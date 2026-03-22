@@ -117,7 +117,7 @@ def cmd_repair_labels(args: argparse.Namespace) -> int:
         if not present:
             # Only assign fallback when the issue is already in AI-managed states.
             # This avoids adding AI labels to unrelated open issues during repair sweeps.
-            fallback = str(group.get("fallback") or "")
+            fallback = str(group.get("fallback") or "").strip()
             if has_known_label and fallback and fallback in known_labels:
                 desired.append(fallback)
             continue
