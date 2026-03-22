@@ -83,7 +83,7 @@ fi
 # ── 2. Warm Serena cache ─────────────────────────────────────────────────────
 
 echo "Warming Serena uvx cache..."
-if ! uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" serena --version 2>/dev/null; then
+if ! uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" serena --help >/dev/null 2>&1; then
 	warn_and_exit "Serena cache warm failed"
 fi
 
