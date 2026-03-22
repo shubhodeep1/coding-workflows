@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -164,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(args.func(args))
     except (LabelContractError, ValueError, json.JSONDecodeError) as exc:
-        print(f"AI_LABELS_ERROR: {exc}")
+        print(f"AI_LABELS_ERROR: {exc}", file=sys.stderr)
         return 2
 
 

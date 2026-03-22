@@ -508,12 +508,11 @@ def complete_processed_command(
     ensure_memory_layout(memory_root)
     entry_id = make_processed_command_entry_id(issue_number, comment_id, command)
     entry_path = _processed_command_path(memory_root, issue_number, comment_id, command)
-    if not entry_path.exists():
-        raise MemoryValidationError(
-            f"Processed command entry not found for issue={issue_number} comment={comment_id} command={command}"
-        )
-
     with _file_lock(f"processed-command-{entry_id}"):
+        if not entry_path.exists():
+            raise MemoryValidationError(
+                f"Processed command entry not found for issue={issue_number} comment={comment_id} command={command}"
+            )
         payload = _load_json(entry_path)
         payload["status"] = sanitize_segment(status.strip().lower(), "completed")
         payload["timestamp"] = utc_now_iso()
