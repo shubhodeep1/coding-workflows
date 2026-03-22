@@ -2,7 +2,7 @@
 """Shared AI memory helpers for GitHub workflows.
 
 This module provides schema validation, deterministic retrieval, governance checks,
-lineage handling, compaction, and branch-safe persistence for `.github/ai-memory`.
+lineage handling, compaction, and branch-safe persistence for `ai-memory`.
 """
 
 from __future__ import annotations
@@ -26,8 +26,11 @@ from typing import Any, Callable
 MEMORY_RECORD_SCHEMA_VERSION = "memory_record.v1"
 RUN_LEDGER_SCHEMA_VERSION = "run_ledger_entry.v1"
 TASK_LINEAGE_SCHEMA_VERSION = "task_lineage.v1"
+PROCESSED_COMMAND_SCHEMA_VERSION = "processed_command_entry.v1"
 RETRIEVAL_PROFILE_SCHEMA_VERSION = "retrieval_profiles.v1"
 MAX_MEMORY_DETAILS_LENGTH = 12000
+LEGACY_MEMORY_ROOT_RELATIVE = ".github/ai-memory"
+CANONICAL_MEMORY_ROOT_RELATIVE = "ai-memory"
 
 ALLOWED_CATEGORIES = {
     "decisions",
@@ -108,6 +111,81 @@ def ensure_memory_layout(memory_root: Path) -> None:
     ]
     for directory in required_dirs:
         directory.mkdir(parents=True, exist_ok=True)
+
+
+def _resolve_within_base_dir(base_dir: Path, relative_path: str) -> Path:
+    path_text = str(relative_path or "").strip()
+    if path_text in {"", "."}:
+        raise MemoryValidationError("memory_root_relative must be a non-empty relative path")
+
+    candidate = Path(path_text)
+    if candidate.is_absolute():
+        raise MemoryValidationError(f"memory_root_relative must be relative: {relative_path!r}")
+
+    resolved = (base_dir / candidate).resolve()
+    base_resolved = base_dir.resolve()
+    try:
+        resolved.relative_to(base_resolved)
+    except ValueError as exc:
+        raise MemoryValidationError(f"memory_root_relative escapes repository root: {relative_path!r}") from exc
+    return resolved
+
+
+def resolve_memory_root_dir(base_dir: Path, memory_root_relative: str) -> Path:
+    preferred = _resolve_within_base_dir(base_dir, memory_root_relative)
+    legacy = _resolve_within_base_dir(base_dir, LEGACY_MEMORY_ROOT_RELATIVE)
+
+    if preferred.exists():
+        return preferred
+    if memory_root_relative != LEGACY_MEMORY_ROOT_RELATIVE and legacy.exists():
+        return legacy
+
+    preferred.parent.mkdir(parents=True, exist_ok=True)
+    return preferred
+
+
+def resolve_memory_reference_source_dir(base_dir: Path, memory_root_relative: str) -> Path:
+    requested = _resolve_within_base_dir(base_dir, memory_root_relative)
+    canonical = _resolve_within_base_dir(base_dir, CANONICAL_MEMORY_ROOT_RELATIVE)
+    legacy = _resolve_within_base_dir(base_dir, LEGACY_MEMORY_ROOT_RELATIVE)
+
+    candidates = [requested]
+    if canonical not in candidates:
+        candidates.append(canonical)
+    if legacy not in candidates:
+        candidates.append(legacy)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return requested
+
+
+def _sync_memory_reference_files(source_root: Path, destination_root: Path) -> None:
+    if not source_root.exists():
+        return
+
+    source_schemas = source_root / "schemas"
+    destination_schemas = destination_root / "schemas"
+    if source_schemas.exists():
+        for schema_file in sorted(source_schemas.glob("*.json")):
+            if not schema_file.is_file():
+                continue
+            destination_schemas.mkdir(parents=True, exist_ok=True)
+            destination_file = destination_schemas / schema_file.name
+            if destination_file.is_symlink():
+                raise MemoryValidationError(f"Refusing to overwrite symlinked schema file: {destination_file}")
+            shutil.copy2(schema_file, destination_file)
+
+    source_config = source_root / "config" / "retrieval_profiles.v1.json"
+    if source_config.is_file():
+        destination_config = destination_root / "config"
+        destination_config.mkdir(parents=True, exist_ok=True)
+        destination_file = destination_config / source_config.name
+        if destination_file.is_symlink():
+            raise MemoryValidationError(f"Refusing to overwrite symlinked config file: {destination_file}")
+        shutil.copy2(source_config, destination_file)
 
 
 def _load_json(path: Path) -> Any:
@@ -271,6 +349,10 @@ def validate_task_lineage(lineage: dict[str, Any], memory_root: Path) -> None:
     _validate_with_schema_file(lineage, _schema_file(memory_root, "task_lineage.v1.json"))
 
 
+def validate_processed_command_entry(entry: dict[str, Any], memory_root: Path) -> None:
+    _validate_with_schema_file(entry, _schema_file(memory_root, "processed_command_entry.v1.json"))
+
+
 def infer_sensitive(category: str, summary: str, details: str, explicit_sensitive: bool | None = None) -> bool:
     if explicit_sensitive is not None:
         return bool(explicit_sensitive)
@@ -365,6 +447,100 @@ def _lineage_path(memory_root: Path, issue_number: int) -> Path:
 def _run_ledger_path(memory_root: Path, run_id: str) -> Path:
     safe_run_id = sanitize_segment(run_id, "run-unknown")
     return memory_root / "runs" / safe_run_id / "ledger" / "events.jsonl"
+
+
+def make_processed_command_entry_id(issue_number: int, comment_id: int, command: str) -> str:
+    normalized_command = sanitize_segment(command.strip().lower(), "command")
+    return f"processed_command_{issue_number}_{comment_id}_{normalized_command}"
+
+
+def _processed_command_path(memory_root: Path, issue_number: int, comment_id: int, command: str) -> Path:
+    entry_id = make_processed_command_entry_id(issue_number, comment_id, command)
+    return memory_root / "tasks" / f"issue-{int(issue_number)}" / "processed_commands" / f"{entry_id}.json"
+
+
+def get_processed_command_entry(
+    memory_root: Path,
+    *,
+    issue_number: int,
+    comment_id: int,
+    command: str,
+) -> dict[str, Any] | None:
+    ensure_memory_layout(memory_root)
+    entry_path = _processed_command_path(memory_root, issue_number, comment_id, command)
+    if not entry_path.exists():
+        return None
+    payload = _load_json(entry_path)
+    validate_processed_command_entry(payload, memory_root)
+    return payload
+
+
+def claim_processed_command(
+    memory_root: Path,
+    *,
+    issue_number: int,
+    comment_id: int,
+    command: str,
+    workflow: str,
+    actor: str,
+    run_id: str,
+    run_attempt: int,
+    metadata: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], bool]:
+    ensure_memory_layout(memory_root)
+    entry_id = make_processed_command_entry_id(issue_number, comment_id, command)
+    entry_path = _processed_command_path(memory_root, issue_number, comment_id, command)
+    with _file_lock(f"processed-command-{entry_id}"):
+        if entry_path.exists():
+            payload = _load_json(entry_path)
+            validate_processed_command_entry(payload, memory_root)
+            return payload, False
+
+        entry = {
+            "entry_id": entry_id,
+            "schema_version": PROCESSED_COMMAND_SCHEMA_VERSION,
+            "issue_number": int(issue_number),
+            "comment_id": int(comment_id),
+            "command": command.strip().lower(),
+            "workflow": workflow,
+            "status": "claimed",
+            "actor": actor,
+            "run_id": sanitize_segment(run_id, "run-unknown"),
+            "run_attempt": int(run_attempt),
+            "timestamp": utc_now_iso(),
+            "metadata": metadata or {},
+        }
+        validate_processed_command_entry(entry, memory_root)
+        _atomic_write_json(entry_path, entry)
+        return entry, True
+
+
+def complete_processed_command(
+    memory_root: Path,
+    *,
+    issue_number: int,
+    comment_id: int,
+    command: str,
+    status: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    entry_id = make_processed_command_entry_id(issue_number, comment_id, command)
+    entry_path = _processed_command_path(memory_root, issue_number, comment_id, command)
+    with _file_lock(f"processed-command-{entry_id}"):
+        if not entry_path.exists():
+            raise MemoryValidationError(
+                f"Processed command entry not found for issue={issue_number} comment={comment_id} command={command}"
+            )
+        payload = _load_json(entry_path)
+        payload["status"] = sanitize_segment(status.strip().lower(), "completed")
+        payload["timestamp"] = utc_now_iso()
+        merged_metadata = dict(payload.get("metadata") or {})
+        merged_metadata.update(metadata or {})
+        payload["metadata"] = merged_metadata
+        validate_processed_command_entry(payload, memory_root)
+        _atomic_write_json(entry_path, payload)
+        return payload
 
 
 def record_run_event(
@@ -968,9 +1144,11 @@ def _run_git(cwd: Path, args: list[str], check: bool = True) -> subprocess.Compl
 
 @contextlib.contextmanager
 def _file_lock(lock_name: str) -> Any:
-    lock_path = Path(tempfile.gettempdir()) / f"{sanitize_segment(lock_name, 'ai-memory')}.lock"
+    lock_key = hashlib.sha256(lock_name.encode("utf-8")).hexdigest()
+    lock_path = Path(tempfile.gettempdir()) / f"ai-memory-{lock_key}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    os.set_inheritable(fd, False)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
@@ -1021,13 +1199,17 @@ def persist_memory_operation(
     with _file_lock(f"ai-memory-{repo_root}-{memory_branch}"):
         clone_dir = _clone_for_memory_branch(repo_root, memory_branch)
         try:
-            memory_root = clone_dir / memory_root_relative
+            memory_root = resolve_memory_root_dir(clone_dir, memory_root_relative)
             ensure_memory_layout(memory_root)
+
+            source_memory_root = resolve_memory_reference_source_dir(repo_root, memory_root_relative)
+            _sync_memory_reference_files(source_memory_root, memory_root)
+
             op_result = operation(clone_dir) or {}
 
             _run_git(clone_dir, ["config", "user.name", "codex-bot"])
             _run_git(clone_dir, ["config", "user.email", "codex@users.noreply.github.com"])
-            _run_git(clone_dir, ["add", memory_root_relative])
+            _run_git(clone_dir, ["add", str(memory_root.relative_to(clone_dir))])
 
             if _run_git(clone_dir, ["diff", "--cached", "--quiet"], check=False).returncode == 0:
                 return {
@@ -1115,7 +1297,9 @@ def read_memory_root_from_branch(
             f"Unable to read memory branch {memory_branch}: {clone.stderr.strip() or clone.stdout.strip()}"
         )
 
-    memory_root = temp_dir / memory_root_relative
+    memory_root = resolve_memory_root_dir(temp_dir, memory_root_relative)
+    source_memory_root = resolve_memory_reference_source_dir(repo_root, memory_root_relative)
+    _sync_memory_reference_files(source_memory_root, memory_root)
     if not memory_root.exists():
         ensure_memory_layout(memory_root)
     return temp_dir

@@ -15,14 +15,18 @@ from typing import Any
 from ai_memory_lib import (
     MemoryGitError,
     MemoryValidationError,
+    claim_processed_command,
     compact_memory,
+    complete_processed_command,
     finalize_task_lineage,
+    get_processed_command_entry,
     parse_bool,
     persist_memory_operation,
     promote_candidates,
     read_memory_root_from_branch,
     record_candidate,
     record_run_event,
+    resolve_memory_root_dir,
     retrieve_memory_context,
     summarize_candidate_for_event,
 )
@@ -46,21 +50,28 @@ def _resolve_repo_root(value: str | None) -> Path:
 
 
 def _resolve_memory_root(memory_dir: Path, memory_root_relative: str) -> Path:
-    return memory_dir / memory_root_relative
+    return resolve_memory_root_dir(memory_dir, memory_root_relative)
+
+
+def _require_positive_int(value: str | None, field_name: str) -> int:
+    parsed = _safe_int(value)
+    if parsed is None or parsed < 1:
+        raise MemoryValidationError(f"{field_name} must be a positive integer")
+    return parsed
 
 
 def _read_env_defaults(args: argparse.Namespace) -> argparse.Namespace:
     if not getattr(args, "memory_branch", None):
         args.memory_branch = os.getenv("AI_MEMORY_BRANCH", "ai-memory")
     if not getattr(args, "memory_root", None):
-        args.memory_root = os.getenv("AI_MEMORY_ROOT", ".github/ai-memory")
+        args.memory_root = os.getenv("AI_MEMORY_ROOT", "ai-memory")
     if not getattr(args, "push_retries", None):
         args.push_retries = int(os.getenv("AI_MEMORY_PUSH_RETRIES", "5"))
     if not getattr(args, "enabled", None):
         args.enabled = parse_bool(os.getenv("AI_MEMORY_ENABLED", "true"), default=True)
     if not getattr(args, "retrieval_profiles", None):
         args.retrieval_profiles = os.getenv(
-            "AI_MEMORY_RETRIEVAL_PROFILES", ".github/ai-memory/config/retrieval_profiles.v1.json"
+            "AI_MEMORY_RETRIEVAL_PROFILES", "ai-memory/config/retrieval_profiles.v1.json"
         )
     return args
 
@@ -393,6 +404,180 @@ def cmd_compact(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_processed_command_check(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "exists": False, "entry": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+        entry = get_processed_command_entry(
+            memory_root,
+            issue_number=_require_positive_int(args.issue_number, "issue_number"),
+            comment_id=_require_positive_int(args.comment_id, "comment_id"),
+            command=_require_nonempty(args.command, "command"),
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "exists": bool(entry),
+                "entry": entry,
+            }
+        )
+        return 0
+    except MemoryGitError as exc:
+        error_text = str(exc)
+        lowered = error_text.lower()
+        is_missing_branch = (
+            ("remote branch" in lowered and ("not found" in lowered or "does not exist" in lowered))
+            or "could not find remote ref" in lowered
+            or "couldn't find remote ref" in lowered
+            or "remote ref does not exist" in lowered
+        )
+        if is_missing_branch:
+            _print_json({"ok": True, "enabled": False, "exists": False, "entry": None, "warning": error_text})
+            return 0
+        print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
+        _print_json({"ok": False, "enabled": True, "exists": False, "entry": None, "error": error_text})
+        return 2
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+def cmd_processed_command_claim(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    if not args.enabled:
+        _print_json(
+            {
+                "ok": True,
+                "enabled": False,
+                "did_commit": False,
+                "did_push": False,
+                "commit_sha": None,
+                "push_attempts": 0,
+                "operation_result": {
+                    "claimed": True,
+                    "entry": None,
+                },
+            }
+        )
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+
+    def _op(clone_dir: Path) -> dict[str, Any]:
+        memory_root = _resolve_memory_root(clone_dir, args.memory_root)
+        entry, claimed = claim_processed_command(
+            memory_root,
+            issue_number=_require_positive_int(args.issue_number, "issue_number"),
+            comment_id=_require_positive_int(args.comment_id, "comment_id"),
+            command=_require_nonempty(args.command, "command"),
+            workflow=_require_nonempty(args.workflow, "workflow"),
+            actor=_require_nonempty(args.actor, "actor"),
+            run_id=_require_nonempty(args.run_id, "run_id"),
+            run_attempt=_require_positive_int(args.run_attempt, "run_attempt"),
+            metadata=_json_or_empty(args.metadata_json),
+        )
+        return {
+            "claimed": claimed,
+            "entry": entry,
+        }
+
+    try:
+        result = persist_memory_operation(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+            push_retries=int(args.push_retries),
+            commit_message=f"ai-memory: claim processed command [{args.command}]",
+            operation=_op,
+        )
+        _print_json({"ok": True, **result})
+        return 0
+    except MemoryGitError as exc:
+        # Concurrent claims on different runners can race on the same entry file.
+        # If the entry now exists on the memory branch, treat this as a duplicate claim.
+        branch_dir = None
+        try:
+            branch_dir = read_memory_root_from_branch(
+                repo_root,
+                memory_branch=args.memory_branch,
+                memory_root_relative=args.memory_root,
+            )
+            memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+            entry = get_processed_command_entry(
+                memory_root,
+                issue_number=_require_positive_int(args.issue_number, "issue_number"),
+                comment_id=_require_positive_int(args.comment_id, "comment_id"),
+                command=_require_nonempty(args.command, "command"),
+            )
+            if entry is not None:
+                print(f"AI_MEMORY_WARNING: {exc}", file=sys.stderr)
+                _print_json(
+                    {
+                        "ok": True,
+                        "did_commit": False,
+                        "did_push": False,
+                        "commit_sha": None,
+                        "push_attempts": int(args.push_retries),
+                        "operation_result": {
+                            "claimed": False,
+                            "entry": entry,
+                        },
+                        "warning": str(exc),
+                    }
+                )
+                return 0
+        except MemoryGitError as recovery_exc:
+            print(f"AI_MEMORY_WARNING: recovery duplicate-check failed: {recovery_exc}", file=sys.stderr)
+        finally:
+            if branch_dir:
+                shutil.rmtree(branch_dir, ignore_errors=True)
+        raise
+
+
+def cmd_processed_command_complete(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "entry": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+
+    def _op(clone_dir: Path) -> dict[str, Any]:
+        memory_root = _resolve_memory_root(clone_dir, args.memory_root)
+        entry = complete_processed_command(
+            memory_root,
+            issue_number=_require_positive_int(args.issue_number, "issue_number"),
+            comment_id=_require_positive_int(args.comment_id, "comment_id"),
+            command=_require_nonempty(args.command, "command"),
+            status=_require_nonempty(args.status, "status"),
+            metadata=_json_or_empty(args.metadata_json),
+        )
+        return {"entry": entry}
+
+    result = persist_memory_operation(
+        repo_root,
+        memory_branch=args.memory_branch,
+        memory_root_relative=args.memory_root,
+        push_retries=int(args.push_retries),
+        commit_message=f"ai-memory: complete processed command [{args.command}]",
+        operation=_op,
+    )
+    _print_json({"ok": True, **result})
+    return 0
+
+
 def _add_shared_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo-root", default=None)
     parser.add_argument("--memory-branch", default=None)
@@ -474,6 +659,34 @@ def build_parser() -> argparse.ArgumentParser:
     compact.add_argument("--month", default=None)
     compact.add_argument("--prune", default="false")
     compact.set_defaults(func=cmd_compact)
+
+    processed_check = subparsers.add_parser("processed-command-check", help="Check processed command entry")
+    _add_shared_args(processed_check)
+    processed_check.add_argument("--issue-number", required=True)
+    processed_check.add_argument("--comment-id", required=True)
+    processed_check.add_argument("--command", required=True)
+    processed_check.set_defaults(func=cmd_processed_command_check)
+
+    processed_claim = subparsers.add_parser("processed-command-claim", help="Claim processed command entry")
+    _add_shared_args(processed_claim)
+    processed_claim.add_argument("--issue-number", required=True)
+    processed_claim.add_argument("--comment-id", required=True)
+    processed_claim.add_argument("--command", required=True)
+    processed_claim.add_argument("--workflow", required=True)
+    processed_claim.add_argument("--actor", required=True)
+    processed_claim.add_argument("--run-id", required=True)
+    processed_claim.add_argument("--run-attempt", default="1")
+    processed_claim.add_argument("--metadata-json", default="{}")
+    processed_claim.set_defaults(func=cmd_processed_command_claim)
+
+    processed_complete = subparsers.add_parser("processed-command-complete", help="Complete processed command entry")
+    _add_shared_args(processed_complete)
+    processed_complete.add_argument("--issue-number", required=True)
+    processed_complete.add_argument("--comment-id", required=True)
+    processed_complete.add_argument("--command", required=True)
+    processed_complete.add_argument("--status", required=True)
+    processed_complete.add_argument("--metadata-json", default="{}")
+    processed_complete.set_defaults(func=cmd_processed_command_complete)
 
     return parser
 

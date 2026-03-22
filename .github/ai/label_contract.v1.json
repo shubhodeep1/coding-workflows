@@ -1,0 +1,53 @@
+{
+  "schema_version": "label_contract.v1",
+  "labels": {
+    "ai:clarification": {
+      "color": "f9d0c4",
+      "description": "AI clarification required before planning"
+    },
+    "ai:planning": {
+      "color": "d4c5f9",
+      "description": "AI planning in progress"
+    },
+    "ai:awaiting-approval": {
+      "color": "fbca04",
+      "description": "Awaiting human approval to implement"
+    },
+    "ai:implementing": {
+      "color": "0052cc",
+      "description": "AI implementation in progress"
+    },
+    "ai:done": {
+      "color": "0e8a16",
+      "description": "Implementation PR created"
+    },
+    "ai:ready-to-merge": {
+      "color": "0e8a16",
+      "description": "PR review complete and ready to merge"
+    },
+    "ai:merged": {
+      "color": "5319e7",
+      "description": "Linked PR merged"
+    },
+    "ai:closed": {
+      "color": "6a737d",
+      "description": "Linked PR closed without merge"
+    }
+  },
+  "phase_groups": [
+    {
+      "name": "issue_phase",
+      "fallback": "ai:clarification",
+      "members": [
+        "ai:clarification",
+        "ai:planning",
+        "ai:awaiting-approval",
+        "ai:implementing",
+        "ai:done",
+        "ai:ready-to-merge",
+        "ai:merged",
+        "ai:closed"
+      ]
+    }
+  ]
+}

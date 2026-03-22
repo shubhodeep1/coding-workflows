@@ -158,7 +158,7 @@ jobs:
     secrets: inherit
 ```
 
-> All 7 wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
+> All internal wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
 
 ### 3. Open an issue
 
@@ -222,6 +222,10 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `TG_ADMIN_CHAT_ID` | — | Telegram chat ID for notifications |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | `true` | Auto-approve clear plans |
 | `ALLOW_WORKFLOW_EDITS` | `false` | Allow AI edits to workflow files |
+| `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
+| `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
+| `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
+| `AI_MEMORY_ENABLED` | `true` | Enable/disable memory operations |
 
 ## Repository Structure
 

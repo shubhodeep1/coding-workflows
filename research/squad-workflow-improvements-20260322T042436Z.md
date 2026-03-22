@@ -73,6 +73,7 @@ Gaps observed:
 - effort: Medium
 - risk: Low
 - dependencies: Decide canonical transition graph for `ai:*` states and ownership for label policy updates.
+- Partial implementation only: added `.github/ai/label_contract.v1.json` and introduced `scripts/ai_labels.py`; workflow-level integration and maintenance workflows are still pending.
 
 ### 2) priority: P2
 - source_pattern: Idempotent workflow behavior with explicit rerun-safe logic (seen across label-driven `squad` workflows)
@@ -85,6 +86,7 @@ Gaps observed:
 - effort: Medium
 - risk: Low
 - dependencies: Extend memory schema/CLI contract for processed-command entries and retention policy.
+- Partial implementation only: added `processed_command_entry.v1` schema/example, implemented processed-command check/claim/complete CLI in `scripts/ai_memory.py`, and added ledger helpers in `scripts/ai_memory_lib.py`; workflow-level idempotency wiring is still pending.
 
 ### 3) priority: P3
 - source_pattern: Template/source-of-truth discipline in `squad` (`templates/workflows/*` mirrored into active workflows)
