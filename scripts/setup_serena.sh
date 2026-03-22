@@ -157,14 +157,22 @@ if [ ! -f .serena/project.yml ]; then
 	IGNORED_YAML="  - node_modules\n  - dist\n  - build\n  - __pycache__\n  - .next\n  - vendor\n  - .git\n"
 	if [ -n "${SERENA_IGNORED_DIRS}" ]; then
 		# Keep space-delimited semantics but prevent pathname expansion.
-		set -f
+		had_noglob=0
+		if [ -o noglob ]; then
+			had_noglob=1
+		else
+			set -f
+		fi
 		for dir in ${SERENA_IGNORED_DIRS}; do
 			# SERENA_IGNORED_DIRS is a space-delimited list by design.
 			[ -n "${dir}" ] || continue
-			safe_dir="${dir//\'/\'\'}"
+			safe_dir="$(printf '%s' "${dir}" | tr -d '\r\n\t')"
+			safe_dir="${safe_dir//\'/\'\'}"
 			IGNORED_YAML="${IGNORED_YAML}  - '${safe_dir}'\n"
 		done
-		set +f
+		if [ "${had_noglob}" -eq 0 ]; then
+			set +f
+		fi
 	fi
 
 	cat > .serena/project.yml <<SERENA_PROJECT_EOF
