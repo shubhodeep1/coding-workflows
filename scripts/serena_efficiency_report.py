@@ -93,7 +93,71 @@ def scan_directory(dirpath: str) -> tuple[Counter, int]:
     return serena_total, file_ops_total
 
 
-def format_report(serena_counts: Counter, file_ops: int) -> str:
+def load_serena_tool_stats(scan_dir: str) -> dict:
+    """Load Serena's own tool_usage_stats.json if present in the scan dir or repo."""
+    for candidate in [
+        os.path.join(scan_dir, "tool_usage_stats.json"),
+        os.path.join(scan_dir, "..", ".serena", "tool_usage_stats.json"),
+        ".serena/tool_usage_stats.json",
+    ]:
+        if os.path.isfile(candidate):
+            try:
+                import json
+                with open(candidate, encoding="utf-8") as f:
+                    return json.load(f)
+            except (OSError, json.JSONDecodeError):
+                pass
+    return {}
+
+
+# Conservative per-operation token estimates for savings calculation.
+# These represent the average tokens saved by using Serena vs file-based ops.
+TOKEN_ESTIMATES = {
+    "get_symbols_overview": {"serena": 30, "file_equiv": 500},
+    "find_symbol": {"serena": 60, "file_equiv": 400},
+    "find_referencing_symbols": {"serena": 80, "file_equiv": 600},
+    "find_referencing_code_snippets": {"serena": 120, "file_equiv": 800},
+    "search_for_pattern": {"serena": 50, "file_equiv": 300},
+    "replace_symbol_body": {"serena": 100, "file_equiv": 1000},
+    "insert_after_symbol": {"serena": 80, "file_equiv": 800},
+    "insert_before_symbol": {"serena": 80, "file_equiv": 800},
+    "insert_at_line": {"serena": 60, "file_equiv": 600},
+    "delete_lines": {"serena": 30, "file_equiv": 400},
+    "rename_symbol": {"serena": 40, "file_equiv": 500},
+}
+DEFAULT_ESTIMATE = {"serena": 60, "file_equiv": 500}
+
+
+def estimate_token_savings(serena_counts: Counter, file_ops: int) -> dict:
+    """Estimate token savings from Serena usage vs file-based equivalent."""
+    serena_tokens = 0
+    equiv_tokens = 0
+    for tool, count in serena_counts.items():
+        est = TOKEN_ESTIMATES.get(tool, DEFAULT_ESTIMATE)
+        serena_tokens += est["serena"] * count
+        equiv_tokens += est["file_equiv"] * count
+
+    # File ops: estimate what they cost (these are the actual file reads/writes)
+    file_op_tokens = file_ops * DEFAULT_ESTIMATE["file_equiv"]
+
+    actual_total = serena_tokens + file_op_tokens
+    baseline_total = equiv_tokens + file_op_tokens
+
+    savings = baseline_total - actual_total
+    savings_pct = (savings / baseline_total * 100) if baseline_total > 0 else 0
+
+    return {
+        "serena_tokens": serena_tokens,
+        "equiv_tokens": equiv_tokens,
+        "file_op_tokens": file_op_tokens,
+        "actual_total": actual_total,
+        "baseline_total": baseline_total,
+        "savings": savings,
+        "savings_pct": savings_pct,
+    }
+
+
+def format_report(serena_counts: Counter, file_ops: int, scan_dir: str = ".") -> str:
     """Return a markdown-formatted efficiency report."""
     total_serena = sum(serena_counts.values())
     total_ops = total_serena + file_ops
@@ -112,6 +176,9 @@ def format_report(serena_counts: Counter, file_ops: int) -> str:
     if not top_str:
         top_str = "none"
 
+    # Token savings estimate
+    savings = estimate_token_savings(serena_counts, file_ops)
+
     lines = [
         "### Serena MCP efficiency",
         "",
@@ -121,8 +188,25 @@ def format_report(serena_counts: Counter, file_ops: int) -> str:
         f"| File-based fallback ops | {file_ops} |",
         f"| **Serena efficiency** | **{efficiency:.0f}%** |",
         f"| Top Serena tools | {top_str} |",
-        "",
     ]
+
+    if total_serena > 0:
+        lines.extend([
+            f"| Est. tokens (with Serena) | ~{savings['actual_total']:,} |",
+            f"| Est. tokens (without Serena) | ~{savings['baseline_total']:,} |",
+            f"| **Est. token savings** | **~{savings['savings']:,} ({savings['savings_pct']:.0f}%)** |",
+        ])
+
+    lines.append("")
+
+    # Load Serena's own stats if available
+    tool_stats = load_serena_tool_stats(scan_dir)
+    if tool_stats:
+        lines.append(
+            f"> Serena recorded {len(tool_stats)} tool invocations in "
+            "`tool_usage_stats.json`."
+        )
+        lines.append("")
 
     if efficiency == 0:
         lines.append(
@@ -172,7 +256,7 @@ def main() -> None:
             serena_counts += c
             file_ops += o
 
-    report = format_report(serena_counts, file_ops)
+    report = format_report(serena_counts, file_ops, scan_dir=args.scan_dir)
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:

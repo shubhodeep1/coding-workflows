@@ -1,0 +1,52 @@
+# Serena MCP project configuration template.
+#
+# Copy this file to your consumer repo as .serena/project.yml to customize
+# Serena's behavior.  If this file is absent, setup_serena.sh auto-generates
+# one based on detected languages.
+#
+# See https://github.com/oraios/serena for full documentation.
+
+project_name: auto
+
+# Set to true for read-only exploration (planning mode).
+# The CI workflows override this via --mode flag.
+read_only: false
+
+# Languages to enable LSP support for.
+# Auto-detected if omitted; explicit list takes precedence.
+languages:
+  - typescript
+  - python
+  # - go
+  # - rust
+  # - java
+
+encoding: utf-8
+ignore_all_files_in_gitignore: true
+
+# Directories to exclude from symbol indexing.
+# Customize per-repo or set SERENA_IGNORED_DIRS repository variable.
+ignored_paths:
+  - node_modules
+  - dist
+  - build
+  - __pycache__
+  - .next
+  - vendor
+  - .git
+
+# Tools to exclude from Serena (empty = all enabled)
+excluded_tools: []
+
+# Optional tools to include beyond defaults
+included_optional_tools: []
+
+base_modes: []
+default_modes:
+  - editing
+
+# Max tokens for symbol info responses (null = unlimited)
+symbol_info_budget: null
+
+# Custom initial prompt injected into Serena context
+initial_prompt: ""
