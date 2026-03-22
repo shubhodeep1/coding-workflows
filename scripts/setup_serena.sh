@@ -128,6 +128,9 @@ done
 
 # ── 4. Create .serena/project.yml if missing ─────────────────────────────────
 
+# Per-repo overrides via repository variables
+SERENA_IGNORED_DIRS="${SERENA_IGNORED_DIRS:-}"
+
 if [ ! -f .serena/project.yml ]; then
 	echo "Creating .serena/project.yml..."
 	mkdir -p .serena
@@ -146,6 +149,14 @@ if [ ! -f .serena/project.yml ]; then
 		READ_ONLY="true"
 	fi
 
+	# Build ignored paths list (defaults + custom overrides)
+	IGNORED_YAML="  - node_modules\n  - dist\n  - build\n  - __pycache__\n  - .next\n  - vendor\n  - .git\n"
+	if [ -n "${SERENA_IGNORED_DIRS}" ]; then
+		for dir in ${SERENA_IGNORED_DIRS}; do
+			IGNORED_YAML="${IGNORED_YAML}  - ${dir}\n"
+		done
+	fi
+
 	cat > .serena/project.yml <<SERENA_PROJECT_EOF
 project_name: auto
 read_only: ${READ_ONLY}
@@ -156,13 +167,7 @@ $(printf "${LANG_YAML}")
 encoding: utf-8
 ignore_all_files_in_gitignore: true
 ignored_paths:
-  - node_modules
-  - dist
-  - build
-  - __pycache__
-  - .next
-  - vendor
-  - .git
+$(printf "${IGNORED_YAML}")
 
 excluded_tools: []
 included_optional_tools: []
@@ -225,7 +230,29 @@ MCP_EOF
 
 echo "Codex MCP config written to ~/.codex/mcp.json"
 
-# ── 7. Health check ──────────────────────────────────────────────────────────
+# ── 7. Verify Codex supports MCP ────────────────────────────────────────────
+
+echo "Checking Codex MCP support..."
+CODEX_MCP_SUPPORTED="false"
+if command -v codex >/dev/null 2>&1; then
+	CODEX_HELP="$(codex --help 2>&1 || true)"
+	if echo "${CODEX_HELP}" | grep -qi "mcp"; then
+		CODEX_MCP_SUPPORTED="true"
+		echo "Codex MCP support confirmed."
+	else
+		# Check if Codex loads mcp.json by looking at config docs
+		CODEX_VER="$(codex --version 2>&1 || echo "unknown")"
+		echo "::warning::Codex ${CODEX_VER} may not support MCP — Serena tools may be silently unavailable. Verify Codex version >= 0.114.0 supports MCP."
+	fi
+else
+	echo "::warning::Codex CLI not found yet (may be installed later in workflow). MCP support cannot be verified at setup time."
+fi
+
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+	echo "serena_mcp_supported=${CODEX_MCP_SUPPORTED}" >> "${GITHUB_OUTPUT}"
+fi
+
+# ── 8. Health check ──────────────────────────────────────────────────────────
 
 echo "Validating Serena MCP server..."
 if timeout 30s uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" \

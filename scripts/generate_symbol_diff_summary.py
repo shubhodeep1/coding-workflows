@@ -104,16 +104,104 @@ def parse_diff_hunks(diff_text):
 
 
 def try_serena_symbols(file_path, project_dir):
-    """Try to get symbol overview from Serena via Python API."""
-    try:
-        from serena.agent import SerenaAgent
+    """Try to get symbol overview from Serena via uvx CLI.
 
-        agent = SerenaAgent(project_path=project_dir)
-        agent.activate_project()
-        result = agent.call_tool("get_symbols_overview", {"file_path": file_path})
-        return result
+    Calls `uvx serena get-symbols` and parses the JSON output into our symbol
+    format [{name, line, text}, ...].  Returns None on any failure so callers
+    fall through to the heuristic path.
+    """
+    try:
+        # First try the Python API (works if serena is importable)
+        try:
+            from serena.agent import SerenaAgent
+
+            agent = SerenaAgent(project_path=project_dir)
+            agent.activate_project()
+            result = agent.call_tool("get_symbols_overview", {"file_path": file_path})
+            if result:
+                return _parse_serena_result(result)
+        except ImportError:
+            pass
+
+        # Fallback: invoke via uvx subprocess
+        full_path = os.path.join(project_dir, file_path)
+        proc = subprocess.run(
+            [
+                "uvx", "--from", "git+https://github.com/oraios/serena@main",
+                "serena", "get-symbols", "--project-dir", project_dir,
+                "--file", full_path, "--format", "json",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            data = json.loads(proc.stdout)
+            return _parse_serena_result(data)
+        return None
     except Exception:
         return None
+
+
+def _parse_serena_result(result):
+    """Parse Serena symbol output into [{name, line, text}, ...].
+
+    Serena may return either:
+      - A list of dicts with keys like 'name', 'kind', 'range'/'line', 'detail'
+      - A string (rendered overview) — we parse lines matching symbol patterns
+      - A dict with a 'symbols' key containing a list
+    """
+    symbols = []
+
+    # Handle string output (rendered overview)
+    if isinstance(result, str):
+        for line in result.splitlines():
+            # Serena text overview lines typically look like:
+            #   "  function foo (line 42)"  or  "  class Bar [23-45]"
+            m = re.match(
+                r"\s*(?:function|def|class|struct|enum|trait|impl|fn|type|const|interface|method)\s+"
+                r"(\w+).*?(?:line\s+|:|\[)(\d+)",
+                line, re.IGNORECASE,
+            )
+            if m:
+                symbols.append({
+                    "name": m.group(1),
+                    "line": int(m.group(2)),
+                    "text": line.strip(),
+                })
+        return symbols if symbols else None
+
+    # Handle dict with 'symbols' key
+    if isinstance(result, dict):
+        result = result.get("symbols", result.get("children", []))
+
+    # Handle list of symbol dicts
+    if isinstance(result, list):
+        for item in result:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("symbol_name", "")
+            if not name:
+                continue
+            # Line number may be in 'line', 'range.start.line', or 'start_line'
+            line_num = item.get("line") or item.get("start_line", 0)
+            if not line_num and "range" in item:
+                rng = item["range"]
+                if isinstance(rng, dict):
+                    start = rng.get("start", {})
+                    line_num = start.get("line", 0)
+            symbols.append({
+                "name": name,
+                "line": int(line_num),
+                "text": item.get("detail", item.get("kind", "")),
+            })
+        # Also recurse into children if present
+        for item in result:
+            if isinstance(item, dict) and "children" in item:
+                child_symbols = _parse_serena_result(item["children"])
+                if child_symbols:
+                    symbols.extend(child_symbols)
+        return symbols if symbols else None
+
+    return None
 
 
 def get_symbols_heuristic(file_path, project_dir):
@@ -208,8 +296,8 @@ def generate_summary(diff_text, changed_files_text, project_dir):
     # Try Serena first for the first file to check availability
     if file_hunks:
         first_file = next(iter(file_hunks))
-        serena_result = try_serena_symbols(first_file, project_dir)
-        if serena_result is not None:
+        first_result = try_serena_symbols(first_file, project_dir)
+        if first_result is not None:
             serena_available = True
 
     for file_path in sorted(file_hunks.keys()):
@@ -224,11 +312,9 @@ def generate_summary(diff_text, changed_files_text, project_dir):
         # Get symbols for this file
         symbols = []
         if serena_available:
-            serena_result = try_serena_symbols(file_path, project_dir)
-            if serena_result:
-                # Parse Serena output into our symbol format
-                # Serena returns structured symbol info
-                pass  # Fall through to heuristic if parsing fails
+            serena_symbols = try_serena_symbols(file_path, project_dir)
+            if serena_symbols:
+                symbols = serena_symbols
 
         if not symbols:
             symbols = get_symbols_heuristic(file_path, project_dir)

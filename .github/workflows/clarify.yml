@@ -129,6 +129,7 @@ jobs:
           SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
           SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
           SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
