@@ -37,49 +37,93 @@ The system instructions (`codex_system_instructions.md`) already reference Seren
 
 Add Serena installation to both `implement.yml` and `review_autofix.yml` alongside the existing Codex install step.
 
-**In both workflows, after the `npm install -g @openai/codex` step, add:**
+**Option A — Install via `uv` + `uvx` (recommended for flexibility):**
 
 ```yaml
-- name: Install Serena MCP server
+- name: Install uv and Serena MCP server
+  uses: astral-sh/setup-uv@v4
+
+- name: Warm Serena cache
   run: |
     set -euo pipefail
-    # Install uv (Serena's package manager)
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.local/bin:$PATH"
-    echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-    # Pin a specific Serena version for reproducibility
     SERENA_VERSION="${{ vars.SERENA_VERSION || 'main' }}"
+    echo "SERENA_VERSION=${SERENA_VERSION}" >> "$GITHUB_ENV"
     uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" serena --version
+```
 
-    # Install language servers for project languages
-    # Adjust these based on what languages your consumer repos use
-    npm install -g typescript-language-server typescript --no-audit --no-fund
-    pip install python-lsp-server 2>/dev/null || true
+**Option B — Use the official Docker image (for heavier CI or multi-language):**
+
+```yaml
+services:
+  serena:
+    image: ghcr.io/oraios/serena:latest
+    ports:
+      - "9121:9121"
+    volumes:
+      - ${{ github.workspace }}:/workspaces/projects/repo
+    # Pre-built with Node.js 22, Rust + rust-analyzer, Python
+    command: >
+      serena start-mcp-server
+      --transport streamable-http --port 9121 --host 0.0.0.0
+      --project /workspaces/projects/repo
+      --context codex --mode one-shot --mode editing
+      --open-web-dashboard false
 ```
 
 **Key decisions:**
 - Pin Serena version via `vars.SERENA_VERSION` for reproducibility (default: `main`)
+- Use `astral-sh/setup-uv@v4` GitHub Action instead of raw `curl` install
 - Language server installation is repo-dependent — start with TypeScript + Python as they cover most use cases
 - Consumer repos can override via `vars.SERENA_LANGUAGES` in the future
+- The Docker image (`ghcr.io/oraios/serena:latest`) ships with Node.js, Rust, and Python pre-installed — good for multi-language repos
+- Some languages need NO extra setup: Bash, JavaScript, TypeScript, Python, Java, Dart, Swift, YAML, Markdown
 
 #### 1.2 Create Serena Project Configuration
 
 Add a `.serena/project.yml` template that consumer repos should include, and a fallback auto-generation step in the workflow.
 
 **File: `.serena/project.yml` (template for consumer repos)**
+
+Uses the [full project config schema](https://github.com/oraios/serena/blob/main/src/serena/resources/project.template.yml):
+
 ```yaml
 project_name: auto
-read_only: false
-ignored_dirs:
+read_only: false                        # Stage 1: set true; Stage 2: set false
+
+# Languages for LSP backends
+# Serena auto-detects, but explicit is better for CI
+languages:
+  - typescript
+  - python
+
+# File handling
+encoding: utf-8
+ignore_all_files_in_gitignore: true
+ignored_paths:
   - node_modules
-  - .git
   - dist
   - build
   - __pycache__
   - .next
   - vendor
+
+# Tool configuration
+excluded_tools: []                      # e.g. ["execute_shell_command"] to restrict
+included_optional_tools: []             # e.g. ["restart_language_server"]
+
+# Modes — override defaults for CI
+base_modes: []
+default_modes:
+  - editing
+
+# Symbol info retrieval timeout (seconds, null = global default 10s)
+symbol_info_budget: null
+
+# Initial prompt injected when project activates
+initial_prompt: ""
 ```
+
+A `project.local.yml` alongside overrides without version control.
 
 **In the workflow, auto-generate if missing:**
 ```bash
@@ -89,9 +133,9 @@ if [ ! -f .serena/project.yml ]; then
   cat > .serena/project.yml <<'SERENA_EOF'
 project_name: auto
 read_only: false
-ignored_dirs:
+ignore_all_files_in_gitignore: true
+ignored_paths:
   - node_modules
-  - .git
   - dist
   - build
   - __pycache__
@@ -105,11 +149,12 @@ fi
 
 Codex supports MCP servers. Add the Serena MCP server config to the Codex configuration step.
 
-**Modify the "Create Codex config" step in both workflows:**
+**Modify the "Create Codex config" step in both workflows.**
+
+**Option A — stdio transport (Codex launches Serena as subprocess):**
 
 ```bash
 # Add Serena MCP server to Codex
-# Codex reads MCP config from its config directory
 cat > ~/.codex/mcp.json <<MCP_EOF
 {
   "mcpServers": {
@@ -118,9 +163,11 @@ cat > ~/.codex/mcp.json <<MCP_EOF
       "args": [
         "--from", "git+https://github.com/oraios/serena@${SERENA_VERSION:-main}",
         "serena", "start-mcp-server",
-        "--context=agent",
-        "--mode=editing",
-        "--project-from-cwd"
+        "--context", "codex",
+        "--mode", "one-shot",
+        "--mode", "editing",
+        "--project-from-cwd",
+        "--open-web-dashboard", "false"
       ]
     }
   }
@@ -128,14 +175,57 @@ cat > ~/.codex/mcp.json <<MCP_EOF
 MCP_EOF
 ```
 
-**Context choice: `--context=agent`** because:
-- `agent` context is designed for autonomous scenarios (no human in the loop)
-- Disables interactive-only tools (dashboard, onboarding prompts)
-- Keeps all code navigation + editing tools enabled
+**Option B — HTTP transport (if using Docker sidecar from 1.1 Option B):**
 
-**Mode choice: `--mode=editing`** because:
-- Enables all editing tools (`replace_symbol_body`, `insert_after_symbol`, etc.)
-- Appropriate for implementation and autofix phases
+```bash
+cat > ~/.codex/mcp.json <<MCP_EOF
+{
+  "mcpServers": {
+    "serena": {
+      "url": "http://localhost:9121/mcp"
+    }
+  }
+}
+MCP_EOF
+```
+
+**Also create the global Serena config to disable GUI and enable stats:**
+
+```bash
+mkdir -p ~/.serena
+cat > ~/.serena/serena_config.yml <<'SERENA_CFG'
+language_backend: LSP
+gui_log_window: false
+web_dashboard: false
+web_dashboard_open_on_launch: false
+record_tool_usage_stats: true
+log_level: 20
+tool_timeout: 240
+default_modes:
+  - editing
+SERENA_CFG
+```
+
+**Context choice: `--context=codex`** because:
+- Serena has a dedicated `codex` context optimized for OpenAI Codex
+- Disables tools that duplicate Codex's built-ins (basic file read/write, shell commands)
+- Forces the LLM to use Serena only for its unique value: **symbol-level operations**
+- Alternative: `--context=agent` for non-Codex editors (includes all tools)
+
+**Available contexts:**
+| Context | Use case |
+|---|---|
+| `codex` | OpenAI Codex — disables duplicate tools |
+| `claude-code` | Claude Code CLI — similar dedup |
+| `agent` | Autonomous agents (Agno, etc.) — full toolset |
+| `desktop-app` | Claude Desktop — full toolset (default) |
+| `ide` | VSCode/Cursor/Cline |
+
+**Mode choice: `--mode=one-shot --mode=editing`** because:
+- `one-shot` — complete task autonomously without waiting for user input (CI appropriate)
+- `editing` — enables all editing tools (`replace_symbol_body`, `insert_after_symbol`, etc.)
+- Modes are composable — both are active simultaneously
+- Alternative for plan phase: `--mode=planning` (read-only analysis)
 
 ---
 
@@ -386,12 +476,90 @@ EOF
 | `.serena/project.yml` | New template file for consumer repos (auto-generated in CI if missing) |
 | `scripts/generate_symbol_diff_summary.py` | New script (Phase 3) — converts unified diffs to symbol-level summaries |
 
+## Complete Serena Tool Inventory
+
+Tools available via MCP, grouped by category. Availability depends on the `--context` and `--mode` flags.
+
+### Symbol Tools (LSP-powered — the core value)
+| Tool | Description |
+|---|---|
+| `find_symbol` | Global/local symbol search via language server |
+| `find_referencing_symbols` | Find all references to a symbol |
+| `find_referencing_code_snippets` | Get code context around symbol references |
+| `get_symbols_overview` | Top-level symbols in a file (classes, functions, exports) |
+| `replace_symbol_body` | Replace a symbol's full definition body |
+| `insert_after_symbol` | Insert code after a symbol definition |
+| `insert_before_symbol` | Insert code before a symbol definition |
+| `rename_symbol` | Rename across entire codebase (LSP refactor) |
+| `restart_language_server` | Restart LSP backend (optional tool) |
+
+### File Tools (some disabled in `codex` context since Codex has its own)
+| Tool | Description |
+|---|---|
+| `read_file` | Read a project file (disabled in `codex`/`claude-code` contexts) |
+| `create_text_file` | Create or overwrite a file (disabled in `codex`/`claude-code` contexts) |
+| `list_dir` | List directory contents |
+| `find_file` | Find files by name/pattern |
+| `replace_content` | Regex/string replacement (disabled in `codex`/`claude-code` contexts) |
+| `delete_lines` | Delete a range of lines |
+| `replace_lines` | Replace a range of lines |
+| `insert_at_line` | Insert content at a specific line |
+| `search_for_pattern` | Regex search across project |
+
+### Workflow & Thinking Tools
+| Tool | Description |
+|---|---|
+| `onboarding` | Project structure discovery (first-run) |
+| `check_onboarding_performed` | Check if onboarding was done |
+| `think_about_collected_information` | Reasoning tool (optional) |
+| `think_about_task_adherence` | Check if agent is on track (optional) |
+| `summarize_changes` | Summarize codebase changes (optional) |
+
+### Memory Tools
+| Tool | Description |
+|---|---|
+| `write_memory` | Persist project info as markdown |
+| `read_memory` | Retrieve stored memory |
+| `list_memories` | List available memories |
+| `delete_memory` | Remove a memory |
+
+### Config Tools
+| Tool | Description |
+|---|---|
+| `activate_project` | Activate a project by name/path |
+| `get_current_config` | Print current config state |
+| `switch_modes` | Change active modes during session |
+
+## Alternative: Programmatic Python Integration (No MCP)
+
+For Phase 3 (symbol-diff summary generation), Serena can be used directly via Python without the MCP layer:
+
+```python
+from serena.agent import SerenaAgent
+
+agent = SerenaAgent(project_path="/path/to/repo")
+agent.activate_project()
+
+# Get symbol overview for a changed file
+symbols = agent.call_tool("get_symbols_overview", {"file_path": "src/auth/login.py"})
+
+# Find what references a modified function
+refs = agent.call_tool("find_referencing_symbols", {
+    "file_path": "src/auth/login.py",
+    "symbol_name": "authenticate_user"
+})
+```
+
+This avoids MCP overhead and is ideal for the `generate_symbol_diff_summary.py` script.
+
 ## Dependencies & Requirements
 
-- **uv** — Serena's package manager (installed via `astral.sh/uv/install.sh`)
-- **Language servers** — Per-language (TypeScript: `typescript-language-server`, Python: `python-lsp-server`, etc.)
+- **uv** — Serena's package manager (use `astral-sh/setup-uv@v4` GitHub Action)
+- **Language servers** — Per-language; many need no extra install (JS/TS, Python, Java, Bash, etc.)
+  - Extra install needed: Go (`gopls`), Rust (`rust-analyzer` via rustup), C/C++ (`clangd`)
 - **Codex MCP support** — Codex must support `~/.codex/mcp.json` for MCP server configuration (verify with pinned version)
 - **No new secrets required** — Serena runs locally, no API keys needed
+- **Docker image** — `ghcr.io/oraios/serena:latest` (optional, ships Node.js 22 + Rust + Python)
 
 ## Expected Token Savings
 
