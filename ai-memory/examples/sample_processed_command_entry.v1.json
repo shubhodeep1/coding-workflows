@@ -1,0 +1,17 @@
+{
+  "entry_id": "processed_command_42_123456789_answer",
+  "schema_version": "processed_command_entry.v1",
+  "issue_number": 42,
+  "comment_id": 123456789,
+  "command": "answer",
+  "workflow": "plan",
+  "status": "claimed",
+  "actor": "github-actions[bot]",
+  "run_id": "987654321",
+  "run_attempt": 1,
+  "timestamp": "2026-03-22T11:30:00Z",
+  "metadata": {
+    "source": "issue_comment",
+    "author_login": "octocat"
+  }
+}

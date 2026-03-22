@@ -13,6 +13,7 @@ This repository contains reusable `workflow_call` workflows that power the full 
 5. **Issue PR Status** — Syncs issue labels when PRs are merged/closed
 6. **Cancel on PR Close** — Cancels orphaned workflow runs when PRs close
 7. **Memory Maintenance** — Monthly compaction and archival of AI memory records
+8. **Label Maintenance** — Scheduled AI label contract sync and orphan-state repair
 
 ## Quickstart
 
@@ -158,7 +159,23 @@ jobs:
     secrets: inherit
 ```
 
-> All 7 wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
+**`.github/workflows/ai-label-maintenance.yml`** — Scheduled AI label contract enforcement and orphan repair
+```yaml
+name: AI Label Maintenance
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+permissions:
+  issues: write
+jobs:
+  maintain-labels:
+    uses: shubhodeep1/coding-workflows/.github/workflows/ai_label_maintenance.yml@stable
+    with:
+      dry_run: 'false'
+    secrets: inherit
+```
+
+> All internal wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
 
 ### 3. Open an issue
 
@@ -205,6 +222,7 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `issue_pr_status.yml` | `pull_request.closed` | Label/state sync |
 | `cancel_on_pr_close.yml` | `pull_request.closed` | Active-run cancellation |
 | `memory_maintenance.yml` | `schedule` (monthly) | Memory compaction/archival |
+| `ai_label_maintenance.yml` | `schedule`, `workflow_dispatch` | AI label contract sync + orphan repair |
 
 ## Required Secrets
 
@@ -222,6 +240,10 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `TG_ADMIN_CHAT_ID` | — | Telegram chat ID for notifications |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | `true` | Auto-approve clear plans |
 | `ALLOW_WORKFLOW_EDITS` | `false` | Allow AI edits to workflow files |
+| `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
+| `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
+| `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
+| `AI_MEMORY_ENABLED` | `true` | Enable/disable memory operations |
 
 ## Repository Structure
 

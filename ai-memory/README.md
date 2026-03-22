@@ -9,6 +9,7 @@ Persistent writes are stored on a dedicated branch (`ai-memory`) and use this la
 - `global/canonical/<category>/*.json`: validated canonical memory records
 - `tasks/issue-<n>/candidates/*.json`: per-task candidate records
 - `tasks/issue-<n>/lineage/task_lineage.v1.json`: issue/PR/run lineage state
+- `tasks/issue-<n>/processed_commands/*.json`: processed command ledger for comment idempotency
 - `runs/<run-id>/ledger/events.jsonl`: per-run event ledger
 - `archive/monthly/<YYYY-MM>/...`: monthly archival snapshots
 - `schemas/*.json`: versioned JSON schemas
@@ -26,6 +27,7 @@ Persistent writes are stored on a dedicated branch (`ai-memory`) and use this la
 4. Passing candidates become canonical `active` records.
 5. Records can supersede previous canonicals using lineage `supersedes`.
 6. Finalization (`finalize-task`) updates issue lineage on merge/close/cancel.
+7. Command claims (`processed-command-claim`) prevent duplicate `/reclarify`, `/answer`, and `/approved` processing.
 
 ## Governance
 
@@ -61,10 +63,16 @@ Library: `scripts/ai_memory_lib.py`
 
 Workflows must use CLI subcommands and avoid duplicated inline memory logic.
 
+Processed command CLI:
+
+- `processed-command-check`
+- `processed-command-claim`
+- `processed-command-complete`
+
 ## Environment variables
 
 - `AI_MEMORY_ENABLED` (default `true`)
 - `AI_MEMORY_BRANCH` (default `ai-memory`)
-- `AI_MEMORY_ROOT` (default `.github/ai-memory`)
-- `AI_MEMORY_RETRIEVAL_PROFILES` (default `.github/ai-memory/config/retrieval_profiles.v1.json`)
+- `AI_MEMORY_ROOT` (default `ai-memory`)
+- `AI_MEMORY_RETRIEVAL_PROFILES` (default `ai-memory/config/retrieval_profiles.v1.json`)
 - `AI_MEMORY_PUSH_RETRIES` (default `5`)

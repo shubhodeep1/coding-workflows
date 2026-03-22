@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/processed_command_entry.v1.json",
+  "title": "ProcessedCommandEntryV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "entry_id",
+    "schema_version",
+    "issue_number",
+    "comment_id",
+    "command",
+    "workflow",
+    "status",
+    "actor",
+    "run_id",
+    "run_attempt",
+    "timestamp",
+    "metadata"
+  ],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 180,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "processed_command_entry.v1"
+    },
+    "issue_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "comment_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[A-Za-z0-9_./:-]+$"
+    },
+    "workflow": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "run_attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "metadata": {
+      "type": "object"
+    }
+  }
+}

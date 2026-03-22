@@ -62,41 +62,44 @@ Gaps observed:
 
 ## Prioritized Recommendation Shortlist
 
-### 1) priority: P1
+### ~~1) priority: P1~~
 - source_pattern: Label sync + mutual-exclusivity enforcement (`sync-squad-labels.yml`, `squad-label-enforce.yml`, `squad-heartbeat.yml`)
 - source_refs:
   - squad: `.github/workflows/sync-squad-labels.yml`, `.github/workflows/squad-label-enforce.yml`, `.github/workflows/squad-heartbeat.yml`
   - local: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/workflows/issue_pr_status.yml`, `.github/workflows/review_autofix.yml`
-- current_state: AI labels are transitioned in multiple workflows independently (`clarify.yml`, `plan.yml`, `implement.yml`, `issue_pr_status.yml`, `review_autofix.yml`).
-- proposed_adaptation: Introduce a single AI label contract (authoritative list + allowed transitions) and enforce it centrally (sync + exclusivity + orphan repair).
-- expected_impact: Lower rate of invalid/stuck issue phase states; simpler incident triage.
-- effort: Medium
-- risk: Low
-- dependencies: Decide canonical transition graph for `ai:*` states and ownership for label policy updates.
+- ~~current_state: AI labels are transitioned in multiple workflows independently (`clarify.yml`, `plan.yml`, `implement.yml`, `issue_pr_status.yml`, `review_autofix.yml`).~~
+- ~~proposed_adaptation: Introduce a single AI label contract (authoritative list + allowed transitions) and enforce it centrally (sync + exclusivity + orphan repair).~~
+- ~~expected_impact: Lower rate of invalid/stuck issue phase states; simpler incident triage.~~
+- ~~effort: Medium~~
+- ~~risk: Low~~
+- ~~dependencies: Decide canonical transition graph for `ai:*` states and ownership for label policy updates.~~
+- Implemented and locally validated: added `.github/ai/label_contract.v1.json`, introduced `scripts/ai_labels.py`, replaced ad hoc label transitions with contract-driven phase resolution, and added scheduled orphan-state repair via `.github/workflows/ai_label_maintenance.yml` + `.github/workflows/internal-ai-label-maintenance.yml`.
 
-### 2) priority: P2
+### ~~2) priority: P2~~
 - source_pattern: Idempotent workflow behavior with explicit rerun-safe logic (seen across label-driven `squad` workflows)
 - source_refs:
   - squad: `.github/workflows/squad-triage.yml`, `.github/workflows/squad-issue-assign.yml`, `.github/workflows/ci-rerun.yml`
   - local: `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `scripts/ai_memory.py`, `scripts/ai_memory_lib.py`
-- current_state: Plan workflow protects against stale `/answer`, but command processing is not tracked through a shared processed-comment ledger across all phases.
-- proposed_adaptation: Track processed issue comment IDs for `/reclarify`, `/answer`, and `/approved` in shared memory (reuse `scripts/ai_memory.py` capabilities) and guard every phase on that ledger.
-- expected_impact: Prevents duplicate phase execution and accidental re-processing after retries/race conditions.
-- effort: Medium
-- risk: Low
-- dependencies: Extend memory schema/CLI contract for processed-command entries and retention policy.
+- ~~current_state: Plan workflow protects against stale `/answer`, but command processing is not tracked through a shared processed-comment ledger across all phases.~~
+- ~~proposed_adaptation: Track processed issue comment IDs for `/reclarify`, `/answer`, and `/approved` in shared memory (reuse `scripts/ai_memory.py` capabilities) and guard every phase on that ledger.~~
+- ~~expected_impact: Prevents duplicate phase execution and accidental re-processing after retries/race conditions.~~
+- ~~effort: Medium~~
+- ~~risk: Low~~
+- ~~dependencies: Extend memory schema/CLI contract for processed-command entries and retention policy.~~
+- Implemented and locally validated: added `processed_command_entry.v1` schema/example, implemented processed-command check/claim/complete CLI in `scripts/ai_memory.py`, added ledger helpers in `scripts/ai_memory_lib.py`, and wired idempotency claims/completions for `/reclarify`, `/answer`, and `/approved` in `clarify.yml`, `plan.yml`, and `implement.yml`.
 
-### 3) priority: P3
+### ~~3) priority: P3~~
 - source_pattern: Template/source-of-truth discipline in `squad` (`templates/workflows/*` mirrored into active workflows)
 - source_refs:
   - squad: `templates/workflows/*.yml`, `.github/workflows/*.yml`, `.squad/templates/workflows/*.yml`
   - local: `prompts/header.txt`, `prompts/mode-clarify.txt`, `prompts/mode-plan.txt`, `prompts/mode-implement.txt`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`
-- current_state: Prompt text exists both inline inside workflow heredocs and separately under `prompts/*`.
-- proposed_adaptation: Use `prompts/header.txt` + `mode-*.txt` as the only prompt source; workflows should assemble prompt text from files at runtime and remove inline duplicates.
-- expected_impact: Eliminates prompt drift, simplifies prompt reviews, and reduces workflow churn.
-- effort: Low
-- risk: Low
-- dependencies: Small refactor of phase workflows to build prompt input from prompt files.
+- ~~current_state: Prompt text exists both inline inside workflow heredocs and separately under `prompts/*`.~~
+- ~~proposed_adaptation: Use `prompts/header.txt` + `mode-*.txt` as the only prompt source; workflows should assemble prompt text from files at runtime and remove inline duplicates.~~
+- ~~expected_impact: Eliminates prompt drift, simplifies prompt reviews, and reduces workflow churn.~~
+- ~~effort: Low~~
+- ~~risk: Low~~
+- ~~dependencies: Small refactor of phase workflows to build prompt input from prompt files.~~
+- Implemented and locally validated: `clarify.yml`, `plan.yml`, and `implement.yml` now assemble prompts from `prompts/header.txt` + `prompts/mode-*.txt` and append retrieved memory context; inline duplicate prompt blocks were removed.
 
 ### 4) priority: P4
 - source_pattern: Manual replay entrypoint (`ci-rerun.yml` with `workflow_dispatch` inputs)
