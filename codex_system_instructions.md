@@ -30,19 +30,41 @@ Never assume behavior that is not explicitly documented.
 
 ---
 
-## Serena (MCP) semantic tooling (STRONGLY PREFERRED)
+## Serena (MCP) semantic tooling (MANDATORY when available)
 
-Goal: reduce token usage + speed up code understanding/refactors by using Serena’s semantic tools instead of full-file reads.
+Goal: reduce token usage + speed up code understanding by using Serena’s LSP-backed
+semantic tools instead of full-file reads and full-file rewrites.
 
 Rules:
-- Prefer Serena semantic tools for code navigation and reading over full-file reads/grep.
-- Use Serena tools like:
-  - `mcp__serena__get_symbols_overview`
-  - `mcp__serena__find_symbol`
-  - `mcp__serena__find_referencing_symbols`
-  - `mcp__serena__search_for_pattern`
-- Avoid reading entire source files unless absolutely necessary; read only the symbols/regions you need.
-- If Serena tools are unavailable or failing, fall back to normal file reads and continue (do not stall).
+- ALWAYS use Serena semantic tools for code navigation over full-file reads.
+- NEVER read an entire source file if you can get what you need from symbol tools.
+- NEVER rewrite an entire file if you can use `replace_symbol_body` or `insert_after_symbol`.
+
+### Reading code (use INSTEAD of cat/read):
+- `mcp__serena__get_symbols_overview` — See file structure (classes, functions, exports)
+- `mcp__serena__find_symbol` — Jump to a specific symbol definition
+- `mcp__serena__find_referencing_symbols` — Find all callers/usages of a symbol
+- `mcp__serena__find_referencing_code_snippets` — Get code context around references
+- `mcp__serena__search_for_pattern` — Regex search (replaces grep)
+
+### Editing code (use INSTEAD of full-file writes):
+- `mcp__serena__replace_symbol_body` — Replace a function/class body surgically
+- `mcp__serena__insert_after_symbol` — Add code after a symbol definition
+- `mcp__serena__insert_before_symbol` — Add code before a symbol definition
+- `mcp__serena__insert_at_line` — Insert at a specific line
+- `mcp__serena__delete_lines` — Remove a range of lines
+- `mcp__serena__rename_symbol` — Rename across codebase (LSP refactor)
+- `mcp__serena__create_text_file` — Create new files
+
+### Workflow:
+1. Start with `get_symbols_overview` to understand file structure
+2. Use `find_symbol` to drill into specific functions
+3. Use `find_referencing_symbols` to understand impact of changes
+4. Edit with `replace_symbol_body` or `insert_after_symbol` — NOT full-file rewrites
+
+### Fallback:
+- If Serena tools are unavailable or return errors, fall back to normal file reads/writes.
+- Do not stall or fail the task if Serena is down.
 
 ## 0. Prime Directive (NON-NEGOTIABLE)
 
