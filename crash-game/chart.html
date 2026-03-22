@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crash Game</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #e8e8e8;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+
+    .game-container {
+      background: #f5f5f5;
+      border-radius: 16px;
+      padding: 24px;
+      width: 560px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.1);
+    }
+
+    .tabs {
+      display: flex;
+      justify-content: center;
+      gap: 0;
+      margin-bottom: 16px;
+    }
+    .tab {
+      padding: 10px 32px;
+      background: #ddd;
+      border: none;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 500;
+      color: #333;
+    }
+    .tab:first-child { border-radius: 8px 0 0 8px; }
+    .tab:last-child { border-radius: 0 8px 8px 0; }
+    .tab.active { background: #fff; }
+
+    .practice-banner {
+      background: #e74c5a;
+      color: #fff;
+      text-align: center;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .chart-wrapper {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      border-radius: 12px;
+      overflow: hidden;
+      background: linear-gradient(180deg, #1a2a3a 0%, #0f1f2e 100%);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .multiplier-display {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #fff;
+      font-size: 64px;
+      font-weight: 900;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      pointer-events: none;
+    }
+    .multiplier-display.crashed { color: #e74c5a; }
+
+    .controls {
+      display: flex;
+      align-items: flex-end;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .control-group { display: flex; flex-direction: column; gap: 4px; }
+    .control-group label { font-size: 13px; color: #666; font-weight: 500; }
+    .control-group .input-row { display: flex; align-items: center; gap: 0; }
+
+    .spin-btn {
+      width: 36px; height: 36px;
+      border: 1px solid #ccc;
+      background: #fff;
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #333;
+    }
+    .spin-btn:hover { background: #f0f0f0; }
+
+    input[type="number"] {
+      width: 80px; height: 36px;
+      border: 1px solid #ccc;
+      text-align: center;
+      font-size: 15px;
+      -moz-appearance: textfield;
+    }
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+    .play-btn {
+      padding: 10px 40px;
+      background: #5cb85c;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-left: auto;
+      height: 36px;
+      display: flex;
+      align-items: center;
+    }
+    .play-btn:hover { background: #4cae4c; }
+    .play-btn:disabled { background: #999; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <div class="game-container">
+    <div class="tabs">
+      <button class="tab active">Manual Bet</button>
+      <button class="tab">Auto Bet</button>
+    </div>
+    <div class="practice-banner">Practice mode – Deposit crypto to play for real!</div>
+    <div class="chart-wrapper">
+      <canvas id="chart"></canvas>
+      <div class="multiplier-display" id="multiplierDisplay">1.00x</div>
+    </div>
+    <div class="controls">
+      <div class="control-group">
+        <label>Target Multiplier</label>
+        <div class="input-row">
+          <button class="spin-btn" onclick="adjustTarget(-0.1)">-</button>
+          <input type="number" id="targetInput" value="10.00" step="0.1" min="1.01" />
+          <button class="spin-btn" onclick="adjustTarget(0.1)">+</button>
+        </div>
+      </div>
+      <div class="control-group">
+        <label>Bet</label>
+        <div class="input-row">
+          <button class="spin-btn" onclick="adjustBet(-1)">-</button>
+          <input type="number" id="betInput" value="0" step="1" min="0" />
+          <button class="spin-btn" onclick="adjustBet(1)">+</button>
+        </div>
+      </div>
+      <button class="play-btn" id="playBtn" onclick="startGame()">Play</button>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('chart');
+    const ctx = canvas.getContext('2d');
+    const multiplierEl = document.getElementById('multiplierDisplay');
+    const playBtn = document.getElementById('playBtn');
+
+    let animationId = null;
+    let startTime = null;
+    let crashed = false;
+    let crashPoint = 1;
+    let currentMultiplier = 1;
+    // History of (elapsed, multiplier) points recorded each frame
+    let history = [];
+
+    function resizeCanvas() {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * devicePixelRatio;
+      canvas.height = rect.height * devicePixelRatio;
+      ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // Chart area with explicit padding
+    const PADDING = { top: 20, right: 20, bottom: 20, left: 20 };
+
+    function chartArea() {
+      const w = canvas.width / devicePixelRatio;
+      const h = canvas.height / devicePixelRatio;
+      return {
+        x: PADDING.left,
+        y: PADDING.top,
+        w: w - PADDING.left - PADDING.right,
+        h: h - PADDING.top - PADDING.bottom,
+      };
+    }
+
+    function drawGrid() {
+      const area = chartArea();
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+      ctx.lineWidth = 1;
+      const cols = 8, rows = 6;
+      for (let i = 0; i <= cols; i++) {
+        const x = area.x + (area.w / cols) * i;
+        ctx.beginPath(); ctx.moveTo(x, area.y); ctx.lineTo(x, area.y + area.h); ctx.stroke();
+      }
+      for (let i = 0; i <= rows; i++) {
+        const y = area.y + (area.h / rows) * i;
+        ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke();
+      }
+    }
+
+    /**
+     * Map a (time, multiplier) point to canvas pixel coordinates.
+     *
+     * Key fixes:
+     * 1. The line starts at the absolute bottom-left corner of the chart area
+     *    (time=0, multiplier=1.00).
+     * 2. We use a square-root scale on the Y axis so that small early
+     *    multipliers still produce visible vertical movement, and large
+     *    multipliers don't push the early portion into an invisible sliver.
+     * 3. The X axis always spans from 0 to the current elapsed time so the
+     *    line tip stays near the right edge, keeping the full curve visible.
+     */
+    function toPixel(t, mult, maxTime, maxMult) {
+      const area = chartArea();
+
+      // X: linear, 0 → maxTime maps to left → right
+      const xRatio = maxTime > 0 ? t / maxTime : 0;
+      const px = area.x + xRatio * area.w;
+
+      // Y: sqrt scale so low multipliers are visible even at high maxMult
+      // mult starts at 1.0; range is [1, maxMult]
+      const range = maxMult - 1;          // e.g. 9 when maxMult = 10
+      const val   = mult - 1;             // 0-based
+      const yRatio = range > 0 ? Math.sqrt(val / range) : 0; // sqrt compression
+      const py = area.y + area.h - yRatio * area.h;           // flip Y
+
+      return { x: px, y: py };
+    }
+
+    function drawCurve() {
+      if (history.length < 1) return;
+      const area = chartArea();
+
+      const maxTime = history[history.length - 1].t;
+      const maxMult = Math.max(currentMultiplier, 1.5); // at least 1.5 for early frames
+
+      // --- Filled area under curve ---
+      ctx.beginPath();
+      // Start at bottom-left corner of the chart
+      const origin = toPixel(0, 1, maxTime, maxMult);
+      ctx.moveTo(origin.x, origin.y);
+
+      for (const pt of history) {
+        const p = toPixel(pt.t, pt.m, maxTime, maxMult);
+        ctx.lineTo(p.x, p.y);
+      }
+      // Close back down to bottom-right, then bottom-left
+      const last = toPixel(history[history.length - 1].t, 1, maxTime, maxMult);
+      ctx.lineTo(last.x, area.y + area.h);
+      ctx.lineTo(area.x, area.y + area.h);
+      ctx.closePath();
+
+      const grad = ctx.createLinearGradient(0, area.y, 0, area.y + area.h);
+      grad.addColorStop(0, 'rgba(255,180,50,0.35)');
+      grad.addColorStop(1, 'rgba(255,180,50,0.05)');
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // --- The line itself ---
+      ctx.beginPath();
+      ctx.moveTo(origin.x, origin.y);
+      for (const pt of history) {
+        const p = toPixel(pt.t, pt.m, maxTime, maxMult);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.strokeStyle = crashed ? '#e74c5a' : '#f0c040';
+      ctx.lineWidth = 3;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      // Glow dot at tip
+      if (!crashed && history.length > 0) {
+        const tip = toPixel(history[history.length - 1].t, history[history.length - 1].m, maxTime, maxMult);
+        ctx.beginPath();
+        ctx.arc(tip.x, tip.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(tip.x, tip.y, 8, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.25)';
+        ctx.fill();
+      }
+    }
+
+    function render() {
+      const w = canvas.width / devicePixelRatio;
+      const h = canvas.height / devicePixelRatio;
+      ctx.clearRect(0, 0, w, h);
+      drawGrid();
+      drawCurve();
+    }
+
+    function generateCrashPoint() {
+      // Simple provably-fair-ish crash point (house edge ~3.5%)
+      const r = Math.random();
+      return Math.max(1.01, 1 / (1 - r) * 0.965);
+    }
+
+    function tick(ts) {
+      if (!startTime) startTime = ts;
+      const elapsed = (ts - startTime) / 1000; // seconds
+
+      // Exponential growth: multiplier = e^(speed * t)
+      const speed = 0.15; // controls how fast the multiplier grows
+      currentMultiplier = Math.exp(speed * elapsed);
+
+      if (currentMultiplier >= crashPoint) {
+        currentMultiplier = crashPoint;
+        crashed = true;
+      }
+
+      history.push({ t: elapsed, m: currentMultiplier });
+
+      multiplierEl.textContent = currentMultiplier.toFixed(2) + 'x';
+      if (crashed) multiplierEl.classList.add('crashed');
+
+      render();
+
+      if (!crashed) {
+        animationId = requestAnimationFrame(tick);
+      } else {
+        playBtn.disabled = false;
+        playBtn.textContent = 'Play';
+      }
+    }
+
+    function startGame() {
+      if (animationId) { cancelAnimationFrame(animationId); }
+
+      crashed = false;
+      currentMultiplier = 1;
+      startTime = null;
+      history = [];
+      crashPoint = generateCrashPoint();
+      multiplierEl.classList.remove('crashed');
+      multiplierEl.textContent = '1.00x';
+      playBtn.disabled = true;
+      playBtn.textContent = '...';
+
+      // Immediately record the origin point so the line is visible from frame 1
+      history.push({ t: 0, m: 1 });
+
+      animationId = requestAnimationFrame(tick);
+    }
+
+    // Initial render (idle state with grid)
+    render();
+
+    function adjustTarget(delta) {
+      const inp = document.getElementById('targetInput');
+      inp.value = Math.max(1.01, parseFloat(inp.value) + delta).toFixed(2);
+    }
+    function adjustBet(delta) {
+      const inp = document.getElementById('betInput');
+      inp.value = Math.max(0, parseInt(inp.value || 0) + delta);
+    }
+  </script>
+</body>
+</html>
