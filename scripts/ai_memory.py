@@ -435,8 +435,13 @@ def cmd_processed_command_check(args: argparse.Namespace) -> int:
         )
         return 0
     except MemoryGitError as exc:
+        error_text = str(exc)
+        lowered = error_text.lower()
+        if "remote branch" in lowered and "not found" in lowered:
+            _print_json({"ok": True, "enabled": True, "exists": False, "entry": None, "warning": error_text})
+            return 0
         print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
-        _print_json({"ok": False, "enabled": True, "exists": False, "entry": None, "error": str(exc)})
+        _print_json({"ok": False, "enabled": True, "exists": False, "entry": None, "error": error_text})
         return 2
     finally:
         if branch_dir:
@@ -527,6 +532,8 @@ def cmd_processed_command_claim(args: argparse.Namespace) -> int:
                     }
                 )
                 return 0
+        except MemoryGitError:
+            pass
         finally:
             if branch_dir:
                 shutil.rmtree(branch_dir, ignore_errors=True)
