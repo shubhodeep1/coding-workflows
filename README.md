@@ -14,6 +14,81 @@ This repository contains reusable `workflow_call` workflows that power the full 
 6. **Cancel on PR Close** — Cancels orphaned workflow runs when PRs close
 7. **Memory Maintenance** — Monthly compaction and archival of AI memory records
 
+## Quickstart
+
+Get AI-powered issue-to-PR automation running in your repository in a few minutes.
+
+### 1. Add required secrets
+
+In your consumer repository, go to **Settings → Secrets and variables → Actions** and add:
+
+- `GH_PAT` — A GitHub Personal Access Token with `repo` scope
+- `OPENROUTER_API_KEY` — Your [OpenRouter](https://openrouter.ai) API key for LLM access
+
+### 2. Create wrapper workflows
+
+Add thin wrapper workflows in your repo's `.github/workflows/` directory. At minimum, create these three files:
+
+**`.github/workflows/ai-clarify.yml`** — Triages new issues automatically
+```yaml
+name: AI Clarify
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  issues: write
+jobs:
+  clarify:
+    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@stable
+    secrets: inherit
+```
+
+**`.github/workflows/ai-plan.yml`** — Generates an implementation plan when you comment `/answer`
+```yaml
+name: AI Plan
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  issues: write
+jobs:
+  plan:
+    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@stable
+    secrets: inherit
+```
+
+**`.github/workflows/ai-implement.yml`** — Executes the plan and opens a PR when you comment `/approved`
+```yaml
+name: AI Implement
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+jobs:
+  implement:
+    uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@stable
+    secrets: inherit
+```
+
+### 3. Open an issue
+
+Create a new issue describing a feature or bug fix. The pipeline kicks off automatically:
+
+1. **Clarify** evaluates whether the issue has enough detail. If not, it comments with clarification questions.
+2. Once the issue is clear, comment `/answer` to trigger **Plan** generation.
+3. Review the plan, then comment `/approved` to start **Implementation** — a PR is created for you.
+
+### 4. (Optional) Add review & housekeeping workflows
+
+For the full experience, also add wrappers for `review_autofix.yml`, `issue_pr_status.yml`, and `cancel_on_pr_close.yml`. See the [Reusable Workflows](#reusable-workflows) table below for triggers and descriptions.
+
 ## Usage
 
 Consumer repositories use thin wrapper workflows that call these reusable workflows:
