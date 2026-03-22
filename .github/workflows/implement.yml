@@ -148,6 +148,25 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
 
+      - name: Fetch workflow support scripts
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          # When called as a reusable workflow from another repo, the caller's
+          # repo is checked out and this repo's scripts/ directory is absent.
+          if [ ! -f scripts/setup_serena.sh ]; then
+            wf_source="$(echo "${{ github.workflow_ref }}" | sed 's|/\.github/.*||')"
+            wf_ref="$(echo "${{ github.workflow_ref }}" | sed 's|.*@||')"
+            mkdir -p scripts
+            for f in setup_serena.sh git_ref_health_check.sh; do
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=${wf_ref}" > "scripts/${f}"
+              chmod +x "scripts/${f}"
+            done
+          fi
+
       - name: Fetch issue metadata
         if: env.SKIP_IMPLEMENT != 'true'
         env:
