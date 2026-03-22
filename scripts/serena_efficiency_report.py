@@ -45,9 +45,9 @@ SERENA_TOOL_RE = re.compile(
 #   read_file, write_file, create_file, patch_file — Codex sandbox tools
 #   cat <path>, head <path>, tail <path> — shell commands
 FILE_OP_RE = re.compile(
-    r"\b(?:read_file|write_file|create_file|patch_file|apply_diff)\b"
+    r"\b(?:read_file|write_file|create_file|patch_file|apply_diff|apply_patch)\b"
     r"|"
-    r'\b(?:cat|head|tail)\s+["\']?[/\w]',
+    r'\b(?:cat|head|tail)\b(?:\s+-[^\s]+)*\s+["\']?[~./\w$-]',
     re.IGNORECASE,
 )
 
@@ -71,8 +71,7 @@ def scan_file(path: str) -> tuple[Counter, int]:
                 for m in SERENA_TOOL_RE.finditer(line):
                     tool_name = m.group(1).lower()
                     serena_counts[tool_name] += 1
-                if FILE_OP_RE.search(line):
-                    file_ops += 1
+                file_ops += sum(1 for _ in FILE_OP_RE.finditer(line))
     except OSError:
         pass
     return serena_counts, file_ops
