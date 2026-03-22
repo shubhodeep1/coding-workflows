@@ -111,10 +111,13 @@ def cmd_repair_labels(args: argparse.Namespace) -> int:
                 desired.append(fallback)
             continue
         if len(present) > 1:
-            keep = present[0]
+            # Keep the most-advanced (last) phase in the group when multiple are present.
+            # This avoids regressing issue state during repairs (e.g., keeping ai:done over ai:implementing).
+            keep = present[-1]
             desired.append(keep)
-            for label in present[1:]:
-                remove.add(label)
+            for label in present:
+                if label != keep:
+                    remove.add(label)
         else:
             desired.append(present[0])
 

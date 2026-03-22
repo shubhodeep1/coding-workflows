@@ -506,21 +506,23 @@ def complete_processed_command(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ensure_memory_layout(memory_root)
+    entry_id = make_processed_command_entry_id(issue_number, comment_id, command)
     entry_path = _processed_command_path(memory_root, issue_number, comment_id, command)
     if not entry_path.exists():
         raise MemoryValidationError(
             f"Processed command entry not found for issue={issue_number} comment={comment_id} command={command}"
         )
 
-    payload = _load_json(entry_path)
-    payload["status"] = sanitize_segment(status.strip().lower(), "completed")
-    payload["timestamp"] = utc_now_iso()
-    merged_metadata = dict(payload.get("metadata") or {})
-    merged_metadata.update(metadata or {})
-    payload["metadata"] = merged_metadata
-    validate_processed_command_entry(payload, memory_root)
-    _atomic_write_json(entry_path, payload)
-    return payload
+    with _file_lock(f"processed-command-{entry_id}"):
+        payload = _load_json(entry_path)
+        payload["status"] = sanitize_segment(status.strip().lower(), "completed")
+        payload["timestamp"] = utc_now_iso()
+        merged_metadata = dict(payload.get("metadata") or {})
+        merged_metadata.update(metadata or {})
+        payload["metadata"] = merged_metadata
+        validate_processed_command_entry(payload, memory_root)
+        _atomic_write_json(entry_path, payload)
+        return payload
 
 
 def record_run_event(
@@ -1124,9 +1126,11 @@ def _run_git(cwd: Path, args: list[str], check: bool = True) -> subprocess.Compl
 
 @contextlib.contextmanager
 def _file_lock(lock_name: str) -> Any:
-    lock_path = Path(tempfile.gettempdir()) / f"{sanitize_segment(lock_name, 'ai-memory')}.lock"
+    lock_key = hashlib.sha256(lock_name.encode("utf-8")).hexdigest()
+    lock_path = Path(tempfile.gettempdir()) / f"ai-memory-{lock_key}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    os.set_inheritable(fd, False)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
