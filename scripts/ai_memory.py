@@ -435,9 +435,9 @@ def cmd_processed_command_check(args: argparse.Namespace) -> int:
         )
         return 0
     except MemoryGitError as exc:
-        print(f"AI_MEMORY_WARNING: {exc}", file=sys.stderr)
-        _print_json({"ok": True, "enabled": True, "exists": False, "entry": None, "warning": str(exc)})
-        return 0
+        print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
+        _print_json({"ok": False, "enabled": True, "exists": False, "entry": None, "error": str(exc)})
+        return 2
     finally:
         if branch_dir:
             shutil.rmtree(branch_dir, ignore_errors=True)
