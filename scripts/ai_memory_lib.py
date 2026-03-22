@@ -30,6 +30,7 @@ PROCESSED_COMMAND_SCHEMA_VERSION = "processed_command_entry.v1"
 RETRIEVAL_PROFILE_SCHEMA_VERSION = "retrieval_profiles.v1"
 MAX_MEMORY_DETAILS_LENGTH = 12000
 LEGACY_MEMORY_ROOT_RELATIVE = ".github/ai-memory"
+CANONICAL_MEMORY_ROOT_RELATIVE = "ai-memory"
 
 ALLOWED_CATEGORIES = {
     "decisions",
@@ -141,6 +142,24 @@ def resolve_memory_root_dir(base_dir: Path, memory_root_relative: str) -> Path:
 
     preferred.parent.mkdir(parents=True, exist_ok=True)
     return preferred
+
+
+def resolve_memory_reference_source_dir(base_dir: Path, memory_root_relative: str) -> Path:
+    requested = _resolve_within_base_dir(base_dir, memory_root_relative)
+    canonical = _resolve_within_base_dir(base_dir, CANONICAL_MEMORY_ROOT_RELATIVE)
+    legacy = _resolve_within_base_dir(base_dir, LEGACY_MEMORY_ROOT_RELATIVE)
+
+    candidates = [requested]
+    if canonical not in candidates:
+        candidates.append(canonical)
+    if legacy not in candidates:
+        candidates.append(legacy)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return requested
 
 
 def _sync_memory_reference_files(source_root: Path, destination_root: Path) -> None:
@@ -1183,7 +1202,7 @@ def persist_memory_operation(
             memory_root = resolve_memory_root_dir(clone_dir, memory_root_relative)
             ensure_memory_layout(memory_root)
 
-            source_memory_root = resolve_memory_root_dir(repo_root, memory_root_relative)
+            source_memory_root = resolve_memory_reference_source_dir(repo_root, memory_root_relative)
             _sync_memory_reference_files(source_memory_root, memory_root)
 
             op_result = operation(clone_dir) or {}
@@ -1279,7 +1298,7 @@ def read_memory_root_from_branch(
         )
 
     memory_root = resolve_memory_root_dir(temp_dir, memory_root_relative)
-    source_memory_root = resolve_memory_root_dir(repo_root, memory_root_relative)
+    source_memory_root = resolve_memory_reference_source_dir(repo_root, memory_root_relative)
     _sync_memory_reference_files(source_memory_root, memory_root)
     if not memory_root.exists():
         ensure_memory_layout(memory_root)
