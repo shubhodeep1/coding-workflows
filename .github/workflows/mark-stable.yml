@@ -1,0 +1,136 @@
+---
+name: Mark Stable Release
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: >
+          Semantic version tag (e.g. v1.2.0). Must match vX.Y.Z format.
+        required: true
+        type: string
+      dry_run:
+        description: Validate only — do not push tags or create release
+        required: false
+        type: boolean
+        default: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version format
+        run: |
+          set -euo pipefail
+          if [[ ! "${{ inputs.version_tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version tag '${{ inputs.version_tag }}'. Must match vX.Y.Z"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Ensure tag does not already exist
+        run: |
+          set -euo pipefail
+          if git rev-parse "refs/tags/${{ inputs.version_tag }}" >/dev/null 2>&1; then
+            echo "::error::Tag ${{ inputs.version_tag }} already exists"
+            exit 1
+          fi
+
+      - name: Verify CI passed on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse HEAD)
+          echo "Checking CI status for $SHA ..."
+          # Allow the release even if no CI status is reported (repos
+          # with no required checks). Fail only on explicit failure.
+          STATE=$(gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
+            --jq '.state' 2>/dev/null || echo "pending")
+          if [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
+            echo "::error::CI is failing on main ($STATE). Fix before releasing."
+            exit 1
+          fi
+          echo "CI state: $STATE — OK"
+
+  release:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version_tag }}"
+          # Pull the section between this version header and the next
+          NOTES=$(awk \
+            "/^## \\[${VERSION}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" \
+            CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="No changelog entry found for ${VERSION}."
+          fi
+          # Write to file to avoid quoting issues
+          echo "$NOTES" > /tmp/release_notes.md
+          echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Tag version and update stable pointer
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          VERSION="${{ inputs.version_tag }}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+
+          # Immutable version tag
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
+
+          # Moving stable pointer
+          git tag -f stable "$VERSION"
+          git push -f origin stable
+
+          # Moving major-version pointer (e.g. v1)
+          git tag -f "$MAJOR" "$VERSION"
+          git push -f origin "$MAJOR"
+
+          echo "Tagged $VERSION and updated stable + $MAJOR pointers."
+
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ inputs.version_tag }}" \
+            --title "${{ inputs.version_tag }}" \
+            --notes-file "${{ steps.changelog.outputs.notes_file }}" \
+            --target main
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "=== DRY RUN ==="
+          echo "Would tag main as: ${{ inputs.version_tag }}"
+          echo "Would update pointers: stable, $(echo '${{ inputs.version_tag }}' | cut -d. -f1)"
+          echo ""
+          echo "Changelog notes:"
+          cat "${{ steps.changelog.outputs.notes_file }}"

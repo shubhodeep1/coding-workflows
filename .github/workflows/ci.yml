@@ -50,3 +50,4 @@ jobs:
           set -euo pipefail
           bash -n scripts/git_ref_health_check.sh
           bash -n scripts/setup_serena.sh
+          bash -n scripts/mark-stable.sh
