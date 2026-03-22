@@ -31,6 +31,7 @@ jobs:
           python3 -m py_compile scripts/ai_memory_lib.py
           python3 -m py_compile scripts/ai_context_utils.py
           python3 -m py_compile scripts/issue_attachment_bundle.py
+          python3 -m py_compile scripts/generate_symbol_diff_summary.py
 
       - name: JSON schema validation
         run: |
@@ -43,3 +44,4 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/git_ref_health_check.sh
+          bash -n scripts/setup_serena.sh

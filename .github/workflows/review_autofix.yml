@@ -70,6 +70,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq curl python3
 
+      - name: Install uv for Serena
+        uses: astral-sh/setup-uv@v4
+
       - name: Initialize runtime workspace
         run: |
           set -euo pipefail
@@ -131,6 +134,16 @@ jobs:
             echo 'network_access = true'
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Setup Serena MCP server
+        env:
+          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
+          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
+          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/setup_serena.sh --mode editing --context codex
 
       - name: Collect PR metadata
         env:
@@ -401,6 +414,25 @@ jobs:
             echo "FIRST_RUN_NO_PREVIOUS_AI_CHANGES" > "${LAST_RUN_DIFF_STAT_FILE}"
           fi
 
+      - name: Generate symbol-level diff summary
+        run: |
+          set -euo pipefail
+          SYMBOL_DIFF_SUMMARY_FILE="${RUNTIME_DIR}/symbol_diff_summary.txt"
+          echo "SYMBOL_DIFF_SUMMARY_FILE=${SYMBOL_DIFF_SUMMARY_FILE}" >> "$GITHUB_ENV"
+
+          if [ -s "${PR_DIFF_FILE}" ] || [ -s "${PR_CHANGED_FILES_FILE}" ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/generate_symbol_diff_summary.py \
+              --diff-file "${PR_DIFF_FILE}" \
+              --changed-files "${PR_CHANGED_FILES_FILE}" \
+              --output "${SYMBOL_DIFF_SUMMARY_FILE}" \
+              --project-dir "." || {
+                echo "::warning::Symbol diff summary generation failed; continuing without it."
+                echo "Symbol diff summary unavailable." > "${SYMBOL_DIFF_SUMMARY_FILE}"
+              }
+          else
+            echo "No diff available for symbol summary." > "${SYMBOL_DIFF_SUMMARY_FILE}"
+          fi
+
       - name: Capture runtime context
         if: always()
         run: |
@@ -511,6 +543,12 @@ jobs:
             "Example command: cat ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
 
           cat > "${REVIEWER_PROMPT_BODY_FILE}" <<__REVIEWER_PROMPT__
+          SYMBOL-LEVEL DIFF SUMMARY
+          A compact symbol-level summary of what changed is available at:
+          ${SYMBOL_DIFF_SUMMARY_FILE}
+          This shows which functions/classes were modified, added, or removed.
+          Read this file FIRST to get a quick overview of the changes before diving into raw diffs.
+
           DIFF CONTEXT
           Two diff files are provided:
 
@@ -674,6 +712,15 @@ jobs:
           2. Would a human reviewer likely choose a simpler fix?
           3. Does the fix introduce unnecessary complexity?
           Prefer the simpler solution.
+
+          SERENA MCP TOOLS (USE WHEN AVAILABLE)
+          Serena semantic tools are available via MCP for efficient code navigation:
+          - Use get_symbols_overview to see file structure without reading entire files.
+          - Use find_symbol to jump to specific symbol definitions.
+          - Use find_referencing_symbols to find callers/usages efficiently.
+          - Use search_for_pattern for regex searches instead of grepping.
+          - These tools reduce token usage significantly. Prefer them over full-file reads.
+          - If Serena tools are unavailable, fall back to normal file reads without stalling.
 
           REVIEW OBJECTIVE
           Review the pull request as a senior engineer and identify issues in the modified code.
@@ -1112,6 +1159,7 @@ jobs:
           - ${LAST_COMMIT_STAT_FILE}
           - ${REVIEWER_CONSENSUS_FILE}
           - ${PR_ALL_COMMENTS_CONTEXT_FILE}
+          - ${SYMBOL_DIFF_SUMMARY_FILE} (symbol-level summary of what changed — read first for quick overview)
           The patch (${PR_DIFF_FILE}) is the primary source of truth for what changed.
           Diff availability status for this run: HAS_PR_DIFF=${HAS_PR_DIFF}, SOURCE=${PR_DIFF_SOURCE}
           If HAS_PR_DIFF=false, the patch file contains placeholder context; prioritize LAST RUN DIFF, changed-files lists, and reviewer evidence.
@@ -1197,6 +1245,16 @@ jobs:
           - reviewer bundle at ${RUNTIME_DIR}/reviewer_bundle.txt
           - do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
           The bug report may contain important context about the problem being fixed.
+
+          SERENA MCP TOOLS (MANDATORY WHEN AVAILABLE)
+          Use Serena MCP symbol-level tools to read and edit code surgically:
+          - Use get_symbols_overview to understand file structure instead of reading entire files.
+          - Use find_symbol to jump to specific definitions.
+          - Use replace_symbol_body to edit individual functions instead of rewriting entire files.
+          - Use insert_after_symbol / insert_before_symbol for precise insertions.
+          - Do NOT read entire files when you only need to modify a specific function.
+          - Do NOT output full file contents when replace_symbol_body can target the exact symbol.
+          - If Serena tools are unavailable, fall back to normal file operations without stalling.
 
           EDITOR ROLE
           You are the final decision maker.
@@ -1492,6 +1550,22 @@ jobs:
             cat "${final_editor_err}"
           fi
 
+      - name: Log token usage and Serena stats
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "${EDITOR_SUMMARY_FILE:-}" ]; then
+            echo "::group::Editor summary size"
+            wc -c < "${EDITOR_SUMMARY_FILE}"
+            echo "::endgroup::"
+          fi
+          if [ -f .serena/tool_usage_stats.json ]; then
+            echo "::group::Serena tool usage stats"
+            cat .serena/tool_usage_stats.json
+            echo "::endgroup::"
+          else
+            echo "No Serena tool usage stats found."
+          fi
 
       - name: Commit changes
         id: commit_changes

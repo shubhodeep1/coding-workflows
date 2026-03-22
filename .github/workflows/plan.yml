@@ -48,6 +48,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq curl gh
 
+      - name: Install uv for Serena
+        uses: astral-sh/setup-uv@v4
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
@@ -269,6 +272,17 @@ jobs:
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
+      - name: Setup Serena MCP server
+        if: env.SKIP_PLAN != 'true'
+        env:
+          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
+          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
+          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/setup_serena.sh --mode planning --context codex
+
       - name: Run Codex planning
         if: env.SKIP_PLAN != 'true'
         env:
@@ -302,6 +316,13 @@ jobs:
           4. API or interface changes
           5. Potential risks or edge cases
           6. Testing considerations
+
+          Serena MCP tools (use when available):
+
+          - Use Serena semantic tools (get_symbols_overview, find_symbol, find_referencing_symbols)
+            to explore the codebase efficiently instead of reading entire files.
+          - This helps you understand code structure with fewer tokens.
+          - If Serena tools are unavailable, fall back to normal file reads.
 
           Rules:
 

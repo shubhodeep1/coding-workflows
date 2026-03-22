@@ -65,6 +65,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq curl gh
 
+      - name: Install uv for Serena
+        if: env.SKIP_IMPLEMENT != 'true'
+        uses: astral-sh/setup-uv@v4
+
       - name: Create runtime workspace
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -267,6 +271,17 @@ jobs:
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${IMPLEMENTATION_CONTEXT_FILE}"
 
+      - name: Setup Serena MCP server
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
+          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
+          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/setup_serena.sh --mode editing --context codex
+
       - name: Create Codex config
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -318,6 +333,15 @@ jobs:
           3. Keep changes minimal and safe.
           4. Avoid modifying unrelated files.
 
+          Serena MCP tools (MANDATORY when available):
+
+          - When reading code, prefer Serena MCP tools (get_symbols_overview, find_symbol,
+            find_referencing_symbols) over reading entire files. This reduces token usage.
+          - When modifying code, prefer Serena MCP tools (replace_symbol_body, insert_after_symbol,
+            insert_before_symbol) over reading and rewriting entire files.
+          - Start with get_symbols_overview to understand file structure before diving in.
+          - If Serena tools are unavailable or error, fall back to normal file operations.
+
           Restrictions:
 
           - Do not ask clarification questions.
@@ -330,6 +354,23 @@ jobs:
           cp "${IMPLEMENTATION_CONTEXT_FILE}" ./implementation_context.txt
           cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"
           rm -f ./implementation_context.txt
+
+      - name: Log token usage and Serena stats
+        if: env.SKIP_IMPLEMENT != 'true' && always()
+        run: |
+          set -euo pipefail
+          if [ -f "${CODEX_OUTPUT_FILE}" ]; then
+            echo "::group::Editor LLM output size"
+            wc -c < "${CODEX_OUTPUT_FILE}"
+            echo "::endgroup::"
+          fi
+          if [ -f .serena/tool_usage_stats.json ]; then
+            echo "::group::Serena tool usage stats"
+            cat .serena/tool_usage_stats.json
+            echo "::endgroup::"
+          else
+            echo "No Serena tool usage stats found (Serena may not have been used or stats not recorded)."
+          fi
 
       - name: Create implementation branch
         if: env.SKIP_IMPLEMENT != 'true'
