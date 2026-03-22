@@ -27,7 +27,7 @@ Persistent writes are stored on a dedicated branch (`ai-memory`) and use this la
 4. Passing candidates become canonical `active` records.
 5. Records can supersede previous canonicals using lineage `supersedes`.
 6. Finalization (`finalize-task`) updates issue lineage on merge/close/cancel.
-7. Command claims (`processed-command-claim`) prevent duplicate `/reclarify`, `/answer`, and `/approved` processing.
+7. Command claims (`processed-command-claim`) provide processed-command ledger support for workflow-level command idempotency.
 
 ## Governance
 

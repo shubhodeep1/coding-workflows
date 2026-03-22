@@ -13,7 +13,6 @@ This repository contains reusable `workflow_call` workflows that power the full 
 5. **Issue PR Status** — Syncs issue labels when PRs are merged/closed
 6. **Cancel on PR Close** — Cancels orphaned workflow runs when PRs close
 7. **Memory Maintenance** — Monthly compaction and archival of AI memory records
-8. **Label Maintenance** — Scheduled AI label contract sync and orphan-state repair
 
 ## Quickstart
 
@@ -159,22 +158,6 @@ jobs:
     secrets: inherit
 ```
 
-**`.github/workflows/ai-label-maintenance.yml`** — Scheduled AI label contract enforcement and orphan repair
-```yaml
-name: AI Label Maintenance
-on:
-  schedule:
-    - cron: '*/30 * * * *'
-permissions:
-  issues: write
-jobs:
-  maintain-labels:
-    uses: shubhodeep1/coding-workflows/.github/workflows/ai_label_maintenance.yml@stable
-    with:
-      dry_run: 'false'
-    secrets: inherit
-```
-
 > All internal wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
 
 ### 3. Open an issue
@@ -222,7 +205,6 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `issue_pr_status.yml` | `pull_request.closed` | Label/state sync |
 | `cancel_on_pr_close.yml` | `pull_request.closed` | Active-run cancellation |
 | `memory_maintenance.yml` | `schedule` (monthly) | Memory compaction/archival |
-| `ai_label_maintenance.yml` | `schedule`, `workflow_dispatch` | AI label contract sync + orphan repair |
 
 ## Required Secrets
 

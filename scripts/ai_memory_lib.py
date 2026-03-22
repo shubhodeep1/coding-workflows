@@ -112,9 +112,27 @@ def ensure_memory_layout(memory_root: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
 
 
+def _resolve_within_base_dir(base_dir: Path, relative_path: str) -> Path:
+    path_text = str(relative_path or "").strip()
+    if path_text in {"", "."}:
+        raise MemoryValidationError("memory_root_relative must be a non-empty relative path")
+
+    candidate = Path(path_text)
+    if candidate.is_absolute():
+        raise MemoryValidationError(f"memory_root_relative must be relative: {relative_path!r}")
+
+    resolved = (base_dir / candidate).resolve()
+    base_resolved = base_dir.resolve()
+    try:
+        resolved.relative_to(base_resolved)
+    except ValueError as exc:
+        raise MemoryValidationError(f"memory_root_relative escapes repository root: {relative_path!r}") from exc
+    return resolved
+
+
 def resolve_memory_root_dir(base_dir: Path, memory_root_relative: str) -> Path:
-    preferred = base_dir / memory_root_relative
-    legacy = base_dir / LEGACY_MEMORY_ROOT_RELATIVE
+    preferred = _resolve_within_base_dir(base_dir, memory_root_relative)
+    legacy = _resolve_within_base_dir(base_dir, LEGACY_MEMORY_ROOT_RELATIVE)
 
     if preferred.exists():
         return preferred
@@ -133,14 +151,22 @@ def _sync_memory_reference_files(source_root: Path, destination_root: Path) -> N
     destination_schemas = destination_root / "schemas"
     if source_schemas.exists():
         for schema_file in sorted(source_schemas.glob("*.json")):
+            if not schema_file.is_file():
+                continue
             destination_schemas.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(schema_file, destination_schemas / schema_file.name)
+            destination_file = destination_schemas / schema_file.name
+            if destination_file.is_symlink():
+                raise MemoryValidationError(f"Refusing to overwrite symlinked schema file: {destination_file}")
+            shutil.copy2(schema_file, destination_file)
 
     source_config = source_root / "config" / "retrieval_profiles.v1.json"
-    if source_config.exists():
+    if source_config.is_file():
         destination_config = destination_root / "config"
         destination_config.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_config, destination_config / source_config.name)
+        destination_file = destination_config / source_config.name
+        if destination_file.is_symlink():
+            raise MemoryValidationError(f"Refusing to overwrite symlinked config file: {destination_file}")
+        shutil.copy2(source_config, destination_file)
 
 
 def _load_json(path: Path) -> Any:
@@ -443,29 +469,31 @@ def claim_processed_command(
     metadata: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     ensure_memory_layout(memory_root)
+    entry_id = make_processed_command_entry_id(issue_number, comment_id, command)
     entry_path = _processed_command_path(memory_root, issue_number, comment_id, command)
-    if entry_path.exists():
-        payload = _load_json(entry_path)
-        validate_processed_command_entry(payload, memory_root)
-        return payload, False
+    with _file_lock(f"processed-command-{entry_id}"):
+        if entry_path.exists():
+            payload = _load_json(entry_path)
+            validate_processed_command_entry(payload, memory_root)
+            return payload, False
 
-    entry = {
-        "entry_id": make_processed_command_entry_id(issue_number, comment_id, command),
-        "schema_version": PROCESSED_COMMAND_SCHEMA_VERSION,
-        "issue_number": int(issue_number),
-        "comment_id": int(comment_id),
-        "command": command.strip().lower(),
-        "workflow": workflow,
-        "status": "claimed",
-        "actor": actor,
-        "run_id": sanitize_segment(run_id, "run-unknown"),
-        "run_attempt": int(run_attempt),
-        "timestamp": utc_now_iso(),
-        "metadata": metadata or {},
-    }
-    validate_processed_command_entry(entry, memory_root)
-    _atomic_write_json(entry_path, entry)
-    return entry, True
+        entry = {
+            "entry_id": entry_id,
+            "schema_version": PROCESSED_COMMAND_SCHEMA_VERSION,
+            "issue_number": int(issue_number),
+            "comment_id": int(comment_id),
+            "command": command.strip().lower(),
+            "workflow": workflow,
+            "status": "claimed",
+            "actor": actor,
+            "run_id": sanitize_segment(run_id, "run-unknown"),
+            "run_attempt": int(run_attempt),
+            "timestamp": utc_now_iso(),
+            "metadata": metadata or {},
+        }
+        validate_processed_command_entry(entry, memory_root)
+        _atomic_write_json(entry_path, entry)
+        return entry, True
 
 
 def complete_processed_command(
