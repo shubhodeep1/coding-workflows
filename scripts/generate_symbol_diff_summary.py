@@ -186,7 +186,8 @@ def _parse_serena_result(result):
                 if kind_num in {5, 6, 9, 10, 11, 12, 23}:
                     symbols.append({
                         "name": m.group(1),
-                        "line": int(m.group(2)) + 1,
+                        # `index-file -v` emits 1-based line numbers.
+                        "line": int(m.group(2)),
                         "text": line.strip(),
                     })
                 continue
