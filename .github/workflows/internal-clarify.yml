@@ -1,0 +1,16 @@
+name: "Internal: AI Clarify"
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  clarify:
+    uses: ./.github/workflows/clarify.yml
+    secrets: inherit

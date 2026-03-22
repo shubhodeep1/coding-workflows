@@ -1,0 +1,13 @@
+name: "Internal: Cancel on PR Close"
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  cancel:
+    uses: ./.github/workflows/cancel_on_pr_close.yml
+    secrets: inherit

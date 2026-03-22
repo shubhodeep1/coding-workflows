@@ -1,0 +1,14 @@
+name: "Internal: AI Plan"
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  plan:
+    uses: ./.github/workflows/plan.yml
+    secrets: inherit
