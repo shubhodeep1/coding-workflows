@@ -1,0 +1,13 @@
+name: "Internal: Issue-PR Status Sync"
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  sync-status:
+    uses: ./.github/workflows/issue_pr_status.yml
+    secrets: inherit

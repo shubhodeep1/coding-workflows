@@ -1,0 +1,17 @@
+name: "Internal: AI Review & Autofix"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    uses: ./.github/workflows/review_autofix.yml
+    with:
+      allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
+    secrets: inherit

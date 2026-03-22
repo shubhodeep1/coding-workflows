@@ -1,0 +1,13 @@
+name: "Internal: Memory Maintenance"
+
+on:
+  schedule:
+    - cron: "0 3 1 * *"  # 1st of each month at 03:00 UTC
+
+permissions:
+  contents: write
+
+jobs:
+  maintenance:
+    uses: ./.github/workflows/memory_maintenance.yml
+    secrets: inherit
