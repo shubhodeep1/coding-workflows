@@ -34,12 +34,12 @@ jobs:
           sudo apt-get install -y jq curl gh
 
       - name: Install uv for Serena
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v5
 
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
       - name: Fetch workflow support scripts
@@ -164,7 +164,7 @@ jobs:
             exit 1
           fi
 
-          cat > "${CODEX_PROMPT_FILE}" <<'EOF'
+          cat > "${CODEX_PROMPT_FILE}" <<'PROMPT'
           You are executing the CLARIFICATION phase of the AI development pipeline.
 
           Your task is to determine whether the GitHub issue contains enough information to implement the task.
@@ -206,7 +206,7 @@ jobs:
           STATUS: CLEAR
           QUESTIONS:
           - None
-          EOF
+          PROMPT
 
           cp "${ISSUE_CONTEXT_FILE}" ./issue_context.txt
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
@@ -346,6 +346,3 @@ jobs:
           if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
             echo "::warning::Telegram failure notification failed: http_code=${HTTP_CODE} response=${RESPONSE}"
           fi
-      - name: Exit safely
-        if: failure()
-        run: exit 0
