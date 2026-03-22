@@ -56,8 +56,8 @@ Candidate and run-ledger tiers can be archived monthly with `compact --month YYY
 
 ## Interfaces
 
-CLI entrypoint: `.github/scripts/ai_memory.py`
-Library: `.github/scripts/ai_memory_lib.py`
+CLI entrypoint: `scripts/ai_memory.py`
+Library: `scripts/ai_memory_lib.py`
 
 Workflows must use CLI subcommands and avoid duplicated inline memory logic.
 
