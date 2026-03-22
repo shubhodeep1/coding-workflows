@@ -24,6 +24,7 @@ Output format:
 """
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -125,11 +126,15 @@ def try_serena_symbols(file_path, project_dir):
 
             agent = SerenaAgent(project=project_root)
             try:
-                result = agent.execute_task(
-                    lambda: agent.get_tool_by_name("get_symbols_overview").apply(normalized_path)
-                )
+                try:
+                    result = agent.execute_task(
+                        lambda: agent.get_tool_by_name("get_symbols_overview").apply(normalized_path)
+                    )
+                except (AttributeError, TypeError):
+                    result = agent.call_tool("get_symbols_overview", {"file_path": normalized_path})
             finally:
-                agent.shutdown()
+                if hasattr(agent, "shutdown"):
+                    agent.shutdown()
 
             if result:
                 parsed_result = _parse_serena_result(result)
@@ -150,6 +155,10 @@ def try_serena_symbols(file_path, project_dir):
             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         )
         if proc.returncode == 0 and proc.stdout.strip():
+            try:
+                return _parse_serena_result(json.loads(proc.stdout))
+            except json.JSONDecodeError:
+                pass
             return _parse_serena_result(proc.stdout)
         return None
     except Exception:
@@ -351,13 +360,6 @@ def generate_summary(diff_text, changed_files_text, project_dir):
     output_lines = []
     serena_available = False
 
-    # Try Serena first for the first file to check availability
-    if file_hunks:
-        first_file = next(iter(file_hunks))
-        first_result = try_serena_symbols(first_file, project_dir)
-        if first_result is not None:
-            serena_available = True
-
     for file_path in sorted(file_hunks.keys()):
         hunks = file_hunks[file_path]
 
@@ -369,10 +371,10 @@ def generate_summary(diff_text, changed_files_text, project_dir):
 
         # Get symbols for this file
         symbols = []
-        if serena_available:
-            serena_symbols = try_serena_symbols(file_path, project_dir)
-            if serena_symbols:
-                symbols = serena_symbols
+        serena_symbols = try_serena_symbols(file_path, project_dir)
+        if serena_symbols is not None:
+            serena_available = True
+            symbols = serena_symbols
 
         if not symbols:
             symbols = get_symbols_heuristic(file_path, project_dir)
