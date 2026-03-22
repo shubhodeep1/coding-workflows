@@ -65,8 +65,7 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | Variable | Default | Description |
 |---|---|---|
 | `WORKFLOW_EDITOR_MODEL` | `openai/gpt-5.3-codex` | Model for code editing tasks |
-| `TG_ADMIN_USERID` | — | Telegram admin user ID |
-| `TG_ADMIN_CHAT_ID` | — | Telegram admin chat ID |
+| `TG_ADMIN_CHAT_ID` | — | Telegram chat ID for notifications |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | `true` | Auto-approve clear plans |
 | `ALLOW_WORKFLOW_EDITS` | `false` | Allow AI edits to workflow files |
 

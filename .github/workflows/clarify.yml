@@ -237,12 +237,11 @@ jobs:
         if: steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
-          TG_ADMIN_USERID: ${{ vars.TG_ADMIN_USERID }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
         run: |
           set -euo pipefail
 
-          CHAT_ID="${TG_ADMIN_USERID:-${TG_CHAT_ID:-}}"
+          CHAT_ID="${TG_CHAT_ID:-}"
           if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
             echo "Warning: Telegram clarification notification skipped (missing TG_BOT_SECRET or chat_id)"
             exit 0
@@ -279,12 +278,11 @@ jobs:
         if: failure()
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
-          TG_ADMIN_USERID: ${{ vars.TG_ADMIN_USERID }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
         run: |
           set -euo pipefail
 
-          CHAT_ID="${TG_ADMIN_USERID:-${TG_CHAT_ID:-}}"
+          CHAT_ID="${TG_CHAT_ID:-}"
           if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
             echo "Warning: Telegram failure notification skipped (missing TG_BOT_SECRET or chat_id)"
             exit 0
