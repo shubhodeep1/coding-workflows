@@ -166,7 +166,8 @@ if [ ! -f .serena/project.yml ]; then
 		for dir in ${SERENA_IGNORED_DIRS}; do
 			# SERENA_IGNORED_DIRS is a space-delimited list by design.
 			[ -n "${dir}" ] || continue
-			safe_dir="$(printf '%s' "${dir}" | tr -d '\r\n\t')"
+			safe_dir="$(printf '%s' "${dir}" | tr -d '[:cntrl:]')"
+			safe_dir="${safe_dir//\\/\\\\}"
 			safe_dir="${safe_dir//\'/\'\'}"
 			IGNORED_YAML="${IGNORED_YAML}  - '${safe_dir}'\n"
 		done
