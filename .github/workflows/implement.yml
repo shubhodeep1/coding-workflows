@@ -63,9 +63,6 @@ jobs:
           CODEX_VERSION="v0.114.0"
           npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
 
-          sudo apt-get update
-          sudo apt-get install -y jq curl gh
-
       - name: Install uv for Serena
         if: env.SKIP_IMPLEMENT != 'true'
         uses: astral-sh/setup-uv@v4
@@ -145,7 +142,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
       - name: Fetch workflow support scripts
@@ -161,7 +158,7 @@ jobs:
           if [ ! -f scripts/setup_serena.sh ]; then
             wf_source="${{ github.repository_owner }}/coding-workflows"
             mkdir -p scripts
-            for f in setup_serena.sh git_ref_health_check.sh; do
+            for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py; do
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}" > "scripts/${f}"
               chmod +x "scripts/${f}"
@@ -312,7 +309,7 @@ jobs:
             echo 'web_search = "disabled"'
             echo 'model_provider = "openrouter"'
             echo "model = \"${MODEL_EDITOR}\""
-              echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+            echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
             echo
             echo '[model_providers.openrouter]'
             echo 'name = "OpenRouter"'
@@ -323,6 +320,11 @@ jobs:
             echo 'network_access = true'
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+          # Expose MCP config path for codex exec (which requires explicit --mcp-config)
+          if [ -f ~/.codex/mcp.json ]; then
+            echo "CODEX_MCP_CONFIG=$HOME/.codex/mcp.json" >> "$GITHUB_ENV"
+          fi
 
       - name: Run Codex implementation
         if: env.SKIP_IMPLEMENT != 'true'
@@ -363,6 +365,19 @@ jobs:
           - Start with get_symbols_overview to understand file structure before diving in.
           - If Serena tools are unavailable or error, fall back to normal file operations.
 
+          Test verification:
+
+          - If `pytest` is not installed, install it via `pip install pytest` before running.
+          - When running `npm test`, treat "Missing script" errors as a pass (the project
+            has no tests defined), but treat any other test failure as a real error.
+
+          Token efficiency rules:
+
+          - Read only the line ranges you need (use sed -n or head/tail), not entire large files.
+          - Do NOT run `git diff` to display your own changes at the end. The CI pipeline
+            handles commit and diff reporting separately.
+          - Avoid re-reading files you have already read unless the content changed.
+
           Restrictions:
 
           - Do not ask clarification questions.
@@ -373,7 +388,13 @@ jobs:
           EOF
 
           cp "${IMPLEMENTATION_CONTEXT_FILE}" ./implementation_context.txt
-          cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"
+
+          MCP_ARGS=()
+          if [ -n "${CODEX_MCP_CONFIG:-}" ] && [ -f "${CODEX_MCP_CONFIG}" ]; then
+            MCP_ARGS=("--mcp-config" "${CODEX_MCP_CONFIG}")
+          fi
+
+          cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto "${MCP_ARGS[@]}" > "${CODEX_OUTPUT_FILE}"
           rm -f ./implementation_context.txt
 
       - name: Log token usage and Serena stats
@@ -421,6 +442,38 @@ jobs:
             exit 1
           fi
           git checkout -B "${TARGET_BRANCH}"
+
+      - name: Validate syntax of changed files
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          ERRORS=0
+
+          # Check all modified/added Python files for syntax errors
+          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.py'); do
+            if [ -f "$f" ]; then
+              if ! python3 -m py_compile "$f" 2>&1; then
+                echo "::error file=${f}::Syntax error in ${f}"
+                ERRORS=$((ERRORS + 1))
+              fi
+            fi
+          done
+
+          # Check all modified/added JS files for syntax errors
+          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.js'); do
+            if [ -f "$f" ]; then
+              if ! node --check "$f" 2>&1; then
+                echo "::error file=${f}::Syntax error in ${f}"
+                ERRORS=$((ERRORS + 1))
+              fi
+            fi
+          done
+
+          if [ "${ERRORS}" -gt 0 ]; then
+            echo "::error::${ERRORS} file(s) failed syntax validation."
+            exit 1
+          fi
+          echo "All changed files passed syntax validation."
 
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
