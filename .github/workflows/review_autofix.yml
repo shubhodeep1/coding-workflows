@@ -61,13 +61,14 @@ jobs:
           set -euo pipefail
           # When called as a reusable workflow from another repo, the caller's
           # repo is checked out and this repo's scripts/ directory is absent.
+          # NOTE: github.workflow_ref resolves to the *caller* workflow, not
+          # this reusable workflow, so we cannot derive the source repo from it.
           if [ ! -f scripts/setup_serena.sh ]; then
-            wf_source="$(echo "${{ github.workflow_ref }}" | sed 's|/\.github/.*||')"
-            wf_ref="$(echo "${{ github.workflow_ref }}" | sed 's|.*@||')"
+            wf_source="${{ github.repository_owner }}/coding-workflows"
             mkdir -p scripts
             for f in setup_serena.sh git_ref_health_check.sh; do
               gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=${wf_ref}" > "scripts/${f}"
+                "repos/${wf_source}/contents/scripts/${f}" > "scripts/${f}"
               chmod +x "scripts/${f}"
             done
           fi
