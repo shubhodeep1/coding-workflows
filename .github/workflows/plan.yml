@@ -67,7 +67,7 @@ jobs:
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
           if [ ! -f scripts/setup_serena.sh ]; then
-            wf_source="${{ github.repository_owner }}/coding-workflows"
+            wf_source="shubhodeep1/coding-workflows"
             mkdir -p scripts
             for f in setup_serena.sh git_ref_health_check.sh; do
               gh api -H 'Accept: application/vnd.github.raw+json' \
