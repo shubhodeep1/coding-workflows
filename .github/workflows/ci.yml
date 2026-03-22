@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: YAML lint
+        run: |
+          set -euo pipefail
+          pip install yamllint
+          yamllint -s .github/workflows/*.yml .github/actions/*/action.yml
+
+      - name: Python syntax check
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/ai_memory.py
+          python3 -m py_compile scripts/ai_memory_lib.py
+          python3 -m py_compile scripts/ai_context_utils.py
+          python3 -m py_compile scripts/issue_attachment_bundle.py
+
+      - name: JSON schema validation
+        run: |
+          set -euo pipefail
+          for f in schemas/*.json examples/*.json; do
+            [ -f "$f" ] && python3 -c "import json; json.load(open('$f'))" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Shell script lint
+        run: |
+          set -euo pipefail
+          bash -n scripts/git_ref_health_check.sh

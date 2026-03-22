@@ -1,5 +1,11 @@
 # Squad Workflow Improvements Report
 
+> **Note**: This report was generated before the workflow refactoring. Old
+> workflow names (`ai-clarify.yml`, `ai-plan.yml`, `ai-implement.yml`,
+> `ai-auto-review-and-edit.yml`, `ai-issue-pr-status.yml`) have been updated to
+> their current names (`clarify.yml`, `plan.yml`, `implement.yml`,
+> `review_autofix.yml`, `issue_pr_status.yml`).
+
 Generated at: 2026-03-22T04:24:36Z
 
 Analyzed external repository:
@@ -31,8 +37,8 @@ Method:
 ## Current-State Baseline (This Repository)
 
 Strengths already in place:
-- End-to-end 3-phase issue pipeline with command gating and phase labels: `.github/workflows/ai-clarify.yml`, `.github/workflows/ai-plan.yml`, `.github/workflows/ai-implement.yml`.
-- PR autofix and review hardening pipeline with runtime context capture: `.github/workflows/ai-auto-review-and-edit.yml`.
+- End-to-end 3-phase issue pipeline with command gating and phase labels: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`.
+- PR autofix and review hardening pipeline with runtime context capture: `.github/workflows/review_autofix.yml`.
 - Shared prompt fragments exist for phase modes: `prompts/header.txt`, `prompts/mode-clarify.txt`, `prompts/mode-plan.txt`, `prompts/mode-implement.txt`.
 - AI memory infrastructure exists for persistence and retrieval: `scripts/ai_memory.py`, `scripts/ai_memory_lib.py`.
 
@@ -60,8 +66,8 @@ Gaps observed:
 - source_pattern: Label sync + mutual-exclusivity enforcement (`sync-squad-labels.yml`, `squad-label-enforce.yml`, `squad-heartbeat.yml`)
 - source_refs:
   - squad: `.github/workflows/sync-squad-labels.yml`, `.github/workflows/squad-label-enforce.yml`, `.github/workflows/squad-heartbeat.yml`
-  - local: `.github/workflows/ai-clarify.yml`, `.github/workflows/ai-plan.yml`, `.github/workflows/ai-implement.yml`, `.github/workflows/ai-issue-pr-status.yml`, `.github/workflows/ai-auto-review-and-edit.yml`
-- current_state: AI labels are transitioned in multiple workflows independently (`ai-clarify.yml`, `ai-plan.yml`, `ai-implement.yml`, `ai-issue-pr-status.yml`, `ai-auto-review-and-edit.yml`).
+  - local: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/workflows/issue_pr_status.yml`, `.github/workflows/review_autofix.yml`
+- current_state: AI labels are transitioned in multiple workflows independently (`clarify.yml`, `plan.yml`, `implement.yml`, `issue_pr_status.yml`, `review_autofix.yml`).
 - proposed_adaptation: Introduce a single AI label contract (authoritative list + allowed transitions) and enforce it centrally (sync + exclusivity + orphan repair).
 - expected_impact: Lower rate of invalid/stuck issue phase states; simpler incident triage.
 - effort: Medium
@@ -72,7 +78,7 @@ Gaps observed:
 - source_pattern: Idempotent workflow behavior with explicit rerun-safe logic (seen across label-driven `squad` workflows)
 - source_refs:
   - squad: `.github/workflows/squad-triage.yml`, `.github/workflows/squad-issue-assign.yml`, `.github/workflows/ci-rerun.yml`
-  - local: `.github/workflows/ai-plan.yml`, `.github/workflows/ai-implement.yml`, `scripts/ai_memory.py`, `scripts/ai_memory_lib.py`
+  - local: `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `scripts/ai_memory.py`, `scripts/ai_memory_lib.py`
 - current_state: Plan workflow protects against stale `/answer`, but command processing is not tracked through a shared processed-comment ledger across all phases.
 - proposed_adaptation: Track processed issue comment IDs for `/reclarify`, `/answer`, and `/approved` in shared memory (reuse `scripts/ai_memory.py` capabilities) and guard every phase on that ledger.
 - expected_impact: Prevents duplicate phase execution and accidental re-processing after retries/race conditions.
@@ -84,7 +90,7 @@ Gaps observed:
 - source_pattern: Template/source-of-truth discipline in `squad` (`templates/workflows/*` mirrored into active workflows)
 - source_refs:
   - squad: `templates/workflows/*.yml`, `.github/workflows/*.yml`, `.squad/templates/workflows/*.yml`
-  - local: `prompts/header.txt`, `prompts/mode-clarify.txt`, `prompts/mode-plan.txt`, `prompts/mode-implement.txt`, `.github/workflows/ai-clarify.yml`, `.github/workflows/ai-plan.yml`, `.github/workflows/ai-implement.yml`
+  - local: `prompts/header.txt`, `prompts/mode-clarify.txt`, `prompts/mode-plan.txt`, `prompts/mode-implement.txt`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`
 - current_state: Prompt text exists both inline inside workflow heredocs and separately under `prompts/*`.
 - proposed_adaptation: Use `prompts/header.txt` + `mode-*.txt` as the only prompt source; workflows should assemble prompt text from files at runtime and remove inline duplicates.
 - expected_impact: Eliminates prompt drift, simplifies prompt reviews, and reduces workflow churn.
@@ -96,7 +102,7 @@ Gaps observed:
 - source_pattern: Manual replay entrypoint (`ci-rerun.yml` with `workflow_dispatch` inputs)
 - source_refs:
   - squad: `.github/workflows/ci-rerun.yml`
-  - local: `.github/workflows/ai-clarify.yml`, `.github/workflows/ai-plan.yml`, `.github/workflows/ai-implement.yml`
+  - local: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`
 - current_state: Recovery relies on posting issue comments to re-trigger phases.
 - proposed_adaptation: Add a controlled manual replay workflow (`workflow_dispatch`) that accepts `issue_number`, `phase`, and optional `comment_id`, then runs existing context-build + guard logic.
 - expected_impact: Faster, safer operator recovery for transient workflow failures.
@@ -108,7 +114,7 @@ Gaps observed:
 - source_pattern: Generated/install-synced workflow copies (`templates/workflows/*`, `.squad/templates/workflows/*`, `.github/workflows/*`)
 - source_refs:
   - squad: `templates/workflows/*.yml`, `.squad/templates/workflows/*.yml`, `.github/workflows/*.yml`
-  - local: `.github/workflows/ai-clarify.yml`, `.github/workflows/ai-plan.yml`, `.github/workflows/ai-implement.yml`, `.github/workflows/ai-auto-review-and-edit.yml`
+  - local: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml`
 - current_state: AI workflows repeat shared shell blocks (Codex config creation, Telegram delivery patterns, common guards) with manual copy/update.
 - proposed_adaptation: Establish workflow snippet/template generation for shared AI pipeline blocks and add drift checks in CI.
 - expected_impact: Higher consistency for security/guardrail fixes across all phases.

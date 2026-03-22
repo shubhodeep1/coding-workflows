@@ -591,13 +591,13 @@ Each workflow must track processed commands using:
 
 ## Codex settings for all phases
 
-Codex to be run with model openai/gpt-5.3-codex, no timeout and search turned off (copy settings from the editor process in .github/workflows/ai-auto-review-and-edit.yml)
+Codex to be run with model openai/gpt-5.3-codex, no timeout and search turned off (copy settings from the editor process in .github/workflows/review_autofix.yml)
 
 codex_system_instructions.md is to be included in the context for codex for every phase and Codex is to be prompted to read and follow this strictly before doing anything in each phase.
 
 ## Telegram messaging settings
 
-For Telegram messaging in all workflows, copy the same settings and api calls as .github/workflows/ai-auto-review-and-edit.yml
+For Telegram messaging in all workflows, copy the same settings and api calls as .github/workflows/review_autofix.yml
 
 # Future Extensions
 

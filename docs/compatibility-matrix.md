@@ -28,5 +28,5 @@
 ## Runner Requirements
 
 - `ubuntu-latest` (Ubuntu 22.04+)
-- Node.js 22 (installed by setup-runtime action)
-- Python 3.12 (installed by setup-runtime action)
+- Node.js 22 (installed by each workflow's setup steps)
+- Python 3.12 (installed by each workflow's setup steps)

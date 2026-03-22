@@ -470,7 +470,7 @@ jobs:
           } | sort > "${RUNTIME_CONTEXT_DIR}/environment_sorted.txt" || true
           git log --oneline -n 20 > "${RUNTIME_CONTEXT_DIR}/recent_commits.txt" || true
           git branch -a > "${RUNTIME_CONTEXT_DIR}/branches.txt" || true
-          cp .github/workflows/ai-auto-review-and-edit.yml "${RUNTIME_CONTEXT_DIR}/workflow_snapshot.yml" || true
+          cp .github/workflows/review_autofix.yml "${RUNTIME_CONTEXT_DIR}/workflow_snapshot.yml" || true
           {
             [ -d "${HOME}/.npm/_logs" ] && ls -1 "${HOME}/.npm/_logs" | tail -n 5 || true
             [ -f "${GITHUB_STEP_SUMMARY:-}" ] && cat "${GITHUB_STEP_SUMMARY}" || true
