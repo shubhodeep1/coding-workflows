@@ -193,37 +193,29 @@ default_modes:
   - editing
 SERENA_GLOBAL_EOF
 
-# ── 6. Create Codex MCP config ───────────────────────────────────────────────
+# ── 6. Append Serena MCP server to Codex config.toml ─────────────────────────
+#
+# Codex CLI reads MCP servers from [mcp_servers.<name>] tables in config.toml,
+# NOT from a separate mcp.json file. Append to the existing config.toml that
+# the workflow creates earlier.
 
+CODEX_CONFIG="${HOME}/.codex/config.toml"
 mkdir -p ~/.codex
 
-# Build mode args
-MODE_ARGS=""
-if [ "${SERENA_MODE}" = "planning" ]; then
-	MODE_ARGS='"--mode", "one-shot", "--mode", "planning"'
-else
-	MODE_ARGS='"--mode", "one-shot", "--mode", "editing"'
+if [ ! -f "${CODEX_CONFIG}" ]; then
+	touch "${CODEX_CONFIG}"
 fi
 
-cat > ~/.codex/mcp.json <<MCP_EOF
-{
-  "mcpServers": {
-    "serena": {
-      "command": "uvx",
-      "args": [
-        "--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}",
-        "serena", "start-mcp-server",
-        "--context", "${SERENA_CONTEXT}",
-        ${MODE_ARGS},
-        "--project-from-cwd",
-        "--open-web-dashboard", "false"
-      ]
-    }
-  }
-}
+cat >> "${CODEX_CONFIG}" <<MCP_EOF
+
+[mcp_servers.serena]
+command = "uvx"
+args = ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", "--mode", "one-shot", "--mode", "${SERENA_MODE}", "--project-from-cwd", "--open-web-dashboard", "false"]
+startup_timeout_sec = 30
+tool_timeout_sec = 240
 MCP_EOF
 
-echo "Codex MCP config written to ~/.codex/mcp.json"
+echo "Serena MCP server appended to ${CODEX_CONFIG}"
 
 # ── 7. Health check ──────────────────────────────────────────────────────────
 

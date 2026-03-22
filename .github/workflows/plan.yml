@@ -39,22 +39,39 @@ jobs:
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
 
     steps:
-      - name: Install dependencies
+      - name: Cache Codex CLI
+        id: cache-codex
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/codex
+          key: codex-v0.114.0
+
+      - name: Install Codex CLI
+        if: steps.cache-codex.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           CODEX_VERSION="v0.114.0"
           npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+          # Persist to tool cache for future runs
+          CODEX_BIN="$(which codex)"
+          CODEX_DIR="$(dirname "${CODEX_BIN}")"
+          mkdir -p "${{ runner.tool_cache }}/codex"
+          cp -r "$(npm root -g)/@openai/codex" "${{ runner.tool_cache }}/codex/package"
+          cp "${CODEX_BIN}" "${{ runner.tool_cache }}/codex/codex"
 
-          sudo apt-get update
-          sudo apt-get install -y jq curl gh
+      - name: Restore Codex CLI from cache
+        if: steps.cache-codex.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          npm install -g "${{ runner.tool_cache }}/codex/package" --no-audit --no-fund
 
       - name: Install uv for Serena
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v7
 
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
       - name: Fetch workflow support scripts
@@ -85,7 +102,6 @@ jobs:
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
             echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
-            echo "PULLS_FILE=${RUNTIME_DIR}/issue_pulls.json"
             echo "PLANNING_CONTEXT_FILE=${RUNTIME_DIR}/planning_context.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
@@ -151,12 +167,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline?per_page=100" \
-            -H "Accept: application/vnd.github+json" > "${PULLS_FILE}"
-
-          LINKED_PR_COUNT="$(jq -r '[.[] | select(.event == "cross-referenced") | .source.issue.pull_request.url? // empty] | unique | length' "${PULLS_FILE}")"
+          # Use search API to find open PRs that mention this issue (catches both
+          # cross-references and commit-message links, unlike the timeline API)
+          LINKED_PR_COUNT="$(gh pr list --repo "${{ github.repository }}" \
+            --search "#${ISSUE_NUMBER}" --state open --json number --jq 'length')"
           if [ "${LINKED_PR_COUNT}" -gt 0 ]; then
-            echo "Issue #${ISSUE_NUMBER} already has at least one linked PR. Skipping planning run."
+            echo "Issue #${ISSUE_NUMBER} already has at least one open PR. Skipping planning run."
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
           fi
 
@@ -302,10 +318,8 @@ jobs:
           set -euo pipefail
           bash scripts/setup_serena.sh --mode planning --context codex
 
-      - name: Run Codex planning
+      - name: Pre-assemble planning context
         if: env.SKIP_PLAN != 'true'
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
 
@@ -314,16 +328,49 @@ jobs:
             exit 1
           fi
 
+          # Pre-assemble all mandatory context into a single file so Codex does not
+          # waste tokens and shell calls reading them one by one (~30+ reads observed).
+          {
+            echo "=== SYSTEM INSTRUCTIONS ==="
+            cat codex_system_instructions.md
+            echo
+            echo "=== AI PIPELINE ==="
+            cat ai_pipeline.md
+            echo
+            echo "=== PLANNING CONTEXT ==="
+            cat "${PLANNING_CONTEXT_FILE}"
+            echo
+            if [ -f agents.md ]; then
+              echo "=== AGENTS.MD ==="
+              cat agents.md
+              echo
+            fi
+            if [ -f README.md ]; then
+              echo "=== README.MD ==="
+              cat README.md
+              echo
+            fi
+          } > ./pre_assembled_context.txt
+
+      - name: Run Codex planning
+        if: env.SKIP_PLAN != 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+
           cat > "${CODEX_PROMPT_FILE}" <<'EOF'
           You are executing the PLANNING phase of the AI development pipeline.
 
           Your task is to generate an implementation plan for the GitHub issue.
 
-          Rules:
+          IMPORTANT: All mandatory context has been pre-assembled into pre_assembled_context.txt.
+          Read that file FIRST — it contains the system instructions, AI pipeline spec,
+          planning context (issue description + clarification Q&A), agents.md, and README.md
+          already concatenated. Do NOT re-read those individual files.
 
-          - Read codex_system_instructions.md first and follow it strictly before any analysis.
-          - Then read ai_pipeline.md and align your behavior to it.
-          - Then read planning_context.txt and use it as the phase-specific task context.
+          After reading pre_assembled_context.txt, use Serena MCP tools or targeted file
+          reads only for specific code symbols/functions you need to inspect for the plan.
 
           Your job:
 
@@ -341,11 +388,11 @@ jobs:
           - Use Serena semantic tools (get_symbols_overview, find_symbol, find_referencing_symbols)
             to explore the codebase efficiently instead of reading entire files.
           - This helps you understand code structure with fewer tokens.
-          - If Serena tools are unavailable, fall back to normal file reads.
+          - If Serena tools are unavailable, fall back to targeted file reads.
 
           Rules:
 
-          - Before planning, always read and interpret the user clarification answers from planning_context.txt.
+          - Before planning, always read and interpret the user clarification answers from pre_assembled_context.txt.
           - Multiple-choice answers may appear in flexible formats and casing (for example: `q1: a q2: c q3:d`, multiline variants, or `Q1: A`). Interpret intent without enforcing strict formatting.
           - Do not require exact answer formatting and do not depend on regex-style strictness in reasoning.
           - Map each interpreted answer back to its corresponding Q<ID> clarification question before creating the plan.
@@ -359,7 +406,6 @@ jobs:
           The output must be plain text suitable for posting as an issue comment.
           EOF
 
-          cp "${PLANNING_CONTEXT_FILE}" ./planning_context.txt
           cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"
 
       - name: Parse planning output
@@ -403,6 +449,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          # Strip absolute CI runner paths from Codex output
+          sed -i -E 's|/home/runner/work/[^/]+/[^/]+/||g' "${CODEX_OUTPUT_FILE}"
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
@@ -425,6 +473,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          # Strip absolute CI runner paths from Codex output so comments show clean relative paths
+          sed -i -E 's|/home/runner/work/[^/]+/[^/]+/||g' "${CODEX_OUTPUT_FILE}"
           {
             echo "Implementation Plan"
             echo
