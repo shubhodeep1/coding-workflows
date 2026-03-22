@@ -1,6 +1,7 @@
+---
 name: AI Clarify (Reusable)
 
-on:
+"on":
   workflow_call:
     secrets:
       GH_PAT:
