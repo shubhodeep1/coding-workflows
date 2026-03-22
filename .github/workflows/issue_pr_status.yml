@@ -1,6 +1,7 @@
+---
 name: AI Issue PR Status Sync
 
-on:
+"on":
   workflow_call:
     secrets:
       GH_PAT:

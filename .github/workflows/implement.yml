@@ -1,6 +1,7 @@
+---
 name: AI Implement
 
-on:
+"on":
   workflow_call:
     secrets:
       GH_PAT:
