@@ -320,7 +320,7 @@ jobs:
             exit 0
           fi
 
-          bash .github/scripts/git_ref_health_check.sh repair
+          bash scripts/git_ref_health_check.sh repair
 
           CURRENT_BRANCH="$(git branch --show-current || true)"
           git fetch --no-tags --prune origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}"
@@ -339,7 +339,7 @@ jobs:
           set -euo pipefail
 
           echo "Generating reviewer diff context"
-          bash .github/scripts/git_ref_health_check.sh repair
+          bash scripts/git_ref_health_check.sh repair
 
           PR_DIFF_ATTEMPTED_PATHS="${PR_DIFF_ATTEMPTED_PATHS:-gh_pr_diff:${PR_DIFF_FILE}}"
           if [ ! -s "${PR_DIFF_FILE}" ]; then
@@ -1715,7 +1715,7 @@ jobs:
           git reset --hard HEAD
           git clean -fd
 
-          bash .github/scripts/git_ref_health_check.sh repair
+          bash scripts/git_ref_health_check.sh repair
           git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
 
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true

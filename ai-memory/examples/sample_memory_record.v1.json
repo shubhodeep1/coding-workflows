@@ -10,7 +10,7 @@
     "run_id": "9001"
   },
   "summary": "Use shared ai_memory CLI for workflow memory operations",
-  "details": "The issue, plan, and implementation workflows call .github/scripts/ai_memory.py for deterministic retrieval and branch-backed writes.",
+  "details": "The issue, plan, and implementation workflows call scripts/ai_memory.py for deterministic retrieval and branch-backed writes.",
   "confidence": 0.91,
   "sensitive": false,
   "fingerprint": "0c2a8ad6dce7f54e24fdbdb80c8b06d664ff79f4f30dc8af5f6f8dc67ad4379e",

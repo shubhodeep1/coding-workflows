@@ -37,7 +37,7 @@ jobs:
 
           python3 -c "
           import sys
-          sys.path.insert(0, '.github/scripts')
+          sys.path.insert(0, 'scripts')
           from ai_memory_lib import compact_memory
           from pathlib import Path
 
