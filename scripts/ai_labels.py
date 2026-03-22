@@ -53,6 +53,16 @@ def load_label_contract(path: Path) -> dict[str, Any]:
             if member not in labels:
                 raise LabelContractError(f"Phase group member not declared in labels: {member}")
 
+        fallback = group.get("fallback")
+        if fallback is not None:
+            fallback_value = str(fallback).strip()
+            if not fallback_value:
+                raise LabelContractError("Phase group fallback cannot be empty")
+            if fallback_value not in labels:
+                raise LabelContractError(f"Phase group fallback not declared in labels: {fallback_value}")
+            if fallback_value not in members:
+                raise LabelContractError(f"Phase group fallback must be a member: {fallback_value}")
+
     return payload
 
 
