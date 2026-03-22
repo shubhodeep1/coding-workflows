@@ -81,8 +81,8 @@ jobs:
 
 Create a new issue describing a feature or bug fix. The pipeline kicks off automatically:
 
-1. **Clarify** evaluates whether the issue has enough detail. If not, it comments with clarification questions.
-2. Once the issue is clear, comment `/answer` to trigger **Plan** generation.
+1. **Clarify** evaluates whether the issue has enough detail. If not, it comments with clarification questions. If you need to run this again, comment `/reclarify`.
+2. Once the issue has `ai:clarification` or `ai:planning` label from **Clarify**, comment `/answer` to trigger **Plan** generation.
 3. Review the plan, then comment `/approved` to start **Implementation** — a PR is created for you.
 
 ### 4. (Optional) Add review & housekeeping workflows
