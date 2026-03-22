@@ -28,41 +28,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          MEMORY_ROOT=".github/ai-memory"
-
           # Calculate the previous month for archival
           ARCHIVE_MONTH="$(date -d 'last month' '+%Y-%m' 2>/dev/null || date -v-1m '+%Y-%m')"
 
           echo "Running memory compaction for month: ${ARCHIVE_MONTH}"
 
-          python3 -c "
-          import sys
-          sys.path.insert(0, 'scripts')
-          from ai_memory_lib import compact_memory
-          from pathlib import Path
-
-          memory_root = Path('${MEMORY_ROOT}')
-          result = compact_memory(
-              memory_root,
-              month_yyyy_mm='${ARCHIVE_MONTH}',
-              prune=True,
-          )
-          print(f'Compaction result: {result}')
-          "
-
-      - name: Commit and push changes
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "$(git status --porcelain)" ]; then
-            echo "No memory changes to commit."
-            exit 0
-          fi
-
-          git config user.name "codex-bot"
-          git config user.email "codex@users.noreply.github.com"
-          git add .github/ai-memory/
-          git commit -m "[ai-memory] monthly maintenance compaction"
-          git push origin HEAD
+          python3 scripts/ai_memory.py compact \
+            --month "${ARCHIVE_MONTH}" \
+            --prune true
