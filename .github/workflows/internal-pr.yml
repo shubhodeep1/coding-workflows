@@ -1,0 +1,29 @@
+name: "Internal: PR Pipeline"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+jobs:
+  review:
+    if: github.event.action != 'closed'
+    uses: ./.github/workflows/review_autofix.yml
+    with:
+      allow_workflow_edits: true
+    secrets: inherit
+
+  cancel-on-close:
+    if: github.event.action == 'closed'
+    uses: ./.github/workflows/cancel_on_pr_close.yml
+    secrets: inherit
+
+  issue-status:
+    if: github.event.action == 'closed'
+    uses: ./.github/workflows/issue_pr_status.yml
+    secrets: inherit

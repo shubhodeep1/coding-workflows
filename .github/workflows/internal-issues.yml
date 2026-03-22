@@ -1,0 +1,24 @@
+name: "Internal: Issue Pipeline"
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  clarify:
+    uses: ./.github/workflows/clarify.yml
+    secrets: inherit
+
+  plan:
+    uses: ./.github/workflows/plan.yml
+    secrets: inherit
+
+  implement:
+    uses: ./.github/workflows/implement.yml
+    secrets: inherit
