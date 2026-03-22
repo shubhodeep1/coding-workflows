@@ -36,6 +36,7 @@ jobs:
           python3 -m py_compile scripts/ai_context_utils.py
           python3 -m py_compile scripts/issue_attachment_bundle.py
           python3 -m py_compile scripts/generate_symbol_diff_summary.py
+          python3 -m py_compile scripts/serena_efficiency_report.py
 
       - name: JSON schema validation
         run: |
