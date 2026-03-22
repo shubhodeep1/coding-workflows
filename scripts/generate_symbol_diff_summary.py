@@ -24,7 +24,6 @@ Output format:
 """
 
 import argparse
-import json
 import os
 import re
 import subprocess
@@ -106,36 +105,52 @@ def parse_diff_hunks(diff_text):
 def try_serena_symbols(file_path, project_dir):
     """Try to get symbol overview from Serena via uvx CLI.
 
-    Calls `uvx serena get-symbols` and parses the JSON output into our symbol
-    format [{name, line, text}, ...].  Returns None on any failure so callers
-    fall through to the heuristic path.
+    Returns symbols in [{name, line, text}, ...] format or None on failure so
+    callers can safely fall back to heuristic parsing.
     """
     try:
+        project_root = os.path.abspath(project_dir)
+        normalized_path = os.path.normpath(file_path)
+        full_path = os.path.abspath(os.path.join(project_root, normalized_path))
+
+        # Reject paths that escape the project directory.
+        if os.path.commonpath([project_root, full_path]) != project_root:
+            return None
+
+        serena_version = os.environ.get("SERENA_VERSION", "main")
+
         # First try the Python API (works if serena is importable)
         try:
             from serena.agent import SerenaAgent
 
-            agent = SerenaAgent(project_path=project_dir)
-            agent.activate_project()
-            result = agent.call_tool("get_symbols_overview", {"file_path": file_path})
+            agent = SerenaAgent(project=project_root)
+            try:
+                result = agent.execute_task(
+                    lambda: agent.get_tool_by_name("get_symbols_overview").apply(normalized_path)
+                )
+            finally:
+                agent.shutdown()
+
             if result:
-                return _parse_serena_result(result)
+                parsed_result = _parse_serena_result(result)
+                if parsed_result:
+                    return parsed_result
         except ImportError:
             pass
+        except Exception:
+            pass
 
-        # Fallback: invoke via uvx subprocess
-        full_path = os.path.join(project_dir, file_path)
+        # Fallback: invoke Serena CLI via uvx.
         proc = subprocess.run(
             [
-                "uvx", "--from", "git+https://github.com/oraios/serena@main",
-                "serena", "get-symbols", "--project-dir", project_dir,
-                "--file", full_path, "--format", "json",
+                "uvx", "--from", f"git+https://github.com/oraios/serena@{serena_version}",
+                "serena", "project", "index-file", "-v", full_path, project_root,
             ],
             capture_output=True, text=True, timeout=30,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         )
         if proc.returncode == 0 and proc.stdout.strip():
-            data = json.loads(proc.stdout)
-            return _parse_serena_result(data)
+            return _parse_serena_result(proc.stdout)
         return None
     except Exception:
         return None
@@ -154,6 +169,19 @@ def _parse_serena_result(result):
     # Handle string output (rendered overview)
     if isinstance(result, str):
         for line in result.splitlines():
+            # `serena project index-file -v` emits symbols in this format.
+            m = re.match(r"\s*-\s+([^\s]+)\s+at\s+line\s+(\d+)\s+of\s+kind\s+(\d+)", line)
+            if m:
+                # Keep structural symbols, skip locals/variables for stability.
+                kind_num = int(m.group(3))
+                if kind_num in {5, 6, 9, 10, 11, 12, 23}:
+                    symbols.append({
+                        "name": m.group(1),
+                        "line": int(m.group(2)) + 1,
+                        "text": line.strip(),
+                    })
+                continue
+
             # Serena text overview lines typically look like:
             #   "  function foo (line 42)"  or  "  class Bar [23-45]"
             m = re.match(
@@ -171,7 +199,16 @@ def _parse_serena_result(result):
 
     # Handle dict with 'symbols' key
     if isinstance(result, dict):
-        result = result.get("symbols", result.get("children", []))
+        if "symbols" in result:
+            result = result.get("symbols", [])
+        elif "children" in result:
+            result = result.get("children", [])
+        else:
+            grouped_symbols = []
+            for value in result.values():
+                if isinstance(value, list):
+                    grouped_symbols.extend(value)
+            result = grouped_symbols
 
     # Handle list of symbol dicts
     if isinstance(result, list):
@@ -181,16 +218,37 @@ def _parse_serena_result(result):
             name = item.get("name") or item.get("symbol_name", "")
             if not name:
                 continue
-            # Line number may be in 'line', 'range.start.line', or 'start_line'
-            line_num = item.get("line") or item.get("start_line", 0)
-            if not line_num and "range" in item:
+            # Line number may be in 'line', 'range.start.line', or 'start_line'.
+            line_num = item.get("line")
+            zero_based = False
+
+            if line_num is None:
+                line_num = item.get("start_line")
+                zero_based = line_num is not None
+
+            if line_num is None and "range" in item:
                 rng = item["range"]
                 if isinstance(rng, dict):
                     start = rng.get("start", {})
-                    line_num = start.get("line", 0)
+                    line_num = start.get("line")
+                    zero_based = line_num is not None
+
+            if line_num is None:
+                continue
+
+            try:
+                line_num = int(line_num)
+            except (TypeError, ValueError):
+                continue
+
+            if zero_based:
+                line_num += 1
+            elif line_num == 0:
+                line_num = 1
+
             symbols.append({
                 "name": name,
-                "line": int(line_num),
+                "line": line_num,
                 "text": item.get("detail", item.get("kind", "")),
             })
         # Also recurse into children if present

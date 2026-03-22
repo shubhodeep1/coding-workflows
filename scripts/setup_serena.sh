@@ -66,6 +66,10 @@ warn_and_exit() {
 	exit 0
 }
 
+if printf '%s' "${SERENA_VERSION}" | grep -q '"'; then
+	warn_and_exit "SERENA_VERSION contains unsupported quote character"
+fi
+
 # ── 1. Install uv if not present ─────────────────────────────────────────────
 
 if ! command -v uv >/dev/null 2>&1; then
@@ -153,6 +157,8 @@ if [ ! -f .serena/project.yml ]; then
 	IGNORED_YAML="  - node_modules\n  - dist\n  - build\n  - __pycache__\n  - .next\n  - vendor\n  - .git\n"
 	if [ -n "${SERENA_IGNORED_DIRS}" ]; then
 		for dir in ${SERENA_IGNORED_DIRS}; do
+			# SERENA_IGNORED_DIRS is a space-delimited list by design.
+			[ -n "${dir}" ] || continue
 			IGNORED_YAML="${IGNORED_YAML}  - ${dir}\n"
 		done
 	fi
@@ -162,12 +168,12 @@ project_name: auto
 read_only: ${READ_ONLY}
 
 languages:
-$(printf "${LANG_YAML}")
+$(printf '%b' "${LANG_YAML}")
 
 encoding: utf-8
 ignore_all_files_in_gitignore: true
 ignored_paths:
-$(printf "${IGNORED_YAML}")
+$(printf '%b' "${IGNORED_YAML}")
 
 excluded_tools: []
 included_optional_tools: []
