@@ -39,8 +39,9 @@ jobs:
       - name: JSON schema validation
         run: |
           set -euo pipefail
+          shopt -s nullglob
           for f in schemas/*.json examples/*.json; do
-            [ -f "$f" ] && python3 -c "import json; json.load(open('$f'))" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+            python3 -c "import json; json.load(open('$f'))" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
       - name: Shell script lint
