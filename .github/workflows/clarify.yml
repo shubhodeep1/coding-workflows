@@ -34,12 +34,12 @@ jobs:
           sudo apt-get install -y jq curl gh
 
       - name: Install uv for Serena
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v5
 
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
       - name: Fetch workflow support scripts
@@ -165,48 +165,48 @@ jobs:
           fi
 
           cat > "${CODEX_PROMPT_FILE}" <<'EOF'
-          You are executing the CLARIFICATION phase of the AI development pipeline.
+You are executing the CLARIFICATION phase of the AI development pipeline.
 
-          Your task is to determine whether the GitHub issue contains enough information to implement the task.
+Your task is to determine whether the GitHub issue contains enough information to implement the task.
 
-          Rules:
+Rules:
 
-          - Read codex_system_instructions.md first and follow it strictly before any analysis.
-          - Then read ai_pipeline.md and align your behavior to it.
-          - Then read issue_context.txt and use it as the phase-specific task context.
+- Read codex_system_instructions.md first and follow it strictly before any analysis.
+- Then read ai_pipeline.md and align your behavior to it.
+- Then read issue_context.txt and use it as the phase-specific task context.
 
-          Your job:
+Your job:
 
-          1. Determine if the issue is clear enough to implement.
-          2. If clarification is required, ask concise clarification questions.
-          3. Ask only essential questions needed for implementation.
-          4. Use web search when needed to resolve unknowns before asking questions.
-          5. If external APIs/services are likely required, review their official API docs and identify the expected endpoints and parameters so planning can include concrete call details for an offline editor.
-          6. Use Serena MCP tools (get_symbols_overview, find_symbol) when available to explore
-             the codebase efficiently. This helps you understand code structure with fewer tokens.
-             If Serena tools are unavailable, fall back to normal file reads.
-          7. Do NOT write code.
-          8. Do NOT propose implementation solutions.
+1. Determine if the issue is clear enough to implement.
+2. If clarification is required, ask concise clarification questions.
+3. Ask only essential questions needed for implementation.
+4. Use web search when needed to resolve unknowns before asking questions.
+5. If external APIs/services are likely required, review their official API docs and identify the expected endpoints and parameters so planning can include concrete call details for an offline editor.
+6. Use Serena MCP tools (get_symbols_overview, find_symbol) when available to explore
+   the codebase efficiently. This helps you understand code structure with fewer tokens.
+   If Serena tools are unavailable, fall back to normal file reads.
+7. Do NOT write code.
+8. Do NOT propose implementation solutions.
 
-          Clarification format requirements (MANDATORY):
+Clarification format requirements (MANDATORY):
 
-          - Use the same question/answer format defined in codex_system_instructions.md section "Mandatory Decision Prompt Format".
-          - Use question identifiers only as Q1, Q2, Q3, ... (never 1), 2), etc.).
-          - For each question, include a "Choices:" block with lettered options (A/B/C minimum as needed).
-          - For each question, mark one or more best options with the exact uppercase suffix: " (RECOMMENDED)".
-          - Never leave a question without at least one " (RECOMMENDED)" option.
-          - Questions must be emitted only in this format; do not use plain bullet-question format.
+- Use the same question/answer format defined in codex_system_instructions.md section "Mandatory Decision Prompt Format".
+- Use question identifiers only as Q1, Q2, Q3, ... (never 1), 2), etc.).
+- For each question, include a "Choices:" block with lettered options (A/B/C minimum as needed).
+- For each question, mark one or more best options with the exact uppercase suffix: " (RECOMMENDED)".
+- Never leave a question without at least one " (RECOMMENDED)" option.
+- Questions must be emitted only in this format; do not use plain bullet-question format.
 
-          Output format (exact):
-          STATUS: NEEDS_CLARIFICATION
-          QUESTIONS:
-          <one or more Q<ID> blocks in mandatory format>
+Output format (exact):
+STATUS: NEEDS_CLARIFICATION
+QUESTIONS:
+<one or more Q<ID> blocks in mandatory format>
 
-          Or, if no clarification is needed:
-          STATUS: CLEAR
-          QUESTIONS:
-          - None
-          EOF
+Or, if no clarification is needed:
+STATUS: CLEAR
+QUESTIONS:
+- None
+EOF
 
           cp "${ISSUE_CONTEXT_FILE}" ./issue_context.txt
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
@@ -346,6 +346,3 @@ jobs:
           if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
             echo "::warning::Telegram failure notification failed: http_code=${HTTP_CODE} response=${RESPONSE}"
           fi
-      - name: Exit safely
-        if: failure()
-        run: exit 0
