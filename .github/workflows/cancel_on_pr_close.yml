@@ -1,0 +1,71 @@
+name: AI Cancel Runs on PR Close
+
+on:
+  workflow_call:
+    secrets:
+      GH_PAT:
+        required: false
+
+jobs:
+  cancel-active-runs:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      REPOSITORY: ${{ github.repository }}
+      CURRENT_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Cancel queued/in-progress runs for closed PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Processing PR #${PR_NUMBER} for ${REPOSITORY} (head ref: ${PR_HEAD_REF})"
+
+          queued_runs_json="$(gh api "repos/${REPOSITORY}/actions/runs" --paginate -f status=queued -f per_page=100 | jq -s '{workflow_runs: [.[].workflow_runs // []] | flatten}')"
+          in_progress_runs_json="$(gh api "repos/${REPOSITORY}/actions/runs" --paginate -f status=in_progress -f per_page=100 | jq -s '{workflow_runs: [.[].workflow_runs // []] | flatten}')"
+
+          combined_runs_json="$(jq -n \
+            --argjson queued "${queued_runs_json}" \
+            --argjson in_progress "${in_progress_runs_json}" \
+            '{workflow_runs: (($queued.workflow_runs // []) + ($in_progress.workflow_runs // []))}')"
+
+          mapfile -t target_run_ids < <(
+            jq -r \
+              --arg head_ref "${PR_HEAD_REF}" \
+              --arg pr_number "${PR_NUMBER}" \
+              --arg current_run_id "${CURRENT_RUN_ID}" \
+              '.workflow_runs[]
+              | select(.head_branch == $head_ref)
+              | select((.pull_requests // []) | any(.number == ($pr_number | tonumber)))
+              | select(.event == "pull_request")
+              | select((.id | tostring) != $current_run_id)
+              | .id' <<<"${combined_runs_json}" \
+            | awk '!seen[$0]++'
+          )
+
+          if [ "${#target_run_ids[@]}" -eq 0 ]; then
+            echo "No matching queued/in-progress pull_request workflow runs found for head ref '${PR_HEAD_REF}'."
+            exit 0
+          fi
+
+          echo "Found ${#target_run_ids[@]} run(s) to cancel: ${target_run_ids[*]}"
+
+          canceled_any=0
+          for run_id in "${target_run_ids[@]}"; do
+            echo "Attempting cancellation for run ${run_id}..."
+
+            if gh api -X POST "repos/${REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>&1; then
+              echo "Canceled run ${run_id}."
+              canceled_any=1
+            else
+              echo "Run ${run_id} could not be canceled (likely already completed); continuing."
+            fi
+          done
+
+          if [ "${canceled_any}" -eq 1 ]; then
+            echo "Cancellation pass complete."
+          else
+            echo "No runs were canceled because matching runs finished before cancellation requests completed."
+          fi

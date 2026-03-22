@@ -1,0 +1,591 @@
+name: AI Implement
+
+on:
+  workflow_call:
+    secrets:
+      GH_PAT:
+        required: true
+      OPENROUTER_API_KEY:
+        required: true
+      TG_BOT_SECRET:
+        required: false
+
+env:
+  MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+  MODEL_REASONING_EFFORT: xhigh
+
+jobs:
+  implement:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      (
+        (
+          github.event.comment.user.type == 'User' &&
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+          startsWith(github.event.comment.body, '/approved')
+        ) ||
+        (
+          github.event.comment.user.type == 'Bot' &&
+          github.event.comment.user.login == 'github-actions[bot]' &&
+          startsWith(github.event.comment.body, '/approved') &&
+          contains(github.event.comment.body, '[auto-approved-by-plan]')
+        )
+      )
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ai-implement-${{ github.repository }}-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_URL: ${{ github.event.issue.html_url }}
+      APPROVAL_COMMENT_ID: ${{ github.event.comment.id }}
+      SKIP_IMPLEMENT: "false"
+
+    steps:
+      - name: Precheck approval phase label
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          if ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
+            echo "Issue #${ISSUE_NUMBER} is not in ai:awaiting-approval phase. Skipping implementation steps."
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install dependencies
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          CODEX_VERSION="v0.114.0"
+          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+
+          sudo apt-get update
+          sudo apt-get install -y jq curl gh
+
+      - name: Create runtime workspace
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/codex-implement-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+
+          {
+            echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
+            echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
+            echo "ISSUE_SUMMARY_PROMPT_FILE=${RUNTIME_DIR}/issue_summary_prompt.txt"
+            echo "ISSUE_SUMMARY_FILE=${RUNTIME_DIR}/issue_summary.md"
+            echo "IMPLEMENTATION_CONTEXT_FILE=${RUNTIME_DIR}/implementation_context.txt"
+            echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
+            echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
+            echo "PLAN_FILE=${RUNTIME_DIR}/implementation_plan.txt"
+            echo "CLARIFICATION_ANSWERS_FILE=${RUNTIME_DIR}/clarification_answers.txt"
+            echo "PR_EXISTS_FILE=${RUNTIME_DIR}/existing_prs.txt"
+            echo "TARGET_BRANCH=ai/issue-${ISSUE_NUMBER}"
+          } >> "$GITHUB_ENV"
+
+      - name: Safety check for existing PR
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: existing_pr_check
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh pr list --repo "${{ github.repository }}" --search "issue:${ISSUE_NUMBER}" --state open --json number,url --jq '.[] | "#\(.number) \(.url)"' > "${PR_EXISTS_FILE}" || true
+
+          if [ -s "${PR_EXISTS_FILE}" ]; then
+            echo "existing_pr=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "Existing PR(s) found for issue ${ISSUE_NUMBER}:"
+              cat "${PR_EXISTS_FILE}"
+            }
+          else
+            echo "existing_pr=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Telegram duplicate PR notification
+        if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_USERID: ${{ vars.TG_ADMIN_USERID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          CHAT_ID="${TG_ADMIN_USERID:-${TG_CHAT_ID:-}}"
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
+            echo "Warning: Telegram duplicate PR notification skipped (missing TG_BOT_SECRET or chat_id)"
+            exit 0
+          fi
+
+          MSG="Skipping implementation for issue ${ISSUE_URL} because a PR already exists."
+          RESPONSE="$(curl -sS -X POST \
+            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}")"
+          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
+            echo "::warning::Telegram duplicate PR notification failed: ${RESPONSE}"
+          fi
+
+      - name: Exit when existing PR is found
+        if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true'
+        run: |
+          echo "Existing PR already present for this issue; exiting safely."
+          exit 0
+
+      - name: Checkout repository
+        if: env.SKIP_IMPLEMENT != 'true'
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Fetch issue metadata
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+
+          ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
+          ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
+          ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+
+          {
+            echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
+            echo "ISSUE_URL=${ISSUE_URL_JSON}"
+            echo 'ISSUE_BODY<<EOF'
+            echo "${ISSUE_BODY}"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch issue comments
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          found_approval_comment="false"
+          for attempt in 1 2 3 4 5; do
+            if ! { gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" | jq -s 'add // []' > "${ISSUE_COMMENTS_FILE}"; } 2>/dev/null; then
+              echo "Attempt ${attempt}: API call failed, retrying..."
+              sleep $((attempt * 2))
+              continue
+            fi
+            if jq -e --arg approval_comment_id "${APPROVAL_COMMENT_ID}" 'any(.[]; (.id | tostring) == $approval_comment_id)' "${ISSUE_COMMENTS_FILE}" >/dev/null; then
+              found_approval_comment="true"
+              break
+            fi
+            sleep $((attempt * 2))
+          done
+
+          if [ "${found_approval_comment}" != "true" ]; then
+            echo "Unable to fetch triggering approval comment from issue comments."
+            exit 1
+          fi
+
+      - name: Validate approval phase label
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          if ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
+            echo "Issue #${ISSUE_NUMBER} is not in ai:awaiting-approval phase. Exiting safely."
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:implementing' >/dev/null
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
+
+      - name: Extract implementation plan
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+
+          # Extract the most recent implementation plan comment at or before the triggering /approved comment.
+          # Only trusted plan authors are accepted to block untrusted comment injection.
+          jq -r --arg approval_comment_id "${APPROVAL_COMMENT_ID}" '
+            sort_by(.created_at) |
+            # Resolve the exact /approved comment that triggered this workflow run.
+            ([.[] | select(
+              ((.id | tostring) == $approval_comment_id) and
+              ((.body // "") | test("(?i)/approved"))
+            )] | if length > 0 then .[0] else null end) as $approval |
+            if $approval == null then ""
+            else
+              # Find the most recent trusted implementation plan before or at this approval.
+              [.[] | select(
+                ((.body // "") | test("(?im)^\\s*implementation\\s+plan\\b")) and
+                (.created_at <= $approval.created_at) and
+                (
+                  (
+                    (.user.type == "Bot") and
+                    ((.user.login // "") as $bot_login | ["github-actions[bot]", "codex-bot[bot]"] | index($bot_login))
+                  ) or
+                  ((.author_association // "") as $assoc | ["OWNER", "MEMBER", "COLLABORATOR"] | index($assoc))
+                )
+              )] |
+              if length > 0 then .[-1].body else "" end
+            end
+          ' "${ISSUE_COMMENTS_FILE}" > "${PLAN_FILE}"
+
+          if [ ! -s "${PLAN_FILE}" ] || ! grep -qiE '^[[:space:]]*implementation[[:space:]]+plan\b' "${PLAN_FILE}"; then
+            echo "Unable to locate approved Implementation Plan in issue comments."
+            exit 1
+          fi
+
+      - name: Extract clarification answers
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+
+          jq -r 'sort_by(.created_at)
+            | map(select(.user.type == "User" and ((.body // "") | test("(?i)^\\s*/answer\\b"))))
+            | if length == 0 then "None" else .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n" end' "${ISSUE_COMMENTS_FILE}" > "${CLARIFICATION_ANSWERS_FILE}"
+
+      - name: Build implementation context
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "ISSUE DESCRIPTION"
+            printf '%s\n\n' "${ISSUE_BODY}"
+            echo "CLARIFICATION ANSWERS"
+            cat "${CLARIFICATION_ANSWERS_FILE}"
+            echo
+            echo "APPROVED IMPLEMENTATION PLAN"
+            cat "${PLAN_FILE}"
+            echo
+            echo "ISSUE COMMENTS"
+            jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
+          } > "${IMPLEMENTATION_CONTEXT_FILE}"
+
+      - name: Create Codex config
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.codex
+          {
+            echo 'web_search = "disabled"'
+            echo 'model_provider = "openrouter"'
+            echo "model = \"${MODEL_EDITOR}\""
+              echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+            echo
+            echo '[model_providers.openrouter]'
+            echo 'name = "OpenRouter"'
+            echo 'base_url = "https://openrouter.ai/api/v1"'
+            echo 'env_key = "OPENROUTER_API_KEY"'
+            echo
+            echo '[sandbox_workspace_write]'
+            echo 'network_access = true'
+          } > ~/.codex/config.toml
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Run Codex implementation
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f codex_system_instructions.md ] || [ ! -f ai_pipeline.md ]; then
+            echo "Missing required codex input file(s): codex_system_instructions.md and/or ai_pipeline.md"
+            exit 1
+          fi
+
+          cat > "${CODEX_PROMPT_FILE}" <<'EOF'
+          You are executing the IMPLEMENTATION phase of the AI development pipeline.
+
+          Your task is to implement the approved implementation plan.
+
+          Rules:
+
+          - Read codex_system_instructions.md first and follow it strictly before any analysis.
+          - Then read ai_pipeline.md and align your behavior to it.
+          - Then read implementation_context.txt and use it as the phase-specific task context.
+
+          Your job:
+
+          1. Implement the approved implementation plan.
+          2. Modify repository files as required.
+          3. Keep changes minimal and safe.
+          4. Avoid modifying unrelated files.
+
+          Restrictions:
+
+          - Do not ask clarification questions.
+          - Do not change CI workflows.
+          - Do not modify ai_pipeline.md or codex_system_instructions.md.
+
+          Your output should be repository changes only.
+          EOF
+
+          cp "${IMPLEMENTATION_CONTEXT_FILE}" ./implementation_context.txt
+          cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"
+          rm -f ./implementation_context.txt
+
+      - name: Create implementation branch
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          if ! [[ "${TARGET_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "${TARGET_BRANCH}" =~ (^|/)__pycache__(/|$) ]] || [[ "${TARGET_BRANCH}" =~ \.pyc$ ]]; then
+            echo "Rejecting invalid TARGET_BRANCH: ${TARGET_BRANCH}"
+            exit 1
+          fi
+          git checkout -B "${TARGET_BRANCH}"
+
+      - name: Protect workflow files from implementation edits
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+
+          if [ -d .github/workflows ]; then
+            if [ -n "$(git status --porcelain .github/workflows)" ]; then
+              echo "Discarding Codex edits under .github/workflows."
+              git restore --source=HEAD --staged --worktree .github/workflows || true
+            fi
+            git clean -fd -- .github/workflows
+          fi
+
+      - name: Commit changes
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: commit_changes
+        run: |
+          set -euo pipefail
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No repository changes were produced by Codex implementation."
+            echo "did_commit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name "codex-bot"
+          git config user.email "codex@users.noreply.github.com"
+          git add -A
+          git commit -m "AI implementation for issue #${ISSUE_NUMBER}"
+          echo "did_commit=true" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on no-op implementation
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="AI implementation completed with no repository changes required for this issue."
+
+      - name: Push branch
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'
+        run: |
+          set -euo pipefail
+
+          git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
+          bash .github/scripts/git_ref_health_check.sh repair
+
+          for attempt in 1 2 3; do
+            if ! git fetch --no-tags --prune origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
+              echo "Fetch attempt ${attempt} failed; continuing with local refs."
+            fi
+
+            PUSH_ARGS=("-u" "origin" "HEAD:${TARGET_BRANCH}")
+            if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
+              if ! git rebase "refs/remotes/origin/${TARGET_BRANCH}"; then
+                echo "Rebase onto origin/${TARGET_BRANCH} failed; aborting push retries."
+                git rebase --abort || true
+                exit 1
+              fi
+
+              REMOTE_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
+              PUSH_ARGS+=("--force-with-lease=refs/heads/${TARGET_BRANCH}:${REMOTE_SHA}")
+            else
+              PUSH_ARGS+=("--force-with-lease")
+            fi
+
+            if git push "${PUSH_ARGS[@]}"; then
+              echo "Push succeeded on attempt ${attempt}."
+              exit 0
+            fi
+
+            if [ "${attempt}" -lt 3 ]; then
+              echo "Push attempt ${attempt} failed; retrying..."
+              sleep $((attempt * 2))
+            fi
+          done
+
+          echo "Push failed after 3 attempts."
+          exit 1
+
+      - name: Create Pull Request
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'
+        id: create_pr
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          if ! gh pr create \
+            --repo "${{ github.repository }}" \
+            --base "${{ github.event.repository.default_branch }}" \
+            --head "${TARGET_BRANCH}" \
+            --title "AI implementation for issue #${ISSUE_NUMBER}" \
+            --body "Automated implementation for issue ${ISSUE_URL}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
+            echo "PR creation failed. This may indicate a PR was created by another process during execution."
+            if [ -s "${RUNTIME_DIR}/created_pr_url.err" ]; then
+              cat "${RUNTIME_DIR}/created_pr_url.err"
+            fi
+            EXISTING_PR="$(gh pr list --repo "${{ github.repository }}" --search "issue:${ISSUE_NUMBER}" --state open --json url --jq '.[0].url // ""')"
+            if [ -n "${EXISTING_PR}" ]; then
+              echo "Found existing PR: ${EXISTING_PR}"
+              echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            exit 1
+          fi
+
+          PR_URL="$(grep -Eo 'https://github\.com/[^[:space:]]+/pull/[0-9]+' "${RUNTIME_DIR}/created_pr_url.txt" | head -n 1 || true)"
+          if [ -z "${PR_URL}" ]; then
+            PR_URL="$(head -n 1 "${RUNTIME_DIR}/created_pr_url.txt" | tr -d '\r')"
+          fi
+          if [ -z "${PR_URL}" ]; then
+            echo "Unable to determine PR URL from gh output."
+            exit 1
+          fi
+          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate AI issue summary for PR comment
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          cat > "${ISSUE_SUMMARY_PROMPT_FILE}" <<EOF
+          Generate a concise issue summary for a pull request comment.
+
+          Requirements:
+          - Output markdown only.
+          - Start with this exact heading: "### AI Issue Summary"
+          - Provide 3-6 bullet points summarizing the issue goal, key constraints, and expected outcome.
+          - Do not include implementation details that are not present in the issue context.
+          - Do not include fenced code blocks.
+          - Keep it under 120 words.
+
+          Use only the contents of ${RUNTIME_DIR}/issue_context_for_summary.txt.
+          EOF
+
+          trap 'rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt"' EXIT
+
+          {
+            echo "ISSUE CONTEXT FOR SUMMARY"
+            jq -r '"Title: " + (.title // "") + "\nURL: " + (.html_url // "") + "\n\nBody:\n" + (.body // "")' "${ISSUE_META_FILE}"
+            echo
+            echo "LATEST APPROVED IMPLEMENTATION PLAN"
+            cat "${PLAN_FILE}"
+          } > "${RUNTIME_DIR}/issue_context_for_summary.txt"
+
+          timeout 300s sh -c 'cat "$1" "$4" | codex exec --model "$2" --full-auto > "$3"' _ "${ISSUE_SUMMARY_PROMPT_FILE}" "${MODEL_EDITOR}" "${ISSUE_SUMMARY_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt"
+
+      - name: Post AI issue summary as first PR comment
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -s "${ISSUE_SUMMARY_FILE}" ]; then
+            echo "AI issue summary file is missing or empty."
+            exit 1
+          fi
+          if ! grep -q '^### AI Issue Summary' "${ISSUE_SUMMARY_FILE}"; then
+            echo "AI issue summary is missing required heading."
+            exit 1
+          fi
+          if grep -q '```' "${ISSUE_SUMMARY_FILE}"; then
+            echo "AI issue summary contains fenced code blocks."
+            exit 1
+          fi
+
+          gh pr comment "${{ steps.create_pr.outputs.pr_url }}" \
+            --repo "${{ github.repository }}" \
+            --body-file "${ISSUE_SUMMARY_FILE}"
+
+      - name: Mark issue done after implementation PR
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:done' >/dev/null
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
+
+      - name: Restore awaiting approval label on no-op implementation
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
+
+      - name: Comment on issue failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
+            gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
+            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="AI implementation workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
+
+      - name: Telegram failure notification
+        if: failure()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_USERID: ${{ vars.TG_ADMIN_USERID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          CHAT_ID="${TG_ADMIN_USERID:-${TG_CHAT_ID:-}}"
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
+            echo "Warning: Telegram failure notification skipped (missing TG_BOT_SECRET or chat_id)"
+            exit 0
+          fi
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="AI implementation workflow failed for issue ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          RESPONSE="$(curl -sS -X POST \
+            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}")"
+          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
+            echo "::warning::Telegram failure notification failed: ${RESPONSE}"
+          fi
+
+      - name: Exit safely
+        if: failure()
+        run: exit 0
+
+      - name: Cleanup temporary artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ "${RUNTIME_DIR:-}" =~ ^/tmp/codex-implement-[0-9]+$ ]]; then
+            rm -rf "${RUNTIME_DIR}"
+          else
+            echo "RUNTIME_DIR not set or unsafe; skipping cleanup"
+          fi

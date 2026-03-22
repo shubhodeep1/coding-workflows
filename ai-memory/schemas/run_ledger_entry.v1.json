@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/run_ledger_entry.v1.json",
+  "title": "RunLedgerEntryV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "entry_id",
+    "schema_version",
+    "run_id",
+    "workflow",
+    "issue_number",
+    "pr_number",
+    "event_type",
+    "status",
+    "message",
+    "actor",
+    "metadata",
+    "timestamp"
+  ],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "run_ledger_entry.v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "workflow": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "issue_number": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "pr_number": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "event_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,0 +1,315 @@
+name: AI Clarify (Reusable)
+
+on:
+  workflow_call:
+    secrets:
+      GH_PAT:
+        required: true
+      OPENROUTER_API_KEY:
+        required: true
+      TG_BOT_SECRET:
+        required: false
+
+jobs:
+  clarify:
+    if: >-
+      (github.event_name == 'issues' && github.event.action == 'opened') ||
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
+    runs-on: ubuntu-latest
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_URL: ${{ github.event.issue.html_url }}
+      MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+      MODEL_REASONING_EFFORT: xhigh
+
+    steps:
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          CODEX_VERSION="v0.114.0"
+          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+
+          sudo apt-get update
+          sudo apt-get install -y jq curl gh
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Create runtime workspace
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/codex-issue-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+          {
+            echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
+            echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
+            echo "ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/issue_context.txt"
+            echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
+            echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
+            echo "QUESTIONS_FILE=${RUNTIME_DIR}/questions.txt"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch issue metadata
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+          ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
+          ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
+          ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+
+          {
+            echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
+            echo "ISSUE_URL=${ISSUE_URL_JSON}"
+            echo 'ISSUE_BODY<<EOF'
+            echo "${ISSUE_BODY}"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch issue comments
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          # Limit to last 50 comments to avoid token limit issues with long threads
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=desc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+      - name: Set clarification phase label
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:done" >/dev/null 2>&1 || true
+
+      - name: Build context file
+        run: |
+          set -euo pipefail
+          {
+            echo "ISSUE DESCRIPTION"
+            printf '%s\n\n' "${ISSUE_BODY}"
+            echo "ISSUE COMMENTS"
+            jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
+          } > "${ISSUE_CONTEXT_FILE}"
+
+      - name: Create Codex config
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.codex
+          {
+            echo 'web_search = "live"'
+            echo 'model_provider = "openrouter"'
+            echo "model = \"${MODEL_EDITOR}\""
+              echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+            echo
+            echo '[model_providers.openrouter]'
+            echo 'name = "OpenRouter"'
+            echo 'base_url = "https://openrouter.ai/api/v1"'
+            echo 'env_key = "OPENROUTER_API_KEY"'
+            echo
+            echo '[sandbox_workspace_write]'
+            echo 'network_access = true'
+          } > ~/.codex/config.toml
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Run Codex
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f codex_system_instructions.md ] || [ ! -f ai_pipeline.md ]; then
+            echo "Missing required codex input file(s): codex_system_instructions.md and/or ai_pipeline.md"
+            exit 1
+          fi
+
+          cat > "${CODEX_PROMPT_FILE}" <<'EOF'
+          You are executing the CLARIFICATION phase of the AI development pipeline.
+
+          Your task is to determine whether the GitHub issue contains enough information to implement the task.
+
+          Rules:
+
+          - Read codex_system_instructions.md first and follow it strictly before any analysis.
+          - Then read ai_pipeline.md and align your behavior to it.
+          - Then read issue_context.txt and use it as the phase-specific task context.
+
+          Your job:
+
+          1. Determine if the issue is clear enough to implement.
+          2. If clarification is required, ask concise clarification questions.
+          3. Ask only essential questions needed for implementation.
+          4. Use web search when needed to resolve unknowns before asking questions.
+          5. If external APIs/services are likely required, review their official API docs and identify the expected endpoints and parameters so planning can include concrete call details for an offline editor.
+          6. Do NOT write code.
+          7. Do NOT propose implementation solutions.
+
+          Clarification format requirements (MANDATORY):
+
+          - Use the same question/answer format defined in codex_system_instructions.md section "Mandatory Decision Prompt Format".
+          - Use question identifiers only as Q1, Q2, Q3, ... (never 1), 2), etc.).
+          - For each question, include a "Choices:" block with lettered options (A/B/C minimum as needed).
+          - For each question, mark one or more best options with the exact uppercase suffix: " (RECOMMENDED)".
+          - Never leave a question without at least one " (RECOMMENDED)" option.
+          - Questions must be emitted only in this format; do not use plain bullet-question format.
+
+          Output format (exact):
+          STATUS: NEEDS_CLARIFICATION
+          QUESTIONS:
+          <one or more Q<ID> blocks in mandatory format>
+
+          Or, if no clarification is needed:
+          STATUS: CLEAR
+          QUESTIONS:
+          - None
+          EOF
+
+          cp "${ISSUE_CONTEXT_FILE}" ./issue_context.txt
+          # Pass prompt via stdin to avoid ARG_MAX limits with large context files
+          cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"
+
+      - name: Parse Codex output
+        id: parse_codex
+        run: |
+          set -euo pipefail
+          # Case-insensitive, flexible parsing to handle LLM output variability
+          if grep -qiE 'STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION' "${CODEX_OUTPUT_FILE}"; then
+            # Extract questions section, handling various markdown formats
+            awk 'BEGIN{IGNORECASE=1} /QUESTIONS:/{f=1; next} f{if (/^[[:space:]]*$/ && NF==0) next; print}' "${CODEX_OUTPUT_FILE}" | sed '/^[[:space:]]*$/d' > "${QUESTIONS_FILE}"
+            FIRST_QUESTION="$(head -n 1 "${QUESTIONS_FILE}" | tr -d '\r')"
+            if [ -n "${FIRST_QUESTION}" ] && printf '%s\n' "${FIRST_QUESTION}" | grep -qiE '^[[:space:]]*(-[[:space:]]*)?(none|no questions([[:space:]]+needed)?)[[:space:]]*\.?[[:space:]]*$' && [ "$(wc -l < "${QUESTIONS_FILE}")" -eq 1 ]; then
+              echo "::warning::NEEDS_CLARIFICATION returned placeholder 'None'; treating as clear"
+              echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
+            elif [ -s "${QUESTIONS_FILE}" ]; then
+              echo "needs_clarification=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post clarification questions
+        if: steps.parse_codex.outputs.needs_clarification == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
+
+          {
+            echo "Clarification required"
+            echo
+            cat "${QUESTIONS_FILE}"
+            echo
+            echo "Reply with:"
+            echo "/answer"
+          } > "${RUNTIME_DIR}/clarification_comment.md"
+
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${RUNTIME_DIR}/clarification_comment.md")"
+
+      - name: Post clear-to-proceed comment
+        if: steps.parse_codex.outputs.needs_clarification != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
+
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body=$'The task appears clear.\n\nNo clarification questions were needed, so the workflow auto-posted /answer to continue automatically.'
+
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body=$'/answer [auto-answered-by-clarify]\n\nAuto answer was posted because no human clarification was required.'
+
+      - name: Telegram clarification notification
+        if: steps.parse_codex.outputs.needs_clarification == 'true'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_USERID: ${{ vars.TG_ADMIN_USERID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          CHAT_ID="${TG_ADMIN_USERID:-${TG_CHAT_ID:-}}"
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
+            echo "Warning: Telegram clarification notification skipped (missing TG_BOT_SECRET or chat_id)"
+            exit 0
+          fi
+
+          MSG="Clarification required for issue ${ISSUE_URL}"
+          set +e
+          HTTP_OUTPUT="$(curl -sS -w '\n%{http_code}' -X POST \
+            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}")"
+          CURL_EXIT="${?}"
+          set -e
+          RESPONSE="$(printf '%s' "${HTTP_OUTPUT}" | sed '$d')"
+          HTTP_CODE="$(printf '%s' "${HTTP_OUTPUT}" | tail -n1)"
+          if [ "${CURL_EXIT}" -ne 0 ] || [ -z "${RESPONSE}" ]; then
+            echo "::warning::Telegram clarification notification failed: curl exit=${CURL_EXIT} http_code=${HTTP_CODE} response=${RESPONSE}"
+            exit 0
+          fi
+          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
+            echo "::warning::Telegram clarification notification failed: http_code=${HTTP_CODE} response=${RESPONSE}"
+          fi
+      - name: Comment on issue failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="AI clarification workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
+
+      - name: Telegram failure notification
+        if: failure()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_USERID: ${{ vars.TG_ADMIN_USERID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          CHAT_ID="${TG_ADMIN_USERID:-${TG_CHAT_ID:-}}"
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
+            echo "Warning: Telegram failure notification skipped (missing TG_BOT_SECRET or chat_id)"
+            exit 0
+          fi
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="AI clarification workflow failed for issue ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          set +e
+          HTTP_OUTPUT="$(curl -sS -w '\n%{http_code}' -X POST \
+            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}")"
+          CURL_EXIT="${?}"
+          set -e
+          RESPONSE="$(printf '%s' "${HTTP_OUTPUT}" | sed '$d')"
+          HTTP_CODE="$(printf '%s' "${HTTP_OUTPUT}" | tail -n1)"
+          if [ "${CURL_EXIT}" -ne 0 ] || [ -z "${RESPONSE}" ]; then
+            echo "::warning::Telegram failure notification failed: curl exit=${CURL_EXIT} http_code=${HTTP_CODE} response=${RESPONSE}"
+            exit 0
+          fi
+          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
+            echo "::warning::Telegram failure notification failed: http_code=${HTTP_CODE} response=${RESPONSE}"
+          fi
+      - name: Exit safely
+        if: failure()
+        run: exit 0

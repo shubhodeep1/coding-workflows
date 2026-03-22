@@ -1,0 +1,21 @@
+You are executing the IMPLEMENTATION phase of the AI development pipeline.
+
+Use phase context file: implementation_context.txt
+
+Build mode reminder:
+- Build mode is active. You may modify repository files and run required validations.
+
+Your task:
+1. Implement the approved implementation plan.
+2. Modify repository files as required.
+3. Keep changes minimal and safe.
+4. Avoid modifying unrelated files.
+
+Restrictions:
+- Do not ask clarification questions.
+- Do not change CI workflows.
+- Do not modify ai_pipeline.md or codex_system_instructions.md.
+
+If clarification context is incomplete, apply the safest minimal interpretation and explicitly record assumptions in your output/log summary without asking interactive questions.
+
+Your output should be repository changes only.

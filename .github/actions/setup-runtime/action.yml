@@ -1,0 +1,145 @@
+name: Setup AI Runtime
+description: Install pinned runtime tooling and initialize shared workflow metadata.
+
+inputs:
+  codex_version:
+    description: Pinned Codex CLI version.
+    required: false
+    default: v0.114.0
+  node_version:
+    description: Node.js version used for Codex CLI.
+    required: false
+    default: "22"
+  python_version:
+    description: Python version used for helper scripts.
+    required: false
+    default: "3.12"
+  runtime_prefix:
+    description: Prefix for runtime workspace in /tmp.
+    required: false
+    default: codex-run
+  required_env_csv:
+    description: Comma-separated env var names that must be present.
+    required: false
+    default: ""
+
+outputs:
+  runtime_dir:
+    description: Runtime workspace path under /tmp.
+    value: ${{ steps.runtime.outputs.runtime_dir }}
+  run_key:
+    description: Deterministic run key for logging and memory partitioning.
+    value: ${{ steps.runtime.outputs.run_key }}
+  repo_slug:
+    description: Owner/repo slug from the caller context.
+    value: ${{ steps.runtime.outputs.repo_slug }}
+  workflow_version:
+    description: Caller workflow ref, used as workflow version metadata.
+    value: ${{ steps.runtime.outputs.workflow_version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node_version }}
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: Install Codex CLI and core tools
+      shell: bash
+      env:
+        CODEX_VERSION: ${{ inputs.codex_version }}
+      run: |
+        set -euo pipefail
+
+        npm install -g "@openai/codex@${CODEX_VERSION}" --no-audit --no-fund
+
+        missing_tools=()
+        for tool in jq curl gh; do
+          command -v "$tool" >/dev/null 2>&1 || missing_tools+=("$tool")
+        done
+
+        if [ "${#missing_tools[@]}" -gt 0 ]; then
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "Missing tools (${missing_tools[*]}), but apt-get is unavailable on this runner" >&2
+            exit 1
+          fi
+
+          apt_cmd=(apt-get)
+          if command -v sudo >/dev/null 2>&1; then
+            apt_cmd=(sudo apt-get)
+          elif [ "$(id -u)" -ne 0 ]; then
+            echo "Missing tools (${missing_tools[*]}), but sudo is unavailable and the current user is not root" >&2
+            exit 1
+          fi
+
+          "${apt_cmd[@]}" update
+          if ! "${apt_cmd[@]}" install -y "${missing_tools[@]}"; then
+            echo "apt-get install failed for: ${missing_tools[*]}" >&2
+            exit 1
+          fi
+        fi
+
+        echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
+
+    - name: Validate required environment variables
+      if: ${{ inputs.required_env_csv != '' }}
+      shell: bash
+      env:
+        REQUIRED_ENV_CSV: ${{ inputs.required_env_csv }}
+      run: |
+        set -euo pipefail
+
+        IFS=',' read -r -a required <<< "${REQUIRED_ENV_CSV}"
+        missing=()
+
+        for item in "${required[@]}"; do
+          key="$(printf '%s' "${item}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          [ -n "${key}" ] || continue
+          if ! [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            echo "Invalid environment variable name in required_env_csv: '${key}'. Names must match ^[A-Za-z_][A-Za-z0-9_]*$." >&2
+            exit 1
+          fi
+          if [ -z "${!key:-}" ]; then
+            missing+=("${key}")
+          fi
+        done
+
+        if [ "${#missing[@]}" -gt 0 ]; then
+          echo "Missing required environment variables: ${missing[*]}" >&2
+          exit 1
+        fi
+
+    - name: Initialize runtime workspace
+      id: runtime
+      shell: bash
+      env:
+        RUNTIME_PREFIX: ${{ inputs.runtime_prefix }}
+      run: |
+        set -euo pipefail
+
+        safe_prefix="$(printf '%s' "${RUNTIME_PREFIX}" | tr -c 'A-Za-z0-9._-' '-')"
+        runtime_dir="/tmp/${safe_prefix}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        mkdir -p "${runtime_dir}"
+
+        run_key="${GITHUB_REPOSITORY}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
+        workflow_version="${GITHUB_WORKFLOW_REF:-unknown}"
+
+        {
+          echo "RUNTIME_DIR=${runtime_dir}"
+          echo "RUN_KEY=${run_key}"
+          echo "REPO_SLUG=${GITHUB_REPOSITORY}"
+          echo "WORKFLOW_VERSION=${workflow_version}"
+        } >> "$GITHUB_ENV"
+
+        {
+          echo "runtime_dir=${runtime_dir}"
+          echo "run_key=${run_key}"
+          echo "repo_slug=${GITHUB_REPOSITORY}"
+          echo "workflow_version=${workflow_version}"
+        } >> "$GITHUB_OUTPUT"

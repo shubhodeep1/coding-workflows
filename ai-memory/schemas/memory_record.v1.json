@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/memory_record.v1.json",
+  "title": "MemoryRecordV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_id",
+    "schema_version",
+    "category",
+    "status",
+    "scope",
+    "summary",
+    "details",
+    "confidence",
+    "sensitive",
+    "fingerprint",
+    "provenance",
+    "lineage",
+    "timestamps"
+  ],
+  "properties": {
+    "record_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "memory_record.v1"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "decisions",
+        "constraints",
+        "patterns",
+        "incidents",
+        "run_events",
+        "task_summaries"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "active",
+        "promoted",
+        "rejected",
+        "superseded"
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "issue_number", "pr_number", "run_id"],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["global", "task", "run"]
+        },
+        "issue_number": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "pr_number": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "run_id": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 120
+        }
+      }
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "details": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 12000
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "sensitive": {
+      "type": "boolean"
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflow", "run_id", "run_attempt", "actor", "source_refs"],
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "run_id": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "run_attempt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issue_number",
+        "pr_number",
+        "run_id",
+        "parent_ids",
+        "supersedes",
+        "superseded_by"
+      ],
+      "properties": {
+        "issue_number": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "pr_number": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "run_id": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "parent_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 128
+          }
+        },
+        "supersedes": {
+          "type": ["string", "null"],
+          "minLength": 3,
+          "maxLength": 128
+        },
+        "superseded_by": {
+          "type": ["string", "null"],
+          "minLength": 3,
+          "maxLength": 128
+        }
+      }
+    },
+    "timestamps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["created_at", "promoted_at", "superseded_at"],
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "promoted_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "superseded_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,518 @@
+name: AI Plan
+
+on:
+  workflow_call:
+    secrets:
+      GH_PAT:
+        required: true
+      OPENROUTER_API_KEY:
+        required: true
+      TG_BOT_SECRET:
+        required: false
+
+jobs:
+  plan:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      (
+        (
+          github.event.comment.user.type == 'User' &&
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+        ) ||
+        (
+          github.event.comment.user.type == 'Bot' &&
+          github.event.comment.user.login == 'github-actions[bot]' &&
+          startsWith(github.event.comment.body, '/answer') &&
+          contains(github.event.comment.body, '[auto-answered-by-clarify]')
+        )
+      )
+    runs-on: ubuntu-latest
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_URL: ${{ github.event.issue.html_url }}
+      SKIP_PLAN: "false"
+      MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+      MODEL_REASONING_EFFORT: xhigh
+      AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
+      PLAN_FAILURE_CONTEXT: "Planning run did not complete."
+
+    steps:
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          CODEX_VERSION="v0.114.0"
+          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+
+          sudo apt-get update
+          sudo apt-get install -y jq curl gh
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Create runtime workspace
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/codex-plan-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+          {
+            echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
+            echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
+            echo "PULLS_FILE=${RUNTIME_DIR}/issue_pulls.json"
+            echo "PLANNING_CONTEXT_FILE=${RUNTIME_DIR}/planning_context.txt"
+            echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
+            echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
+            echo "PLAN_COMMENT_FILE=${RUNTIME_DIR}/plan_comment.md"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch issue metadata
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+
+          ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
+          ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
+          ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+
+          {
+            echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
+            echo "ISSUE_URL=${ISSUE_URL_JSON}"
+            echo 'ISSUE_BODY<<EOF'
+            echo "${ISSUE_BODY}"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch issue comments
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" > "${ISSUE_COMMENTS_FILE}"
+
+      - name: Validate planning phase label
+        if: env.SKIP_PLAN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRIGGER_COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${TRIGGER_COMMENT_BODY}" | perl -0777 -ne 'exit((/^\s*\/answer\b/is) ? 0 : 1)'; then
+            echo "Comment does not begin with /answer on first non-whitespace content. Skipping planning run."
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:planning") != null' >/dev/null; then
+            echo "Issue #${ISSUE_NUMBER} is already in ai:planning phase."
+          elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:clarification") != null' >/dev/null; then
+            echo "Issue #${ISSUE_NUMBER} is in ai:clarification phase; transitioning to ai:planning for /answer processing."
+            gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
+            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
+          else
+            echo "Issue #${ISSUE_NUMBER} has neither ai:planning nor ai:clarification labels. Skipping planning run."
+            echo "Current labels: ${ISSUE_LABELS_JSON}"
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+      - name: Skip when issue already has a PR
+        if: env.SKIP_PLAN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline?per_page=100" \
+            -H "Accept: application/vnd.github+json" > "${PULLS_FILE}"
+
+          LINKED_PR_COUNT="$(jq -r '[.[] | select(.event == "cross-referenced") | .source.issue.pull_request.url? // empty] | unique | length' "${PULLS_FILE}")"
+          if [ "${LINKED_PR_COUNT}" -gt 0 ]; then
+            echo "Issue #${ISSUE_NUMBER} already has at least one linked PR. Skipping planning run."
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Skip stale /answer comments
+        if: env.SKIP_PLAN != 'true'
+        env:
+          TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          set -euo pipefail
+
+          LATEST_ANSWER_COMMENT_ID="$(jq -r '
+            [ .[] | select((.body // "") | test("(?i)^\\s*/answer\\b")) ]
+            | sort_by(.created_at)
+            | last
+            | .id // ""
+          ' "${ISSUE_COMMENTS_FILE}")"
+
+          if [ -z "${LATEST_ANSWER_COMMENT_ID}" ] || [ "${LATEST_ANSWER_COMMENT_ID}" = "null" ]; then
+            echo "No start-of-comment /answer command found. Skipping planning run."
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "Triggering comment ID: ${TRIGGER_COMMENT_ID}"
+          echo "Latest /answer comment ID: ${LATEST_ANSWER_COMMENT_ID}"
+
+          if [ "${LATEST_ANSWER_COMMENT_ID}" != "${TRIGGER_COMMENT_ID}" ]; then
+            echo "Skipping stale /answer comment ${TRIGGER_COMMENT_ID}; latest is ${LATEST_ANSWER_COMMENT_ID}."
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+      - name: Extract clarification answers and questions
+        if: env.SKIP_PLAN != 'true'
+        env:
+          TRIGGER_COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+
+          write_multiline_env() {
+            local key="$1"
+            local value="$2"
+            local delim
+            delim="EOF_$(date +%s%N)_$RANDOM"
+            {
+              printf '%s<<%s\n' "$key" "$delim"
+              printf '%s\n' "$value"
+              printf '%s\n' "$delim"
+            } >> "$GITHUB_ENV"
+          }
+
+          ANSWER_COMMENT_BODY="$(jq -r '
+            [ .[] | select((.body // "") | test("(?i)^\\s*/answer\\b")) ]
+            | sort_by(.created_at)
+            | last
+            | .body // ""
+          ' "${ISSUE_COMMENTS_FILE}")"
+
+          if [ -z "${ANSWER_COMMENT_BODY}" ] || [ "${ANSWER_COMMENT_BODY}" = "null" ]; then
+            echo "No /answer comment found in thread; using triggering comment body."
+            ANSWER_COMMENT_BODY="${TRIGGER_COMMENT_BODY}"
+          fi
+
+          USER_ANSWERS="$(printf '%s' "${ANSWER_COMMENT_BODY}" | perl -0777 -pe 's/^\s*\/answer\b\s*//is')"
+          if [ -z "${USER_ANSWERS}" ]; then
+            USER_ANSWERS="(No content provided after /answer.)"
+          fi
+
+          CLARIFICATION_QUESTIONS="$(jq -r '
+            def ix_of_latest_answer:
+              ([ .
+                | to_entries[]
+                | select((.value.body // "") | test("(?i)^\\s*/answer\\b"))
+                | .key
+              ] | last);
+
+            . as $all
+            | (ix_of_latest_answer) as $idx
+            | if ($idx == null) then
+                ""
+              else
+                [ range(0; $idx) as $i | $all[$i] ]
+                | reverse
+                | map(select(
+                    ((.user.type // "") != "User") or
+                    ((.body // "") | test("Q[0-9]+:|QUESTIONS:|clarification"; "i"))
+                  ))
+                | if length > 0 then .[0].body // "" else "" end
+              end
+          ' "${ISSUE_COMMENTS_FILE}")"
+
+          if [ -z "${CLARIFICATION_QUESTIONS}" ]; then
+            CLARIFICATION_QUESTIONS="(No clarification questions were required. Continuation was confirmed with /answer.)"
+          fi
+
+          write_multiline_env "USER_ANSWERS" "${USER_ANSWERS}"
+          write_multiline_env "CLARIFICATION_QUESTIONS" "${CLARIFICATION_QUESTIONS}"
+
+      - name: Build planning context
+        if: env.SKIP_PLAN != 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "ISSUE DESCRIPTION"
+            printf '%s\n\n' "${ISSUE_BODY}"
+            echo "CLARIFICATION QUESTIONS"
+            printf '%s\n\n' "${CLARIFICATION_QUESTIONS}"
+            echo "USER ANSWERS"
+            printf '%s\n\n' "${USER_ANSWERS}"
+            echo "ALL COMMENTS"
+            jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
+          } > "${PLANNING_CONTEXT_FILE}"
+
+      - name: Create Codex config
+        if: env.SKIP_PLAN != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.codex
+          {
+            echo 'web_search = "live"'
+            echo 'model_provider = "openrouter"'
+            echo "model = \"${MODEL_EDITOR}\""
+              echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+            echo
+            echo '[model_providers.openrouter]'
+            echo 'name = "OpenRouter"'
+            echo 'base_url = "https://openrouter.ai/api/v1"'
+            echo 'env_key = "OPENROUTER_API_KEY"'
+            echo
+            echo '[sandbox_workspace_write]'
+            echo 'network_access = true'
+          } > ~/.codex/config.toml
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Run Codex planning
+        if: env.SKIP_PLAN != 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f codex_system_instructions.md ] || [ ! -f ai_pipeline.md ]; then
+            echo "Missing required codex input file(s): codex_system_instructions.md and/or ai_pipeline.md"
+            exit 1
+          fi
+
+          cat > "${CODEX_PROMPT_FILE}" <<'EOF'
+          You are executing the PLANNING phase of the AI development pipeline.
+
+          Your task is to generate an implementation plan for the GitHub issue.
+
+          Rules:
+
+          - Read codex_system_instructions.md first and follow it strictly before any analysis.
+          - Then read ai_pipeline.md and align your behavior to it.
+          - Then read planning_context.txt and use it as the phase-specific task context.
+
+          Your job:
+
+          Create a structured implementation plan that includes:
+
+          1. Files likely to change
+          2. Functions or modules to implement
+          3. Data structures affected
+          4. API or interface changes
+          5. Potential risks or edge cases
+          6. Testing considerations
+
+          Rules:
+
+          - Before planning, always read and interpret the user clarification answers from planning_context.txt.
+          - Multiple-choice answers may appear in flexible formats and casing (for example: `q1: a q2: c q3:d`, multiline variants, or `Q1: A`). Interpret intent without enforcing strict formatting.
+          - Do not require exact answer formatting and do not depend on regex-style strictness in reasoning.
+          - Map each interpreted answer back to its corresponding Q<ID> clarification question before creating the plan.
+          - If any answer is missing, contradictory, or unclear after best-effort interpretation, do NOT guess: return clarification questions in the codex_system_instructions.md mandatory Q<ID>/Choices format and state that clarification is required before planning.
+          - Use web search when needed to validate unknowns.
+          - If implementation requires calling external APIs/services, read their official API docs and include concrete endpoint/method/parameter details in the plan so the implementation editor can execute without web access.
+          - Do NOT write code.
+          - Do NOT modify repository files.
+          - Only generate the implementation plan when answers are interpretable and sufficient.
+
+          The output must be plain text suitable for posting as an issue comment.
+          EOF
+
+          cp "${PLANNING_CONTEXT_FILE}" ./planning_context.txt
+          cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"
+
+      - name: Parse planning output
+        if: env.SKIP_PLAN != 'true'
+        id: parse_plan
+        run: |
+          set -euo pipefail
+          if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+            echo "Codex planning output is empty; refusing to continue."
+            exit 1
+          fi
+
+          HAS_STATUS_NEEDS_CLARIFICATION="false"
+          if grep -qiE 'STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION' "${CODEX_OUTPUT_FILE}"; then
+            HAS_STATUS_NEEDS_CLARIFICATION="true"
+          fi
+
+          HAS_STRUCTURED_CLARIFICATION_BLOCK="false"
+          if perl -ne '
+            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
+            next if $in_code;
+            if (/^\s*(?:\*\*)?Q[0-9]+(?:\*\*)?:(?:\*\*)?\s+/i) { $q_line = $.; next; }
+            if (defined $q_line && $. - $q_line <= 20 && /^\s*Choices:\s*$/i) { $has_block = 1; }
+            if (defined $q_line && $. - $q_line <= 20 && /^\s*-\s*\*\*[A-Z]\*\*\s*[—–-]/) { $has_block = 1; }
+            END { exit($has_block ? 0 : 1); }
+          ' "${CODEX_OUTPUT_FILE}"; then
+            HAS_STRUCTURED_CLARIFICATION_BLOCK="true"
+          fi
+
+          if [ "${HAS_STATUS_NEEDS_CLARIFICATION}" = "true" ] || [ "${HAS_STRUCTURED_CLARIFICATION_BLOCK}" = "true" ]; then
+            echo "needs_clarification=true" >> "$GITHUB_OUTPUT"
+            echo "NEEDS_CLARIFICATION=true" >> "$GITHUB_ENV"
+          else
+            echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
+            echo "NEEDS_CLARIFICATION=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Post clarification questions
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
+
+          {
+            echo "Clarification required"
+            echo
+            cat "${CODEX_OUTPUT_FILE}"
+            echo
+            echo "Reply with:"
+            echo "/answer"
+          } > "${PLAN_COMMENT_FILE}"
+
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${PLAN_COMMENT_FILE}")"
+
+      - name: Post implementation plan
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Implementation Plan"
+            echo
+            cat "${CODEX_OUTPUT_FILE}"
+            echo
+            echo "To proceed reply:"
+            echo
+            echo "/approved"
+            echo
+            echo "To restart clarification reply:"
+            echo
+            echo "/reclarify"
+          } > "${PLAN_COMMENT_FILE}"
+
+          PLAN_COMMENT_LEN="$(wc -c < "${PLAN_COMMENT_FILE}")"
+          if [ "${PLAN_COMMENT_LEN}" -gt 65536 ]; then
+            echo "Generated plan comment too long (${PLAN_COMMENT_LEN} bytes); refusing to post over GitHub limit."
+            exit 1
+          fi
+
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${PLAN_COMMENT_FILE}")"
+
+          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
+
+      - name: Auto-approve clear plan
+        id: auto_approve
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          echo "auto_approved=false" >> "$GITHUB_OUTPUT"
+          normalized_flag="$(printf '%s' "${AUTO_IMPLEMENT_ON_CLEAR_PLAN:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
+          case "${normalized_flag}" in
+            1|true|yes|on)
+              gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+                -f body=$'/approved [auto-approved-by-plan]\n\nAuto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled.'
+              echo "auto_approved=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "AUTO_IMPLEMENT_ON_CLEAR_PLAN disabled; skipping auto-approval comment."
+              ;;
+          esac
+
+      - name: Telegram plan notification
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && steps.auto_approve.outputs.auto_approved != 'true'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_USERID: ${{ vars.TG_ADMIN_USERID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          CHAT_ID="${TG_ADMIN_USERID:-${TG_CHAT_ID:-}}"
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
+            echo "Warning: Telegram plan notification skipped (missing TG_BOT_SECRET or chat_id)"
+            exit 0
+          fi
+
+          MSG="Implementation plan generated for issue ${ISSUE_URL}"
+          RESPONSE="$(curl -sS -X POST \
+            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}")"
+          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
+            echo "::warning::Telegram plan notification failed: ${RESPONSE}"
+          fi
+
+      - name: Capture planning failure context
+        if: failure()
+        run: |
+          set -euo pipefail
+          {
+            echo "PLAN_FAILURE_CONTEXT=AI Plan phase failed before posting the implementation plan."
+          } >> "$GITHUB_ENV"
+
+      - name: Comment on issue failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}"
+
+      - name: Telegram failure notification
+        if: failure()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_USERID: ${{ vars.TG_ADMIN_USERID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          CHAT_ID="${TG_ADMIN_USERID:-${TG_CHAT_ID:-}}"
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
+            echo "Warning: Telegram failure notification skipped (missing TG_BOT_SECRET or chat_id)"
+            exit 0
+          fi
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."
+          MSG="AI planning workflow failed."
+          MSG+=$'\n'
+          MSG+="Workflow: AI Plan"
+          MSG+=$'\n'
+          MSG+="Issue: #${ISSUE_NUMBER}"
+          MSG+=$'\n'
+          MSG+="Issue URL: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Context: ${PLAN_FAILURE_CONTEXT}"
+          MSG+=$'\n'
+          MSG+="Hint: ${FAILED_STEP_HINT}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          RESPONSE="$(curl -sS -X POST \
+            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=${MSG}")"
+          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
+            echo "::warning::Telegram failure notification failed: ${RESPONSE}"
+          fi
+
+      - name: Exit safely
+        if: failure()
+        run: exit 0

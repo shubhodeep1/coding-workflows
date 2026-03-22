@@ -1,0 +1,40 @@
+{
+  "record_id": "mem_example_0001",
+  "schema_version": "memory_record.v1",
+  "category": "decisions",
+  "status": "active",
+  "scope": {
+    "level": "task",
+    "issue_number": 42,
+    "pr_number": 314,
+    "run_id": "9001"
+  },
+  "summary": "Use shared ai_memory CLI for workflow memory operations",
+  "details": "The issue, plan, and implementation workflows call .github/scripts/ai_memory.py for deterministic retrieval and branch-backed writes.",
+  "confidence": 0.91,
+  "sensitive": false,
+  "fingerprint": "0c2a8ad6dce7f54e24fdbdb80c8b06d664ff79f4f30dc8af5f6f8dc67ad4379e",
+  "provenance": {
+    "workflow": "ai-implement",
+    "run_id": "9001",
+    "run_attempt": 1,
+    "actor": "codex-bot",
+    "source_refs": [
+      "https://github.com/example/repo/issues/42",
+      "https://github.com/example/repo/pull/314"
+    ]
+  },
+  "lineage": {
+    "issue_number": 42,
+    "pr_number": 314,
+    "run_id": "9001",
+    "parent_ids": [],
+    "supersedes": null,
+    "superseded_by": null
+  },
+  "timestamps": {
+    "created_at": "2026-03-21T00:00:00Z",
+    "promoted_at": "2026-03-21T00:05:00Z",
+    "superseded_at": null
+  }
+}

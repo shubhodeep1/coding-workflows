@@ -1,0 +1,41 @@
+name: AI Issue PR Status Sync
+
+on:
+  workflow_call:
+    secrets:
+      GH_PAT:
+        required: true
+
+env:
+  FINAL_LABEL: ${{ github.event.pull_request.merged && 'ai:merged' || 'ai:closed' }}
+
+jobs:
+  sync-issue-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update linked issue labels when PR closes
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          ISSUE_NUMBERS="$(gh api graphql \
+            -f owner="${REPOSITORY%/*}" \
+            -f name="${REPOSITORY#*/}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+
+          if [ -z "${ISSUE_NUMBERS}" ]; then
+            echo "No linked issues found for PR #${PR_NUMBER}."
+            exit 0
+          fi
+
+          while IFS= read -r issue_number; do
+            [ -n "${issue_number}" ] || continue
+            echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
+            gh issue edit "${issue_number}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
+            gh issue edit "${issue_number}" --add-label "${FINAL_LABEL}"
+          done <<< "${ISSUE_NUMBERS}"
