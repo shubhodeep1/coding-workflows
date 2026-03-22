@@ -129,6 +129,7 @@ jobs:
           RESPONSE="$(curl -sS -X POST \
             "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
             --data-urlencode "text=${MSG}")"
           if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
             echo "::warning::Telegram duplicate PR notification failed: ${RESPONSE}"
@@ -611,6 +612,7 @@ jobs:
           RESPONSE="$(curl -sS -X POST \
             "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
             --data-urlencode "text=${MSG}")"
           if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
             echo "::warning::Telegram failure notification failed: ${RESPONSE}"

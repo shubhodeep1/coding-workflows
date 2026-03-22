@@ -269,6 +269,7 @@ jobs:
           HTTP_OUTPUT="$(curl -sS -w '\n%{http_code}' -X POST \
             "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
             --data-urlencode "text=${MSG}")"
           CURL_EXIT="${?}"
           set -e
@@ -313,6 +314,7 @@ jobs:
           HTTP_OUTPUT="$(curl -sS -w '\n%{http_code}' -X POST \
             "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
             --data-urlencode "text=${MSG}")"
           CURL_EXIT="${?}"
           set -e

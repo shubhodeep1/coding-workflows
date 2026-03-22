@@ -1902,6 +1902,7 @@ jobs:
           curl -sS -X POST \
             "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
             --data-urlencode "text=${MSG}"
 
       - name: Mark linked issues ready to merge
@@ -1942,6 +1943,7 @@ jobs:
           curl -sS -X POST \
             "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
             --data-urlencode "text=${MSG}"
 
       - name: Telegram failure
@@ -1956,6 +1958,7 @@ jobs:
           curl -sS -X POST \
             "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
             --data-urlencode "text=${MSG}"
 
       - name: Cleanup temporary artifacts
