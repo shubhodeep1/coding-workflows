@@ -57,7 +57,7 @@ jobs:
             mkdir -p scripts
             for f in setup_serena.sh git_ref_health_check.sh; do
               gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}" > "scripts/${f}"
+                "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
               chmod +x "scripts/${f}"
             done
           fi
@@ -86,10 +86,12 @@ jobs:
           ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+          ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
 
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
+            echo "ISSUE_TITLE=${ISSUE_TITLE}"
             echo 'ISSUE_BODY<<EOF'
             echo "${ISSUE_BODY}"
             echo 'EOF'
@@ -100,7 +102,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          # Limit to last 50 comments to avoid token limit issues with long threads
+          # Fetch the 50 most recent comments (direction=desc gives newest first,
+          # limited to 50). The "Build context file" step re-sorts them
+          # chronologically with jq sort_by(.created_at) before passing to Codex.
           gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=desc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
 
       - name: Set clarification phase label
@@ -192,30 +196,29 @@ jobs:
             fi
           } > ./pre_assembled_static.txt
 
-          # Copy dynamic issue context into the working directory so Codex reads
-          # it as a separate file after the static prefix (preserving cache hits).
-          cp "${ISSUE_CONTEXT_FILE}" ./issue_context.txt
-
       - name: Run Codex
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
 
+          # Build prompt: static heredoc instructions + dynamic issue context appended.
+          # The issue context is inlined so the model doesn't waste a tool call reading it.
           cat > "${CODEX_PROMPT_FILE}" <<'PROMPT'
           You are executing the CLARIFICATION phase of the AI development pipeline.
 
           Your task is to determine whether the GitHub issue contains enough information to implement the task.
 
-          IMPORTANT: Mandatory context has been split into two pre-assembled files for
-          prompt caching efficiency. Read them in this exact order:
-          1. pre_assembled_static.txt — system instructions, AI pipeline spec, agents.md,
-             and README.md (constant across all runs, cached by the LLM provider).
-          2. issue_context.txt — issue description and comments (unique per issue).
-          Do NOT re-read the individual source files.
+          IMPORTANT: Read the file pre_assembled_static.txt first — it contains system
+          instructions, AI pipeline spec, agents.md, and README.md (constant across all
+          runs, cached by the LLM provider). Do NOT re-read the individual source files.
 
-          After reading both files, use Serena MCP tools or targeted file
-          reads only for specific code symbols/functions you need to inspect for clarification.
+          The issue context (description and comments) is provided below at the end of
+          this prompt — do NOT read issue_context.txt separately.
+
+          After reading pre_assembled_static.txt and the issue context below, use Serena
+          MCP tools or targeted file reads only for specific code symbols/functions you
+          need to inspect for clarification.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - When reading files, request large ranges (200+ lines) in a single call instead
@@ -262,11 +265,19 @@ jobs:
           - None
           PROMPT
 
+          # Append the dynamic issue context directly into the prompt so the
+          # model doesn't need a separate tool call to read issue_context.txt.
+          {
+            echo
+            echo "=== ISSUE CONTEXT ==="
+            cat "${ISSUE_CONTEXT_FILE}"
+          } >> "${CODEX_PROMPT_FILE}"
+
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex clarify attempt ${attempt}/${max_attempts}..."
-            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"; then
+            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex clarify succeeded on attempt ${attempt}."
                 break
@@ -284,6 +295,30 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Write run summary
+        if: always()
+        run: |
+          set -euo pipefail
+          TOKENS=""
+          if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
+            # Codex CLI prints "tokens used\n<number>" to stderr
+            TOKENS="$(grep -A1 'tokens used' "${RUNTIME_DIR}/codex_log.txt" | tail -1 | tr -d '[:space:]' || true)"
+          fi
+          {
+            echo "## AI Clarify Summary"
+            echo "| Key | Value |"
+            echo "|-----|-------|"
+            echo "| Issue | #${ISSUE_NUMBER} |"
+            echo "| Model | \`${MODEL_EDITOR}\` |"
+            if [ -n "${TOKENS}" ]; then
+              echo "| Tokens used | ${TOKENS} |"
+            fi
+            if [ -f "${CODEX_OUTPUT_FILE}" ]; then
+              STATUS="$(grep -oiE 'STATUS:\s*(CLEAR|NEEDS_CLARIFICATION)' "${CODEX_OUTPUT_FILE}" | head -1 || echo "unknown")"
+              echo "| Result | ${STATUS} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Parse Codex output
         id: parse_codex
@@ -312,9 +347,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
-
+          # Labels already set by "Set clarification phase label" step above.
           {
             echo "Clarification required"
             echo
@@ -333,6 +366,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          # Swap label from ai:clarification to ai:planning since no questions needed.
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
 
@@ -356,7 +390,9 @@ jobs:
             exit 0
           fi
 
-          MSG="Clarification required for issue ${ISSUE_URL}"
+          MSG="Clarification required for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+          MSG+=$'\n'
+          MSG+="${ISSUE_URL}"
           set +e
           HTTP_OUTPUT="$(curl -sS -w '\n%{http_code}' -X POST \
             "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
@@ -374,6 +410,7 @@ jobs:
           if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
             echo "::warning::Telegram clarification notification failed: http_code=${HTTP_CODE} response=${RESPONSE}"
           fi
+
       - name: Comment on issue failure
         if: failure()
         env:
@@ -399,7 +436,9 @@ jobs:
           fi
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          MSG="AI clarification workflow failed for issue ${ISSUE_URL}"
+          MSG="AI clarification failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+          MSG+=$'\n'
+          MSG+="${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           set +e

@@ -161,7 +161,7 @@ jobs:
           for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py; do
             if [ ! -f "scripts/${f}" ]; then
               gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}" > "scripts/${f}"
+                "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
               chmod +x "scripts/${f}"
             fi
           done
