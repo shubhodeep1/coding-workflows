@@ -329,6 +329,7 @@ jobs:
             echo 'name = "OpenRouter"'
             echo 'base_url = "https://openrouter.ai/api/v1"'
             echo 'env_key = "OPENROUTER_API_KEY"'
+            echo 'wire_api = "chat"'
             echo 'stream_idle_timeout_ms = 600000'
             echo 'stream_max_retries = 5'
             echo 'request_max_retries = 3'

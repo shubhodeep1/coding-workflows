@@ -19,6 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     concurrency:
+      # NOTE: cancel-in-progress: true means if a /reclarify comment arrives
+      # while a clarification run is already in progress, the old run is killed
+      # immediately with no comment, label update, or Telegram alert. This is
+      # intentional — the new run supersedes the old one. The "Comment on issue
+      # failure" step does NOT fire for cancelled runs (only for failures).
       group: ai-clarify-${{ github.event.issue.number }}
       cancel-in-progress: true
     env:
@@ -28,6 +33,15 @@ jobs:
       MODEL_REASONING_EFFORT: xhigh
 
     steps:
+      - name: Log trigger context
+        run: |
+          echo "Clarify workflow triggered for issue #${{ github.event.issue.number }}"
+          echo "Trigger: ${{ github.event_name }}/${{ github.event.action }}"
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            echo "Comment author: ${{ github.event.comment.user.login }}"
+            echo "Note: If a previous clarify run was in progress, it has been cancelled by this run (cancel-in-progress: true)."
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
@@ -92,21 +106,18 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
-          ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
 
           # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
-          # issue. It is passed via heredoc (not shell expansion) to prevent injection
-          # into shell commands. Downstream consumers must treat it as untrusted input.
+          # issue. It is NOT set as an env var to avoid repeated logging of
+          # potentially large content in every step's env dump. Read it from
+          # ISSUE_META_FILE via jq when needed: jq -r '.body // ""' "${ISSUE_META_FILE}"
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
             echo "ISSUE_TITLE=${ISSUE_TITLE}"
-            echo 'ISSUE_BODY<<EOF'
-            echo "${ISSUE_BODY}"
-            echo 'EOF'
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue comments
@@ -114,31 +125,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          # Fetch the 50 most recent comments (direction=desc gives newest first,
-          # limited to 50). The "Build context file" step re-sorts them
-          # chronologically with jq sort_by(.created_at) before passing to Codex.
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=desc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+          # Fetch the 50 most recent comments in chronological order (asc) so
+          # the "Build context file" step can use them directly without re-sorting.
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
 
       - name: Set clarification phase label
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          # Add clarification label and remove any stale phase labels in parallel
+          # Add clarification label
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
-          for label in ai:planning ai:awaiting-approval ai:implementing ai:done; do
-            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/${label}" >/dev/null 2>&1 &
-          done
-          wait
+          # Remove stale phase labels only on /reclarify (new issues won't have them)
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            CURRENT_LABELS="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" --jq '.[].name' 2>/dev/null || true)"
+            for label in ai:planning ai:awaiting-approval ai:implementing ai:done; do
+              if echo "${CURRENT_LABELS}" | grep -qxF "${label}"; then
+                gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/${label}" >/dev/null 2>&1 || true
+              fi
+            done
+          fi
 
       - name: Build context file
         run: |
           set -euo pipefail
           {
             echo "ISSUE DESCRIPTION"
-            printf '%s\n\n' "${ISSUE_BODY}"
+            printf '%s\n\n' "$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
             echo "ISSUE COMMENTS"
-            jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
+            # Comments are already in chronological order (direction=asc fetch).
+            jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${ISSUE_CONTEXT_FILE}"
 
       - name: Create Codex config
@@ -155,6 +171,7 @@ jobs:
             echo 'name = "OpenRouter"'
             echo 'base_url = "https://openrouter.ai/api/v1"'
             echo 'env_key = "OPENROUTER_API_KEY"'
+            echo 'wire_api = "chat"'
             echo 'stream_idle_timeout_ms = 600000'
             echo 'stream_max_retries = 5'
             echo 'request_max_retries = 3'
@@ -193,12 +210,19 @@ jobs:
           # NOTE: This file is inlined directly into the Codex prompt (not read
           # via a tool call) to avoid wasting a tool call round-trip and ~1400
           # lines of token overhead from the tool response envelope.
+          #
+          # PHASE-SPECIFIC TRIMMING: For clarification, we only need Phase 1
+          # details from ai_pipeline.md, not Phase 2/3/future extensions.
+          # We also trim README.md to exclude CI/workflow documentation that
+          # is irrelevant to understanding the issue for clarification.
           {
             echo "=== SYSTEM INSTRUCTIONS ==="
             cat codex_system_instructions.md
             echo
-            echo "=== AI PIPELINE ==="
-            cat ai_pipeline.md
+            echo "=== AI PIPELINE (Phase 1 — Clarification) ==="
+            # Extract only the relevant sections: Overview, Commands, Phase 1,
+            # and Shared Runtime Behavior. Stop before Phase 2.
+            awk '/^# Phase 2/{exit} {print}' ai_pipeline.md
             echo
             if [ -f agents.md ]; then
               echo "=== AGENTS.MD ==="
@@ -206,11 +230,19 @@ jobs:
               echo
             fi
             if [ -f README.md ]; then
-              echo "=== README.MD ==="
-              cat README.md
+              echo "=== README.MD (trimmed) ==="
+              # Include app descriptions and conventions but exclude CI/workflow
+              # automation docs, PR autofix details, and switchover runbooks that
+              # are irrelevant to clarification.
+              awk '/^### GitHub AI Automation/{exit} /^### Decimal128 switchover/{exit} {print}' README.md
               echo
             fi
           } > ./pre_assembled_static.txt
+
+          # Log the trimmed static context size for token budget monitoring
+          STATIC_LINES="$(wc -l < ./pre_assembled_static.txt)"
+          STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
+          echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
 
       - name: Run Codex
         env:
@@ -251,6 +283,11 @@ jobs:
             Skip straight to activate_project and then use tools directly.
           - Prefer get_symbols_overview and find_symbol over raw file reads.
           - Never read the same file region twice. Plan reads upfront.
+          - Serena search responses are truncated at ~29,000 characters. If a result
+            appears truncated, refine the query or narrow scope — do NOT retry the
+            same query or fall back to shell grep with the same patterns.
+          - If Serena tools are completely unavailable (startup failure), fall back to
+            shell grep/rg once per search. Do not attempt Serena calls after a failure.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
@@ -270,7 +307,7 @@ jobs:
             ONLY the final STATUS/QUESTIONS result.
 
           QUESTION BUDGET (MANDATORY):
-          - Ask at most 5 questions. Fewer is better.
+          - HARD LIMIT: Never ask more than 5 questions. Fewer is better.
           - Only ask about decisions that genuinely block implementation.
           - Do NOT ask about implementation details that can be decided during planning
             with reasonable defaults. Examples of planning-phase decisions (do NOT ask):
@@ -341,8 +378,8 @@ jobs:
               echo "::warning::Codex exited with code $? on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
-              sleep_secs=$((10 * (2 ** (attempt - 1))))
-              echo "Retrying in ${sleep_secs}s..."
+              sleep_secs=$(( 10 * (2 ** (attempt - 1)) + RANDOM % 10 ))
+              echo "Retrying in ${sleep_secs}s (includes jitter)..."
               sleep "${sleep_secs}"
             else
               echo "::error::Codex clarify failed after ${max_attempts} attempts."
@@ -393,14 +430,26 @@ jobs:
           if grep -qiE 'STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION' "${CODEX_OUTPUT_FILE}"; then
             # Extract questions section, handling various markdown formats
             awk 'BEGIN{IGNORECASE=1} /QUESTIONS:/{f=1; next} f{if (/^[[:space:]]*$/ && NF==0) next; print}' "${CODEX_OUTPUT_FILE}" | sed '/^[[:space:]]*$/d' > "${QUESTIONS_FILE}"
-            FIRST_QUESTION="$(head -n 1 "${QUESTIONS_FILE}" | tr -d '\r')"
-            if [ -n "${FIRST_QUESTION}" ] && printf '%s\n' "${FIRST_QUESTION}" | grep -qiE '^[[:space:]]*(-[[:space:]]*)?(none|no questions([[:space:]]+needed)?)[[:space:]]*\.?[[:space:]]*$' && [ "$(wc -l < "${QUESTIONS_FILE}")" -eq 1 ]; then
-              echo "::warning::NEEDS_CLARIFICATION returned placeholder 'None'; treating as clear"
-              echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
-            elif [ -s "${QUESTIONS_FILE}" ]; then
+
+            # Primary signal: count actual Q<N> formatted questions (most reliable)
+            Q_COUNT="$(grep -cE '^\*?\*?Q[0-9]+' "${QUESTIONS_FILE}" || echo "0")"
+
+            if [ "${Q_COUNT}" -gt 0 ]; then
               echo "needs_clarification=true" >> "$GITHUB_OUTPUT"
+              echo "Detected ${Q_COUNT} clarification question(s)."
             else
-              echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
+              # Fallback: check for placeholder patterns that mean "no questions"
+              FIRST_LINE="$(head -n 1 "${QUESTIONS_FILE}" | tr -d '\r')"
+              if [ -z "${FIRST_LINE}" ] || printf '%s\n' "${FIRST_LINE}" | grep -qiE '^[[:space:]]*(-[[:space:]]*)?(none|n/?a|no questions|no clarification)[[:space:]]*'; then
+                echo "::warning::NEEDS_CLARIFICATION with no actual questions; treating as clear"
+                echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
+              elif [ -s "${QUESTIONS_FILE}" ]; then
+                # Has content but no Q<N> pattern — still treat as clarification needed
+                echo "::warning::Questions section has content but no Q<N> format; posting as-is"
+                echo "needs_clarification=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
+              fi
             fi
           else
             echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
