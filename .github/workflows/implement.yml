@@ -188,6 +188,9 @@ jobs:
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
 
+          # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
+          # issue. It is passed via heredoc (not shell expansion) to prevent injection
+          # into shell commands. Downstream consumers must treat it as untrusted input.
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
@@ -403,10 +406,15 @@ jobs:
 
           Token efficiency rules:
 
-          - Read only the line ranges you need (use sed -n or head/tail), not entire large files.
+          - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
+            request large ranges speculatively. Use Serena symbol tools or targeted line
+            ranges (e.g. sed -n '10,30p') instead of full-file reads.
           - Do NOT run `git diff` to display your own changes at the end. The CI pipeline
             handles commit and diff reporting separately.
           - Avoid re-reading files you have already read unless the content changed.
+          - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
+            with the same patterns. Refine the Serena query or narrow the scope instead.
+          - Do NOT emit progress/status messages. Output ONLY repository changes.
 
           Restrictions:
 
@@ -432,7 +440,7 @@ jobs:
               echo "::warning::Codex exited with code $? on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
-              sleep_secs=$((attempt * 30))
+              sleep_secs=$((10 * (2 ** (attempt - 1))))
               echo "Retrying in ${sleep_secs}s..."
               sleep "${sleep_secs}"
             else

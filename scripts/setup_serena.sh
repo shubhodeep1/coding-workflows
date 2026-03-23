@@ -122,7 +122,12 @@ for lang in ${ALL_LANGS}; do
 			;;
 		python)
 			echo "Installing Python language server..."
-			pip install python-lsp-server 2>/dev/null || echo "::warning::Python LSP install failed"
+			# Prefer uv pip (leverages uv cache from setup-uv action) over raw pip
+			if command -v uv >/dev/null 2>&1; then
+				uv pip install --system python-lsp-server 2>/dev/null || echo "::warning::Python LSP install via uv failed"
+			else
+				pip install python-lsp-server 2>/dev/null || echo "::warning::Python LSP install failed"
+			fi
 			;;
 		go)
 			echo "Installing Go language server..."
@@ -204,7 +209,7 @@ default_modes:
   - ${SERENA_MODE}
 
 symbol_info_budget: 10
-initial_prompt: ""
+initial_prompt: "Skip onboarding. Do not run serena.onboarding(). Proceed directly to the task."
 SERENA_PROJECT_EOF
 else
 	echo ".serena/project.yml already exists — using existing config."
