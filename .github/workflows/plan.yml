@@ -377,6 +377,14 @@ jobs:
           After reading pre_assembled_context.txt, use Serena MCP tools or targeted file
           reads only for specific code symbols/functions you need to inspect for the plan.
 
+          EFFICIENCY RULES (MANDATORY — reduces token waste):
+          - When reading files, request large ranges (200+ lines) in a single call instead
+            of many small reads. Combine adjacent ranges.
+          - Never read the same file region twice. Plan your reads upfront.
+          - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
+            when available — they return only relevant symbols with far fewer tokens.
+          - Limit total shell exec calls to 15 or fewer. Batch searches with && or ;.
+
           Your job:
 
           Create a structured implementation plan that includes:
@@ -477,8 +485,9 @@ jobs:
           # Strip absolute CI runner paths from Codex output
           sed -i -E 's|/home/runner/work/[^/]+/[^/]+/||g' "${CODEX_OUTPUT_FILE}"
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 &
+          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 &
+          wait
 
           {
             echo "Clarification required"
