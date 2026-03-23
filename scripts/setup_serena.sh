@@ -246,7 +246,6 @@ language_backend: LSP
 gui_log_window: false
 web_dashboard: false
 web_dashboard_open_on_launch: false
-record_tool_usage_stats: true
 log_level: 20
 tool_timeout: 240
 default_modes:
@@ -285,7 +284,7 @@ echo "Resolved uvx path: ${UVX_PATH}"
 # Codex sandbox subprocess can locate uvx dependencies and caches.
 # Without these, the sandbox strips PATH/HOME/UV_CACHE_DIR and the MCP
 # server process fails silently ("mcp startup: no servers").
-ENV_VARS_LINE='env_vars = ["PATH", "HOME"'
+ENV_VARS_LINE='env_vars = ["PATH", "HOME", "TMPDIR"'
 if [ -n "${UV_CACHE_DIR:-}" ]; then
 	ENV_VARS_LINE="${ENV_VARS_LINE}, \"UV_CACHE_DIR\""
 fi
@@ -298,7 +297,7 @@ cat >> "${CODEX_CONFIG}" <<MCP_EOF
 
 [mcp_servers.serena]
 command = "${UVX_PATH}"
-args = ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", "--mode", "one-shot", "--mode", "${SERENA_MODE}", "--project-from-cwd", "--open-web-dashboard", "false"]
+args = ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", "--mode", "one-shot", "--mode", "${SERENA_MODE}", "--project-from-cwd", "--enable-web-dashboard", "false", "--open-web-dashboard", "false"]
 ${ENV_VARS_LINE}
 startup_timeout_sec = 30
 tool_timeout_sec = 240
@@ -353,7 +352,7 @@ for _health_attempt in $(seq 1 "${SERENA_HEALTH_MAX_RETRIES}"); do
 	HEALTH_EXIT=0
 	timeout 30s uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" \
 		serena start-mcp-server --context "${SERENA_CONTEXT}" --mode one-shot --mode "${SERENA_MODE}" \
-		--project-from-cwd --open-web-dashboard false </dev/null >"${HEALTH_LOG}" 2>&1 || HEALTH_EXIT=$?
+		--project-from-cwd --enable-web-dashboard false --open-web-dashboard false </dev/null >"${HEALTH_LOG}" 2>&1 || HEALTH_EXIT=$?
 	if [ "${HEALTH_EXIT}" -eq 0 ] || [ "${HEALTH_EXIT}" -eq 124 ]; then
 		# Exit 0 = clean exit; Exit 124 = timeout killed a still-running server (expected).
 		echo "Serena MCP server validated successfully."
