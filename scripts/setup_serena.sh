@@ -225,7 +225,7 @@ tool_timeout: 240
 default_modes:
   - editing
 projects:
-  - path: "${PROJECT_ROOT}"
+  - "${PROJECT_ROOT}"
 SERENA_GLOBAL_EOF
 
 # ── 6. Append Serena MCP server to Codex config.toml ─────────────────────────
