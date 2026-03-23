@@ -44,17 +44,13 @@ Rules:
 - `mcp__serena__get_symbols_overview` — See file structure (classes, functions, exports)
 - `mcp__serena__find_symbol` — Jump to a specific symbol definition
 - `mcp__serena__find_referencing_symbols` — Find all callers/usages of a symbol
-- `mcp__serena__find_referencing_code_snippets` — Get code context around references
 - `mcp__serena__search_for_pattern` — Regex search (replaces grep)
 
 ### Editing code (use INSTEAD of full-file writes):
 - `mcp__serena__replace_symbol_body` — Replace a function/class body surgically
 - `mcp__serena__insert_after_symbol` — Add code after a symbol definition
 - `mcp__serena__insert_before_symbol` — Add code before a symbol definition
-- `mcp__serena__insert_at_line` — Insert at a specific line
-- `mcp__serena__delete_lines` — Remove a range of lines
 - `mcp__serena__rename_symbol` — Rename across codebase (LSP refactor)
-- `mcp__serena__create_text_file` — Create new files
 
 ### Workflow:
 1. Start with `get_symbols_overview` to understand file structure

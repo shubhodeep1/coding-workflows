@@ -195,7 +195,7 @@ base_modes: []
 default_modes:
   - ${SERENA_MODE}
 
-symbol_info_budget: null
+symbol_info_budget: 10
 initial_prompt: ""
 SERENA_PROJECT_EOF
 else
@@ -303,13 +303,26 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
 fi
 
 # ── 8. Health check ──────────────────────────────────────────────────────────
+# Validate the actual MCP server startup, not just --help. This catches mode
+# combination errors, LSP failures, and config issues that only surface when
+# serena tries to initialize as an MCP server.
 
-echo "Validating Serena MCP server..."
+echo "Validating Serena MCP server startup..."
+HEALTH_LOG="${TMPDIR:-/tmp}/serena_health_check.log"
 if timeout 30s uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" \
-	serena --help >/dev/null 2>&1; then
+	serena start-mcp-server --context "${SERENA_CONTEXT}" --mode one-shot --mode "${SERENA_MODE}" \
+	--project-from-cwd --open-web-dashboard false </dev/null >"${HEALTH_LOG}" 2>&1; then
 	echo "Serena MCP server validated successfully."
+elif [ $? -eq 124 ]; then
+	# timeout(1) returns 124 when the command is killed — that means serena
+	# started and kept running (good), it just didn't exit on its own (expected
+	# for a server). Treat this as success.
+	echo "Serena MCP server validated successfully (startup held for 30s — expected for server process)."
 else
-	warn_and_exit "Serena health check timed out or failed"
+	echo "::warning::Serena health check failed. Server output:"
+	cat "${HEALTH_LOG}" >&2 || true
+	warn_and_exit "Serena MCP server failed to start — check output above for details"
 fi
+rm -f "${HEALTH_LOG}"
 
 echo "Serena setup complete."

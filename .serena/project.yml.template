@@ -45,8 +45,8 @@ base_modes: []
 default_modes:
   - editing
 
-# Max tokens for symbol info responses (null = unlimited)
-symbol_info_budget: null
+# Timeout in seconds for symbol metadata retrieval (default: 10)
+symbol_info_budget: 10
 
 # Custom initial prompt injected into Serena context
 initial_prompt: ""
