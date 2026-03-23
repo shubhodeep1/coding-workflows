@@ -35,7 +35,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Install uv for Serena
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install Codex CLI
         run: |
@@ -111,8 +111,9 @@ jobs:
           # Add clarification label and remove any stale phase labels in parallel
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           for label in ai:planning ai:awaiting-approval ai:implementing ai:done; do
-            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/${label}" >/dev/null 2>&1 || true
+            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/${label}" >/dev/null 2>&1 &
           done
+          wait
 
       - name: Build context file
         run: |
@@ -215,6 +216,14 @@ jobs:
 
           After reading both files, use Serena MCP tools or targeted file
           reads only for specific code symbols/functions you need to inspect for clarification.
+
+          EFFICIENCY RULES (MANDATORY — reduces token waste):
+          - When reading files, request large ranges (200+ lines) in a single call instead
+            of many small reads. Combine adjacent ranges.
+          - Never read the same file region twice. Plan your reads upfront.
+          - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
+            when available — they return only relevant symbols with far fewer tokens.
+          - Limit total shell exec calls to 10 or fewer. Batch searches with && or ;.
 
           Your job:
 
