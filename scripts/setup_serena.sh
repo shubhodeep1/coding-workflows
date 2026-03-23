@@ -230,10 +230,17 @@ if [ ! -f "${CODEX_CONFIG}" ]; then
 	touch "${CODEX_CONFIG}"
 fi
 
+# Resolve uvx to an absolute path so the Codex sandbox can find it
+# regardless of its PATH. This is the most common cause of
+# "mcp startup: no servers" — uvx is on PATH in the shell but not
+# inside the Codex sandbox environment.
+UVX_PATH="$(command -v uvx 2>/dev/null || echo "uvx")"
+echo "Resolved uvx path: ${UVX_PATH}"
+
 cat >> "${CODEX_CONFIG}" <<MCP_EOF
 
 [mcp_servers.serena]
-command = "uvx"
+command = "${UVX_PATH}"
 args = ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", "--mode", "one-shot", "--mode", "${SERENA_MODE}", "--project-from-cwd", "--open-web-dashboard", "false"]
 startup_timeout_sec = 30
 tool_timeout_sec = 240
@@ -248,22 +255,6 @@ else
 	echo "::warning::MCP server config NOT found in ${CODEX_CONFIG} after write — Serena tools will be unavailable."
 fi
 
-# Also write mcp.json as a fallback for Codex versions that read it
-# instead of config.toml (observed: v0.114.0 ignoring config.toml MCP).
-CODEX_MCP_JSON="${HOME}/.codex/mcp.json"
-cat > "${CODEX_MCP_JSON}" <<MCP_JSON_EOF
-{
-  "mcpServers": {
-    "serena": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", "--mode", "one-shot", "--mode", "${SERENA_MODE}", "--project-from-cwd", "--open-web-dashboard", "false"],
-      "timeout": 30
-    }
-  }
-}
-MCP_JSON_EOF
-echo "Codex MCP config written to ${CODEX_MCP_JSON}"
-
 # ── 7. Verify Codex supports MCP ────────────────────────────────────────────
 
 echo "Checking Codex MCP support..."
@@ -275,7 +266,7 @@ if command -v codex >/dev/null 2>&1; then
 		echo "Codex MCP support confirmed."
 	else
 		CODEX_VER="$(codex --version 2>&1 || echo "unknown")"
-		echo "::warning::Codex ${CODEX_VER} may not support MCP via config.toml — falling back to mcp.json. Serena tools may be silently unavailable."
+		echo "::warning::Codex ${CODEX_VER} may not support MCP — Serena tools may be silently unavailable."
 	fi
 else
 	echo "::warning::Codex CLI not found yet (may be installed later in workflow). MCP support cannot be verified at setup time."
