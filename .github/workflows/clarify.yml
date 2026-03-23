@@ -60,6 +60,11 @@ jobs:
                 "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
               chmod +x "scripts/${f}"
             done
+            # Always use the canonical instruction files from coding-workflows
+            for f in codex_system_instructions.md ai_pipeline.md; do
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
+            done
           fi
 
       - name: Create runtime workspace
