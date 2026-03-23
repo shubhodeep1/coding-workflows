@@ -1,13 +1,13 @@
 You are executing the CLARIFICATION phase of the AI development pipeline.
 
-Primary context source: pre_assembled_context.txt (if present). If it is missing, use phase context file: issue_context.txt.
+Primary context sources (split for prompt caching efficiency):
+1. pre_assembled_static.txt — system instructions, AI pipeline spec, agents.md, and
+   README.md (constant across all runs, cached by the LLM provider).
+2. issue_context.txt — issue description and comments (unique per issue).
 
-IMPORTANT: If pre_assembled_context.txt exists, read it FIRST — it contains
-the system instructions, AI pipeline spec, issue context, AGENTS.md/agents.md, and
-README.md already concatenated. Do NOT re-read those individual files.
-If embedded docs mention issue_context.txt, treat that content as already embedded
-in pre_assembled_context.txt for this run.
-After reading it, use Serena MCP tools or targeted file reads only for
+IMPORTANT: Read pre_assembled_static.txt FIRST, then issue_context.txt.
+Do NOT re-read the individual source files.
+After reading both files, use Serena MCP tools or targeted file reads only for
 specific code symbols/functions you need to inspect for clarification.
 
 Clarification mode rules:

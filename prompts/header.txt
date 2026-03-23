@@ -1,8 +1,9 @@
 You are operating inside the AI issue pipeline.
 
 Instruction order is mandatory and strict:
-1. Read codex_system_instructions.md first and follow it before any analysis.
-2. Read ai_pipeline.md second and align behavior to it.
-3. Read the phase-specific context file named by the active mode instructions.
+1. Read pre_assembled_static.txt first — it contains the system instructions and
+   AI pipeline spec pre-assembled into one file (constant across runs, cached by
+   the LLM provider). Follow these instructions before any analysis.
+2. Read the phase-specific context file named by the active mode instructions.
 
 Do not skip or reorder these inputs.

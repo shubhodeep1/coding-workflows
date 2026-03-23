@@ -331,10 +331,8 @@ jobs:
             echo "CODEX_MCP_CONFIG=$HOME/.codex/mcp.json" >> "$GITHUB_ENV"
           fi
 
-      - name: Run Codex implementation
+      - name: Pre-assemble static context (cacheable across runs)
         if: env.SKIP_IMPLEMENT != 'true'
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
 
@@ -343,6 +341,26 @@ jobs:
             exit 1
           fi
 
+          # Split context into static (constant across runs) and dynamic (per-issue)
+          # files. This enables LLM prompt caching: the static prefix is identical
+          # across all runs, so the provider can cache it and charge reduced rates
+          # for subsequent requests.
+          {
+            echo "=== SYSTEM INSTRUCTIONS ==="
+            cat codex_system_instructions.md
+            echo
+            echo "=== AI PIPELINE ==="
+            cat ai_pipeline.md
+            echo
+          } > ./pre_assembled_static.txt
+
+      - name: Run Codex implementation
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+
           cat > "${CODEX_PROMPT_FILE}" <<'EOF'
           You are executing the IMPLEMENTATION phase of the AI development pipeline.
 
@@ -350,8 +368,9 @@ jobs:
 
           Rules:
 
-          - Read codex_system_instructions.md first and follow it strictly before any analysis.
-          - Then read ai_pipeline.md and align your behavior to it.
+          - Read pre_assembled_static.txt first — it contains the system instructions and
+            AI pipeline spec pre-assembled into one file (constant across runs, cached by
+            the LLM provider). Follow these instructions strictly before any analysis.
           - Then read implementation_context.txt and use it as the phase-specific task context.
 
           Your job:

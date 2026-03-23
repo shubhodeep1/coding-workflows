@@ -158,7 +158,7 @@ jobs:
           set -euo pipefail
           bash scripts/setup_serena.sh --mode planning --context codex
 
-      - name: Pre-assemble clarification context
+      - name: Pre-assemble static context (cacheable across runs)
         run: |
           set -euo pipefail
 
@@ -167,18 +167,17 @@ jobs:
             exit 1
           fi
 
-          # Pre-assemble all mandatory context into a single file so Codex does not
-          # waste tokens and shell calls reading them one by one (~30+ reads observed
-          # when files are read individually, burning ~100k+ tokens).
+          # Split context into static (constant across runs) and dynamic (per-issue)
+          # files. This enables LLM prompt caching: the static prefix is identical
+          # across all runs, so the provider can cache it and charge reduced rates
+          # for subsequent requests. Bundling everything into one file defeats
+          # prefix caching because the dynamic issue context changes every run.
           {
             echo "=== SYSTEM INSTRUCTIONS ==="
             cat codex_system_instructions.md
             echo
             echo "=== AI PIPELINE ==="
             cat ai_pipeline.md
-            echo
-            echo "=== ISSUE CONTEXT ==="
-            cat "${ISSUE_CONTEXT_FILE}"
             echo
             if [ -f agents.md ]; then
               echo "=== AGENTS.MD ==="
@@ -190,7 +189,11 @@ jobs:
               cat README.md
               echo
             fi
-          } > ./pre_assembled_context.txt
+          } > ./pre_assembled_static.txt
+
+          # Copy dynamic issue context into the working directory so Codex reads
+          # it as a separate file after the static prefix (preserving cache hits).
+          cp "${ISSUE_CONTEXT_FILE}" ./issue_context.txt
 
       - name: Run Codex
         env:
@@ -203,12 +206,14 @@ jobs:
 
           Your task is to determine whether the GitHub issue contains enough information to implement the task.
 
-          IMPORTANT: All mandatory context has been pre-assembled into pre_assembled_context.txt.
-          Read that file FIRST — it contains the system instructions, AI pipeline spec,
-          issue context (description + comments), agents.md, and README.md
-          already concatenated. Do NOT re-read those individual files.
+          IMPORTANT: Mandatory context has been split into two pre-assembled files for
+          prompt caching efficiency. Read them in this exact order:
+          1. pre_assembled_static.txt — system instructions, AI pipeline spec, agents.md,
+             and README.md (constant across all runs, cached by the LLM provider).
+          2. issue_context.txt — issue description and comments (unique per issue).
+          Do NOT re-read the individual source files.
 
-          After reading pre_assembled_context.txt, use Serena MCP tools or targeted file
+          After reading both files, use Serena MCP tools or targeted file
           reads only for specific code symbols/functions you need to inspect for clarification.
 
           Your job:
