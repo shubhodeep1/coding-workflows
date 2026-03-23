@@ -36,13 +36,13 @@ jobs:
       SKIP_PLAN: "false"
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
       MODEL_REASONING_EFFORT: xhigh
-      AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
+      AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'false' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
 
     steps:
       - name: Cache Codex CLI
         id: cache-codex
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ runner.tool_cache }}/codex
           key: codex-v0.114.0
@@ -66,14 +66,14 @@ jobs:
           set -euo pipefail
           npm install -g "${{ runner.tool_cache }}/codex/package" --no-audit --no-fund
 
-      - name: Install uv for Serena
-        uses: astral-sh/setup-uv@v7
-
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+
+      - name: Install uv for Serena
+        uses: astral-sh/setup-uv@v7
 
       - name: Fetch workflow support scripts
         env:
@@ -125,6 +125,9 @@ jobs:
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
 
+          # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
+          # issue. It is passed via heredoc (not shell expansion) to prevent injection
+          # into shell commands. Downstream consumers must treat it as untrusted input.
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
@@ -153,7 +156,8 @@ jobs:
             exit 0
           fi
 
-          ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          # Reuse already-fetched issue metadata instead of a redundant API call
+          ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}")"
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:planning") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is already in ai:planning phase."
           elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:clarification") != null' >/dev/null; then
@@ -390,12 +394,17 @@ jobs:
           reads only for specific code symbols/functions you need to inspect for the plan.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
-          - When reading files, request large ranges (200+ lines) in a single call instead
-            of many small reads. Combine adjacent ranges.
+          - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
+            request large ranges speculatively. Use Serena symbol tools or targeted line
+            ranges (e.g. sed -n '10,30p') instead of full-file reads.
           - Never read the same file region twice. Plan your reads upfront.
           - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
             when available — they return only relevant symbols with far fewer tokens.
+          - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
+            with the same patterns. Refine the Serena query or narrow the scope instead.
           - Limit total shell exec calls to 15 or fewer. Batch searches with && or ;.
+          - Do NOT emit progress/status messages (e.g. "I've parsed the answers…"). Output
+            ONLY the final plan or clarification result.
 
           Your job:
 
@@ -444,7 +453,7 @@ jobs:
               echo "::warning::Codex exited with code $? on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
-              sleep_secs=$((attempt * 30))
+              sleep_secs=$((10 * (2 ** (attempt - 1))))
               echo "Retrying in ${sleep_secs}s..."
               sleep "${sleep_secs}"
             else

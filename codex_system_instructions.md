@@ -58,8 +58,14 @@ Rules:
 3. Use `find_referencing_symbols` to understand impact of changes
 4. Edit with `replace_symbol_body` or `insert_after_symbol` — NOT full-file rewrites
 
+### Search result limits:
+- Serena search results may be truncated at ~29k characters. When this happens, do NOT
+  re-run the same search via shell grep/rg. Instead, narrow the Serena query (add path
+  filters, refine the pattern, or split into targeted symbol lookups).
+- Never duplicate a Serena search with a shell fallback — this wastes tokens for identical data.
+
 ### Fallback:
-- If Serena tools are unavailable or return errors, fall back to normal file reads/writes.
+- If Serena tools are **unavailable or return errors**, fall back to normal file reads/writes.
 - Do not stall or fail the task if Serena is down.
 
 ## 0. Prime Directive (NON-NEGOTIABLE)

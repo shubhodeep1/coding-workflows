@@ -93,6 +93,9 @@ jobs:
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
 
+          # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
+          # issue. It is passed via heredoc (not shell expansion) to prevent injection
+          # into shell commands. Downstream consumers must treat it as untrusted input.
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
@@ -226,12 +229,17 @@ jobs:
           need to inspect for clarification.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
-          - When reading files, request large ranges (200+ lines) in a single call instead
-            of many small reads. Combine adjacent ranges.
+          - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
+            request large ranges speculatively. Use Serena symbol tools or targeted line
+            ranges (e.g. sed -n '10,30p') instead of full-file reads.
           - Never read the same file region twice. Plan your reads upfront.
           - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
             when available — they return only relevant symbols with far fewer tokens.
+          - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
+            with the same patterns. Refine the Serena query or narrow the scope instead.
           - Limit total shell exec calls to 10 or fewer. Batch searches with && or ;.
+          - Do NOT emit progress/status messages (e.g. "I've parsed the issue…"). Output
+            ONLY the final STATUS/QUESTIONS result.
 
           Your job:
 
@@ -292,7 +300,7 @@ jobs:
               echo "::warning::Codex exited with code $? on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
-              sleep_secs=$((attempt * 30))
+              sleep_secs=$((10 * (2 ** (attempt - 1))))
               echo "Retrying in ${sleep_secs}s..."
               sleep "${sleep_secs}"
             else
