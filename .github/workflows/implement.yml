@@ -156,15 +156,15 @@ jobs:
           # repo is checked out and this repo's scripts/ directory is absent.
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
-          if [ ! -f scripts/setup_serena.sh ]; then
-            wf_source="${{ github.repository_owner }}/coding-workflows"
-            mkdir -p scripts
-            for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py; do
+          wf_source="${{ github.repository_owner }}/coding-workflows"
+          mkdir -p scripts
+          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py; do
+            if [ ! -f "scripts/${f}" ]; then
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}" > "scripts/${f}"
               chmod +x "scripts/${f}"
-            done
-          fi
+            fi
+          done
 
       - name: Fetch issue metadata
         if: env.SKIP_IMPLEMENT != 'true'
@@ -326,10 +326,7 @@ jobs:
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
-          # Expose MCP config path for codex exec (which requires explicit --mcp-config)
-          if [ -f ~/.codex/mcp.json ]; then
-            echo "CODEX_MCP_CONFIG=$HOME/.codex/mcp.json" >> "$GITHUB_ENV"
-          fi
+          # MCP config at ~/.codex/mcp.json is auto-discovered by codex
 
       - name: Run Codex implementation
         if: env.SKIP_IMPLEMENT != 'true'
@@ -394,15 +391,10 @@ jobs:
 
           cp "${IMPLEMENTATION_CONTEXT_FILE}" ./implementation_context.txt
 
-          MCP_ARGS=()
-          if [ -n "${CODEX_MCP_CONFIG:-}" ] && [ -f "${CODEX_MCP_CONFIG}" ]; then
-            MCP_ARGS=("--mcp-config" "${CODEX_MCP_CONFIG}")
-          fi
-
           max_attempts=2
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
-            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto "${MCP_ARGS[@]}" > "${CODEX_OUTPUT_FILE}"; then
+            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex implement succeeded on attempt ${attempt}."
                 break
