@@ -35,6 +35,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     concurrency:
       group: ai-implement-${{ github.repository }}-${{ github.event.issue.number }}
       cancel-in-progress: false
@@ -316,6 +317,9 @@ jobs:
             echo 'name = "OpenRouter"'
             echo 'base_url = "https://openrouter.ai/api/v1"'
             echo 'env_key = "OPENROUTER_API_KEY"'
+            echo 'stream_idle_timeout_ms = 600000'
+            echo 'stream_max_retries = 5'
+            echo 'request_max_retries = 3'
             echo
             echo '[sandbox_workspace_write]'
             echo 'network_access = true'
@@ -395,7 +399,27 @@ jobs:
             MCP_ARGS=("--mcp-config" "${CODEX_MCP_CONFIG}")
           fi
 
-          cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto "${MCP_ARGS[@]}" > "${CODEX_OUTPUT_FILE}"
+          max_attempts=2
+          for attempt in $(seq 1 "${max_attempts}"); do
+            echo "Codex implement attempt ${attempt}/${max_attempts}..."
+            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto "${MCP_ARGS[@]}" > "${CODEX_OUTPUT_FILE}"; then
+              if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+                echo "Codex implement succeeded on attempt ${attempt}."
+                break
+              fi
+              echo "::warning::Codex returned empty output on attempt ${attempt}."
+            else
+              echo "::warning::Codex exited with code $? on attempt ${attempt}."
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$((attempt * 30))
+              echo "Retrying in ${sleep_secs}s..."
+              sleep "${sleep_secs}"
+            else
+              echo "::error::Codex implement failed after ${max_attempts} attempts."
+              exit 1
+            fi
+          done
           rm -f ./implementation_context.txt
 
       - name: Log token usage and Serena stats
@@ -625,7 +649,7 @@ jobs:
             cat "${PLAN_FILE}"
           } > "${RUNTIME_DIR}/issue_context_for_summary.txt"
 
-          timeout 300s sh -c 'cat "$1" "$4" | codex exec --model "$2" --full-auto > "$3"' _ "${ISSUE_SUMMARY_PROMPT_FILE}" "${MODEL_EDITOR}" "${ISSUE_SUMMARY_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt"
+          cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${ISSUE_SUMMARY_FILE}"
 
       - name: Post AI issue summary as first PR comment
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''

@@ -39,6 +39,7 @@ env:
 jobs:
   codex-agent:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     if: ${{ github.event_name == 'workflow_dispatch' || (!github.event.pull_request.draft && !contains(github.event.pull_request.title || '', '[skip ai]') && !contains(github.event.pull_request.body || '', '[skip ai]')) }}
 
     env:
@@ -148,6 +149,9 @@ jobs:
             echo 'name = "OpenRouter"'
             echo 'base_url = "https://openrouter.ai/api/v1"'
             echo 'env_key = "OPENROUTER_API_KEY"'
+            echo 'stream_idle_timeout_ms = 600000'
+            echo 'stream_max_retries = 5'
+            echo 'request_max_retries = 3'
             echo
             echo '[sandbox_workspace_write]'
             echo 'network_access = true'

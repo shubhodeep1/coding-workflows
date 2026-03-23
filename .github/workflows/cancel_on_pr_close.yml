@@ -10,6 +10,7 @@ name: AI Cancel Runs on PR Close
 jobs:
   cancel-active-runs:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     env:
       GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
       PR_NUMBER: ${{ github.event.pull_request.number }}

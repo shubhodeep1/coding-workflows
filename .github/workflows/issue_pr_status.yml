@@ -13,6 +13,7 @@ env:
 jobs:
   sync-issue-status:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Update linked issue labels when PR closes
         env:

@@ -29,6 +29,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 55
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
@@ -301,6 +302,9 @@ jobs:
             echo 'name = "OpenRouter"'
             echo 'base_url = "https://openrouter.ai/api/v1"'
             echo 'env_key = "OPENROUTER_API_KEY"'
+            echo 'stream_idle_timeout_ms = 600000'
+            echo 'stream_max_retries = 5'
+            echo 'request_max_retries = 3'
             echo
             echo '[sandbox_workspace_write]'
             echo 'network_access = true'
@@ -407,7 +411,27 @@ jobs:
           The output must be plain text suitable for posting as an issue comment.
           EOF
 
-          cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"
+          max_attempts=3
+          for attempt in $(seq 1 "${max_attempts}"); do
+            echo "Codex planning attempt ${attempt}/${max_attempts}..."
+            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"; then
+              if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+                echo "Codex planning succeeded on attempt ${attempt}."
+                break
+              fi
+              echo "::warning::Codex returned empty output on attempt ${attempt}."
+            else
+              echo "::warning::Codex exited with code $? on attempt ${attempt}."
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$((attempt * 30))
+              echo "Retrying in ${sleep_secs}s..."
+              sleep "${sleep_secs}"
+            else
+              echo "::error::Codex planning failed after ${max_attempts} attempts."
+              exit 1
+            fi
+          done
 
       - name: Parse planning output
         if: env.SKIP_PLAN != 'true'
