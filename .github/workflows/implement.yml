@@ -35,6 +35,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     concurrency:
       group: ai-implement-${{ github.repository }}-${{ github.event.issue.number }}
       cancel-in-progress: false
@@ -395,7 +396,7 @@ jobs:
             MCP_ARGS=("--mcp-config" "${CODEX_MCP_CONFIG}")
           fi
 
-          cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto "${MCP_ARGS[@]}" > "${CODEX_OUTPUT_FILE}"
+          cat "${CODEX_PROMPT_FILE}" | timeout --signal=TERM --kill-after=30s 1800s codex exec --model "${MODEL_EDITOR}" --full-auto "${MCP_ARGS[@]}" > "${CODEX_OUTPUT_FILE}"
           rm -f ./implementation_context.txt
 
       - name: Log token usage and Serena stats

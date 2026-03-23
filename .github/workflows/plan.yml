@@ -29,6 +29,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
@@ -407,7 +408,7 @@ jobs:
           The output must be plain text suitable for posting as an issue comment.
           EOF
 
-          cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"
+          cat "${CODEX_PROMPT_FILE}" | timeout --signal=TERM --kill-after=30s 900s codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"
 
       - name: Parse planning output
         if: env.SKIP_PLAN != 'true'
