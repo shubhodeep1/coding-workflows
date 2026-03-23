@@ -208,6 +208,7 @@ jobs:
       - name: Run Codex
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY || '15' }}
         run: |
           set -euo pipefail
 
@@ -217,6 +218,9 @@ jobs:
           # runs, enabling LLM provider prompt-prefix caching.
           {
             cat ./pre_assembled_static.txt
+            echo
+            # Inject the configurable tool call budget before the static heredoc
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
             cat <<'PROMPT'
           === CLARIFICATION TASK ===
@@ -244,7 +248,8 @@ jobs:
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - When reading files, request large ranges (200+ lines) in a single call instead
             of many small reads. Combine adjacent ranges.
-          - Limit total tool calls (MCP + shell exec combined) to 15 or fewer.
+          - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
+            The budget is a guideline to prevent waste, not a hard cap.
           - Batch shell searches with && or ;.
           - Do NOT map the full implementation surface. Only inspect code to the extent
             needed to identify genuine ambiguities that would block implementation.
@@ -332,6 +337,8 @@ jobs:
 
       - name: Write run summary
         if: always()
+        env:
+          TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_CLARIFY || '80000' }}
         run: |
           set -euo pipefail
           TOKENS=""
@@ -347,12 +354,9 @@ jobs:
             echo "| Model | \`${MODEL_EDITOR}\` |"
             if [ -n "${TOKENS}" ]; then
               echo "| Tokens used | ${TOKENS} |"
-              # Warn when clarification consumes excessive tokens.
-              # Clarify should be lightweight; >80k suggests the model
-              # over-explored the codebase or the static context is too large.
               TOKENS_NUM="${TOKENS//,/}"
-              if [ "${TOKENS_NUM}" -gt 80000 ] 2>/dev/null; then
-                echo "| :warning: Token alert | Above 80k threshold — review prompt efficiency |"
+              if [ "${TOKENS_NUM}" -gt "${TOKEN_WARN_THRESHOLD}" ] 2>/dev/null; then
+                echo "| :warning: Token alert | Above ${TOKEN_WARN_THRESHOLD} threshold — review prompt efficiency |"
               fi
             fi
             if [ -f "${CODEX_OUTPUT_FILE}" ]; then

@@ -367,6 +367,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '25' }}
         run: |
           set -euo pipefail
 
@@ -376,6 +377,9 @@ jobs:
           # runs, enabling LLM provider prompt-prefix caching.
           {
             cat ./pre_assembled_static.txt
+            echo
+            # Inject the configurable tool call budget before the static heredoc
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
             cat <<'EOF'
           === IMPLEMENTATION TASK ===
@@ -413,7 +417,9 @@ jobs:
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - When reading files, request large ranges (200+ lines) in a single call instead
             of many small reads. Combine adjacent ranges.
-          - Limit total tool calls (MCP + shell exec combined) to 25 or fewer.
+          - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
+            For large refactors that touch many files, exceeding the budget is acceptable —
+            the budget is a guideline to prevent waste, not a hard cap.
           - Batch shell searches with && or ;.
           - Do NOT run `git diff` to display your own changes at the end. The CI pipeline
             handles commit and diff reporting separately.
@@ -469,6 +475,8 @@ jobs:
 
       - name: Write run summary
         if: env.SKIP_IMPLEMENT != 'true' && always()
+        env:
+          TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_IMPLEMENT || '120000' }}
         run: |
           set -euo pipefail
           TOKENS=""
@@ -483,12 +491,9 @@ jobs:
             echo "| Model | \`${MODEL_EDITOR}\` |"
             if [ -n "${TOKENS}" ]; then
               echo "| Tokens used | ${TOKENS} |"
-              # Warn when implementation consumes excessive tokens.
-              # Implementation is heavier than clarify/plan but >120k
-              # suggests over-exploration or redundant file reads.
               TOKENS_NUM="${TOKENS//,/}"
-              if [ "${TOKENS_NUM}" -gt 120000 ] 2>/dev/null; then
-                echo "| :warning: Token alert | Above 120k threshold — review prompt efficiency |"
+              if [ "${TOKENS_NUM}" -gt "${TOKEN_WARN_THRESHOLD}" ] 2>/dev/null; then
+                echo "| :warning: Token alert | Above ${TOKEN_WARN_THRESHOLD} threshold — review prompt efficiency |"
               fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
