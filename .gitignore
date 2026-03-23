@@ -1,3 +1,7 @@
 __pycache__/
+*.pyc
 
 .serena/
+
+# Workflow-generated artifacts (created at repo root during CI runs)
+pre_assembled_static.txt
