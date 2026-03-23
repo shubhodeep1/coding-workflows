@@ -63,6 +63,14 @@ echo "Setting up Serena MCP server (version=${SERENA_VERSION}, mode=${SERENA_MOD
 
 warn_and_exit() {
 	echo "::warning::Serena setup failed: $1 — workflow will fall back to file-based editing."
+	# Remove the Serena MCP server block from Codex config so that
+	# required=true doesn't prevent Codex from starting at all.
+	CODEX_CFG="${HOME}/.codex/config.toml"
+	if [ -f "${CODEX_CFG}" ] && grep -q '\[mcp_servers\.serena\]' "${CODEX_CFG}"; then
+		# Delete from [mcp_servers.serena] to the next section header or EOF
+		sed -i '/^\[mcp_servers\.serena\]/,/^\[/{/^\[mcp_servers\.serena\]/d;/^\[/!d;}' "${CODEX_CFG}"
+		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
+	fi
 	exit 0
 }
 
@@ -205,7 +213,8 @@ fi
 # ── 5. Create global Serena config ───────────────────────────────────────────
 
 mkdir -p ~/.serena
-cat > ~/.serena/serena_config.yml <<'SERENA_GLOBAL_EOF'
+PROJECT_ROOT="$(pwd)"
+cat > ~/.serena/serena_config.yml <<SERENA_GLOBAL_EOF
 language_backend: LSP
 gui_log_window: false
 web_dashboard: false
@@ -215,6 +224,8 @@ log_level: 20
 tool_timeout: 240
 default_modes:
   - editing
+projects:
+  - path: "${PROJECT_ROOT}"
 SERENA_GLOBAL_EOF
 
 # ── 6. Append Serena MCP server to Codex config.toml ─────────────────────────
