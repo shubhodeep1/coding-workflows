@@ -199,28 +199,7 @@ Document index timing, expected output, failure modes, rollout considerations.
 
 ---
 
-## 11. `[codex-plan]` — Planning Mode
-
-When a task includes `[codex-plan]`: **planning only — no code, diffs, schemas, or scripts.**
-
-Required:
-- Read repo docs and contracts
-- Identify entrypoints
-- Ask clarifying questions (mandatory Q/A format)
-- Surface risks and decisions
-
-Response format:
-1. What I understand so far
-2. Open questions (blocking) — multiple-choice
-3. Decision points (A/B/C)
-4. Risks & constraints
-5. What happens after clarification
-
-Exit only when all questions are answered with no ambiguity. Then: create one executable task, list everything it will do, wait for approval.
-
----
-
-## 12. Task Checklist Completion Gate
+## 11. Task Checklist Completion Gate
 
 When a user provides a task list for execution, convert it to a checklist.
 
@@ -231,11 +210,11 @@ Rules:
 - Complete all non-PR items before creating a PR (unless user approves splitting)
 - If blocked: report failure, keep item open, await direction
 
-Scope: In `[codex-plan]` mode, checklist is informational until execution is approved. In PR review mode, applies only to new task lists in the current request.
+Scope: In PR review mode, applies only to new task lists in the current request.
 
 ---
 
-## 13. PR Review Mode
+## 12. PR Review Mode
 
 When the user comments `@codex change` in a PR: review all feedback and apply only explicitly requested changes.
 
@@ -257,7 +236,7 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
-## 14. Repository Hygiene
+## 13. Repository Hygiene
 
 - Never write into `.git/**` (no artifacts, caches, or bytecode).
 - Set `PYTHONDONTWRITEBYTECODE=1` for Python tooling on repo files.
