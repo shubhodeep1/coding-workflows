@@ -243,11 +243,25 @@ elif [ "${UVX_PATH#/}" = "${UVX_PATH}" ]; then
 fi
 echo "Resolved uvx path: ${UVX_PATH}"
 
+# Build the env_vars list: forward critical environment variables so the
+# Codex sandbox subprocess can locate uvx dependencies and caches.
+# Without these, the sandbox strips PATH/HOME/UV_CACHE_DIR and the MCP
+# server process fails silently ("mcp startup: no servers").
+ENV_VARS_LINE='env_vars = ["PATH", "HOME"'
+if [ -n "${UV_CACHE_DIR:-}" ]; then
+	ENV_VARS_LINE="${ENV_VARS_LINE}, \"UV_CACHE_DIR\""
+fi
+if [ -n "${PYTHONDONTWRITEBYTECODE:-}" ]; then
+	ENV_VARS_LINE="${ENV_VARS_LINE}, \"PYTHONDONTWRITEBYTECODE\""
+fi
+ENV_VARS_LINE="${ENV_VARS_LINE}]"
+
 cat >> "${CODEX_CONFIG}" <<MCP_EOF
 
 [mcp_servers.serena]
 command = "${UVX_PATH}"
 args = ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", "--mode", "one-shot", "--mode", "${SERENA_MODE}", "--project-from-cwd", "--open-web-dashboard", "false"]
+${ENV_VARS_LINE}
 startup_timeout_sec = 30
 tool_timeout_sec = 240
 MCP_EOF
@@ -260,6 +274,11 @@ if grep -q '\[mcp_servers\.serena\]' "${CODEX_CONFIG}"; then
 else
 	echo "::warning::MCP server config NOT found in ${CODEX_CONFIG} after write — Serena tools will be unavailable."
 fi
+
+# Print the final config for CI debugging
+echo "--- Final config.toml MCP section ---"
+sed -n '/\[mcp_servers/,$ p' "${CODEX_CONFIG}"
+echo "--- End MCP section ---"
 
 # ── 7. Verify Codex supports MCP ────────────────────────────────────────────
 
