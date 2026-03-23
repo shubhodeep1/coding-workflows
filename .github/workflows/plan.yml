@@ -366,7 +366,7 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '15' }}
+          TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
         run: |
           set -euo pipefail
 
@@ -486,7 +486,7 @@ jobs:
       - name: Write run summary
         if: env.SKIP_PLAN != 'true' && always()
         env:
-          TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_PLAN || '100000' }}
+          TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_PLAN || '200000' }}
         run: |
           set -euo pipefail
           TOKENS=""
