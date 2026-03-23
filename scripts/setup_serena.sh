@@ -213,8 +213,7 @@ fi
 # ── 5. Create global Serena config ───────────────────────────────────────────
 
 mkdir -p ~/.serena
-PROJECT_ROOT="$(pwd)"
-cat > ~/.serena/serena_config.yml <<SERENA_GLOBAL_EOF
+cat > ~/.serena/serena_config.yml <<'SERENA_GLOBAL_EOF'
 language_backend: LSP
 gui_log_window: false
 web_dashboard: false
@@ -224,8 +223,9 @@ log_level: 20
 tool_timeout: 240
 default_modes:
   - editing
-projects:
-  - path: "${PROJECT_ROOT}"
+# projects is required by Serena's config schema; --project-from-cwd
+# handles project discovery at runtime so an empty list suffices here.
+projects: []
 SERENA_GLOBAL_EOF
 
 # ── 6. Append Serena MCP server to Codex config.toml ─────────────────────────
