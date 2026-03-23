@@ -157,11 +157,6 @@ jobs:
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
           wf_source="${{ github.repository_owner }}/coding-workflows"
-          # Detect external context before scripts are fetched
-          is_external="false"
-          if [ ! -f scripts/setup_serena.sh ]; then
-            is_external="true"
-          fi
           mkdir -p scripts
           for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py; do
             if [ ! -f "scripts/${f}" ]; then
@@ -171,12 +166,14 @@ jobs:
             fi
           done
           # Always use the canonical instruction files from coding-workflows
-          if [ "$is_external" = "true" ]; then
-            for f in codex_system_instructions.md ai_pipeline.md; do
+          # (must not be gated on is_external — caller repos that ship their
+          # own scripts/ still need these canonical md files)
+          for f in codex_system_instructions.md ai_pipeline.md; do
+            if [ ! -f "${f}" ]; then
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
-            done
-          fi
+            fi
+          done
 
       - name: Fetch issue metadata
         if: env.SKIP_IMPLEMENT != 'true'
@@ -191,6 +188,9 @@ jobs:
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
 
+          # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
+          # issue. It is passed via heredoc (not shell expansion) to prevent injection
+          # into shell commands. Downstream consumers must treat it as untrusted input.
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
@@ -415,15 +415,21 @@ jobs:
           - If Serena tools are unavailable or error, fall back to normal file operations.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
-          - When reading files, request large ranges (200+ lines) in a single call instead
-            of many small reads. Combine adjacent ranges.
+          - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
+            request large ranges speculatively. Use Serena symbol tools or targeted line
+            ranges (e.g. sed -n '10,30p') instead of full-file reads.
+          - Never read the same file region twice. Plan your reads upfront.
+          - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
+            when available — they return only relevant symbols with far fewer tokens.
+          - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
+            with the same patterns. Refine the Serena query or narrow the scope instead.
           - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
             For large refactors that touch many files, exceeding the budget is acceptable —
             the budget is a guideline to prevent waste, not a hard cap.
           - Batch shell searches with && or ;.
           - Do NOT run `git diff` to display your own changes at the end. The CI pipeline
             handles commit and diff reporting separately.
-          - Avoid re-reading files you have already read unless the content changed.
+          - Do NOT emit progress/status messages. Output ONLY repository changes.
 
           CONFLICT DETECTION:
           - Flag any factual conflicts between the implementation plan and the actual
@@ -464,7 +470,7 @@ jobs:
               echo "::warning::Codex exited with code $? on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
-              sleep_secs=$((attempt * 30))
+              sleep_secs=$((10 * (2 ** (attempt - 1))))
               echo "Retrying in ${sleep_secs}s..."
               sleep "${sleep_secs}"
             else

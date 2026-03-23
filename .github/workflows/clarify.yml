@@ -52,20 +52,24 @@ jobs:
           # repo is checked out and this repo's scripts/ directory is absent.
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
+          wf_source="${{ github.repository_owner }}/coding-workflows"
           if [ ! -f scripts/setup_serena.sh ]; then
-            wf_source="${{ github.repository_owner }}/coding-workflows"
             mkdir -p scripts
             for f in setup_serena.sh git_ref_health_check.sh; do
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
               chmod +x "scripts/${f}"
             done
-            # Always use the canonical instruction files from coding-workflows
-            for f in codex_system_instructions.md ai_pipeline.md; do
+          fi
+          # Always use the canonical instruction files from coding-workflows
+          # (must be outside the if-block so they're fetched even when the
+          # caller repo ships its own scripts/ directory)
+          for f in codex_system_instructions.md ai_pipeline.md; do
+            if [ ! -f "${f}" ]; then
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
-            done
-          fi
+            fi
+          done
 
       - name: Create runtime workspace
         run: |
@@ -93,6 +97,9 @@ jobs:
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
 
+          # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
+          # issue. It is passed via heredoc (not shell expansion) to prevent injection
+          # into shell commands. Downstream consumers must treat it as untrusted input.
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
@@ -246,13 +253,21 @@ jobs:
           - Never read the same file region twice. Plan reads upfront.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
-          - When reading files, request large ranges (200+ lines) in a single call instead
-            of many small reads. Combine adjacent ranges.
+          - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
+            request large ranges speculatively. Use Serena symbol tools or targeted line
+            ranges (e.g. sed -n '10,30p') instead of full-file reads.
+          - Never read the same file region twice. Plan your reads upfront.
+          - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
+            when available — they return only relevant symbols with far fewer tokens.
+          - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
+            with the same patterns. Refine the Serena query or narrow the scope instead.
           - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
             The budget is a guideline to prevent waste, not a hard cap.
           - Batch shell searches with && or ;.
           - Do NOT map the full implementation surface. Only inspect code to the extent
             needed to identify genuine ambiguities that would block implementation.
+          - Do NOT emit progress/status messages (e.g. "I've parsed the issue…"). Output
+            ONLY the final STATUS/QUESTIONS result.
 
           QUESTION BUDGET (MANDATORY):
           - Ask at most 5 questions. Fewer is better.
@@ -326,7 +341,7 @@ jobs:
               echo "::warning::Codex exited with code $? on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
-              sleep_secs=$((attempt * 30))
+              sleep_secs=$((10 * (2 ** (attempt - 1))))
               echo "Retrying in ${sleep_secs}s..."
               sleep "${sleep_secs}"
             else
