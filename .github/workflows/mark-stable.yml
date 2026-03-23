@@ -24,6 +24,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Validate version format
         run: |
@@ -67,6 +68,7 @@ jobs:
   release:
     needs: validate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout main
         uses: actions/checkout@v5

@@ -399,7 +399,7 @@ jobs:
           max_attempts=2
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
-            if cat "${CODEX_PROMPT_FILE}" | timeout --signal=TERM --kill-after=30s 1800s codex exec --model "${MODEL_EDITOR}" --full-auto "${MCP_ARGS[@]}" > "${CODEX_OUTPUT_FILE}"; then
+            if cat "${CODEX_PROMPT_FILE}" | bash scripts/codex_idle_timeout.sh 900 codex exec --model "${MODEL_EDITOR}" --full-auto "${MCP_ARGS[@]}" > "${CODEX_OUTPUT_FILE}"; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex implement succeeded on attempt ${attempt}."
                 break
@@ -646,7 +646,7 @@ jobs:
             cat "${PLAN_FILE}"
           } > "${RUNTIME_DIR}/issue_context_for_summary.txt"
 
-          timeout 300s sh -c 'cat "$1" "$4" | codex exec --model "$2" --full-auto > "$3"' _ "${ISSUE_SUMMARY_PROMPT_FILE}" "${MODEL_EDITOR}" "${ISSUE_SUMMARY_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt"
+          cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" | bash scripts/codex_idle_timeout.sh 300 codex exec --model "${MODEL_EDITOR}" --full-auto > "${ISSUE_SUMMARY_FILE}"
 
       - name: Post AI issue summary as first PR comment
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
