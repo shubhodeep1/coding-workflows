@@ -182,6 +182,10 @@ jobs:
           # across all runs, so the provider can cache it and charge reduced rates
           # for subsequent requests. Bundling everything into one file defeats
           # prefix caching because the dynamic issue context changes every run.
+          #
+          # NOTE: This file is inlined directly into the Codex prompt (not read
+          # via a tool call) to avoid wasting a tool call round-trip and ~1400
+          # lines of token overhead from the tool response envelope.
           {
             echo "=== SYSTEM INSTRUCTIONS ==="
             cat codex_system_instructions.md
@@ -207,31 +211,58 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Build prompt: static heredoc instructions + dynamic issue context appended.
-          # The issue context is inlined so the model doesn't waste a tool call reading it.
-          cat > "${CODEX_PROMPT_FILE}" <<'PROMPT'
+          # Build prompt: static context + instructions + dynamic issue context,
+          # all inlined so the model doesn't waste tool calls reading files.
+          # The static prefix (pre_assembled_static.txt) is identical across all
+          # runs, enabling LLM provider prompt-prefix caching.
+          {
+            cat ./pre_assembled_static.txt
+            echo
+            cat <<'PROMPT'
+          === CLARIFICATION TASK ===
+
           You are executing the CLARIFICATION phase of the AI development pipeline.
 
           Your task is to determine whether the GitHub issue contains enough information to implement the task.
 
-          IMPORTANT: Read the file pre_assembled_static.txt first — it contains system
-          instructions, AI pipeline spec, agents.md, and README.md (constant across all
-          runs, cached by the LLM provider). Do NOT re-read the individual source files.
+          IMPORTANT: The system instructions, AI pipeline spec, agents.md, and README.md
+          are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt or
+          any of the individual source files — they are already loaded.
 
-          The issue context (description and comments) is provided below at the end of
+          The issue context (description and comments) is provided BELOW at the end of
           this prompt — do NOT read issue_context.txt separately.
 
-          After reading pre_assembled_static.txt and the issue context below, use Serena
-          MCP tools or targeted file reads only for specific code symbols/functions you
-          need to inspect for clarification.
+          Use Serena MCP tools or targeted file reads only for specific code
+          symbols/functions you need to inspect for clarification.
+
+          SERENA MCP EFFICIENCY (MANDATORY):
+          - Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+            Skip straight to activate_project and then use tools directly.
+          - Prefer get_symbols_overview and find_symbol over raw file reads.
+          - Never read the same file region twice. Plan reads upfront.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - When reading files, request large ranges (200+ lines) in a single call instead
             of many small reads. Combine adjacent ranges.
-          - Never read the same file region twice. Plan your reads upfront.
-          - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
-            when available — they return only relevant symbols with far fewer tokens.
-          - Limit total shell exec calls to 10 or fewer. Batch searches with && or ;.
+          - Limit total tool calls (MCP + shell exec combined) to 15 or fewer.
+          - Batch shell searches with && or ;.
+          - Do NOT map the full implementation surface. Only inspect code to the extent
+            needed to identify genuine ambiguities that would block implementation.
+
+          QUESTION BUDGET (MANDATORY):
+          - Ask at most 5 questions. Fewer is better.
+          - Only ask about decisions that genuinely block implementation.
+          - Do NOT ask about implementation details that can be decided during planning
+            with reasonable defaults. Examples of planning-phase decisions (do NOT ask):
+            * Error handling strategy (retry vs log vs fail)
+            * Whether to keep existing storage alongside new integrations
+            * Minor format choices (SVG vs PNG icon, inline vs file)
+            * Code organization / file structure
+          - DO ask about:
+            * Ambiguous scope (which pages/components are affected)
+            * Conflicting information (e.g., names that don't match between issue and code)
+            * Missing critical information (credentials, endpoints, target behavior)
+            * Decisions with significant user-facing impact
 
           Your job:
 
@@ -243,8 +274,10 @@ jobs:
           6. Use Serena MCP tools (get_symbols_overview, find_symbol) when available to explore
              the codebase efficiently. This helps you understand code structure with fewer tokens.
              If Serena tools are unavailable, fall back to normal file reads.
-          7. Do NOT write code.
-          8. Do NOT propose implementation solutions.
+          7. Flag any factual conflicts between the issue description and the codebase
+             (e.g., a name in the issue doesn't match the name in the code).
+          8. Do NOT write code.
+          9. Do NOT propose implementation solutions.
 
           Clarification format requirements (MANDATORY):
 
@@ -269,14 +302,10 @@ jobs:
           QUESTIONS:
           - None
           PROMPT
-
-          # Append the dynamic issue context directly into the prompt so the
-          # model doesn't need a separate tool call to read issue_context.txt.
-          {
             echo
             echo "=== ISSUE CONTEXT ==="
             cat "${ISSUE_CONTEXT_FILE}"
-          } >> "${CODEX_PROMPT_FILE}"
+          } > "${CODEX_PROMPT_FILE}"
 
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
           max_attempts=3
@@ -318,10 +347,22 @@ jobs:
             echo "| Model | \`${MODEL_EDITOR}\` |"
             if [ -n "${TOKENS}" ]; then
               echo "| Tokens used | ${TOKENS} |"
+              # Warn when clarification consumes excessive tokens.
+              # Clarify should be lightweight; >80k suggests the model
+              # over-explored the codebase or the static context is too large.
+              TOKENS_NUM="${TOKENS//,/}"
+              if [ "${TOKENS_NUM}" -gt 80000 ] 2>/dev/null; then
+                echo "| :warning: Token alert | Above 80k threshold — review prompt efficiency |"
+              fi
             fi
             if [ -f "${CODEX_OUTPUT_FILE}" ]; then
               STATUS="$(grep -oiE 'STATUS:\s*(CLEAR|NEEDS_CLARIFICATION)' "${CODEX_OUTPUT_FILE}" | head -1 || echo "unknown")"
               echo "| Result | ${STATUS} |"
+              # Count questions if clarification was needed
+              if echo "${STATUS}" | grep -qi 'NEEDS_CLARIFICATION'; then
+                Q_COUNT="$(grep -cE '^\*\*Q[0-9]+:' "${CODEX_OUTPUT_FILE}" || echo "0")"
+                echo "| Questions | ${Q_COUNT} |"
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
