@@ -10,10 +10,13 @@ All releases follow semver:
 
 ## Release Channels
 
+### Main (`@main`)
+- Latest development branch, used by all workflow wrappers for testing
+- Consumer repos testing workflow changes should pin to this channel
+
 ### Stable (`@stable` / `@v1`)
 - Production-ready releases
 - Updated only after canary validation passes
-- Consumer repos should pin to this channel
 
 ### Canary (`@canary`)
 - Pre-stable testing channel

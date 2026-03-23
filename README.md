@@ -61,7 +61,7 @@ permissions:
   issues: write
 jobs:
   clarify:
-    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@main
     secrets: inherit
 ```
 
@@ -76,7 +76,7 @@ permissions:
   issues: write
 jobs:
   plan:
-    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@main
     secrets: inherit
 ```
 
@@ -92,7 +92,7 @@ permissions:
   pull-requests: write
 jobs:
   implement:
-    uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@main
     secrets: inherit
 ```
 
@@ -110,7 +110,7 @@ permissions:
   issues: write
 jobs:
   review:
-    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@main
     with:
       allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
     secrets: inherit
@@ -126,7 +126,7 @@ permissions:
   issues: write
 jobs:
   status:
-    uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@main
     secrets: inherit
 ```
 
@@ -140,7 +140,7 @@ permissions:
   actions: write
 jobs:
   cancel:
-    uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@main
     secrets: inherit
 ```
 
@@ -154,7 +154,7 @@ permissions:
   contents: write
 jobs:
   maintenance:
-    uses: shubhodeep1/coding-workflows/.github/workflows/memory_maintenance.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/memory_maintenance.yml@main
     secrets: inherit
 ```
 
@@ -188,7 +188,7 @@ permissions:
 
 jobs:
   clarify:
-    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@main
     secrets: inherit
 ```
 
@@ -244,11 +244,14 @@ coding-workflows/
 
 ## Versioning
 
-- **Immutable tags**: `v1.0.0`, `v1.0.1`, etc.
-- **Stable channel**: `@stable` — moving tag, updated after canary validation
+This repository is configured for **testing**: all workflow wrappers reference `@main` directly so that consumer repos always pick up the latest changes without waiting for a tagged release.
+
+- **Main branch**: `@main` — latest development, used by all wrappers
+- **Immutable tags**: `v1.0.0`, `v1.0.1`, etc. — available for reproducibility if needed
+- **Stable channel**: `@stable` — moving tag, available but not used by default
 - **Canary channel**: `@canary` — pre-stable testing
 
-Consumer repos pin to `@stable` for automatic updates or exact tags for reproducibility.
+Consumer repos using this repository for testing should pin to `@main`.
 
 ## Contributing
 
