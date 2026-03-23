@@ -241,6 +241,29 @@ MCP_EOF
 
 echo "Serena MCP server appended to ${CODEX_CONFIG}"
 
+# Verify the MCP config was actually written correctly
+if grep -q '\[mcp_servers\.serena\]' "${CODEX_CONFIG}"; then
+	echo "MCP server config verified in ${CODEX_CONFIG}"
+else
+	echo "::warning::MCP server config NOT found in ${CODEX_CONFIG} after write — Serena tools will be unavailable."
+fi
+
+# Also write mcp.json as a fallback for Codex versions that read it
+# instead of config.toml (observed: v0.114.0 ignoring config.toml MCP).
+CODEX_MCP_JSON="${HOME}/.codex/mcp.json"
+cat > "${CODEX_MCP_JSON}" <<MCP_JSON_EOF
+{
+  "mcpServers": {
+    "serena": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", "--mode", "one-shot", "--mode", "${SERENA_MODE}", "--project-from-cwd", "--open-web-dashboard", "false"],
+      "timeout": 30
+    }
+  }
+}
+MCP_JSON_EOF
+echo "Codex MCP config written to ${CODEX_MCP_JSON}"
+
 # ── 7. Verify Codex supports MCP ────────────────────────────────────────────
 
 echo "Checking Codex MCP support..."
@@ -251,9 +274,8 @@ if command -v codex >/dev/null 2>&1; then
 		CODEX_MCP_SUPPORTED="true"
 		echo "Codex MCP support confirmed."
 	else
-		# Check if Codex loads mcp.json by looking at config docs
 		CODEX_VER="$(codex --version 2>&1 || echo "unknown")"
-		echo "::warning::Codex ${CODEX_VER} may not support MCP — Serena tools may be silently unavailable. Verify Codex version >= 0.114.0 supports MCP."
+		echo "::warning::Codex ${CODEX_VER} may not support MCP via config.toml — falling back to mcp.json. Serena tools may be silently unavailable."
 	fi
 else
 	echo "::warning::Codex CLI not found yet (may be installed later in workflow). MCP support cannot be verified at setup time."

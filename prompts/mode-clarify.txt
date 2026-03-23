@@ -2,6 +2,12 @@ You are executing the CLARIFICATION phase of the AI development pipeline.
 
 Use phase context file: issue_context.txt
 
+IMPORTANT: If pre_assembled_context.txt exists, read it FIRST — it contains
+the system instructions, AI pipeline spec, issue context, agents.md, and
+README.md already concatenated. Do NOT re-read those individual files.
+After reading it, use Serena MCP tools or targeted file reads only for
+specific code symbols/functions you need to inspect for clarification.
+
 Clarification mode rules:
 - Investigate repository context and issue context first; exhaust available context before asking questions.
 - Ask only ambiguities that materially affect implementation behavior, correctness, safety, interfaces, or rollout.

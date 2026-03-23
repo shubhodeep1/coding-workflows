@@ -17,6 +17,9 @@ jobs:
       (github.event_name == 'issues' && github.event.action == 'opened') ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     runs-on: ubuntu-latest
+    concurrency:
+      group: ai-clarify-${{ github.event.issue.number }}
+      cancel-in-progress: true
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
@@ -24,23 +27,20 @@ jobs:
       MODEL_REASONING_EFFORT: xhigh
 
     steps:
-      - name: Install dependencies
-        run: |
-          set -euo pipefail
-          CODEX_VERSION="v0.114.0"
-          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
-
-          sudo apt-get update
-          sudo apt-get install -y jq curl gh
-
-      - name: Install uv for Serena
-        uses: astral-sh/setup-uv@v5
-
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+
+      - name: Install uv for Serena
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Codex CLI
+        run: |
+          set -euo pipefail
+          CODEX_VERSION="${{ vars.CODEX_VERSION || 'v0.114.0' }}"
+          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
 
       - name: Fetch workflow support scripts
         env:
@@ -107,11 +107,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          # Add clarification label and remove any stale phase labels in parallel
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:done" >/dev/null 2>&1 || true
+          for label in ai:planning ai:awaiting-approval ai:implementing ai:done; do
+            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/${label}" >/dev/null 2>&1 || true
+          done
 
       - name: Build context file
         run: |
@@ -131,7 +131,7 @@ jobs:
             echo 'web_search = "live"'
             echo 'model_provider = "openrouter"'
             echo "model = \"${MODEL_EDITOR}\""
-              echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+            echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
             echo
             echo '[model_providers.openrouter]'
             echo 'name = "OpenRouter"'
@@ -154,9 +154,7 @@ jobs:
           set -euo pipefail
           bash scripts/setup_serena.sh --mode planning --context codex
 
-      - name: Run Codex
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      - name: Pre-assemble clarification context
         run: |
           set -euo pipefail
 
@@ -165,16 +163,49 @@ jobs:
             exit 1
           fi
 
+          # Pre-assemble all mandatory context into a single file so Codex does not
+          # waste tokens and shell calls reading them one by one (~30+ reads observed
+          # when files are read individually, burning ~100k+ tokens).
+          {
+            echo "=== SYSTEM INSTRUCTIONS ==="
+            cat codex_system_instructions.md
+            echo
+            echo "=== AI PIPELINE ==="
+            cat ai_pipeline.md
+            echo
+            echo "=== ISSUE CONTEXT ==="
+            cat "${ISSUE_CONTEXT_FILE}"
+            echo
+            if [ -f agents.md ]; then
+              echo "=== AGENTS.MD ==="
+              cat agents.md
+              echo
+            fi
+            if [ -f README.md ]; then
+              echo "=== README.MD ==="
+              cat README.md
+              echo
+            fi
+          } > ./pre_assembled_context.txt
+
+      - name: Run Codex
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+
           cat > "${CODEX_PROMPT_FILE}" <<'PROMPT'
           You are executing the CLARIFICATION phase of the AI development pipeline.
 
           Your task is to determine whether the GitHub issue contains enough information to implement the task.
 
-          Rules:
+          IMPORTANT: All mandatory context has been pre-assembled into pre_assembled_context.txt.
+          Read that file FIRST — it contains the system instructions, AI pipeline spec,
+          issue context (description + comments), agents.md, and README.md
+          already concatenated. Do NOT re-read those individual files.
 
-          - Read codex_system_instructions.md first and follow it strictly before any analysis.
-          - Then read ai_pipeline.md and align your behavior to it.
-          - Then read issue_context.txt and use it as the phase-specific task context.
+          After reading pre_assembled_context.txt, use Serena MCP tools or targeted file
+          reads only for specific code symbols/functions you need to inspect for clarification.
 
           Your job:
 
@@ -200,16 +231,19 @@ jobs:
 
           Output format (exact):
           STATUS: NEEDS_CLARIFICATION
+          CONFIDENCE: HIGH | MEDIUM | LOW
+          RATIONALE: <1-3 short lines>
           QUESTIONS:
           <one or more Q<ID> blocks in mandatory format>
 
           Or, if no clarification is needed:
           STATUS: CLEAR
+          CONFIDENCE: HIGH | MEDIUM | LOW
+          RATIONALE: <1-3 short lines>
           QUESTIONS:
           - None
           PROMPT
 
-          cp "${ISSUE_CONTEXT_FILE}" ./issue_context.txt
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
           cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"
 
