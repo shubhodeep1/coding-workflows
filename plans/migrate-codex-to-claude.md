@@ -79,15 +79,18 @@ base_url = "https://openrouter.ai/api/v1"
 env_key = "OPENROUTER_API_KEY"
 ```
 
-Claude Code uses environment variables + `~/.claude/settings.json`:
+Claude Code uses environment variables (no config file needed):
 ```bash
 export ANTHROPIC_BASE_URL="https://openrouter.ai/api/v1"
-export ANTHROPIC_API_KEY="${OPENROUTER_API_KEY}"
+export ANTHROPIC_AUTH_TOKEN="${OPENROUTER_API_KEY}"
 ```
 
-Alternatively, Claude Code may support a provider configuration file — verify
-against the latest CLI docs at migration time. The critical requirement is that
-all API calls route through OpenRouter using the existing `OPENROUTER_API_KEY` secret.
+`ANTHROPIC_BASE_URL` routes all API calls through OpenRouter.
+`ANTHROPIC_AUTH_TOKEN` sets the `Authorization: Bearer` header using the
+existing `OPENROUTER_API_KEY` secret — no new secrets required.
+
+These environment variables are set in the workflow `env:` block for each job,
+replacing the `~/.codex/config.toml` creation steps entirely.
 
 **Files to update (config creation blocks):**
 - `clarify.yml` — lines ~126-144
@@ -131,7 +134,7 @@ Changes needed:
   - `implement.yml` — line ~302
   - `review_autofix.yml` — line ~166
 
-### 1.6 Review / Autofix (No Change to Review Models)
+### 1.6 Review / Autofix
 
 The multi-model reviewer list in `review_autofix.yml` (lines ~28-36) is **unchanged**:
 ```yaml
@@ -145,10 +148,35 @@ REVIEWER_MODELS: |
   openai/gpt-5-mini
 ```
 
-These reviewers continue to be invoked via OpenRouter. Only the **editor/autofix
-model** (used to apply fixes after review) changes from `openai/gpt-5.3-codex`
-to `anthropic/claude-opus-4-6`, and the CLI changes from `codex exec` to
-`claude -p`.
+**Important limitation:** Claude Code CLI is designed for Claude-family models
+only. It cannot reliably invoke arbitrary third-party models (deepseek, gemini,
+qwen, etc.) even when routed through OpenRouter. This affects the reviewer
+invocations in `review_autofix.yml` (line ~998) which call `codex exec --model
+"${model}"` for each reviewer model.
+
+**What changes and what stays:**
+
+| Role | Before | After |
+|------|--------|-------|
+| Reviewer (7 models) | `codex exec --model "${model}"` | **Keep using `codex exec`** — these are non-Claude models |
+| Editor/Autofix | `codex exec --model "${MODEL_EDITOR}"` | `claude -p --model "${MODEL_EDITOR}"` |
+| Conflict resolver | `codex exec --model "${MODEL_EDITOR}"` | `claude -p --model "${MODEL_EDITOR}"` |
+
+This means `review_autofix.yml` will install **both CLIs**: Codex for the
+multi-model reviewer loop, and Claude Code for the editor/autofix and conflict
+resolution steps. The Codex installation can be dropped entirely once the
+reviewer invocations are migrated to direct OpenRouter API calls (`curl`) in a
+future iteration.
+
+**Future simplification (out of scope for this migration):**
+Replace `codex exec` reviewer calls with direct `curl` calls to the OpenRouter
+chat completions endpoint. This would eliminate the Codex CLI dependency entirely:
+```bash
+curl -s https://openrouter.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer ${OPENROUTER_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"'"${model}"'","messages":[{"role":"user","content":"..."}]}'
+```
 
 ### 1.7 System Instructions & Prompts
 
@@ -222,35 +250,43 @@ to pick up the new default).
 ## 4. Migration Checklist
 
 ### Phase 1: Preparation
-- [ ] Verify Claude Code CLI supports OpenRouter as a base URL provider
-- [ ] Verify Claude Code CLI `--mcp-config` flag or equivalent for Serena
 - [ ] Verify `claude -p` stdin/stdout behavior matches `codex exec` output format
+- [ ] Verify Claude Code MCP config format for Serena integration
 - [ ] Pin a specific Claude Code CLI version for reproducibility
 
-### Phase 2: Core Changes
-- [ ] Update CLI installation in all 4 main workflows
-- [ ] Update CLI invocation commands in all 4 main workflows
-- [ ] Replace config.toml creation with Claude Code env vars / settings.json
+### Phase 2: Core Changes (clarify, plan, implement)
+- [ ] Add Claude Code CLI installation step in `clarify.yml`, `plan.yml`, `implement.yml`
+- [ ] Replace `codex exec` invocations with `claude -p` in all three workflows
+- [ ] Replace `~/.codex/config.toml` creation with `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` env vars
 - [ ] Update default model from `openai/gpt-5.3-codex` to `anthropic/claude-opus-4-6`
-- [ ] Update `scripts/setup_serena.sh` for `--context claude-code`
-- [ ] Update npm cache keys in `plan.yml`
+- [ ] Update `scripts/setup_serena.sh` for `--context claude-code` (MCP config path + health check)
+- [ ] Update Serena context arg in workflow calls from `--context codex` to `--context claude-code`
+- [ ] Remove Codex CLI installation from `clarify.yml`, `plan.yml`, `implement.yml`
 
-### Phase 3: Instructions & Docs
+### Phase 3: Review/Autofix Workflow
+- [ ] Keep Codex CLI installation for multi-model reviewer loop (non-Claude models)
+- [ ] Add Claude Code CLI installation alongside Codex in `review_autofix.yml`
+- [ ] Replace editor/autofix `codex exec` calls with `claude -p` (lines ~1457, ~1906)
+- [ ] Replace config.toml creation with env vars for Claude Code
+- [ ] Update editor model default to `anthropic/claude-opus-4-6`
+
+### Phase 4: Instructions & Docs
 - [ ] Rename `codex_system_instructions.md` → `claude_system_instructions.md`
 - [ ] Update all references to the renamed file in prompts and workflows
 - [ ] Update `unattended_llm_system_instructions.md` Codex → Claude references
 - [ ] Update `README.md` (model, CLI, quickstart)
 - [ ] Update `ai_pipeline.md` CLI references
+- [ ] Update npm cache keys in `plan.yml`
 - [ ] Add CHANGELOG entry
 
-### Phase 4: Internal Variants
+### Phase 5: Internal Variants
 - [ ] Update all `internal-*.yml` workflows to match main workflow changes
 
-### Phase 5: Validation
+### Phase 6: Validation
 - [ ] Run internal-clarify workflow on a test issue
 - [ ] Run internal-plan workflow on a test issue
 - [ ] Run internal-implement workflow on a test issue
-- [ ] Run internal-review workflow on a test PR
+- [ ] Run internal-review workflow on a test PR (verify both CLIs work)
 - [ ] Verify Serena MCP tools are invoked successfully
 - [ ] Verify consumer repo wrappers work with `@stable` tag after release
 
@@ -260,10 +296,10 @@ to pick up the new default).
 
 | Risk | Likelihood | Mitigation |
 |------|-----------|------------|
-| Claude Code CLI doesn't support OpenRouter base URL | Low | Verify before starting; fall back to `ANTHROPIC_BASE_URL` env var |
-| Output format differences between `codex exec` and `claude -p` | Medium | Test each phase; adjust output parsing if needed |
+| Output format differences between `codex exec` and `claude -p` | Medium | Test each phase; adjust output parsing (STATUS/QUESTIONS markers) if needed |
 | MCP config format differs between Codex and Claude Code | Medium | Review Claude Code MCP docs; update `setup_serena.sh` accordingly |
 | Claude opus-4-6 output style differs from gpt-5.3-codex | Low | Prompts are explicit about output contracts; minor prompt tuning may be needed |
+| Two CLIs in review_autofix.yml adds install time | Low | Codex is only needed for reviewer loop; can be replaced with `curl` calls later |
 | Consumer repos break if they hardcoded model name | Low | Document in CHANGELOG; `WORKFLOW_EDITOR_MODEL` override still works |
 
 ---
