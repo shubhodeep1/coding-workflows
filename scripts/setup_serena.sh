@@ -124,7 +124,9 @@ for lang in ${ALL_LANGS}; do
 			echo "Installing Python language server..."
 			# Prefer uv pip (leverages uv cache from setup-uv action) over raw pip
 			if command -v uv >/dev/null 2>&1; then
-				uv pip install --system python-lsp-server 2>/dev/null || echo "::warning::Python LSP install via uv failed"
+				uv pip install --system --break-system-packages python-lsp-server 2>/dev/null \
+					|| pip install python-lsp-server 2>/dev/null \
+					|| echo "::warning::Python LSP install failed"
 			else
 				pip install python-lsp-server 2>/dev/null || echo "::warning::Python LSP install failed"
 			fi
