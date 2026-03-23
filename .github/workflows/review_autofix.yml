@@ -169,6 +169,40 @@ jobs:
           set -euo pipefail
           bash scripts/setup_serena.sh --mode editing --context codex
 
+      - name: Pre-assemble static context (cacheable across runs)
+        run: |
+          set -euo pipefail
+
+          if [ ! -s unattended_llm_system_instructions.md ]; then
+            echo "Missing required unattended_llm_system_instructions.md"
+            exit 1
+          fi
+
+          # Pre-assemble all static system instructions into one file so the LLM
+          # provider can cache this stable prefix across runs. Dynamic per-PR
+          # content (diffs, reviewer output, etc.) is kept separate and read after.
+          {
+            echo "=== UNATTENDED SYSTEM INSTRUCTIONS ==="
+            cat unattended_llm_system_instructions.md
+            echo
+            if [ -f codex_system_instructions.md ]; then
+              echo "=== CODEX SYSTEM INSTRUCTIONS ==="
+              echo "(Repository code-style, MongoDB, backward-compatibility, and safety rules.)"
+              cat codex_system_instructions.md
+              echo
+            fi
+            if [ -f agents.md ]; then
+              echo "=== AGENTS.MD ==="
+              cat agents.md
+              echo
+            fi
+            if [ -f README.md ]; then
+              echo "=== README.MD ==="
+              cat README.md
+              echo
+            fi
+          } > ./pre_assembled_static.txt
+
       - name: Collect PR metadata
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -545,11 +579,6 @@ jobs:
           if [ ! -s "${LAST_RUN_CHANGED_FILES_FILE}" ]; then
             echo "LAST_RUN_CHANGED_FILES_FILE is missing or empty; using placeholder context for this run."
             echo "No previous AI autofix changed files are available." > "${LAST_RUN_CHANGED_FILES_FILE}"
-          fi
-
-          if [ ! -s unattended_llm_system_instructions.md ]; then
-            echo "Missing required unattended_llm_system_instructions.md"
-            exit 1
           fi
 
           mkdir -p "${PREVIOUS_REVIEWS_DIR}"
@@ -976,7 +1005,10 @@ jobs:
 
           {
             echo "SYSTEM INSTRUCTIONS (MANDATORY):"
-            cat unattended_llm_system_instructions.md
+            echo "Read pre_assembled_static.txt FIRST — it contains the unattended system"
+            echo "instructions, codex system instructions (code-style/safety/MongoDB rules),"
+            echo "agents.md, and README.md pre-assembled into one file (constant across runs,"
+            echo "cached by the LLM provider). Follow these before any review work."
             echo
             echo "${PROMPT_ARTIFACT_PATH_HINT}"
             echo
@@ -1140,11 +1172,6 @@ jobs:
             "All transient reviewer artifacts are under ${PREVIOUS_REVIEWS_DIR}." \
             'Do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow.' \
             "Example command: cat ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt")"
-
-          if [ ! -s unattended_llm_system_instructions.md ]; then
-            echo "Missing required unattended_llm_system_instructions.md"
-            exit 1
-          fi
 
           REVIEWER_MANIFEST_FILE="${RUNTIME_DIR}/reviewer_manifest.txt"
           REVIEWER_BUNDLE_FILE="${RUNTIME_DIR}/reviewer_bundle.txt"
@@ -1431,7 +1458,7 @@ jobs:
             exit 1
           fi
 
-          for required_file in unattended_llm_system_instructions.md "${PR_META_FILE}" "${LAST_RUN_DIFF_FILE}" "${EDITOR_PROMPT_BODY_FILE}" "${REVIEWER_MANIFEST_FILE}" "${REVIEWER_BUNDLE_FILE}"; do
+          for required_file in ./pre_assembled_static.txt "${PR_META_FILE}" "${LAST_RUN_DIFF_FILE}" "${EDITOR_PROMPT_BODY_FILE}" "${REVIEWER_MANIFEST_FILE}" "${REVIEWER_BUNDLE_FILE}"; do
             if [ ! -s "${required_file}" ]; then
               echo "Missing required editor input file: ${required_file}"
               exit 1
@@ -1442,7 +1469,10 @@ jobs:
           prompt_tmp="$(mktemp)"
           {
             echo "SYSTEM INSTRUCTIONS (MANDATORY):"
-            cat unattended_llm_system_instructions.md
+            echo "Read pre_assembled_static.txt FIRST — it contains the unattended system"
+            echo "instructions, codex system instructions (code-style/safety/MongoDB rules),"
+            echo "agents.md, and README.md pre-assembled into one file (constant across runs,"
+            echo "cached by the LLM provider). Follow these before any editing work."
             echo
             echo "${PROMPT_ARTIFACT_PATH_HINT}"
             echo
