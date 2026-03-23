@@ -370,17 +370,27 @@ jobs:
         run: |
           set -euo pipefail
 
-          cat > "${CODEX_PROMPT_FILE}" <<'EOF'
+          # Build prompt: static context + instructions + dynamic implementation context,
+          # all inlined so the model doesn't waste tool calls reading files.
+          # The static prefix (pre_assembled_static.txt) is identical across all
+          # runs, enabling LLM provider prompt-prefix caching.
+          {
+            cat ./pre_assembled_static.txt
+            echo
+            cat <<'EOF'
+          === IMPLEMENTATION TASK ===
+
           You are executing the IMPLEMENTATION phase of the AI development pipeline.
 
           Your task is to implement the approved implementation plan.
 
-          Rules:
+          IMPORTANT: The system instructions and AI pipeline spec are provided ABOVE in
+          this prompt. Do NOT read pre_assembled_static.txt or any of the individual
+          source files — they are already loaded.
 
-          - Read pre_assembled_static.txt first — it contains the system instructions and
-            AI pipeline spec pre-assembled into one file (constant across runs, cached by
-            the LLM provider). Follow these instructions strictly before any analysis.
-          - Then read implementation_context.txt and use it as the phase-specific task context.
+          The implementation context (issue description, clarification answers, approved
+          plan, and comments) is provided BELOW at the end of this prompt — do NOT read
+          implementation_context.txt separately.
 
           Your job:
 
@@ -389,27 +399,38 @@ jobs:
           3. Keep changes minimal and safe.
           4. Avoid modifying unrelated files.
 
-          Serena MCP tools (MANDATORY when available):
-
+          SERENA MCP EFFICIENCY (MANDATORY):
+          - Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+            Skip straight to activate_project and then use tools directly.
           - When reading code, prefer Serena MCP tools (get_symbols_overview, find_symbol,
             find_referencing_symbols) over reading entire files. This reduces token usage.
           - When modifying code, prefer Serena MCP tools (replace_symbol_body, insert_after_symbol,
             insert_before_symbol) over reading and rewriting entire files.
           - Start with get_symbols_overview to understand file structure before diving in.
+          - Never read the same file region twice. Plan reads upfront.
           - If Serena tools are unavailable or error, fall back to normal file operations.
+
+          EFFICIENCY RULES (MANDATORY — reduces token waste):
+          - When reading files, request large ranges (200+ lines) in a single call instead
+            of many small reads. Combine adjacent ranges.
+          - Limit total tool calls (MCP + shell exec combined) to 25 or fewer.
+          - Batch shell searches with && or ;.
+          - Do NOT run `git diff` to display your own changes at the end. The CI pipeline
+            handles commit and diff reporting separately.
+          - Avoid re-reading files you have already read unless the content changed.
+
+          CONFLICT DETECTION:
+          - Flag any factual conflicts between the implementation plan and the actual
+            codebase (e.g., a function name in the plan doesn't match the code, a file
+            path referenced in the plan doesn't exist, or an API signature differs).
+          - When a conflict is found, note it clearly in your output and proceed with the
+            codebase truth (not the plan's assumption).
 
           Test verification:
 
           - If `pytest` is not installed, install it via `pip install pytest` before running.
           - When running `npm test`, treat "Missing script" errors as a pass (the project
             has no tests defined), but treat any other test failure as a real error.
-
-          Token efficiency rules:
-
-          - Read only the line ranges you need (use sed -n or head/tail), not entire large files.
-          - Do NOT run `git diff` to display your own changes at the end. The CI pipeline
-            handles commit and diff reporting separately.
-          - Avoid re-reading files you have already read unless the content changed.
 
           Restrictions:
 
@@ -419,13 +440,15 @@ jobs:
 
           Your output should be repository changes only.
           EOF
-
-          cp "${IMPLEMENTATION_CONTEXT_FILE}" ./implementation_context.txt
+            echo
+            echo "=== IMPLEMENTATION CONTEXT ==="
+            cat "${IMPLEMENTATION_CONTEXT_FILE}"
+          } > "${CODEX_PROMPT_FILE}"
 
           max_attempts=2
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
-            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"; then
+            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex implement succeeded on attempt ${attempt}."
                 break
@@ -443,7 +466,32 @@ jobs:
               exit 1
             fi
           done
-          rm -f ./implementation_context.txt
+
+      - name: Write run summary
+        if: env.SKIP_IMPLEMENT != 'true' && always()
+        run: |
+          set -euo pipefail
+          TOKENS=""
+          if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
+            TOKENS="$(grep -A1 'tokens used' "${RUNTIME_DIR}/codex_log.txt" | tail -1 | tr -d '[:space:]' || true)"
+          fi
+          {
+            echo "## AI Implement Summary"
+            echo "| Key | Value |"
+            echo "|-----|-------|"
+            echo "| Issue | #${ISSUE_NUMBER} |"
+            echo "| Model | \`${MODEL_EDITOR}\` |"
+            if [ -n "${TOKENS}" ]; then
+              echo "| Tokens used | ${TOKENS} |"
+              # Warn when implementation consumes excessive tokens.
+              # Implementation is heavier than clarify/plan but >120k
+              # suggests over-exploration or redundant file reads.
+              TOKENS_NUM="${TOKENS//,/}"
+              if [ "${TOKENS_NUM}" -gt 120000 ] 2>/dev/null; then
+                echo "| :warning: Token alert | Above 120k threshold — review prompt efficiency |"
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log token usage and Serena stats
         if: env.SKIP_IMPLEMENT != 'true' && always()
