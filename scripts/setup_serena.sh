@@ -264,6 +264,7 @@ args = ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "ser
 ${ENV_VARS_LINE}
 startup_timeout_sec = 30
 tool_timeout_sec = 240
+required = true
 MCP_EOF
 
 echo "Serena MCP server appended to ${CODEX_CONFIG}"
