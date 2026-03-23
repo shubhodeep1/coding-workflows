@@ -1,585 +1,272 @@
 # Codex System Instructions (Production Code + MongoDB)
-## HARD ENFORCEMENT — READ BEFORE ANY ACTION
 
-These instructions are **mandatory**.  
-Codex must follow them **before doing anything in this repository**.
-
-Failure to comply is considered a **blocking error**.
+These instructions are **mandatory** and must be followed **before any action**.
 
 ---
 
-## PRE-TASK MANDATORY CONTEXT LOADING (CRITICAL)
+## PRE-TASK MANDATORY CONTEXT LOADING
 
-**Before any task, analysis, plan, or execution, Codex MUST read:**
+Before any task, read:
 - `README.md`
 - `agents.md`
-- all `/db/contracts/*.yml` (or `.json`) files **relevant to the collections that may be touched**
+- all `/db/contracts/*.yml` (or `.json`) relevant to collections that may be touched
 
-This applies to:
-- planning
-- answering questions
-- proposing changes
-- writing code
-- reviewing PRs
-- suggesting fixes or improvements
-
-If any of these files are missing, outdated, or unclear:
-**STOP and ask clarifying questions using the mandatory multiple-choice format.**
-
-Never assume behavior that is not explicitly documented.
+If any are missing or unclear: **STOP and ask using the mandatory Q/A format.**
+Never assume undocumented behavior.
 
 ---
 
-## Serena (MCP) semantic tooling (MANDATORY when available)
+## Serena (MCP) Semantic Tooling (MANDATORY when available)
 
-Goal: reduce token usage + speed up code understanding by using Serena’s LSP-backed
-semantic tools instead of full-file reads and full-file rewrites.
+Reduce token usage by using Serena's LSP-backed semantic tools instead of full-file reads/writes.
 
 Rules:
-- ALWAYS use Serena semantic tools for code navigation over full-file reads.
-- NEVER read an entire source file if you can get what you need from symbol tools.
-- NEVER rewrite an entire file if you can use `replace_symbol_body` or `insert_after_symbol`.
+- ALWAYS use Serena semantic tools over full-file reads.
+- NEVER read an entire file if symbol tools suffice.
+- NEVER rewrite an entire file if `replace_symbol_body` or `insert_after_symbol` can do it.
 
 ### Reading code (use INSTEAD of cat/read):
-- `mcp__serena__get_symbols_overview` — See file structure (classes, functions, exports)
-- `mcp__serena__find_symbol` — Jump to a specific symbol definition
-- `mcp__serena__find_referencing_symbols` — Find all callers/usages of a symbol
-- `mcp__serena__search_for_pattern` — Regex search (replaces grep)
+- `mcp__serena__get_symbols_overview` — file structure (classes, functions, exports)
+- `mcp__serena__find_symbol` — jump to a symbol definition
+- `mcp__serena__find_referencing_symbols` — find all callers/usages
+- `mcp__serena__search_for_pattern` — regex search (replaces grep)
 
 ### Editing code (use INSTEAD of full-file writes):
-- `mcp__serena__replace_symbol_body` — Replace a function/class body surgically
-- `mcp__serena__insert_after_symbol` — Add code after a symbol definition
-- `mcp__serena__insert_before_symbol` — Add code before a symbol definition
-- `mcp__serena__rename_symbol` — Rename across codebase (LSP refactor)
+- `mcp__serena__replace_symbol_body` — replace a function/class body
+- `mcp__serena__insert_after_symbol` / `insert_before_symbol` — add code around a symbol
+- `mcp__serena__rename_symbol` — rename across codebase (LSP refactor)
 
 ### Workflow:
-1. Start with `get_symbols_overview` to understand file structure
-2. Use `find_symbol` to drill into specific functions
-3. Use `find_referencing_symbols` to understand impact of changes
-4. Edit with `replace_symbol_body` or `insert_after_symbol` — NOT full-file rewrites
+1. `get_symbols_overview` → understand file structure
+2. `find_symbol` → drill into specific functions
+3. `find_referencing_symbols` → understand change impact
+4. Edit with `replace_symbol_body` / `insert_after_symbol` — NOT full-file rewrites
 
 ### Search result limits:
-- Serena search results may be truncated at ~29k characters. When this happens, do NOT
-  re-run the same search via shell grep/rg. Instead, narrow the Serena query (add path
-  filters, refine the pattern, or split into targeted symbol lookups).
-- Never duplicate a Serena search with a shell fallback — this wastes tokens for identical data.
+- Serena results may truncate at ~29k chars. Do NOT re-run via shell grep. Instead narrow the query or split into targeted lookups.
 
 ### Fallback:
-- If Serena tools are **unavailable or return errors**, fall back to normal file reads/writes.
-- Do not stall or fail the task if Serena is down.
+- If Serena is unavailable or errors, fall back to normal file reads/writes. Do not stall.
+
+---
 
 ## 0. Prime Directive (NON-NEGOTIABLE)
 
-If you are **not 100% certain** that the outcome of your actions will match the user’s expectations:
-
-**STOP. ASK QUESTIONS. DO NOT PROCEED.**
-
-This rule applies **always**, even if:
-- the task looks trivial
-- the user did not use `[codex-plan]`
-- the user did not use `/plan`
-- similar patterns exist in the repo
-- you believe the intent is “obvious”
-
-No assumptions. Ever.
+If you are **not 100% certain** the outcome matches the user's expectations:
+**STOP. ASK. DO NOT PROCEED.** — even if the task looks trivial or the intent seems obvious.
 
 ---
 
 ## 1. Core Priorities (Strict Order)
 
-1. Security  
-2. Correctness & safety  
-3. Backward compatibility  
-4. Operational clarity  
-5. Performance  
-6. Speed (last)
+1. Security
+2. Correctness & safety
+3. Backward compatibility
+4. Operational clarity
+5. Performance
+6. Speed
 
 ---
 
-## 2. Always-On Ask-First Mode (CRITICAL)
+## 2. Always-On Ask-First Mode
 
 Ambiguity is a **hard stop**.
 
-Before drafting questions, Codex MUST:
-- restate and validate understanding of the task objective
-- study the repository thoroughly enough to avoid avoidable questions
-- identify all currently-known blocking uncertainties
+Before asking questions:
+- Restate your understanding of the task
+- Study the repo to avoid avoidable questions
+- Identify all blocking uncertainties
 
-You MUST ask clarifying questions **before** writing or modifying:
-- code
-- schemas
-- indexes
-- configs
-- scripts
-- docs
-- migrations
-- infrastructure
+Ask clarifying questions **before** modifying code, schemas, configs, scripts, docs, migrations, or infrastructure.
 
-### 2.0 Clarification Batching Rule (MANDATORY)
+### Clarification Batching
+Ask **all known questions in a single batch**. Follow-ups only if answers introduce new ambiguity.
 
-When clarification is required, Codex MUST ask **all known clarifying questions in a single batch**.
+### Mandatory Question Format
 
-Follow-up questions are allowed **only** if answers to that first batch introduce new ambiguity that could not have been known earlier.
+Use stable identifiers `Q1`, `Q2`, etc. with letter-only answers (`A`, `B`, `C`, or `A+C`).
 
-Codex MUST NOT drip-feed obvious questions across multiple messages.
+**Format:**
 
-### 2.1 Mandatory Decision Prompt Format (ANTI-MISALIGNMENT — CRITICAL)
+> **Q1: \<question\>**
+>
+> Choices:
+> - **A** — \<description\> (RECOMMENDED)
+> - **B** — \<description\>
+> - **C** — \<description\>
+>
+> Reply: `Q1: A`
 
-When Codex needs **any** decision, clarification, preference, or approval from the user, it MUST:
+Rules:
+- One decision per Q-ID. Never bundle multiple decisions.
+- Mark at least one option `(RECOMMENDED)`.
+- Do NOT use numeric question numbering (1, 2, 3) — only Q-IDs.
+- If multiple selections allowed, state explicitly.
 
-- **NOT use numeric question numbering** (1, 2, 3, etc.)
-- **NOT rely on markdown list numbering for questions**
-- use **stable question identifiers**: `Q1`, `Q2`, `Q3`, …
-- require **letter-only answers**: `A`, `B`, `C`, or `A+C`
-- number NOTHING except answer options if absolutely needed
+### When to Ask
 
-The user must be able to reply with **only the answer token(s)**  
-(e.g. `A`, `B`, `A+C`) — no prefixes, no prose.
+Ask if **any** of these are unclear:
+- **Scope:** which repo/module/service, runtime vs batch, prod/staging/dev
+- **Behavior:** expected behavior, edge cases, failure handling, safety constraints
+- **Interfaces:** API/CLI/env vars, backward compatibility, logging/observability
+- **Data/MongoDB:** collections, uniqueness rules, index contracts
+- **Operations:** timing, concurrency, rollback/recovery
 
----
-
-#### Required Question Format (MANDATORY)
-
-Each decision block MUST follow this exact structure:
-
-**Q<ID>: <short question text>**
-
-Choices:
-- **A** — <choice description>
-- **B** — <choice description>
-- **C** — <choice description>
-
-Recommendation tagging rule (MANDATORY):
-- For every multiple-choice question, mark one or more options with ` (RECOMMENDED)` based on Codex's best interpretation of the task.
-- If multiple options are equally strong, mark each qualifying option as ` (RECOMMENDED)`.
-- Never leave all options unmarked.
-
-Reply format:
-`Q<ID>: <LETTER(S)>`
-
-Example reply:
-`Q2: B`
+### Forbidden
+- Guessing intent or applying "reasonable defaults" without confirmation
+- Silent refactors, cleanups, or speculative fixes
 
 ---
 
-#### Example (CORRECT)
+## 3. Production Code Assumptions
 
-**Q1: Which environment should this apply to?**
-
-Choices:
-- **A** — Production only
-- **B** — Staging only
-- **C** — Both production and staging
-- **D** — Development only
-
-Reply format:
-`Q1: C`
-
----
-
-#### Forbidden Formats (DO NOT USE)
-
-- Numbered questions (`1)`, `2)`, `3)`)
-- Mixed numbering (`3. A`, `4. B`)
-- Markdown auto-numbered lists
-- Inline questions inside paragraphs
-- Multiple questions under a single ID
-
----
-
-#### Multiple Decisions Rule
-
-- Each decision = **one Q<ID>**
-- Never bundle multiple decisions into one question
-- If multiple selections are allowed, explicitly say so:
-  > “You may select multiple letters”
-
----
-
-#### When to Ask vs Proceed
-
-- If **any ambiguity exists** → ask using this format and STOP
-- If the user already answered the exact decision → proceed silently
-- Never infer answers from context
-
----
-
-**This format is designed to be:**
-- unambiguous
-- copy-paste safe
-- markdown-proof
-- fast to answer
-
-### You must ask questions if ANY of the following are unclear:
-
-#### Scope
-- which repo/module/service/script
-- runtime vs batch vs migration vs one-off
-- prod/staging/dev applicability
-
-#### Behavior
-- exact expected behavior
-- edge cases and failure handling
-- safety and performance constraints
-
-#### Interfaces
-- API / CLI / env vars
-- backward compatibility requirements
-- logging and observability expectations
-
-#### Data / MongoDB
-- collections touched
-- uniqueness rules (null / missing / empty)
-- index contracts or rollout constraints
-
-#### Operations
-- execution timing
-- concurrency expectations
-- rollback or failure recovery
-
-### Forbidden behavior
-- guessing intent
-- “reasonable defaults” without confirmation
-- silent refactors or cleanups
-- speculative fixes
-
-If unsure: **ask using the mandatory multiple-choice format** — never choose silently.
-
----
-
-## 3. Code Assumptions (Production-Bound)
-
-Assume **all code is production-bound**.
-
-Before outputting anything, verify:
-- logic correctness
-- error paths
-- race conditions
-- idempotency
-- deployment safety
+All code is production-bound. Verify: logic correctness, error paths, race conditions, idempotency, deployment safety.
 
 ---
 
 ## 4. Environment Variables
 
-- If you add a new env var, **always provide a default value**
-- Do NOT introduce env vars without defaults unless explicitly instructed
-- Preserve all existing env var names forever
+- Always provide defaults for new env vars unless explicitly told otherwise.
+- Preserve all existing env var names.
 
 ---
 
-## 5. Minimal Change Set Rule
+## 5. Minimal Change Set
 
-- Do NOT change formats, data types, or unrelated logic
-- Do NOT reformat files unless required to fix errors or integrate changes
-- Do NOT create test scripts unless explicitly asked
-- Extend existing mechanisms — never compete with them
+- Do NOT change formats, types, or unrelated logic.
+- Do NOT reformat files unless required for the fix.
+- Do NOT create test scripts unless asked.
+- Extend existing mechanisms — never compete with them.
 
 ---
 
-## 6. Backward Compatibility / Naming Immutability (CRITICAL)
+## 6. Backward Compatibility / Naming Immutability
 
-You must NEVER rename, remove, or repurpose existing identifiers without asking first and detailing what the removed items currently do, including:
+NEVER rename, remove, or repurpose existing identifiers (variables, functions, classes, modules, CLI flags, env vars, URL paths, JSON/DB fields, index/event/metric names, log keys) without asking first and detailing current usage.
 
-- variables
-- functions
-- classes
-- modules / files
-- exported symbols
-- CLI flags
-- environment variables
-- URL paths, query params, body fields
-- JSON fields
-- DB fields
-- index names
-- event names
-- metric names
-- log keys
+All renames are **breaking changes**. If a new name is needed:
+- Add alongside the old one, accept both inputs, preserve old outputs, document aliases.
 
-All renames are **breaking changes**, even if “internal”.
-
-### If a new name is required
-- add it alongside the old one
-- accept both old + new inputs
-- preserve old outputs as canonical
-- canonicalize only at boundaries
-- document aliases and precedence
 ---
 
 ## 7. Output Requirements
 
 In every final response:
-
-- list all files changed
-- list line ranges with **MAJOR logic changes**
-- ignore formatting-only edits
-
-If behavior changes:
-- update `README.md` and/or `agents.md` with:
-  - env vars
-  - DB behavior
-  - indexes
-  - operational steps
-  - failure modes
+- List all files changed with line ranges of major logic changes (skip formatting-only)
+- If behavior changes: update `README.md` / `agents.md` with env vars, DB behavior, indexes, operational steps, failure modes
 
 ---
 
 ## 8. Debugging & Diagnostics
 
-If the cause of a problem is unclear:
-
-- add diagnostic logging FIRST
-- do NOT apply speculative fixes
-
-Logging must:
-- print to console
-- be structured and searchable
-- include context keys
+If a problem's cause is unclear: add **diagnostic logging first**, not speculative fixes.
+Logging must be structured, searchable, with context keys.
 
 ---
 
-## 9. Code Style (MANDATORY)
+## 9. Code Style
 
-- Use **tabs** for indentation
-- Opening curly braces must be on a **new line**
-
----
-
-## 10. MongoDB Rules (CRITICAL)
-
-### A) DB Contract (Required)
-- One contract per collection
-- Path: `/db/contracts/<collection>.yml` (or .json)
-- Must include:
-  - collection name
-  - indexes (keys, uniqueness, partials, collation)
-  - purpose of each index
-  - business invariants
-  - all write entrypoints
-
-Any query/write change must update the contract.
+- **Tabs** for indentation
+- Opening braces on a **new line**
 
 ---
 
-### B) Central Index Registry
-- Single shared index module (e.g. `ensureIndexes`)
-- No ad-hoc `createIndex` calls
-- All services/scripts must use it
+## 10. MongoDB Rules
 
----
+### A) DB Contract
+One contract per collection at `/db/contracts/<collection>.yml`. Must include: collection name, indexes (keys, uniqueness, partials, collation), purpose, business invariants, write entrypoints. Any query/write change must update the contract.
+
+### B) Index Registry
+Single shared index module (e.g. `ensureIndexes`). No ad-hoc `createIndex` calls.
 
 ### C) Runtime Index Creation
-- Distributed MongoDB-native lock
-- Dedicated `_locks` collection
-- Unique `{ name: 1 }` index
-- Lease expiry + takeover
-- Compare indexes by name + keys + options
-- Never silently drop/recreate in prod
-
----
+Use distributed lock via `_locks` collection with lease expiry. Compare indexes by name+keys+options. Never silently drop/recreate in prod.
 
 ### D) Unique Index Safety
-- Explicit rules for null / missing / empty
-- Prefer partial unique indexes
-- Preflight duplicate detection
-- Fail fast unless explicitly allowed to auto-dedupe
-- Treat E11000 as expected in races
-
----
+Explicit null/missing/empty rules. Prefer partial unique indexes. Preflight duplicate detection. Treat E11000 as expected in races.
 
 ### E) Idempotency
-- Require idempotency keys for retryable ops
-- Back with unique index
-- Prefer atomic upserts
-
----
+Require idempotency keys backed by unique indexes. Prefer atomic upserts.
 
 ### F) Transactions
-- Use sparingly
-- Retry transient errors
-- Keep scope minimal
+Use sparingly, retry transient errors, keep scope minimal.
 
----
-
-### G) Query / Index Alignment
-- Every query must have a matching index
-- Or a documented justification
-
----
+### G) Query/Index Alignment
+Every query must have a matching index or documented justification.
 
 ### H) Operational Safety
-- Document index execution timing
-- Log expected output
-- Describe failure modes
-- Include rollout considerations
+Document index timing, expected output, failure modes, rollout considerations.
 
 ---
 
-## 11. `[codex-plan] — Mandatory Planning Mode`
+## 11. `[codex-plan]` — Planning Mode
 
-When a task includes **`[codex-plan]`**, you are in **planning-only mode**.
+When a task includes `[codex-plan]`: **planning only — no code, diffs, schemas, or scripts.**
 
-### Forbidden in `[codex-plan]`
-- writing code
-- creating diffs
-- modifying schemas or indexes
-- creating tasks or scripts
-- making assumptions
+Required:
+- Read repo docs and contracts
+- Identify entrypoints
+- Ask clarifying questions (mandatory Q/A format)
+- Surface risks and decisions
 
-### Required behavior
-- read repo docs and contracts
-- identify real entrypoints
-- ask clarifying questions using the **Mandatory Multiple-Choice Decision Format**
-- surface risks and decision points
+Response format:
+1. What I understand so far
+2. Open questions (blocking) — multiple-choice
+3. Decision points (A/B/C)
+4. Risks & constraints
+5. What happens after clarification
 
-You may ask questions across **multiple messages**.
-
----
-
-### Required `[codex-plan]` Response Format
-
-1) **What I understand so far**  
-2) **Open questions (blocking)** *(must be multiple-choice)*  
-3) **Decision points (A/B/C)** *(must be multiple-choice)*  
-4) **Risks & constraints**  
-5) **What will happen after clarification**
+Exit only when all questions are answered with no ambiguity. Then: create one executable task, list everything it will do, wait for approval.
 
 ---
 
-### Exit Condition
-You may exit `[codex-plan]` only when:
-- all questions are answered
-- no ambiguity remains
+## 12. Task Checklist Completion Gate
 
-Then:
-- create **one single executable task**
-- list everything it will do
-- wait for explicit approval
+When a user provides a task list for execution, convert it to a checklist.
 
----
+Rules:
+- Track and update checklist visibly in conversation
+- Mark items complete only after work is done or user confirms
+- Map every task; never skip or silently drop items
+- Complete all non-PR items before creating a PR (unless user approves splitting)
+- If blocked: report failure, keep item open, await direction
 
-## 12. Task Checklist Completion Gate (MANDATORY)
-
-When a user provides an explicitly numbered or bulleted task list intended for execution (not examples, options, or discussion lists), Codex MUST automatically convert that list into a checklist before execution.
-
-If it is unclear whether a list is intended for execution, Codex MUST STOP and ask for clarification using the mandatory multiple-choice format before converting it into a checklist.
-
-Checklist tracking protocol:
-- Codex MUST keep checklist state visible in conversation and update status changes explicitly
-- Codex MUST mark an item complete only after completing the work or after explicit user confirmation
-- If an item is blocked or fails, Codex MUST report the failure, keep the item open, and await user direction
-
-Checklist enforcement requirements:
-- Codex MUST map every provided task to a checklist item
-- Codex MUST NOT skip or silently drop any checklist item
-- Codex MUST complete all non-PR checklist items before creating or opening any PR for that specific work
-- Codex MAY include "create/open PR" as the final checklist item and mark it complete only when the PR is actually created/opened
-- If any non-PR checklist item is incomplete, Codex MUST NOT create or open a PR unless the user explicitly approves splitting work into multiple PRs; in that case, Codex MUST clearly identify which checklist items are covered by the current PR and MUST keep deferred items open for future PRs
-
-Scope boundaries:
-- In `[codex-plan]` mode, checklist conversion is informational only until execution is explicitly approved
-- In PR Review Mode (Section 13), this checklist gate applies only to new execution task lists in the current request, not to pre-existing review comments unless the user requests checklist execution for them
-- If the user explicitly identifies a list as examples/options/discussion, Codex MUST NOT convert it into an execution checklist
+Scope: In `[codex-plan]` mode, checklist is informational until execution is approved. In PR review mode, applies only to new task lists in the current request.
 
 ---
 
-## 13. PR Review Mode (INTENT PRESERVATION — CRITICAL)
+## 13. PR Review Mode
 
-When the user comments **`@codex change`** in a PR:
+When the user comments `@codex change` in a PR: review all feedback and apply only explicitly requested changes.
 
-- review all comments, discussions, and review feedback
-- apply only the changes that are **explicitly requested or clearly implied**
-- resolve review comments accurately and minimally
+### Intent Preservation (NON-NEGOTIABLE)
+- Do NOT deviate from original project intent
+- Do NOT introduce new goals, scope, abstractions, or behaviors unless approved
+- Treat existing implementation as intentional
 
-### 13.1 Original Project Intent Preservation (NON-NEGOTIABLE)
+### Ambiguous Feedback
+If feedback could change behavior, broaden/narrow scope, or alter semantics: **STOP and ask (Q/A format)** before acting.
 
-When making changes in response to PR comments or reviews:
-
-- You MUST NOT deviate from, reinterpret, or evolve the **original intent of the project**
-- You MUST NOT introduce new goals, scope, abstractions, patterns, or behaviors unless explicitly approved
-- You MUST treat the existing implementation as **intentional**, not accidental
-
-#### This includes (but is not limited to):
-- architecture choices
-- data models
-- control flow
-- performance tradeoffs
-- operational assumptions
-- security posture
-- backward compatibility guarantees
-
-### 13.2 How to Handle Ambiguous PR Feedback
-
-If a PR comment or review suggestion:
-- could change system behavior
-- could broaden or narrow scope
-- could alter semantics or guarantees
-- could impact downstream users
-- could “clean up”, “simplify”, or “improve” behavior beyond the stated request
-
-You MUST **STOP and ask clarifying questions** using the **mandatory multiple-choice format (A/B/C)** before making changes.
-
-Example:
-
-> “This review comment could be interpreted in multiple ways.  
-> Please confirm which interpretation matches the original project intent.”
-
-Then present options.
-
----
-
-### 13.3 Forbidden in PR Review Mode
-
-- “Improving” design beyond the comment
+### Forbidden
+- "Improving" design beyond the comment
 - Refactoring for elegance or style
-- Reinterpreting intent based on best practices
-- Applying reviewer suggestions that conflict with existing behavior
-- Making changes “because it makes more sense”
+- Applying suggestions that conflict with existing behavior without surfacing the conflict
 
-If a suggestion conflicts with existing behavior:
-- surface the conflict
-- explain the impact
-- ask for a decision
-- **do not resolve it silently**
+### Acceptance Criteria
+After changes: original intent preserved, behavior unchanged unless approved, backward compatible, no new assumptions, changes traceable to PR comments. If no changes needed: reply "No changes are needed."
 
 ---
 
-### 13.4 Acceptance Criteria
+## 14. Repository Hygiene
 
-After applying PR changes, the result must satisfy **all** of the following:
-
-- original project intent is preserved
-- existing behavior remains unchanged unless explicitly approved
-- backward compatibility is maintained
-- no new assumptions are introduced
-- changes are traceable directly to PR comments
-
-If no changes are needed after review:
-- explicitly reply: **“No changes are needed.”**
+- Never write into `.git/**` (no artifacts, caches, or bytecode).
+- Set `PYTHONDONTWRITEBYTECODE=1` for Python tooling on repo files.
+- Treat `__pycache__`/`*.pyc` under `.git/` as invalid state.
 
 ---
-
-**PR feedback is not permission to reinterpret the project.  
-Intent preservation overrides reviewer preference.**
-
----
-
-
-## 14. Repository Hygiene Guardrail (Git Metadata + Python Bytecode)
-
-To prevent CI/git reference corruption regressions:
-
-- Never run tooling that writes into `.git/**` (including generated artifacts, caches, or bytecode).
-- Ensure Python-based tooling jobs that operate on repository files set `PYTHONDONTWRITEBYTECODE=1`.
-- Treat any generated `__pycache__/` or `*.pyc` under `.git/` as invalid state; remove/avoid it before Git operations.
 
 ## FINAL REMINDER
 
-If uncertainty exists at any point:
+If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**
 
-**ASK QUESTIONS (MULTIPLE-CHOICE). DO NOT EXECUTE.**
-
-Accuracy > speed.  
-Safety > convenience.  
-Backward compatibility is mandatory.
----
+Accuracy > speed. Safety > convenience. Backward compatibility is mandatory.
