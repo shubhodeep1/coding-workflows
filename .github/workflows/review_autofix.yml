@@ -149,6 +149,9 @@ jobs:
             echo 'name = "OpenRouter"'
             echo 'base_url = "https://openrouter.ai/api/v1"'
             echo 'env_key = "OPENROUTER_API_KEY"'
+            echo 'stream_idle_timeout_ms = 600000'
+            echo 'stream_max_retries = 5'
+            echo 'request_max_retries = 3'
             echo
             echo '[sandbox_workspace_write]'
             echo 'network_access = true'
@@ -995,7 +998,7 @@ jobs:
             while [ "${attempt}" -le 3 ]; do
               tmp_output="$(mktemp)"
               tmp_stderr="$(mktemp)"
-              if bash scripts/codex_idle_timeout.sh "${reviewer_timeout_seconds}" \
+              if timeout --signal=TERM --kill-after=30s "${reviewer_timeout_seconds}s" \
                 codex exec --model "${model}" --full-auto "$(cat "${REVIEWER_PROMPT_FILE}")" > "${tmp_output}" 2> "${tmp_stderr}"; then
                 cat "${tmp_stderr}" >> "${log_file}"
                 if [ -s "${tmp_output}" ]; then
@@ -1455,7 +1458,7 @@ jobs:
           while [ "${attempt}" -le 3 ]; do
             tmp_output="$(mktemp)"
             tmp_err="$(mktemp)"
-            if bash scripts/codex_idle_timeout.sh 900 codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${EDITOR_PROMPT_FILE}")" > "${tmp_output}" 2>"${tmp_err}"; then
+            if codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${EDITOR_PROMPT_FILE}")" > "${tmp_output}" 2>"${tmp_err}"; then
               cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
               if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints" "${tmp_output}"; then
                 reviewer_validation_ok=true
@@ -1904,7 +1907,7 @@ jobs:
           attempt=1
           while [ "${attempt}" -le 3 ]; do
             tmp_output="$(mktemp)"
-            if bash scripts/codex_idle_timeout.sh 900 codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${CONFLICT_RESOLVER_PROMPT_FILE}")" > "${tmp_output}"; then
+            if codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${CONFLICT_RESOLVER_PROMPT_FILE}")" > "${tmp_output}"; then
               if [ -s "${tmp_output}" ]; then
                 mv "${tmp_output}" "${CONFLICT_RESOLVER_SUMMARY_FILE}"
                 echo "Conflict resolver succeeded on attempt ${attempt}."
