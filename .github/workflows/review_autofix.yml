@@ -1690,6 +1690,15 @@ jobs:
             git clean -f -d -- .github/workflows || true
           fi
 
+          # Remove workflow-generated/fetched artifacts so they are not committed
+          rm -f ./pre_assembled_static.txt
+          for f in codex_system_instructions.md ai_pipeline.md agents.md; do
+            [ -n "$(git ls-files "${f}")" ] || rm -f "${f}"
+          done
+          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py; do
+            [ -n "$(git ls-files "scripts/${f}")" ] || rm -f "scripts/${f}"
+          done
+
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
           git add -A
@@ -1966,6 +1975,15 @@ jobs:
             echo "Discarding workflow-file edits from conflict resolver."
             git checkout -- .github/workflows || true
           fi
+
+          # Remove workflow-generated/fetched artifacts so they are not committed
+          rm -f ./pre_assembled_static.txt
+          for f in codex_system_instructions.md ai_pipeline.md agents.md; do
+            [ -n "$(git ls-files "${f}")" ] || rm -f "${f}"
+          done
+          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py; do
+            [ -n "$(git ls-files "scripts/${f}")" ] || rm -f "scripts/${f}"
+          done
 
           if [ -n "$(git status --porcelain)" ]; then
             git config user.name "codex-bot"
