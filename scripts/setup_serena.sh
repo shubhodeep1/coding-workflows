@@ -256,11 +256,20 @@ if [ -n "${PYTHONDONTWRITEBYTECODE:-}" ]; then
 fi
 ENV_VARS_LINE="${ENV_VARS_LINE}]"
 
+# Build the mode args: "one-shot" is only valid when combined with "editing"
+# (autonomous editing). For "planning" (read-only), use it alone — combining
+# "one-shot" with "planning" is an invalid combination that crashes serena
+# during MCP initialization.
+MODE_ARGS="\"--mode\", \"${SERENA_MODE}\""
+if [ "${SERENA_MODE}" != "planning" ]; then
+	MODE_ARGS="\"--mode\", \"one-shot\", ${MODE_ARGS}"
+fi
+
 cat >> "${CODEX_CONFIG}" <<MCP_EOF
 
 [mcp_servers.serena]
 command = "${UVX_PATH}"
-args = ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", "--mode", "one-shot", "--mode", "${SERENA_MODE}", "--project-from-cwd", "--open-web-dashboard", "false"]
+args = ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", ${MODE_ARGS}, "--project-from-cwd", "--open-web-dashboard", "false"]
 ${ENV_VARS_LINE}
 startup_timeout_sec = 30
 tool_timeout_sec = 240
@@ -303,13 +312,26 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
 fi
 
 # ── 8. Health check ──────────────────────────────────────────────────────────
+# Validate the actual MCP server startup, not just --help. This catches mode
+# combination errors, LSP failures, and config issues that only surface when
+# serena tries to initialize as an MCP server.
 
-echo "Validating Serena MCP server..."
+echo "Validating Serena MCP server startup..."
+HEALTH_LOG="${TMPDIR:-/tmp}/serena_health_check.log"
 if timeout 30s uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" \
-	serena --help >/dev/null 2>&1; then
+	serena start-mcp-server --context "${SERENA_CONTEXT}" --mode "${SERENA_MODE}" \
+	--project-from-cwd --open-web-dashboard false </dev/null >"${HEALTH_LOG}" 2>&1; then
 	echo "Serena MCP server validated successfully."
+elif [ $? -eq 124 ]; then
+	# timeout(1) returns 124 when the command is killed — that means serena
+	# started and kept running (good), it just didn't exit on its own (expected
+	# for a server). Treat this as success.
+	echo "Serena MCP server validated successfully (startup held for 30s — expected for server process)."
 else
-	warn_and_exit "Serena health check timed out or failed"
+	echo "::warning::Serena health check failed. Server output:"
+	cat "${HEALTH_LOG}" >&2 || true
+	warn_and_exit "Serena MCP server failed to start — check output above for details"
 fi
+rm -f "${HEALTH_LOG}"
 
 echo "Serena setup complete."
