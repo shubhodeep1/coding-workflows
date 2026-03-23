@@ -195,7 +195,7 @@ base_modes: []
 default_modes:
   - ${SERENA_MODE}
 
-symbol_info_budget: null
+symbol_info_budget: 10
 initial_prompt: ""
 SERENA_PROJECT_EOF
 else
@@ -256,20 +256,11 @@ if [ -n "${PYTHONDONTWRITEBYTECODE:-}" ]; then
 fi
 ENV_VARS_LINE="${ENV_VARS_LINE}]"
 
-# Build the mode args: "one-shot" is only valid when combined with "editing"
-# (autonomous editing). For "planning" (read-only), use it alone — combining
-# "one-shot" with "planning" is an invalid combination that crashes serena
-# during MCP initialization.
-MODE_ARGS="\"--mode\", \"${SERENA_MODE}\""
-if [ "${SERENA_MODE}" != "planning" ]; then
-	MODE_ARGS="\"--mode\", \"one-shot\", ${MODE_ARGS}"
-fi
-
 cat >> "${CODEX_CONFIG}" <<MCP_EOF
 
 [mcp_servers.serena]
 command = "${UVX_PATH}"
-args = ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", ${MODE_ARGS}, "--project-from-cwd", "--open-web-dashboard", "false"]
+args = ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", "--mode", "one-shot", "--mode", "${SERENA_MODE}", "--project-from-cwd", "--open-web-dashboard", "false"]
 ${ENV_VARS_LINE}
 startup_timeout_sec = 30
 tool_timeout_sec = 240
@@ -319,7 +310,7 @@ fi
 echo "Validating Serena MCP server startup..."
 HEALTH_LOG="${TMPDIR:-/tmp}/serena_health_check.log"
 if timeout 30s uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" \
-	serena start-mcp-server --context "${SERENA_CONTEXT}" --mode "${SERENA_MODE}" \
+	serena start-mcp-server --context "${SERENA_CONTEXT}" --mode one-shot --mode "${SERENA_MODE}" \
 	--project-from-cwd --open-web-dashboard false </dev/null >"${HEALTH_LOG}" 2>&1; then
 	echo "Serena MCP server validated successfully."
 elif [ $? -eq 124 ]; then
