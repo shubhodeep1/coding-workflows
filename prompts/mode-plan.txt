@@ -1,6 +1,12 @@
 You are executing the PLANNING phase of the AI development pipeline.
 
-Use phase context file: planning_context.txt
+All context is inlined directly into the prompt for efficiency:
+- System instructions, AI pipeline spec, agents.md, and README.md appear above
+  (constant across all runs, cached by the LLM provider).
+- Planning context (issue description, clarification Q&A, and comments) appears below.
+
+Do NOT read pre_assembled_static.txt, planning_context.txt, or any of the
+individual source files — they are already loaded.
 
 Plan mode: Do not modify files or output patches/diffs.
 

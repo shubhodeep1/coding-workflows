@@ -370,32 +370,47 @@ jobs:
             fi
           } > ./pre_assembled_static.txt
 
-          # Copy dynamic planning context into the working directory so Codex reads
-          # it as a separate file after the static prefix (preserving cache hits).
-          cp "${PLANNING_CONTEXT_FILE}" ./planning_context.txt
-
       - name: Run Codex planning
         if: env.SKIP_PLAN != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
         run: |
           set -euo pipefail
 
-          cat > "${CODEX_PROMPT_FILE}" <<'EOF'
+          # Build prompt: static context + instructions + dynamic planning context,
+          # all inlined so the model doesn't waste tool calls reading files.
+          # The static prefix (pre_assembled_static.txt) is identical across all
+          # runs, enabling LLM provider prompt-prefix caching.
+          {
+            cat ./pre_assembled_static.txt
+            echo
+            # Inject the configurable tool call budget before the static heredoc
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo
+            cat <<'EOF'
+          === PLANNING TASK ===
+
           You are executing the PLANNING phase of the AI development pipeline.
 
           Your task is to generate an implementation plan for the GitHub issue.
 
-          IMPORTANT: Mandatory context has been split into two pre-assembled files for
-          prompt caching efficiency. Read them in this exact order:
-          1. pre_assembled_static.txt — system instructions, AI pipeline spec, agents.md,
-             and README.md (constant across all runs, cached by the LLM provider).
-          2. planning_context.txt — issue description, clarification Q&A, and comments
-             (unique per issue).
-          Do NOT re-read the individual source files.
+          IMPORTANT: The system instructions, AI pipeline spec, agents.md, and README.md
+          are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt or
+          any of the individual source files — they are already loaded.
 
-          After reading both files, use Serena MCP tools or targeted file
-          reads only for specific code symbols/functions you need to inspect for the plan.
+          The planning context (issue description, clarification Q&A, and comments) is
+          provided BELOW at the end of this prompt — do NOT read planning_context.txt
+          separately.
+
+          Use Serena MCP tools or targeted file reads only for specific code
+          symbols/functions you need to inspect for the plan.
+
+          SERENA MCP EFFICIENCY (MANDATORY):
+          - Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+            Skip straight to activate_project and then use tools directly.
+          - Prefer get_symbols_overview and find_symbol over raw file reads.
+          - Never read the same file region twice. Plan reads upfront.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
@@ -406,9 +421,21 @@ jobs:
             when available — they return only relevant symbols with far fewer tokens.
           - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
             with the same patterns. Refine the Serena query or narrow the scope instead.
-          - Limit total shell exec calls to 15 or fewer. Batch searches with && or ;.
+          - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
+            For large refactors that span many files/modules, exceeding the budget is
+            acceptable — the budget is a guideline to prevent waste, not a hard cap.
+          - Batch shell searches with && or ;.
+          - Focus exploration on code areas directly relevant to the plan. Avoid reading
+            files that are unlikely to change or inform the implementation.
           - Do NOT emit progress/status messages (e.g. "I've parsed the answers…"). Output
             ONLY the final plan or clarification result.
+
+          CONFLICT DETECTION:
+          - Flag any factual conflicts between the issue description and the codebase
+            (e.g., a name in the issue doesn't match the name in the code, a file path
+            referenced in the issue doesn't exist, or an API signature differs).
+          - When a conflict is found, note it explicitly in the plan so the implementer
+            and reviewer are aware.
 
           Your job:
 
@@ -421,33 +448,39 @@ jobs:
           5. Potential risks or edge cases
           6. Testing considerations
 
-          Serena MCP tools (use when available):
-
-          - Use Serena semantic tools (get_symbols_overview, find_symbol, find_referencing_symbols)
-            to explore the codebase efficiently instead of reading entire files.
-          - This helps you understand code structure with fewer tokens.
-          - If Serena tools are unavailable, fall back to targeted file reads.
-
           Rules:
 
-          - Before planning, always read and interpret the user clarification answers from planning_context.txt.
-          - Multiple-choice answers may appear in flexible formats and casing (for example: `q1: a q2: c q3:d`, multiline variants, or `Q1: A`). Interpret intent without enforcing strict formatting.
-          - Do not require exact answer formatting and do not depend on regex-style strictness in reasoning.
-          - Map each interpreted answer back to its corresponding Q<ID> clarification question before creating the plan.
-          - If any answer is missing, contradictory, or unclear after best-effort interpretation, do NOT guess: return clarification questions in the codex_system_instructions.md mandatory Q<ID>/Choices format and state that clarification is required before planning.
+          - Before planning, always read and interpret the user clarification answers from
+            the planning context provided below.
+          - Multiple-choice answers may appear in flexible formats and casing (for example:
+            `q1: a q2: c q3:d`, multiline variants, or `Q1: A`). Interpret intent without
+            enforcing strict formatting.
+          - Do not require exact answer formatting and do not depend on regex-style strictness
+            in reasoning.
+          - Map each interpreted answer back to its corresponding Q<ID> clarification question
+            before creating the plan.
+          - If any answer is missing, contradictory, or unclear after best-effort interpretation,
+            do NOT guess: return clarification questions in the codex_system_instructions.md
+            mandatory Q<ID>/Choices format and state that clarification is required before planning.
           - Use web search when needed to validate unknowns.
-          - If implementation requires calling external APIs/services, read their official API docs and include concrete endpoint/method/parameter details in the plan so the implementation editor can execute without web access.
+          - If implementation requires calling external APIs/services, read their official API
+            docs and include concrete endpoint/method/parameter details in the plan so the
+            implementation editor can execute without web access.
           - Do NOT write code.
           - Do NOT modify repository files.
           - Only generate the implementation plan when answers are interpretable and sufficient.
 
           The output must be plain text suitable for posting as an issue comment.
           EOF
+            echo
+            echo "=== PLANNING CONTEXT ==="
+            cat "${PLANNING_CONTEXT_FILE}"
+          } > "${CODEX_PROMPT_FILE}"
 
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex planning attempt ${attempt}/${max_attempts}..."
-            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"; then
+            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex planning succeeded on attempt ${attempt}."
                 break
@@ -465,6 +498,31 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Write run summary
+        if: env.SKIP_PLAN != 'true' && always()
+        env:
+          TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_PLAN || '200000' }}
+        run: |
+          set -euo pipefail
+          TOKENS=""
+          if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
+            TOKENS="$(grep -A1 'tokens used' "${RUNTIME_DIR}/codex_log.txt" | tail -1 | tr -d '[:space:]' || true)"
+          fi
+          {
+            echo "## AI Plan Summary"
+            echo "| Key | Value |"
+            echo "|-----|-------|"
+            echo "| Issue | #${ISSUE_NUMBER} |"
+            echo "| Model | \`${MODEL_EDITOR}\` |"
+            if [ -n "${TOKENS}" ]; then
+              echo "| Tokens used | ${TOKENS} |"
+              TOKENS_NUM="${TOKENS//,/}"
+              if [ "${TOKENS_NUM}" -gt "${TOKEN_WARN_THRESHOLD}" ] 2>/dev/null; then
+                echo "| :warning: Token alert | Above ${TOKEN_WARN_THRESHOLD} threshold — review prompt efficiency |"
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Parse planning output
         if: env.SKIP_PLAN != 'true'

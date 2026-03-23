@@ -42,6 +42,22 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix | Languages for Serena symbol analysis |
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix | Disable the Serena MCP server |
 
+**Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
+
+| Variable | Default | Used By | Description |
+|---|---|---|---|
+| `TOOL_CALL_BUDGET_CLARIFY` | `15` | clarify | Tool call budget for the clarification phase |
+| `TOOL_CALL_BUDGET_PLAN` | `40` | plan | Tool call budget for the planning phase |
+| `TOOL_CALL_BUDGET_IMPLEMENT` | `50` | implement | Tool call budget for the implementation phase |
+
+**Token warning thresholds** — when a phase exceeds this many tokens, a warning appears in the GitHub Actions run summary. Raise these for large repos where deeper exploration is expected.
+
+| Variable | Default | Used By | Description |
+|---|---|---|---|
+| `TOKEN_WARN_THRESHOLD_CLARIFY` | `80000` | clarify | Token usage warning threshold for clarification |
+| `TOKEN_WARN_THRESHOLD_PLAN` | `200000` | plan | Token usage warning threshold for planning |
+| `TOKEN_WARN_THRESHOLD_IMPLEMENT` | `200000` | implement | Token usage warning threshold for implementation |
+
 ### 2. Create wrapper workflows
 
 Add thin wrapper workflows in your repo's `.github/workflows/` directory. Reference implementations live in [`.github/workflows/internal-*.yml`](.github/workflows/) in this repository.
@@ -226,6 +242,12 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
 | `AI_MEMORY_ENABLED` | `true` | Enable/disable memory operations |
+| `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
+| `TOOL_CALL_BUDGET_PLAN` | `40` | Tool call budget for planning |
+| `TOOL_CALL_BUDGET_IMPLEMENT` | `50` | Tool call budget for implementation |
+| `TOKEN_WARN_THRESHOLD_CLARIFY` | `80000` | Token warning threshold for clarification |
+| `TOKEN_WARN_THRESHOLD_PLAN` | `200000` | Token warning threshold for planning |
+| `TOKEN_WARN_THRESHOLD_IMPLEMENT` | `200000` | Token warning threshold for implementation |
 
 ## Repository Structure
 
