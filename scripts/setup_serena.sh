@@ -57,12 +57,19 @@ if [ "${SERENA_DISABLED:-false}" = "true" ]; then
 fi
 
 SERENA_VERSION="${SERENA_VERSION:-main}"
+SERENA_DEBUG_LOG="${TMPDIR:-/tmp}/serena_debug.log"
 echo "Setting up Serena MCP server (version=${SERENA_VERSION}, mode=${SERENA_MODE}, context=${SERENA_CONTEXT})"
 
 # ── Helper: warn and exit cleanly ────────────────────────────────────────────
 
 warn_and_exit() {
 	echo "::warning::Serena setup failed: $1 — workflow will fall back to file-based editing."
+	# Dump debug log if available for CI troubleshooting
+	if [ -f "${SERENA_DEBUG_LOG}" ] && [ -s "${SERENA_DEBUG_LOG}" ]; then
+		echo "--- Serena debug log (last 50 lines) ---"
+		tail -50 "${SERENA_DEBUG_LOG}" >&2 || true
+		echo "--- End Serena debug log ---"
+	fi
 	# Remove the Serena MCP server block from Codex config so that
 	# required=true doesn't prevent Codex from starting at all.
 	CODEX_CFG="${HOME}/.codex/config.toml"
@@ -71,6 +78,7 @@ warn_and_exit() {
 		sed -i '/^\[mcp_servers\.serena\]/,/^\[/{/^\[mcp_servers\.serena\]/d;/^\[/!d;}' "${CODEX_CFG}"
 		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
 	fi
+	rm -f "${SERENA_DEBUG_LOG}"
 	exit 0
 }
 
@@ -92,21 +100,35 @@ if ! command -v uv >/dev/null 2>&1; then
 	fi
 fi
 
-# ── 2. Warm Serena cache ─────────────────────────────────────────────────────
+# ── 2. Warm Serena cache (with retry) ────────────────────────────────────────
 
-echo "Warming Serena uvx cache..."
-if ! uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" serena --help >/dev/null 2>&1; then
-	warn_and_exit "Serena cache warm failed"
-fi
+SERENA_CACHE_MAX_RETRIES=3
+for _cache_attempt in $(seq 1 "${SERENA_CACHE_MAX_RETRIES}"); do
+	echo "Warming Serena uvx cache (attempt ${_cache_attempt}/${SERENA_CACHE_MAX_RETRIES})..."
+	if uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" serena --help >"${SERENA_DEBUG_LOG}" 2>&1; then
+		echo "Serena cache warm succeeded."
+		break
+	fi
+	echo "::warning::Serena cache warm failed on attempt ${_cache_attempt}."
+	if [ "${_cache_attempt}" -lt "${SERENA_CACHE_MAX_RETRIES}" ]; then
+		_sleep_secs=$(( 5 * _cache_attempt + RANDOM % 5 ))
+		echo "Retrying in ${_sleep_secs}s..."
+		sleep "${_sleep_secs}"
+	else
+		warn_and_exit "Serena cache warm failed after ${SERENA_CACHE_MAX_RETRIES} attempts"
+	fi
+done
 
 # ── 3. Auto-detect languages and install language servers ─────────────────────
 
+# Single find pass for all language extensions (avoids 5 separate traversals)
 DETECTED_LANGS=""
-[ -n "$(find . -maxdepth 3 -name '*.ts' -o -name '*.tsx' | head -1 2>/dev/null)" ] && DETECTED_LANGS="${DETECTED_LANGS} typescript"
-[ -n "$(find . -maxdepth 3 -name '*.py' | head -1 2>/dev/null)" ] && DETECTED_LANGS="${DETECTED_LANGS} python"
-[ -n "$(find . -maxdepth 3 -name '*.go' | head -1 2>/dev/null)" ] && DETECTED_LANGS="${DETECTED_LANGS} go"
-[ -n "$(find . -maxdepth 3 -name '*.rs' | head -1 2>/dev/null)" ] && DETECTED_LANGS="${DETECTED_LANGS} rust"
-[ -n "$(find . -maxdepth 3 -name '*.java' | head -1 2>/dev/null)" ] && DETECTED_LANGS="${DETECTED_LANGS} java"
+_found_exts="$(find . -maxdepth 3 \( -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' -o -name '*.rs' -o -name '*.java' \) -printf '%f\n' 2>/dev/null | head -50 || true)"
+echo "${_found_exts}" | grep -qE '\.(ts|tsx)$' && DETECTED_LANGS="${DETECTED_LANGS} typescript"
+echo "${_found_exts}" | grep -qE '\.py$' && DETECTED_LANGS="${DETECTED_LANGS} python"
+echo "${_found_exts}" | grep -qE '\.go$' && DETECTED_LANGS="${DETECTED_LANGS} go"
+echo "${_found_exts}" | grep -qE '\.rs$' && DETECTED_LANGS="${DETECTED_LANGS} rust"
+echo "${_found_exts}" | grep -qE '\.java$' && DETECTED_LANGS="${DETECTED_LANGS} java"
 
 # Merge with explicit override
 ALL_LANGS="${SERENA_LANGUAGES:-} ${DETECTED_LANGS}"
@@ -318,27 +340,55 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
 	echo "serena_mcp_supported=${CODEX_MCP_SUPPORTED}" >> "${GITHUB_OUTPUT}"
 fi
 
-# ── 8. Health check ──────────────────────────────────────────────────────────
+# ── 8. Health check (with retry) ─────────────────────────────────────────────
 # Validate the actual MCP server startup, not just --help. This catches mode
 # combination errors, LSP failures, and config issues that only surface when
 # serena tries to initialize as an MCP server.
 
-echo "Validating Serena MCP server startup..."
 HEALTH_LOG="${TMPDIR:-/tmp}/serena_health_check.log"
-if timeout 30s uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" \
-	serena start-mcp-server --context "${SERENA_CONTEXT}" --mode one-shot --mode "${SERENA_MODE}" \
-	--project-from-cwd --open-web-dashboard false </dev/null >"${HEALTH_LOG}" 2>&1; then
-	echo "Serena MCP server validated successfully."
-elif [ $? -eq 124 ]; then
-	# timeout(1) returns 124 when the command is killed — that means serena
-	# started and kept running (good), it just didn't exit on its own (expected
-	# for a server). Treat this as success.
-	echo "Serena MCP server validated successfully (startup held for 30s — expected for server process)."
-else
-	echo "::warning::Serena health check failed. Server output:"
+SERENA_HEALTH_MAX_RETRIES=2
+SERENA_HEALTH_OK="false"
+for _health_attempt in $(seq 1 "${SERENA_HEALTH_MAX_RETRIES}"); do
+	echo "Validating Serena MCP server startup (attempt ${_health_attempt}/${SERENA_HEALTH_MAX_RETRIES})..."
+	HEALTH_EXIT=0
+	timeout 30s uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" \
+		serena start-mcp-server --context "${SERENA_CONTEXT}" --mode one-shot --mode "${SERENA_MODE}" \
+		--project-from-cwd --open-web-dashboard false </dev/null >"${HEALTH_LOG}" 2>&1 || HEALTH_EXIT=$?
+	if [ "${HEALTH_EXIT}" -eq 0 ] || [ "${HEALTH_EXIT}" -eq 124 ]; then
+		# Exit 0 = clean exit; Exit 124 = timeout killed a still-running server (expected).
+		echo "Serena MCP server validated successfully."
+		SERENA_HEALTH_OK="true"
+		break
+	fi
+	echo "::warning::Serena health check failed on attempt ${_health_attempt} (exit=${HEALTH_EXIT})."
+	echo "--- Serena health check output (attempt ${_health_attempt}) ---"
 	cat "${HEALTH_LOG}" >&2 || true
-	warn_and_exit "Serena MCP server failed to start — check output above for details"
-fi
+	echo "--- End health check output ---"
+	if [ "${_health_attempt}" -lt "${SERENA_HEALTH_MAX_RETRIES}" ]; then
+		_sleep_secs=$(( 5 * _health_attempt + RANDOM % 5 ))
+		echo "Retrying health check in ${_sleep_secs}s..."
+		sleep "${_sleep_secs}"
+	fi
+done
 rm -f "${HEALTH_LOG}"
+
+if [ "${SERENA_HEALTH_OK}" != "true" ]; then
+	warn_and_exit "Serena MCP server failed to start after ${SERENA_HEALTH_MAX_RETRIES} attempts — check output above for details"
+fi
+
+# ── 9. Debug diagnostics ────────────────────────────────────────────────────
+# Print key diagnostic info to CI logs for troubleshooting "no servers" issues.
+echo "--- Serena setup diagnostics ---"
+echo "uvx path: $(command -v uvx 2>/dev/null || echo 'NOT FOUND')"
+echo "uv path: $(command -v uv 2>/dev/null || echo 'NOT FOUND')"
+echo "UV_CACHE_DIR: ${UV_CACHE_DIR:-'(not set)'}"
+echo "Codex config location: ${CODEX_CONFIG}"
+echo "MCP section present: $(grep -c '\[mcp_servers\.serena\]' "${CODEX_CONFIG}" 2>/dev/null || echo '0')"
+echo "required=true set: $(grep -c 'required = true' "${CODEX_CONFIG}" 2>/dev/null || echo '0')"
+echo "Project root: ${PROJECT_ROOT}"
+echo ".serena/project.yml exists: $([ -f .serena/project.yml ] && echo 'yes' || echo 'no')"
+echo "Languages configured: ${ALL_LANGS:-none}"
+echo "--- End diagnostics ---"
+rm -f "${SERENA_DEBUG_LOG}"
 
 echo "Serena setup complete."
