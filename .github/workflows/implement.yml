@@ -35,7 +35,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     concurrency:
       group: ai-implement-${{ github.repository }}-${{ github.event.issue.number }}
       cancel-in-progress: false
@@ -396,7 +396,27 @@ jobs:
             MCP_ARGS=("--mcp-config" "${CODEX_MCP_CONFIG}")
           fi
 
-          cat "${CODEX_PROMPT_FILE}" | timeout --signal=TERM --kill-after=30s 1800s codex exec --model "${MODEL_EDITOR}" --full-auto "${MCP_ARGS[@]}" > "${CODEX_OUTPUT_FILE}"
+          max_attempts=2
+          for attempt in $(seq 1 "${max_attempts}"); do
+            echo "Codex implement attempt ${attempt}/${max_attempts}..."
+            if cat "${CODEX_PROMPT_FILE}" | timeout --signal=TERM --kill-after=30s 1800s codex exec --model "${MODEL_EDITOR}" --full-auto "${MCP_ARGS[@]}" > "${CODEX_OUTPUT_FILE}"; then
+              if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+                echo "Codex implement succeeded on attempt ${attempt}."
+                break
+              fi
+              echo "::warning::Codex returned empty output on attempt ${attempt}."
+            else
+              echo "::warning::Codex exited with code $? on attempt ${attempt}."
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$((attempt * 30))
+              echo "Retrying in ${sleep_secs}s..."
+              sleep "${sleep_secs}"
+            else
+              echo "::error::Codex implement failed after ${max_attempts} attempts."
+              exit 1
+            fi
+          done
           rm -f ./implementation_context.txt
 
       - name: Log token usage and Serena stats

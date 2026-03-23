@@ -17,7 +17,7 @@ jobs:
       (github.event_name == 'issues' && github.event.action == 'opened') ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 55
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
@@ -212,7 +212,27 @@ jobs:
 
           cp "${ISSUE_CONTEXT_FILE}" ./issue_context.txt
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
-          cat "${CODEX_PROMPT_FILE}" | timeout --signal=TERM --kill-after=30s 900s codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"
+          max_attempts=3
+          for attempt in $(seq 1 "${max_attempts}"); do
+            echo "Codex clarify attempt ${attempt}/${max_attempts}..."
+            if cat "${CODEX_PROMPT_FILE}" | timeout --signal=TERM --kill-after=30s 900s codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}"; then
+              if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+                echo "Codex clarify succeeded on attempt ${attempt}."
+                break
+              fi
+              echo "::warning::Codex returned empty output on attempt ${attempt}."
+            else
+              echo "::warning::Codex exited with code $? on attempt ${attempt}."
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$((attempt * 30))
+              echo "Retrying in ${sleep_secs}s..."
+              sleep "${sleep_secs}"
+            else
+              echo "::error::Codex clarify failed after ${max_attempts} attempts."
+              exit 1
+            fi
+          done
 
       - name: Parse Codex output
         id: parse_codex
