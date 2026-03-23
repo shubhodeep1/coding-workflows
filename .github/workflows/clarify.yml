@@ -52,20 +52,24 @@ jobs:
           # repo is checked out and this repo's scripts/ directory is absent.
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
+          wf_source="${{ github.repository_owner }}/coding-workflows"
           if [ ! -f scripts/setup_serena.sh ]; then
-            wf_source="${{ github.repository_owner }}/coding-workflows"
             mkdir -p scripts
             for f in setup_serena.sh git_ref_health_check.sh; do
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
               chmod +x "scripts/${f}"
             done
-            # Always use the canonical instruction files from coding-workflows
-            for f in codex_system_instructions.md ai_pipeline.md; do
+          fi
+          # Always use the canonical instruction files from coding-workflows
+          # (must be outside the if-block so they're fetched even when the
+          # caller repo ships its own scripts/ directory)
+          for f in codex_system_instructions.md ai_pipeline.md; do
+            if [ ! -f "${f}" ]; then
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
-            done
-          fi
+            fi
+          done
 
       - name: Create runtime workspace
         run: |

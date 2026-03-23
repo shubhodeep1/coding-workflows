@@ -157,11 +157,6 @@ jobs:
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
           wf_source="${{ github.repository_owner }}/coding-workflows"
-          # Detect external context before scripts are fetched
-          is_external="false"
-          if [ ! -f scripts/setup_serena.sh ]; then
-            is_external="true"
-          fi
           mkdir -p scripts
           for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py; do
             if [ ! -f "scripts/${f}" ]; then
@@ -171,12 +166,14 @@ jobs:
             fi
           done
           # Always use the canonical instruction files from coding-workflows
-          if [ "$is_external" = "true" ]; then
-            for f in codex_system_instructions.md ai_pipeline.md; do
+          # (must not be gated on is_external — caller repos that ship their
+          # own scripts/ still need these canonical md files)
+          for f in codex_system_instructions.md ai_pipeline.md; do
+            if [ ! -f "${f}" ]; then
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
-            done
-          fi
+            fi
+          done
 
       - name: Fetch issue metadata
         if: env.SKIP_IMPLEMENT != 'true'
