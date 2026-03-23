@@ -321,13 +321,21 @@ fi
 echo "Validating Serena MCP server startup..."
 HEALTH_LOG="${TMPDIR:-/tmp}/serena_health_check.log"
 if timeout 30s uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" \
-	serena start-mcp-server --context "${SERENA_CONTEXT}" --mode one-shot --mode "${SERENA_MODE}" \
-	--project-from-cwd --open-web-dashboard false </dev/null >"${HEALTH_LOG}" 2>&1; then
+		serena start-mcp-server --context "${SERENA_CONTEXT}" --mode one-shot --mode "${SERENA_MODE}" \
+		--project-from-cwd --open-web-dashboard false </dev/null >"${HEALTH_LOG}" 2>&1; then
+	if grep -Eqi 'warn|error|invalid|fail' "${HEALTH_LOG}"; then
+		echo "::warning::Serena health check passed but emitted warning-like output."
+		sed -n '1,20p' "${HEALTH_LOG}" >&2 || true
+	fi
 	echo "Serena MCP server validated successfully."
 elif [ $? -eq 124 ]; then
 	# timeout(1) returns 124 when the command is killed — that means serena
 	# started and kept running (good), it just didn't exit on its own (expected
 	# for a server). Treat this as success.
+	if grep -Eqi 'warn|error|invalid|fail' "${HEALTH_LOG}"; then
+		echo "::warning::Serena health check passed but emitted warning-like output."
+		sed -n '1,20p' "${HEALTH_LOG}" >&2 || true
+	fi
 	echo "Serena MCP server validated successfully (startup held for 30s — expected for server process)."
 else
 	echo "::warning::Serena health check failed. Server output:"
