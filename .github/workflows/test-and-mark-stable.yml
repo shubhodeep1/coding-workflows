@@ -320,8 +320,8 @@ jobs:
           echo "status=timeout" >> "$GITHUB_OUTPUT"
           exit 1
 
-      # ── Deep verification: inspect workflow internals ───────────
-      - name: "Deep verify: inspect workflow run steps"
+      # ── Deep verification: inspect every step in every workflow run ─
+      - name: "Deep verify: inspect all workflow run steps"
         id: deep-verify
         env:
           CLARIFY_RUN_ID: ${{ steps.wait-clarify.outputs.run_id }}
@@ -332,97 +332,124 @@ jobs:
           set -euo pipefail
 
           DEEP_PASS=true
-          WARNINGS=""
+          FAILED_STEPS=""
+          SKIPPED_STEPS=""
+          TOTAL_CHECKED=0
+          TOTAL_OK=0
+          TOTAL_FAILED=0
+          TOTAL_SKIPPED=0
 
-          # ── Helper: check that required steps exist and succeeded in a run ──
-          check_run_steps() {
+          # ── Helper: check ALL steps in a workflow run ──
+          check_all_steps() {
             local run_id="$1"
             local phase_name="$2"
-            shift 2
-            local required_patterns=("$@")
 
             if [ -z "${run_id}" ] || [ "${run_id}" = "null" ]; then
-              echo "  ⚠ ${phase_name}: could not find workflow run ID — skipping deep check"
-              WARNINGS="${WARNINGS}\n  - ${phase_name}: run ID not captured"
+              echo ""
+              echo "  ⚠ ${phase_name}: workflow run ID not captured — cannot verify steps"
+              DEEP_PASS=false
+              FAILED_STEPS="${FAILED_STEPS}\n  - ${phase_name}: run ID not found (phase may not have triggered)"
               return 0
             fi
 
             echo ""
-            echo "  Inspecting ${phase_name} run #${run_id}..."
+            echo "  ┌─ ${phase_name} (run #${run_id})"
 
-            # Fetch all jobs and steps for this run
-            JOBS_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=50" 2>/dev/null || echo '{"jobs":[]}')
-            STEP_LIST=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | {name: .name, status: .status, conclusion: .conclusion}]')
+            # Fetch all jobs and their steps
+            JOBS_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null || echo '{"jobs":[]}')
 
-            for pattern in "${required_patterns[@]}"; do
-              # Find steps matching this pattern (case-insensitive)
-              MATCHING=$(echo "$STEP_LIST" | jq -r --arg pat "$pattern" \
-                '[.[] | select(.name | test($pat; "i"))]')
-              MATCH_COUNT=$(echo "$MATCHING" | jq 'length')
+            # Iterate every step in every job
+            STEP_COUNT=$(echo "$JOBS_JSON" | jq '[.jobs[].steps[]] | length')
+            if [ "$STEP_COUNT" -eq 0 ]; then
+              echo "  │  ⚠ No steps found — run may still be in progress or API returned empty"
+              DEEP_PASS=false
+              FAILED_STEPS="${FAILED_STEPS}\n  - ${phase_name}: no steps found in run"
+              echo "  └─"
+              return 0
+            fi
 
-              if [ "$MATCH_COUNT" -eq 0 ]; then
-                echo "    ✗ Missing step: '${pattern}'"
-                DEEP_PASS=false
-              else
-                CONCLUSION=$(echo "$MATCHING" | jq -r '.[0].conclusion // "null"')
-                STEP_NAME=$(echo "$MATCHING" | jq -r '.[0].name')
-                if [ "$CONCLUSION" = "success" ]; then
-                  echo "    ✓ ${STEP_NAME}"
-                elif [ "$CONCLUSION" = "skipped" ]; then
-                  echo "    ⚠ ${STEP_NAME} — SKIPPED"
-                  WARNINGS="${WARNINGS}\n  - ${phase_name}: '${STEP_NAME}' was skipped"
-                else
-                  echo "    ✗ ${STEP_NAME} — ${CONCLUSION}"
-                  DEEP_PASS=false
-                fi
+            local phase_ok=0
+            local phase_fail=0
+            local phase_skip=0
+
+            # Process each step
+            while IFS=$'\t' read -r step_name step_conclusion step_status; do
+              TOTAL_CHECKED=$((TOTAL_CHECKED + 1))
+
+              # Skip GitHub's internal "Set up job" / "Complete job" steps —
+              # these are infra steps, not workflow logic
+              if [ "$step_name" = "Set up job" ] || [ "$step_name" = "Complete job" ] || [ "$step_name" = "Post actions/checkout@v5" ]; then
+                continue
               fi
-            done
+
+              case "${step_conclusion}" in
+                success)
+                  echo "  │  ✓ ${step_name}"
+                  phase_ok=$((phase_ok + 1))
+                  TOTAL_OK=$((TOTAL_OK + 1))
+                  ;;
+                skipped)
+                  echo "  │  ⊘ ${step_name} — SKIPPED"
+                  phase_skip=$((phase_skip + 1))
+                  TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
+                  SKIPPED_STEPS="${SKIPPED_STEPS}\n  - ${phase_name} → ${step_name}"
+                  ;;
+                failure)
+                  echo "  │  ✗ ${step_name} — FAILED"
+                  phase_fail=$((phase_fail + 1))
+                  TOTAL_FAILED=$((TOTAL_FAILED + 1))
+                  DEEP_PASS=false
+                  FAILED_STEPS="${FAILED_STEPS}\n  - ${phase_name} → ${step_name}"
+                  ;;
+                cancelled)
+                  echo "  │  ⊘ ${step_name} — CANCELLED"
+                  phase_skip=$((phase_skip + 1))
+                  TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
+                  SKIPPED_STEPS="${SKIPPED_STEPS}\n  - ${phase_name} → ${step_name} (cancelled)"
+                  ;;
+                *)
+                  echo "  │  ? ${step_name} — ${step_conclusion:-unknown} (status: ${step_status})"
+                  # In-progress or unknown — flag but don't fail
+                  SKIPPED_STEPS="${SKIPPED_STEPS}\n  - ${phase_name} → ${step_name} (${step_conclusion:-unknown})"
+                  ;;
+              esac
+            done < <(echo "$JOBS_JSON" | jq -r '.jobs[].steps[] | [.name, .conclusion, .status] | @tsv')
+
+            echo "  └─ ${phase_ok} ok, ${phase_fail} failed, ${phase_skip} skipped"
           }
 
           echo "═══════════════════════════════════════════"
-          echo "  Deep Verification: Workflow Internals"
+          echo "  Deep Verification: All Workflow Steps"
           echo "═══════════════════════════════════════════"
 
-          # Clarify: verify Codex ran, Serena set up, output was parsed
-          check_run_steps "${CLARIFY_RUN_ID}" "Clarify" \
-            "Install Codex" \
-            "Setup Serena" \
-            "Run Codex" \
-            "Parse Codex output"
-
-          # Plan: verify Codex ran, Serena set up
-          check_run_steps "${PLAN_RUN_ID}" "Plan" \
-            "Install Codex" \
-            "Setup Serena" \
-            "Codex|Run.*plan"
-
-          # Implement: verify Codex ran, Serena set up, branch created, PR created
-          check_run_steps "${IMPL_RUN_ID}" "Implement" \
-            "Setup Serena" \
-            "Run Codex implementation" \
-            "Create implementation branch" \
-            "Push branch" \
-            "Create Pull Request"
-
-          # Review: verify Serena set up, reviewers ran, consensus filtered, editor ran
-          check_run_steps "${REVIEW_RUN_ID}" "Review" \
-            "Setup Serena" \
-            "Run reviewer models" \
-            "Filter reviewer issues" \
-            "Apply fixes with editor"
+          check_all_steps "${CLARIFY_RUN_ID}" "Clarify"
+          check_all_steps "${PLAN_RUN_ID}" "Plan"
+          check_all_steps "${IMPL_RUN_ID}" "Implement"
+          check_all_steps "${REVIEW_RUN_ID}" "Review/Edit"
 
           echo ""
-          if [ -n "$WARNINGS" ]; then
-            echo "  Warnings:"
-            echo -e "$WARNINGS"
+          echo "───────────────────────────────────────────"
+          echo "  Totals: ${TOTAL_OK} ok, ${TOTAL_FAILED} failed, ${TOTAL_SKIPPED} skipped"
+          echo "───────────────────────────────────────────"
+
+          if [ "$TOTAL_FAILED" -gt 0 ]; then
             echo ""
+            echo "  Failed steps:"
+            echo -e "$FAILED_STEPS"
           fi
 
+          if [ "$TOTAL_SKIPPED" -gt 0 ]; then
+            echo ""
+            echo "  Skipped steps:"
+            echo -e "$SKIPPED_STEPS"
+          fi
+
+          echo ""
           if [ "$DEEP_PASS" = "true" ]; then
-            echo "  All critical workflow steps verified."
+            echo "  ✓ All steps across all phases succeeded."
             echo "deep_passed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "  ✗ Some critical workflow steps missing or failed."
+            echo "  ✗ Some steps failed — see details above."
             echo "deep_passed=false" >> "$GITHUB_OUTPUT"
           fi
           echo "═══════════════════════════════════════════"
@@ -478,16 +505,14 @@ jobs:
             PASSED=false
           fi
 
-          # Check deep verification
+          # Check deep verification (step-level)
           DEEP="${{ steps.deep-verify.outputs.deep_passed }}"
           if [ "$DEEP" = "true" ]; then
-            echo "  ✓ Internals .. PASSED (Codex, Serena, reviewers, editor)"
+            echo "  ✓ Internals .. PASSED (all steps in all phases succeeded)"
           else
-            echo "  ⚠ Internals .. WARNING (some steps skipped or missing)"
-            echo "    See 'Deep verify' step above for details."
-            # Deep verification warnings don't block the release —
-            # a step may legitimately be skipped (e.g. editor has no fixes to apply).
-            # But we surface it clearly so the operator can decide.
+            echo "  ✗ Internals .. FAILED (some workflow steps failed or missing)"
+            echo "    See 'Deep verify' step for full per-step breakdown."
+            PASSED=false
           fi
 
           echo ""
@@ -596,6 +621,7 @@ jobs:
           MSG+=$'\n'"Plan: ${{ steps.wait-plan.outputs.status || 'not reached' }}"
           MSG+=$'\n'"Implement: ${{ steps.wait-implement.outputs.status || 'not reached' }}"
           MSG+=$'\n'"Review: ${{ steps.wait-review.outputs.status || 'not reached' }}"
+          MSG+=$'\n'"Internals: ${{ steps.deep-verify.outputs.deep_passed == 'true' && 'ok' || 'FAILED' }}"
           MSG+=$'\n'"Issue #${ISSUE_NUMBER:-unknown}"
           MSG+=$'\n'"Run: ${RUN_URL}"
           set +e
