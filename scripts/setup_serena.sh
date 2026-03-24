@@ -144,11 +144,13 @@ for lang in ${ALL_LANGS}; do
 			;;
 		python)
 			echo "Installing Python language server..."
-			# Prefer uv pip (leverages uv cache from setup-uv action) over raw pip
+			# Use uv tool install to avoid PEP 668 "externally managed" errors
+			# on Ubuntu 24.04+ system Python. This installs pylsp into an
+			# isolated venv while making the binary available on PATH.
 			if command -v uv >/dev/null 2>&1; then
-				uv pip install --system python-lsp-server 2>/dev/null || echo "::warning::Python LSP install via uv failed"
+				uv tool install python-lsp-server 2>/dev/null || echo "::warning::Python LSP install via uv failed"
 			else
-				pip install python-lsp-server 2>/dev/null || echo "::warning::Python LSP install failed"
+				pip install --break-system-packages python-lsp-server 2>/dev/null || echo "::warning::Python LSP install failed"
 			fi
 			;;
 		go)
