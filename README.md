@@ -48,8 +48,9 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 |---|---|---|---|
 | `THINKING_LEVEL_CLARIFY` | `medium` | clarify | Reasoning effort for the clarification phase |
 | `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
-| `THINKING_LEVEL_IMPLEMENT` | `high` | implement | Reasoning effort for the implementation phase |
-| `THINKING_LEVEL_REVIEW` | `xhigh` | review_autofix | Reasoning effort for the review & autofix phase |
+| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
+| `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
+| `THINKING_LEVEL_EDITOR` | `high` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 
@@ -253,8 +254,9 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `AI_MEMORY_ENABLED` | `true` | Enable/disable memory operations |
 | `THINKING_LEVEL_CLARIFY` | `medium` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
 | `THINKING_LEVEL_PLAN` | `xhigh` | Reasoning effort for planning |
-| `THINKING_LEVEL_IMPLEMENT` | `high` | Reasoning effort for implementation |
-| `THINKING_LEVEL_REVIEW` | `xhigh` | Reasoning effort for review & autofix |
+| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | Reasoning effort for implementation |
+| `THINKING_LEVEL_REVIEWER` | `xhigh` | Reasoning effort for reviewer models (bug detection) |
+| `THINKING_LEVEL_EDITOR` | `high` | Reasoning effort for editor model (applying fixes) |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
 | `TOOL_CALL_BUDGET_PLAN` | `40` | Tool call budget for planning |
 | `TOOL_CALL_BUDGET_IMPLEMENT` | `50` | Tool call budget for implementation |
