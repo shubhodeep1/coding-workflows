@@ -42,6 +42,15 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix | Languages for Serena symbol analysis |
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix | Disable the Serena MCP server |
 
+**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Higher levels produce more thorough analysis but use more tokens. Lower levels are faster and cheaper, suitable for straightforward tasks.
+
+| Variable | Default | Used By | Description |
+|---|---|---|---|
+| `THINKING_LEVEL_CLARIFY` | `xhigh` | clarify | Reasoning effort for the clarification phase |
+| `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
+| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
+| `THINKING_LEVEL_REVIEW` | `xhigh` | review_autofix | Reasoning effort for the review & autofix phase |
+
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 
 | Variable | Default | Used By | Description |
@@ -242,6 +251,10 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
 | `AI_MEMORY_ENABLED` | `true` | Enable/disable memory operations |
+| `THINKING_LEVEL_CLARIFY` | `xhigh` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
+| `THINKING_LEVEL_PLAN` | `xhigh` | Reasoning effort for planning |
+| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | Reasoning effort for implementation |
+| `THINKING_LEVEL_REVIEW` | `xhigh` | Reasoning effort for review & autofix |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
 | `TOOL_CALL_BUDGET_PLAN` | `40` | Tool call budget for planning |
 | `TOOL_CALL_BUDGET_IMPLEMENT` | `50` | Tool call budget for implementation |
