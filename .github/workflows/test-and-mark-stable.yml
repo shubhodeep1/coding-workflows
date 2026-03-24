@@ -81,6 +81,7 @@ jobs:
           set -euo pipefail
           RUN_ID="${GITHUB_RUN_ID}"
           TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "created_after=${TIMESTAMP}" >> "$GITHUB_OUTPUT"
 
           TITLE="[E2E Smoke Test] Update smoke-test canary (run ${RUN_ID})"
 
@@ -138,6 +139,10 @@ jobs:
             # Clarify succeeded if we see planning or awaiting-approval
             if echo "$LABELS" | grep -qE 'ai:planning|ai:awaiting-approval'; then
               echo "✓ Clarify phase completed — issue moved to planning"
+              # Capture the clarify workflow run ID
+              CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
+                --jq '[.workflow_runs[] | select(.name | test("Clarif"; "i")) | select(.status == "completed")] | sort_by(.created_at) | last.id // empty' 2>/dev/null || echo "")
+              echo "run_id=${CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -179,6 +184,9 @@ jobs:
 
             if echo "$LABELS" | grep -q 'ai:awaiting-approval'; then
               echo "✓ Plan phase completed — awaiting approval"
+              PLAN_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
+                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.status == "completed")] | sort_by(.created_at) | last.id // empty' 2>/dev/null || echo "")
+              echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -186,6 +194,9 @@ jobs:
             # Check for auto-approved (if AUTO_IMPLEMENT_ON_CLEAR_PLAN is on)
             if echo "$LABELS" | grep -q 'ai:implementing'; then
               echo "✓ Plan phase completed with auto-approval — already implementing"
+              PLAN_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
+                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.status == "completed")] | sort_by(.created_at) | last.id // empty' 2>/dev/null || echo "")
+              echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=auto_approved" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -232,6 +243,9 @@ jobs:
 
             if [ -n "$PR_NUMBER" ]; then
               echo "✓ Implementation PR #${PR_NUMBER} created"
+              IMPL_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
+                --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.status == "completed")] | sort_by(.created_at) | last.id // empty' 2>/dev/null || echo "")
+              echo "run_id=${IMPL_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
@@ -306,7 +320,114 @@ jobs:
           echo "status=timeout" >> "$GITHUB_OUTPUT"
           exit 1
 
-      # ── Verification ────────────────────────────────────────────
+      # ── Deep verification: inspect workflow internals ───────────
+      - name: "Deep verify: inspect workflow run steps"
+        id: deep-verify
+        env:
+          CLARIFY_RUN_ID: ${{ steps.wait-clarify.outputs.run_id }}
+          PLAN_RUN_ID: ${{ steps.wait-plan.outputs.run_id }}
+          IMPL_RUN_ID: ${{ steps.wait-implement.outputs.run_id }}
+          REVIEW_RUN_ID: ${{ steps.wait-review.outputs.review_run_id }}
+        run: |
+          set -euo pipefail
+
+          DEEP_PASS=true
+          WARNINGS=""
+
+          # ── Helper: check that required steps exist and succeeded in a run ──
+          check_run_steps() {
+            local run_id="$1"
+            local phase_name="$2"
+            shift 2
+            local required_patterns=("$@")
+
+            if [ -z "${run_id}" ] || [ "${run_id}" = "null" ]; then
+              echo "  ⚠ ${phase_name}: could not find workflow run ID — skipping deep check"
+              WARNINGS="${WARNINGS}\n  - ${phase_name}: run ID not captured"
+              return 0
+            fi
+
+            echo ""
+            echo "  Inspecting ${phase_name} run #${run_id}..."
+
+            # Fetch all jobs and steps for this run
+            JOBS_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=50" 2>/dev/null || echo '{"jobs":[]}')
+            STEP_LIST=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | {name: .name, status: .status, conclusion: .conclusion}]')
+
+            for pattern in "${required_patterns[@]}"; do
+              # Find steps matching this pattern (case-insensitive)
+              MATCHING=$(echo "$STEP_LIST" | jq -r --arg pat "$pattern" \
+                '[.[] | select(.name | test($pat; "i"))]')
+              MATCH_COUNT=$(echo "$MATCHING" | jq 'length')
+
+              if [ "$MATCH_COUNT" -eq 0 ]; then
+                echo "    ✗ Missing step: '${pattern}'"
+                DEEP_PASS=false
+              else
+                CONCLUSION=$(echo "$MATCHING" | jq -r '.[0].conclusion // "null"')
+                STEP_NAME=$(echo "$MATCHING" | jq -r '.[0].name')
+                if [ "$CONCLUSION" = "success" ]; then
+                  echo "    ✓ ${STEP_NAME}"
+                elif [ "$CONCLUSION" = "skipped" ]; then
+                  echo "    ⚠ ${STEP_NAME} — SKIPPED"
+                  WARNINGS="${WARNINGS}\n  - ${phase_name}: '${STEP_NAME}' was skipped"
+                else
+                  echo "    ✗ ${STEP_NAME} — ${CONCLUSION}"
+                  DEEP_PASS=false
+                fi
+              fi
+            done
+          }
+
+          echo "═══════════════════════════════════════════"
+          echo "  Deep Verification: Workflow Internals"
+          echo "═══════════════════════════════════════════"
+
+          # Clarify: verify Codex ran, Serena set up, output was parsed
+          check_run_steps "${CLARIFY_RUN_ID}" "Clarify" \
+            "Install Codex" \
+            "Setup Serena" \
+            "Run Codex" \
+            "Parse Codex output"
+
+          # Plan: verify Codex ran, Serena set up
+          check_run_steps "${PLAN_RUN_ID}" "Plan" \
+            "Install Codex" \
+            "Setup Serena" \
+            "Codex|Run.*plan"
+
+          # Implement: verify Codex ran, Serena set up, branch created, PR created
+          check_run_steps "${IMPL_RUN_ID}" "Implement" \
+            "Setup Serena" \
+            "Run Codex implementation" \
+            "Create implementation branch" \
+            "Push branch" \
+            "Create Pull Request"
+
+          # Review: verify Serena set up, reviewers ran, consensus filtered, editor ran
+          check_run_steps "${REVIEW_RUN_ID}" "Review" \
+            "Setup Serena" \
+            "Run reviewer models" \
+            "Filter reviewer issues" \
+            "Apply fixes with editor"
+
+          echo ""
+          if [ -n "$WARNINGS" ]; then
+            echo "  Warnings:"
+            echo -e "$WARNINGS"
+            echo ""
+          fi
+
+          if [ "$DEEP_PASS" = "true" ]; then
+            echo "  All critical workflow steps verified."
+            echo "deep_passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "  ✗ Some critical workflow steps missing or failed."
+            echo "deep_passed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "═══════════════════════════════════════════"
+
+      # ── Verification summary ───────────────────────────────────
       - name: Verify all phases passed
         id: verify
         env:
@@ -355,6 +476,18 @@ jobs:
           else
             echo "  ✗ Review ..... FAILED (${REVIEW})"
             PASSED=false
+          fi
+
+          # Check deep verification
+          DEEP="${{ steps.deep-verify.outputs.deep_passed }}"
+          if [ "$DEEP" = "true" ]; then
+            echo "  ✓ Internals .. PASSED (Codex, Serena, reviewers, editor)"
+          else
+            echo "  ⚠ Internals .. WARNING (some steps skipped or missing)"
+            echo "    See 'Deep verify' step above for details."
+            # Deep verification warnings don't block the release —
+            # a step may legitimately be skipped (e.g. editor has no fixes to apply).
+            # But we surface it clearly so the operator can decide.
           fi
 
           echo ""
@@ -416,6 +549,61 @@ jobs:
           echo "  Deleted branch ${BRANCH}"
 
           echo "Cleanup complete."
+
+      # ── Telegram notifications ─────────────────────────────────
+      - name: Telegram success notification
+        if: success()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          CHAT_ID="${TG_CHAT_ID:-}"
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
+            echo "Telegram notification skipped (missing TG_BOT_SECRET or chat_id)"
+            exit 0
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="E2E smoke test PASSED for ${{ inputs.version_tag }}"
+          MSG+=$'\n'"All phases: clarify, plan, implement, review/edit"
+          MSG+=$'\n'"Issue #${ISSUE_NUMBER} → PR #${PR_NUMBER}"
+          MSG+=$'\n'"Run: ${RUN_URL}"
+          set +e
+          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1
+          set -e
+
+      - name: Telegram failure notification
+        if: failure()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          CHAT_ID="${TG_CHAT_ID:-}"
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
+            echo "Telegram notification skipped (missing TG_BOT_SECRET or chat_id)"
+            exit 0
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="E2E smoke test FAILED for ${{ inputs.version_tag }}"
+          MSG+=$'\n'"Clarify: ${{ steps.wait-clarify.outputs.status || 'not reached' }}"
+          MSG+=$'\n'"Plan: ${{ steps.wait-plan.outputs.status || 'not reached' }}"
+          MSG+=$'\n'"Implement: ${{ steps.wait-implement.outputs.status || 'not reached' }}"
+          MSG+=$'\n'"Review: ${{ steps.wait-review.outputs.status || 'not reached' }}"
+          MSG+=$'\n'"Issue #${ISSUE_NUMBER:-unknown}"
+          MSG+=$'\n'"Run: ${RUN_URL}"
+          set +e
+          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1
+          set -e
 
   # ──────────────────────────────────────────────────────────────────
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
