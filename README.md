@@ -42,13 +42,13 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix | Languages for Serena symbol analysis |
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix | Disable the Serena MCP server |
 
-**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Higher levels produce more thorough analysis but use more tokens. Lower levels are faster and cheaper, suitable for straightforward tasks.
+**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs).
 
 | Variable | Default | Used By | Description |
 |---|---|---|---|
-| `THINKING_LEVEL_CLARIFY` | `xhigh` | clarify | Reasoning effort for the clarification phase |
+| `THINKING_LEVEL_CLARIFY` | `medium` | clarify | Reasoning effort for the clarification phase |
 | `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
-| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
+| `THINKING_LEVEL_IMPLEMENT` | `high` | implement | Reasoning effort for the implementation phase |
 | `THINKING_LEVEL_REVIEW` | `xhigh` | review_autofix | Reasoning effort for the review & autofix phase |
 
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
@@ -251,9 +251,9 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
 | `AI_MEMORY_ENABLED` | `true` | Enable/disable memory operations |
-| `THINKING_LEVEL_CLARIFY` | `xhigh` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
+| `THINKING_LEVEL_CLARIFY` | `medium` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
 | `THINKING_LEVEL_PLAN` | `xhigh` | Reasoning effort for planning |
-| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | Reasoning effort for implementation |
+| `THINKING_LEVEL_IMPLEMENT` | `high` | Reasoning effort for implementation |
 | `THINKING_LEVEL_REVIEW` | `xhigh` | Reasoning effort for review & autofix |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
 | `TOOL_CALL_BUDGET_PLAN` | `40` | Tool call budget for planning |
