@@ -157,13 +157,14 @@ jobs:
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
           wf_source="${{ github.repository_owner }}/coding-workflows"
+          # ALWAYS fetch canonical scripts from coding-workflows, even if the
+          # caller repo ships its own scripts/ directory. Stale caller-repo
+          # scripts cause silent MCP failures.
           mkdir -p scripts
           for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py; do
-            if [ ! -f "scripts/${f}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
-              chmod +x "scripts/${f}"
-            fi
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
+            chmod +x "scripts/${f}"
           done
           # Always use the canonical instruction files from coding-workflows
           # (must not be gated on is_external — caller repos that ship their
