@@ -121,10 +121,12 @@ done
 
 # ── 3. Auto-detect languages and install language servers ─────────────────────
 
-# Single find pass for all language extensions (avoids 5 separate traversals)
+# Single find pass for all language extensions (avoids separate traversals).
+# Include .js/.jsx so that JS-heavy repos (e.g. frontend games) get the
+# TypeScript language server which handles both TS and JS files via Serena.
 DETECTED_LANGS=""
-_found_exts="$(find . -maxdepth 3 \( -name '*.ts' -o -name '*.tsx' -o -name '*.py' -o -name '*.go' -o -name '*.rs' -o -name '*.java' \) -printf '%f\n' 2>/dev/null | head -50 || true)"
-echo "${_found_exts}" | grep -qE '\.(ts|tsx)$' && DETECTED_LANGS="${DETECTED_LANGS} typescript"
+_found_exts="$(find . -maxdepth 3 \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.py' -o -name '*.go' -o -name '*.rs' -o -name '*.java' \) -printf '%f\n' 2>/dev/null | head -50 || true)"
+echo "${_found_exts}" | grep -qE '\.(ts|tsx|js|jsx)$' && DETECTED_LANGS="${DETECTED_LANGS} typescript"
 echo "${_found_exts}" | grep -qE '\.py$' && DETECTED_LANGS="${DETECTED_LANGS} python"
 echo "${_found_exts}" | grep -qE '\.go$' && DETECTED_LANGS="${DETECTED_LANGS} go"
 echo "${_found_exts}" | grep -qE '\.rs$' && DETECTED_LANGS="${DETECTED_LANGS} rust"

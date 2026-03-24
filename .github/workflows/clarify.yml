@@ -213,13 +213,27 @@ jobs:
           # via a tool call) to avoid wasting a tool call round-trip and ~1400
           # lines of token overhead from the tool response envelope.
           #
-          # PHASE-SPECIFIC TRIMMING: For clarification, we only need Phase 1
-          # details from ai_pipeline.md, not Phase 2/3/future extensions.
-          # We also trim README.md to exclude CI/workflow documentation that
-          # is irrelevant to understanding the issue for clarification.
+          # PHASE-SPECIFIC TRIMMING:
+          # - codex_system_instructions.md: Include only sections relevant to
+          #   clarification (Serena tooling, Prime Directive, Core Priorities,
+          #   Ask-First Mode with question format). Skip execution-phase sections
+          #   (production code, env vars, minimal change set, backward compat,
+          #   output requirements, debugging, code style, MongoDB rules, task
+          #   checklists, PR review mode, repo hygiene) — these save ~130 lines
+          #   of tokens that are irrelevant to asking clarification questions.
+          # - ai_pipeline.md: Only Phase 1, not Phase 2/3.
+          # - README.md: Exclude CI/workflow docs.
           {
-            echo "=== SYSTEM INSTRUCTIONS ==="
-            cat codex_system_instructions.md
+            echo "=== SYSTEM INSTRUCTIONS (clarification-trimmed) ==="
+            # Extract: header through end of section 2 (Ask-First Mode / question
+            # format). This includes Serena tooling, Prime Directive, Core
+            # Priorities, and the mandatory Q/A format — everything needed for
+            # clarification. Stop at section 3 ("## 3.") which begins
+            # execution-phase rules.
+            awk '/^## 3\. /{exit} {print}' codex_system_instructions.md
+            # Append the FINAL REMINDER since it reinforces ask-first behavior
+            echo
+            awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
             echo
             echo "=== AI PIPELINE (Phase 1 — Clarification) ==="
             # Extract only the relevant sections: Overview, Commands, Phase 1,
@@ -290,6 +304,11 @@ jobs:
             same query or fall back to shell grep with the same patterns.
           - If Serena tools are completely unavailable (startup failure), fall back to
             shell grep/rg once per search. Do not attempt Serena calls after a failure.
+          - NARROW SEARCH SCOPE: When using search_for_pattern, target a specific
+            directory or file — never search the entire repo with a broad pattern.
+            Bad:  search_for_pattern("crash", "ft.games", "**/*.{py,html,js}")
+            Good: search_for_pattern("animateCrash|riseFrameId", "ft.games/static/crash.js")
+            If you need to locate files first, use find_file with a specific mask.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
@@ -307,6 +326,10 @@ jobs:
             needed to identify genuine ambiguities that would block implementation.
           - Do NOT emit progress/status messages (e.g. "I've parsed the issue…"). Output
             ONLY the final STATUS/QUESTIONS result.
+          - SKIP DB CONTRACTS for pure UI/frontend issues. Only inspect /db/contracts/
+            files when the issue involves data model changes, queries, indexes, or storage.
+            Issues about visual alignment, animations, CSS, or JS behavior do not need
+            DB contract review.
 
           QUESTION BUDGET (MANDATORY):
           - HARD LIMIT: Never ask more than 5 questions. Fewer is better.
