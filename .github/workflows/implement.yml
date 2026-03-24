@@ -476,7 +476,7 @@ jobs:
             fi
           }
           heartbeat_stop() {
-            [ -n "${HEARTBEAT_WATCHDOG_PID:-}" ] && kill "${HEARTBEAT_WATCHDOG_PID}" 2>/dev/null && wait "${HEARTBEAT_WATCHDOG_PID}" 2>/dev/null; HEARTBEAT_WATCHDOG_PID=""
+            [ -n "${HEARTBEAT_WATCHDOG_PID:-}" ] && { kill "${HEARTBEAT_WATCHDOG_PID}" 2>/dev/null; wait "${HEARTBEAT_WATCHDOG_PID}" 2>/dev/null || true; }; HEARTBEAT_WATCHDOG_PID=""
             [ -n "${HEARTBEAT_FILE:-}" ] && rm -f "${HEARTBEAT_FILE}"; HEARTBEAT_FILE=""
           }
           ( while true; do sleep 10; now="$(date +%s)"; last="$(cat "${HEARTBEAT_FILE}" 2>/dev/null || echo "$now")"
