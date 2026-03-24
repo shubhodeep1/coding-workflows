@@ -2168,14 +2168,18 @@ jobs:
             --data-urlencode "text=${MSG}"
 
       - name: Telegram failure
-        if: failure()
+        if: failure() || cancelled()
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
         run: |
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          MSG="$(printf 'PR autofix failed\nPR: %s\nRun: %s' "${PR_URL}" "${RUN_URL}")"
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            MSG="$(printf 'PR autofix cancelled/timed out\nPR: %s\nRun: %s' "${PR_URL}" "${RUN_URL}")"
+          else
+            MSG="$(printf 'PR autofix failed\nPR: %s\nRun: %s' "${PR_URL}" "${RUN_URL}")"
+          fi
           curl -sS -X POST \
             "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}" \

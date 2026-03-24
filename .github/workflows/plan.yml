@@ -755,15 +755,21 @@ jobs:
           fi
 
       - name: Capture planning failure context
-        if: failure()
+        if: failure() || cancelled()
         run: |
           set -euo pipefail
-          {
-            echo "PLAN_FAILURE_CONTEXT=AI Plan phase failed before posting the implementation plan."
-          } >> "$GITHUB_ENV"
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            {
+              echo "PLAN_FAILURE_CONTEXT=AI Plan phase was cancelled or timed out before posting the implementation plan."
+            } >> "$GITHUB_ENV"
+          else
+            {
+              echo "PLAN_FAILURE_CONTEXT=AI Plan phase failed before posting the implementation plan."
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Comment on issue failure
-        if: failure()
+        if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -774,7 +780,7 @@ jobs:
             -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}"
 
       - name: Telegram failure notification
-        if: failure()
+        if: failure() || cancelled()
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -789,7 +795,11 @@ jobs:
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."
-          MSG="AI planning workflow failed."
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            MSG="AI planning workflow cancelled/timed out."
+          else
+            MSG="AI planning workflow failed."
+          fi
           MSG+=$'\n'
           MSG+="Workflow: AI Plan"
           MSG+=$'\n'
@@ -812,5 +822,5 @@ jobs:
           fi
 
       - name: Exit safely
-        if: failure()
+        if: failure() || cancelled()
         run: exit 0
