@@ -1,0 +1,539 @@
+---
+name: Test & Mark Stable Release
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: >
+          Semantic version tag (e.g. v1.2.0). Must match vX.Y.Z format.
+        required: true
+        type: string
+      test_repo:
+        description: >
+          Repository to run E2E smoke test on (owner/repo).
+          Defaults to this repository. The target repo must have
+          the internal/consumer workflow wrappers installed.
+        required: false
+        type: string
+        default: ""
+      skip_e2e:
+        description: Skip E2E test and only mark stable (same as mark-stable.yml)
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: Validate only — do not push tags or create release
+        required: false
+        type: boolean
+        default: false
+      phase_timeout:
+        description: >
+          Max minutes to wait for each workflow phase (clarify, plan, implement, review).
+          Increase for repos with large codebases or slow LLM providers.
+        required: false
+        type: number
+        default: 30
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # Job 1: End-to-end smoke test — exercises every pipeline phase
+  # ──────────────────────────────────────────────────────────────────
+  e2e-smoke-test:
+    if: ${{ !inputs.skip_e2e }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    concurrency:
+      group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}
+      cancel-in-progress: false
+    outputs:
+      test_passed: ${{ steps.verify.outputs.passed }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      TEST_REPO: ${{ inputs.test_repo || github.repository }}
+      PHASE_TIMEOUT: ${{ inputs.phase_timeout || 30 }}
+      POLL_INTERVAL: 30
+
+    steps:
+      - name: Validate prerequisites
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::GH_PAT secret is required for E2E tests (GITHUB_TOKEN cannot trigger downstream workflows)"
+            exit 1
+          fi
+          echo "Target repo: ${TEST_REPO}"
+          echo "Phase timeout: ${PHASE_TIMEOUT} minutes"
+          # Verify we can access the repo
+          gh api "repos/${TEST_REPO}" --jq '.full_name' \
+            || { echo "::error::Cannot access ${TEST_REPO}. Check GH_PAT permissions."; exit 1; }
+
+      # ── Phase 0: Create the test issue ───────────────────────────
+      - name: Create E2E test issue
+        id: create-issue
+        run: |
+          set -euo pipefail
+          RUN_ID="${GITHUB_RUN_ID}"
+          TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          TITLE="[E2E Smoke Test] Update smoke-test canary (run ${RUN_ID})"
+
+          BODY="$(cat <<'ISSUE_EOF'
+          ## Task
+
+          Create or update the file `tests/e2e_smoke_canary.txt` so its entire content is exactly these three lines:
+
+          ```text
+          status: ok
+          workflow: e2e-smoke-test
+          updated-by: ai-pipeline
+          ```
+
+          ## Constraints
+
+          - **Only** modify `tests/e2e_smoke_canary.txt` — do not touch any other file
+          - Create the `tests/` directory if it does not already exist
+          - If the file already exists, overwrite it completely with the content above
+          - Do **not** add comments, headers, or any extra content beyond the three lines shown
+          - This is a fully-specified task — **no clarification is needed**
+
+          ## Context
+
+          This issue is created by an automated end-to-end smoke test that validates all AI workflow phases (clarify → plan → implement → review/edit) execute correctly. The change is intentionally trivial so the test completes quickly and can be run unlimited times.
+          ISSUE_EOF
+          )"
+
+          # Create the issue and extract number in one call
+          ISSUE_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+            -f title="${TITLE}" \
+            -f body="${BODY}" \
+            --jq '.number')
+
+          ISSUE_URL=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '.html_url')
+
+          echo "issue_number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "Created test issue #${ISSUE_NUMBER}: ${ISSUE_URL}"
+
+      # ── Phase 1: Wait for Clarify → Plan transition ─────────────
+      - name: "Phase 1: Wait for clarify to complete"
+        id: wait-clarify
+        env:
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for clarify to finish on issue #${ISSUE_NUMBER}..."
+          TIMEOUT_SECS=$((PHASE_TIMEOUT * 60))
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
+            LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+
+            # Clarify succeeded if we see planning or awaiting-approval
+            if echo "$LABELS" | grep -qE 'ai:planning|ai:awaiting-approval'; then
+              echo "✓ Clarify phase completed — issue moved to planning"
+              echo "status=success" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # Check for failure: look for error comments from bot
+            LAST_BOT_COMMENT=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=5&direction=desc" \
+              --jq '[.[] | select(.user.login == "github-actions[bot]")] | .[0].body // ""' 2>/dev/null || echo "")
+            if echo "$LAST_BOT_COMMENT" | grep -qi "failed\|error\|clarification.*needed"; then
+              if echo "$LAST_BOT_COMMENT" | grep -qi "clarification.*needed\|NEEDS_CLARIFICATION"; then
+                echo "::error::Clarify phase requested human clarification — test issue may not be clear enough"
+                echo "status=clarification_needed" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+            fi
+
+            echo "  ... waiting (${ELAPSED}s / ${TIMEOUT_SECS}s) — labels: ${LABELS:-none}"
+            sleep "$POLL_INTERVAL"
+            ELAPSED=$((ELAPSED + POLL_INTERVAL))
+          done
+
+          echo "::error::Timeout waiting for clarify phase to complete"
+          echo "status=timeout" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      # ── Phase 2: Wait for Plan to complete ──────────────────────
+      - name: "Phase 2: Wait for plan to complete"
+        id: wait-plan
+        env:
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for plan to finish on issue #${ISSUE_NUMBER}..."
+          TIMEOUT_SECS=$((PHASE_TIMEOUT * 60))
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
+            LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+
+            if echo "$LABELS" | grep -q 'ai:awaiting-approval'; then
+              echo "✓ Plan phase completed — awaiting approval"
+              echo "status=success" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # Check for auto-approved (if AUTO_IMPLEMENT_ON_CLEAR_PLAN is on)
+            if echo "$LABELS" | grep -q 'ai:implementing'; then
+              echo "✓ Plan phase completed with auto-approval — already implementing"
+              echo "status=auto_approved" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "  ... waiting (${ELAPSED}s / ${TIMEOUT_SECS}s) — labels: ${LABELS:-none}"
+            sleep "$POLL_INTERVAL"
+            ELAPSED=$((ELAPSED + POLL_INTERVAL))
+          done
+
+          echo "::error::Timeout waiting for plan phase to complete"
+          echo "status=timeout" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      # ── Phase 3: Approve and wait for implementation ────────────
+      - name: "Phase 3a: Approve the plan"
+        id: approve
+        if: steps.wait-plan.outputs.status == 'success'
+        env:
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          echo "Posting /approved on issue #${ISSUE_NUMBER}..."
+          gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="/approved
+
+          E2E smoke test auto-approval (run ${GITHUB_RUN_ID})."
+          echo "✓ Posted /approved comment"
+
+      - name: "Phase 3b: Wait for PR creation (implement phase)"
+        id: wait-implement
+        env:
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for implementation PR on issue #${ISSUE_NUMBER}..."
+          TIMEOUT_SECS=$((PHASE_TIMEOUT * 60))
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
+            # Search for PRs that reference this issue
+            # The implement workflow creates branch ai/issue-<N>
+            PR_NUMBER=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
+              --jq '.[0].number // empty' 2>/dev/null || echo "")
+
+            if [ -n "$PR_NUMBER" ]; then
+              echo "✓ Implementation PR #${PR_NUMBER} created"
+              echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+              echo "status=success" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # Also check labels for failure
+            LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+
+            echo "  ... waiting (${ELAPSED}s / ${TIMEOUT_SECS}s) — labels: ${LABELS:-none}"
+            sleep "$POLL_INTERVAL"
+            ELAPSED=$((ELAPSED + POLL_INTERVAL))
+          done
+
+          echo "::error::Timeout waiting for implementation PR"
+          echo "status=timeout" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      # ── Phase 4: Wait for review/edit to complete ───────────────
+      - name: "Phase 4: Wait for review & autofix to complete"
+        id: wait-review
+        env:
+          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for review workflow on PR #${PR_NUMBER}..."
+          TIMEOUT_SECS=$((PHASE_TIMEOUT * 60))
+          ELAPSED=0
+
+          # Give the review workflow a moment to start
+          sleep 15
+
+          while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
+            # Find the review workflow run for this PR's head branch
+            PR_BRANCH="ai/issue-${{ steps.create-issue.outputs.issue_number }}"
+
+            # Look for workflow runs on this branch
+            REVIEW_RUN=$(gh api "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
+              --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix"; "i"))] | sort_by(.created_at) | last' 2>/dev/null || echo "")
+
+            if [ -n "$REVIEW_RUN" ] && [ "$REVIEW_RUN" != "null" ]; then
+              RUN_STATUS=$(echo "$REVIEW_RUN" | jq -r '.status // "unknown"')
+              RUN_CONCLUSION=$(echo "$REVIEW_RUN" | jq -r '.conclusion // "null"')
+              RUN_ID=$(echo "$REVIEW_RUN" | jq -r '.id // "unknown"')
+
+              echo "  Review run #${RUN_ID}: status=${RUN_STATUS}, conclusion=${RUN_CONCLUSION}"
+
+              if [ "$RUN_STATUS" = "completed" ]; then
+                if [ "$RUN_CONCLUSION" = "success" ]; then
+                  echo "✓ Review & autofix completed successfully"
+                  echo "status=success" >> "$GITHUB_OUTPUT"
+                  echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+                  exit 0
+                elif [ "$RUN_CONCLUSION" = "failure" ]; then
+                  echo "::warning::Review workflow completed with failure — this may be acceptable if reviewers found issues"
+                  echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
+                  echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+                  exit 0
+                elif [ "$RUN_CONCLUSION" = "cancelled" ]; then
+                  # Review may be cancelled if a newer run superseded it
+                  echo "Review run was cancelled — checking for newer run..."
+                fi
+              fi
+            fi
+
+            echo "  ... waiting (${ELAPSED}s / ${TIMEOUT_SECS}s)"
+            sleep "$POLL_INTERVAL"
+            ELAPSED=$((ELAPSED + POLL_INTERVAL))
+          done
+
+          echo "::error::Timeout waiting for review workflow to complete"
+          echo "status=timeout" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      # ── Verification ────────────────────────────────────────────
+      - name: Verify all phases passed
+        id: verify
+        env:
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          echo "═══════════════════════════════════════════"
+          echo "  E2E Smoke Test Results"
+          echo "═══════════════════════════════════════════"
+          echo ""
+
+          PASSED=true
+
+          # Check clarify
+          CLARIFY="${{ steps.wait-clarify.outputs.status }}"
+          if [ "$CLARIFY" = "success" ]; then
+            echo "  ✓ Clarify .... PASSED"
+          else
+            echo "  ✗ Clarify .... FAILED (${CLARIFY})"
+            PASSED=false
+          fi
+
+          # Check plan
+          PLAN="${{ steps.wait-plan.outputs.status }}"
+          if [ "$PLAN" = "success" ] || [ "$PLAN" = "auto_approved" ]; then
+            echo "  ✓ Plan ....... PASSED"
+          else
+            echo "  ✗ Plan ....... FAILED (${PLAN})"
+            PASSED=false
+          fi
+
+          # Check implement
+          IMPL="${{ steps.wait-implement.outputs.status }}"
+          if [ "$IMPL" = "success" ]; then
+            echo "  ✓ Implement .. PASSED (PR #${PR_NUMBER})"
+          else
+            echo "  ✗ Implement .. FAILED (${IMPL})"
+            PASSED=false
+          fi
+
+          # Check review
+          REVIEW="${{ steps.wait-review.outputs.status }}"
+          if [ "$REVIEW" = "success" ] || [ "$REVIEW" = "completed_with_findings" ]; then
+            echo "  ✓ Review ..... PASSED"
+          else
+            echo "  ✗ Review ..... FAILED (${REVIEW})"
+            PASSED=false
+          fi
+
+          echo ""
+          echo "═══════════════════════════════════════════"
+
+          if [ "$PASSED" = "true" ]; then
+            echo "  ALL PHASES PASSED — safe to release"
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "  SOME PHASES FAILED — blocking release"
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      # ── Cleanup ─────────────────────────────────────────────────
+      - name: Cleanup test artifacts
+        if: always()
+        env:
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          echo "Cleaning up E2E test artifacts..."
+
+          # Close PR without merging
+          if [ -n "${PR_NUMBER}" ]; then
+            gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+              -X PATCH -f state=closed \
+              -f body="$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body')
+
+          ---
+          *Closed by E2E smoke test cleanup (run ${GITHUB_RUN_ID}).*" \
+              2>/dev/null || echo "Warning: could not close PR #${PR_NUMBER}"
+            echo "  Closed PR #${PR_NUMBER}"
+          fi
+
+          # Close issue
+          if [ -n "${ISSUE_NUMBER}" ]; then
+            gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              -X PATCH -f state=closed \
+              -f state_reason=not_planned \
+              2>/dev/null || echo "Warning: could not close issue #${ISSUE_NUMBER}"
+
+            # Add cleanup comment
+            gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+              -f body="E2E smoke test completed. Cleaning up.
+
+          **Result:** ${{ steps.verify.outputs.passed == 'true' && '✓ All phases passed' || '✗ Some phases failed' }}
+          **Run:** [${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
+          **Version under test:** ${{ inputs.version_tag }}" \
+              2>/dev/null || echo "Warning: could not post cleanup comment"
+            echo "  Closed issue #${ISSUE_NUMBER}"
+          fi
+
+          # Delete test branch
+          BRANCH="ai/issue-${ISSUE_NUMBER}"
+          gh api "repos/${TEST_REPO}/git/refs/heads/${BRANCH}" -X DELETE \
+            2>/dev/null || echo "  Branch ${BRANCH} already deleted or does not exist"
+          echo "  Deleted branch ${BRANCH}"
+
+          echo "Cleanup complete."
+
+  # ──────────────────────────────────────────────────────────────────
+  # Job 2: Validate release prerequisites (same as mark-stable.yml)
+  # ──────────────────────────────────────────────────────────────────
+  validate:
+    needs: [e2e-smoke-test]
+    if: >-
+      always() &&
+      (needs.e2e-smoke-test.result == 'success' || needs.e2e-smoke-test.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate version format
+        run: |
+          set -euo pipefail
+          if [[ ! "${{ inputs.version_tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version tag '${{ inputs.version_tag }}'. Must match vX.Y.Z"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Ensure tag does not already exist
+        run: |
+          set -euo pipefail
+          if git rev-parse "refs/tags/${{ inputs.version_tag }}" >/dev/null 2>&1; then
+            echo "::error::Tag ${{ inputs.version_tag }} already exists"
+            exit 1
+          fi
+
+      - name: Verify CI passed on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse HEAD)
+          echo "Checking CI status for $SHA ..."
+          STATE=$(gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
+            --jq '.state' 2>/dev/null || echo "pending")
+          if [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
+            echo "::error::CI is failing on main ($STATE). Fix before releasing."
+            exit 1
+          fi
+          echo "CI state: $STATE — OK"
+
+  # ──────────────────────────────────────────────────────────────────
+  # Job 3: Create release (same as mark-stable.yml)
+  # ──────────────────────────────────────────────────────────────────
+  release:
+    needs: [validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version_tag }}"
+          NOTES=$(awk \
+            "/^## \\[${VERSION}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" \
+            CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="No changelog entry found for ${VERSION}."
+          fi
+          echo "$NOTES" > /tmp/release_notes.md
+          echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Tag version and update stable pointer
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          VERSION="${{ inputs.version_tag }}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+
+          # Immutable version tag
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
+
+          # Moving stable pointer
+          git tag -f stable "$VERSION"
+          git push -f origin stable
+
+          # Moving major-version pointer (e.g. v1)
+          git tag -f "$MAJOR" "$VERSION"
+          git push -f origin "$MAJOR"
+
+          echo "Tagged $VERSION and updated stable + $MAJOR pointers."
+
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ inputs.version_tag }}" \
+            --title "${{ inputs.version_tag }}" \
+            --notes-file "${{ steps.changelog.outputs.notes_file }}" \
+            --target main
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "=== DRY RUN ==="
+          echo "Would tag main as: ${{ inputs.version_tag }}"
+          echo "Would update pointers: stable, $(echo '${{ inputs.version_tag }}' | cut -d. -f1)"
+          echo ""
+          echo "Changelog notes:"
+          cat "${{ steps.changelog.outputs.notes_file }}"
