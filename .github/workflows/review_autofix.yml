@@ -39,7 +39,7 @@ env:
 jobs:
   codex-agent:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     if: ${{ github.event_name == 'workflow_dispatch' || (!github.event.pull_request.draft && !contains(github.event.pull_request.title || '', '[skip ai]') && !contains(github.event.pull_request.body || '', '[skip ai]')) }}
 
     env:
@@ -1053,21 +1053,62 @@ jobs:
             cat "${REVIEWER_PROMPT_BODY_FILE}"
           } > "${REVIEWER_PROMPT_FILE}"
 
+          # Source heartbeat utilities for activity-based timeouts
+          source "${GITHUB_WORKSPACE}/scripts/heartbeat_exec.sh"
+
           run_reviewer() {
             local model="$1"
             local safe_name="$2"
             local output_file="${PREVIOUS_REVIEWS_DIR}/review_${safe_name}.txt"
             local status_file="${PREVIOUS_REVIEWS_DIR}/status_${safe_name}.txt"
             local log_file="${PREVIOUS_REVIEWS_DIR}/review_${safe_name}.log"
-            local reviewer_timeout_seconds=1800
+            local reviewer_idle_timeout="${HEARTBEAT_IDLE_TIMEOUT:-900}"
+            local reviewer_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
             local attempt=1
 
             : > "${log_file}"
             while [ "${attempt}" -le 3 ]; do
               tmp_output="$(mktemp)"
               tmp_stderr="$(mktemp)"
-              if timeout --signal=TERM --kill-after=30s "${reviewer_timeout_seconds}s" \
-                codex exec --model "${model}" --full-auto "$(cat "${REVIEWER_PROMPT_FILE}")" > "${tmp_output}" 2> "${tmp_stderr}"; then
+              # Use heartbeat file per reviewer to track activity
+              local hb_file
+              hb_file="$(mktemp /tmp/heartbeat_reviewer.XXXXXX)"
+              date +%s > "${hb_file}"
+              local start_time
+              start_time="$(date +%s)"
+
+              # Background watchdog for this reviewer attempt
+              (
+                while true; do
+                  sleep 10
+                  now="$(date +%s)"
+                  last="$(cat "${hb_file}" 2>/dev/null || echo "$now")"
+                  if [ $(( now - last )) -ge "${reviewer_idle_timeout}" ]; then
+                    echo "Reviewer ${model} killed — no output for $(( now - last ))s (idle limit: ${reviewer_idle_timeout}s)." | tee -a "${log_file}" >&2
+                    rm -f "${hb_file}"
+                    exit 142
+                  fi
+                  if [ $(( now - start_time )) -ge "${reviewer_max_wall}" ]; then
+                    echo "Reviewer ${model} killed — max wall time ${reviewer_max_wall}s exceeded." | tee -a "${log_file}" >&2
+                    rm -f "${hb_file}"
+                    exit 143
+                  fi
+                done
+              ) &
+              local wd_pid=$!
+
+              codex exec --model "${model}" --full-auto "$(cat "${REVIEWER_PROMPT_FILE}")" > "${tmp_output}" 2> >(
+                while IFS= read -r line || [ -n "$line" ]; do
+                  date +%s > "${hb_file}" 2>/dev/null
+                  printf '%s\n' "$line"
+                done > "${tmp_stderr}"
+              )
+              local cmd_rc=$?
+
+              kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null
+              rm -f "${hb_file}"
+
+              if [ "${cmd_rc}" -eq 0 ]; then
                 cat "${tmp_stderr}" >> "${log_file}"
                 if [ -s "${tmp_output}" ]; then
                   mv "${tmp_output}" "${output_file}"
@@ -1078,13 +1119,8 @@ jobs:
                 fi
                 echo "Reviewer ${model} produced empty output on attempt ${attempt}." | tee -a "${log_file}"
               else
-                rc=$?
                 cat "${tmp_stderr}" >> "${log_file}"
-                if [ "${rc}" -eq 124 ]; then
-                  echo "Reviewer ${model} timed out after ${reviewer_timeout_seconds}s on attempt ${attempt}." | tee -a "${log_file}"
-                else
-                  echo "Reviewer ${model} execution failed on attempt ${attempt} (exit=${rc})." | tee -a "${log_file}"
-                fi
+                echo "Reviewer ${model} execution failed on attempt ${attempt} (exit=${cmd_rc})." | tee -a "${log_file}"
               fi
 
               if [ -s "${tmp_stderr}" ]; then
@@ -1520,11 +1556,15 @@ jobs:
           echo "Editor prompt sha256: $(sha256sum "${EDITOR_PROMPT_FILE}" | awk '{print $1}')"
 
           rm -f "${EDITOR_SUMMARY_FILE}"
+
+          # Heartbeat-based timeout for editor
+          heartbeat_start --idle-timeout "${HEARTBEAT_IDLE_TIMEOUT:-900}" --max-wall "${HEARTBEAT_MAX_WALL:-10800}"
+
           attempt=1
           while [ "${attempt}" -le 3 ]; do
             tmp_output="$(mktemp)"
             tmp_err="$(mktemp)"
-            if codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${EDITOR_PROMPT_FILE}")" > "${tmp_output}" 2>"${tmp_err}"; then
+            if codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${EDITOR_PROMPT_FILE}")" > "${tmp_output}" 2> >(heartbeat_tee "${tmp_err}" >/dev/null); then
               cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
               if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints" "${tmp_output}"; then
                 reviewer_validation_ok=true
@@ -1614,6 +1654,8 @@ jobs:
             attempt=$((attempt + 1))
             sleep 2
           done
+
+          heartbeat_stop
 
           cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
           Changes made:
