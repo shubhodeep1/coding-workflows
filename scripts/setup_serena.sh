@@ -122,10 +122,11 @@ done
 # ── 3. Auto-detect languages and install language servers ─────────────────────
 
 # Single find pass for all language extensions (avoids separate traversals).
-# Maps file extensions to Serena language identifiers. The TypeScript language
-# server handles both TS and JS files; .vue maps to the dedicated vue LSP.
-# Note: HTML/CSS have no standalone Serena language — they are partially
-# covered by the vue and typescript LSPs when present.
+# Maps file extensions to Serena language identifiers. Covers every language
+# Serena supports (see https://oraios.github.io/serena/01-about/020_programming-languages.html).
+# The TypeScript language server handles both TS and JS files; .vue maps to
+# the dedicated vue LSP. HTML/CSS have no standalone Serena language — they
+# are partially covered by the vue and typescript LSPs when present.
 DETECTED_LANGS=""
 _found_exts="$(find . -maxdepth 3 \( \
 	-name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \
@@ -139,33 +140,70 @@ _found_exts="$(find . -maxdepth 3 \( \
 	-o -name '*.cs' \
 	-o -name '*.cpp' -o -name '*.c' -o -name '*.h' -o -name '*.hpp' \
 	-o -name '*.sh' -o -name '*.bash' \
-	-o -name '*.lua' \
+	-o -name '*.lua' -o -name '*.luau' \
 	-o -name '*.ex' -o -name '*.exs' \
 	-o -name '*.dart' \
 	-o -name '*.swift' \
 	-o -name '*.scala' \
 	-o -name '*.pl' -o -name '*.pm' \
 	-o -name '*.zig' \
-	\) -printf '%f\n' 2>/dev/null | head -80 || true)"
-echo "${_found_exts}" | grep -qE '\.(ts|tsx|js|jsx)$'  && DETECTED_LANGS="${DETECTED_LANGS} typescript"
-echo "${_found_exts}" | grep -qE '\.vue$'              && DETECTED_LANGS="${DETECTED_LANGS} vue"
-echo "${_found_exts}" | grep -qE '\.py$'               && DETECTED_LANGS="${DETECTED_LANGS} python"
-echo "${_found_exts}" | grep -qE '\.go$'               && DETECTED_LANGS="${DETECTED_LANGS} go"
-echo "${_found_exts}" | grep -qE '\.rs$'               && DETECTED_LANGS="${DETECTED_LANGS} rust"
-echo "${_found_exts}" | grep -qE '\.java$'             && DETECTED_LANGS="${DETECTED_LANGS} java"
-echo "${_found_exts}" | grep -qE '\.kt$'               && DETECTED_LANGS="${DETECTED_LANGS} kotlin"
-echo "${_found_exts}" | grep -qE '\.rb$'               && DETECTED_LANGS="${DETECTED_LANGS} ruby"
-echo "${_found_exts}" | grep -qE '\.php$'              && DETECTED_LANGS="${DETECTED_LANGS} php"
-echo "${_found_exts}" | grep -qE '\.cs$'               && DETECTED_LANGS="${DETECTED_LANGS} csharp"
-echo "${_found_exts}" | grep -qE '\.(cpp|c|h|hpp)$'    && DETECTED_LANGS="${DETECTED_LANGS} cpp"
-echo "${_found_exts}" | grep -qE '\.(sh|bash)$'        && DETECTED_LANGS="${DETECTED_LANGS} bash"
-echo "${_found_exts}" | grep -qE '\.lua$'              && DETECTED_LANGS="${DETECTED_LANGS} lua"
-echo "${_found_exts}" | grep -qE '\.(ex|exs)$'         && DETECTED_LANGS="${DETECTED_LANGS} elixir"
-echo "${_found_exts}" | grep -qE '\.dart$'             && DETECTED_LANGS="${DETECTED_LANGS} dart"
-echo "${_found_exts}" | grep -qE '\.swift$'            && DETECTED_LANGS="${DETECTED_LANGS} swift"
-echo "${_found_exts}" | grep -qE '\.scala$'            && DETECTED_LANGS="${DETECTED_LANGS} scala"
-echo "${_found_exts}" | grep -qE '\.(pl|pm)$'          && DETECTED_LANGS="${DETECTED_LANGS} perl"
-echo "${_found_exts}" | grep -qE '\.zig$'              && DETECTED_LANGS="${DETECTED_LANGS} zig"
+	-o -name '*.fs' -o -name '*.fsx' \
+	-o -name '*.hs' -o -name '*.lhs' \
+	-o -name '*.clj' -o -name '*.cljs' -o -name '*.cljc' \
+	-o -name '*.elm' \
+	-o -name '*.erl' -o -name '*.hrl' \
+	-o -name '*.jl' \
+	-o -name '*.r' -o -name '*.R' \
+	-o -name '*.ml' -o -name '*.mli' \
+	-o -name '*.pas' -o -name '*.pp' \
+	-o -name '*.f90' -o -name '*.f95' -o -name '*.f03' \
+	-o -name '*.groovy' -o -name '*.gvy' \
+	-o -name '*.sol' \
+	-o -name '*.nix' \
+	-o -name '*.lean' \
+	-o -name '*.al' \
+	-o -name '*.hlsl' -o -name '*.glsl' -o -name '*.wgsl' \
+	-o -name '*.yml' -o -name '*.yaml' \
+	\) -printf '%f\n' 2>/dev/null | head -100 || true)"
+# Map detected extensions to Serena language identifiers
+echo "${_found_exts}" | grep -qE '\.(ts|tsx|js|jsx)$'       && DETECTED_LANGS="${DETECTED_LANGS} typescript"
+echo "${_found_exts}" | grep -qE '\.vue$'                   && DETECTED_LANGS="${DETECTED_LANGS} vue"
+echo "${_found_exts}" | grep -qE '\.py$'                    && DETECTED_LANGS="${DETECTED_LANGS} python"
+echo "${_found_exts}" | grep -qE '\.go$'                    && DETECTED_LANGS="${DETECTED_LANGS} go"
+echo "${_found_exts}" | grep -qE '\.rs$'                    && DETECTED_LANGS="${DETECTED_LANGS} rust"
+echo "${_found_exts}" | grep -qE '\.java$'                  && DETECTED_LANGS="${DETECTED_LANGS} java"
+echo "${_found_exts}" | grep -qE '\.kt$'                    && DETECTED_LANGS="${DETECTED_LANGS} kotlin"
+echo "${_found_exts}" | grep -qE '\.rb$'                    && DETECTED_LANGS="${DETECTED_LANGS} ruby"
+echo "${_found_exts}" | grep -qE '\.php$'                   && DETECTED_LANGS="${DETECTED_LANGS} php"
+echo "${_found_exts}" | grep -qE '\.cs$'                    && DETECTED_LANGS="${DETECTED_LANGS} csharp"
+echo "${_found_exts}" | grep -qE '\.(cpp|c|h|hpp)$'         && DETECTED_LANGS="${DETECTED_LANGS} cpp"
+echo "${_found_exts}" | grep -qE '\.(sh|bash)$'             && DETECTED_LANGS="${DETECTED_LANGS} bash"
+echo "${_found_exts}" | grep -qE '\.lua$'                   && DETECTED_LANGS="${DETECTED_LANGS} lua"
+echo "${_found_exts}" | grep -qE '\.luau$'                  && DETECTED_LANGS="${DETECTED_LANGS} luau"
+echo "${_found_exts}" | grep -qE '\.(ex|exs)$'              && DETECTED_LANGS="${DETECTED_LANGS} elixir"
+echo "${_found_exts}" | grep -qE '\.dart$'                  && DETECTED_LANGS="${DETECTED_LANGS} dart"
+echo "${_found_exts}" | grep -qE '\.swift$'                 && DETECTED_LANGS="${DETECTED_LANGS} swift"
+echo "${_found_exts}" | grep -qE '\.scala$'                 && DETECTED_LANGS="${DETECTED_LANGS} scala"
+echo "${_found_exts}" | grep -qE '\.(pl|pm)$'               && DETECTED_LANGS="${DETECTED_LANGS} perl"
+echo "${_found_exts}" | grep -qE '\.zig$'                   && DETECTED_LANGS="${DETECTED_LANGS} zig"
+echo "${_found_exts}" | grep -qE '\.(fs|fsx)$'              && DETECTED_LANGS="${DETECTED_LANGS} fsharp"
+echo "${_found_exts}" | grep -qE '\.(hs|lhs)$'              && DETECTED_LANGS="${DETECTED_LANGS} haskell"
+echo "${_found_exts}" | grep -qE '\.(clj|cljs|cljc)$'       && DETECTED_LANGS="${DETECTED_LANGS} clojure"
+echo "${_found_exts}" | grep -qE '\.elm$'                   && DETECTED_LANGS="${DETECTED_LANGS} elm"
+echo "${_found_exts}" | grep -qE '\.(erl|hrl)$'             && DETECTED_LANGS="${DETECTED_LANGS} erlang"
+echo "${_found_exts}" | grep -qE '\.jl$'                    && DETECTED_LANGS="${DETECTED_LANGS} julia"
+echo "${_found_exts}" | grep -qiE '\.[rR]$'                 && DETECTED_LANGS="${DETECTED_LANGS} r"
+echo "${_found_exts}" | grep -qE '\.(ml|mli)$'              && DETECTED_LANGS="${DETECTED_LANGS} ocaml"
+echo "${_found_exts}" | grep -qE '\.(pas|pp)$'              && DETECTED_LANGS="${DETECTED_LANGS} pascal"
+echo "${_found_exts}" | grep -qE '\.(f90|f95|f03)$'         && DETECTED_LANGS="${DETECTED_LANGS} fortran"
+echo "${_found_exts}" | grep -qE '\.(groovy|gvy)$'          && DETECTED_LANGS="${DETECTED_LANGS} groovy"
+echo "${_found_exts}" | grep -qE '\.sol$'                   && DETECTED_LANGS="${DETECTED_LANGS} solidity"
+echo "${_found_exts}" | grep -qE '\.nix$'                   && DETECTED_LANGS="${DETECTED_LANGS} nix"
+echo "${_found_exts}" | grep -qE '\.lean$'                  && DETECTED_LANGS="${DETECTED_LANGS} lean4"
+echo "${_found_exts}" | grep -qE '\.al$'                    && DETECTED_LANGS="${DETECTED_LANGS} al"
+echo "${_found_exts}" | grep -qE '\.(hlsl|glsl)$'           && DETECTED_LANGS="${DETECTED_LANGS} hlsl"
+echo "${_found_exts}" | grep -qE '\.wgsl$'                  && DETECTED_LANGS="${DETECTED_LANGS} wgsl"
+echo "${_found_exts}" | grep -qE '\.(yml|yaml)$'            && DETECTED_LANGS="${DETECTED_LANGS} yaml"
 
 # Merge with explicit override
 ALL_LANGS="${SERENA_LANGUAGES:-} ${DETECTED_LANGS}"
@@ -232,25 +270,79 @@ for lang in ${ALL_LANGS}; do
 				echo "::warning::Dart LSP skipped — dart SDK not found"
 			fi
 			;;
+		yaml)
+			echo "Installing YAML language server..."
+			npm install -g yaml-language-server --no-audit --no-fund 2>/dev/null || echo "::warning::YAML LSP install failed"
+			;;
+		elm)
+			echo "Installing Elm language server..."
+			npm install -g @elm-tooling/elm-language-server --no-audit --no-fund 2>/dev/null || echo "::warning::Elm LSP install failed"
+			;;
+		solidity)
+			echo "Installing Solidity language server..."
+			npm install -g @nomicfoundation/solidity-language-server --no-audit --no-fund 2>/dev/null || echo "::warning::Solidity LSP install failed"
+			;;
+		clojure)
+			echo "Installing Clojure language server..."
+			if command -v brew >/dev/null 2>&1; then
+				brew install clojure-lsp/brew/clojure-lsp-native 2>/dev/null || echo "::warning::Clojure LSP install failed"
+			else
+				echo "Language 'clojure' registered for Serena indexing (LSP requires manual install)."
+			fi
+			;;
+		haskell)
+			echo "Installing Haskell language server..."
+			if command -v ghcup >/dev/null 2>&1; then
+				ghcup install hls 2>/dev/null || echo "::warning::Haskell LSP install failed"
+			else
+				echo "Language 'haskell' registered for Serena indexing (LSP requires ghcup)."
+			fi
+			;;
+		ocaml)
+			echo "Installing OCaml language server..."
+			if command -v opam >/dev/null 2>&1; then
+				opam install ocaml-lsp-server -y 2>/dev/null || echo "::warning::OCaml LSP install failed"
+			else
+				echo "Language 'ocaml' registered for Serena indexing (LSP requires opam)."
+			fi
+			;;
+		r)
+			echo "Installing R language server..."
+			if command -v Rscript >/dev/null 2>&1; then
+				Rscript -e 'install.packages("languageserver", repos="https://cloud.r-project.org")' 2>/dev/null || echo "::warning::R LSP install failed"
+			else
+				echo "Language 'r' registered for Serena indexing (LSP requires R)."
+			fi
+			;;
+		nix)
+			echo "Installing Nix language server..."
+			if command -v nix >/dev/null 2>&1; then
+				nix profile install nixpkgs#nixd 2>/dev/null || echo "::warning::Nix LSP install failed"
+			else
+				echo "Language 'nix' registered for Serena indexing (LSP requires nix)."
+			fi
+			;;
 		kotlin)
-			echo "::warning::Kotlin LSP requires manual setup — skipping (language registered for Serena indexing)"
+			echo "Language 'kotlin' registered for Serena indexing (LSP requires manual setup)."
 			;;
 		csharp)
-			echo "::warning::C# LSP requires manual setup — skipping (language registered for Serena indexing)"
+			echo "Language 'csharp' registered for Serena indexing (LSP requires manual setup)."
 			;;
 		java)
-			echo "::warning::Java LSP requires manual setup — skipping (language registered for Serena indexing)"
+			echo "Language 'java' registered for Serena indexing (LSP requires manual setup)."
 			;;
 		scala)
-			echo "::warning::Scala LSP (Metals) requires manual setup — skipping (language registered for Serena indexing)"
+			echo "Language 'scala' registered for Serena indexing (LSP requires Metals — manual setup)."
 			;;
 		swift)
-			echo "::warning::Swift LSP requires Xcode/SourceKit — skipping (language registered for Serena indexing)"
+			echo "Language 'swift' registered for Serena indexing (LSP requires Xcode/SourceKit)."
 			;;
-		cpp|lua|elixir|perl|zig)
-			# These languages are registered in project.yml so Serena indexes
-			# their files. LSP install is either handled by Serena internally,
-			# requires complex setup, or uses system-installed tools.
+		*)
+			# Catch-all for languages that are registered in project.yml so
+			# Serena indexes their files. LSP install is either handled by
+			# Serena internally, requires complex setup, or uses system tools.
+			# Covers: cpp, lua, luau, elixir, perl, zig, fsharp, erlang,
+			# julia, pascal, fortran, groovy, lean4, al, hlsl, wgsl
 			echo "Language '${lang}' registered for Serena indexing (LSP may require manual setup)."
 			;;
 	esac
