@@ -141,7 +141,7 @@ jobs:
               echo "✓ Clarify phase completed — issue moved to planning"
               # Capture the clarify workflow run ID
               CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Clarif"; "i")) | select(.status == "completed")] | sort_by(.created_at) | last.id // empty' 2>/dev/null || echo "")
+                --jq '[.workflow_runs[] | select(.name | test("Clarif"; "i")) | select(.status == "completed")] | sort_by(.created_at) | .[0].id // empty' 2>/dev/null || echo "")
               echo "run_id=${CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
@@ -185,7 +185,7 @@ jobs:
             if echo "$LABELS" | grep -q 'ai:awaiting-approval'; then
               echo "✓ Plan phase completed — awaiting approval"
               PLAN_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.status == "completed")] | sort_by(.created_at) | last.id // empty' 2>/dev/null || echo "")
+                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.status == "completed")] | sort_by(.created_at) | .[0].id // empty' 2>/dev/null || echo "")
               echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
@@ -195,7 +195,7 @@ jobs:
             if echo "$LABELS" | grep -q 'ai:implementing'; then
               echo "✓ Plan phase completed with auto-approval — already implementing"
               PLAN_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.status == "completed")] | sort_by(.created_at) | last.id // empty' 2>/dev/null || echo "")
+                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.status == "completed")] | sort_by(.created_at) | .[0].id // empty' 2>/dev/null || echo "")
               echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=auto_approved" >> "$GITHUB_OUTPUT"
               exit 0
@@ -244,7 +244,7 @@ jobs:
             if [ -n "$PR_NUMBER" ]; then
               echo "✓ Implementation PR #${PR_NUMBER} created"
               IMPL_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.status == "completed")] | sort_by(.created_at) | last.id // empty' 2>/dev/null || echo "")
+                --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.status == "completed")] | sort_by(.created_at) | .[0].id // empty' 2>/dev/null || echo "")
               echo "run_id=${IMPL_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
@@ -374,6 +374,18 @@ jobs:
 
             # Fetch all jobs and their steps
             JOBS_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null || echo '{"jobs":[]}')
+
+            # Check if all jobs in this run were skipped (spurious re-trigger where
+            # the reusable workflow's job-level if: condition was false). This commonly
+            # happens when a comment event re-triggers internal-clarify.yml or
+            # internal-implement.yml but the reusable workflow skips the job.
+            TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
+            SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
+            if [ "$TOTAL_JOBS" -gt 0 ] && [ "$SKIPPED_JOBS" -eq "$TOTAL_JOBS" ]; then
+              echo "  │  ⊘ All ${TOTAL_JOBS} job(s) were skipped (spurious re-trigger) — OK"
+              echo "  └─"
+              return 0
+            fi
 
             # Iterate every step in every job
             STEP_COUNT=$(echo "$JOBS_JSON" | jq '[.jobs[].steps[]] | length')
