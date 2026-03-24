@@ -261,6 +261,11 @@ SERENA_GLOBAL_EOF
 # Codex CLI reads MCP servers from [mcp_servers.<name>] tables in config.toml,
 # NOT from a separate mcp.json file. Append to the existing config.toml that
 # the workflow creates earlier.
+#
+# IMPORTANT: Codex's process spawning does NOT work reliably with `uvx` as the
+# MCP server command. The `uvx` launcher adds a process indirection layer that
+# causes Codex MCP handshake timeouts. Instead, we resolve the actual `serena`
+# binary from the uvx cache (which was warmed in step 2) and use it directly.
 
 CODEX_CONFIG="${HOME}/.codex/config.toml"
 mkdir -p ~/.codex
@@ -269,41 +274,47 @@ if [ ! -f "${CODEX_CONFIG}" ]; then
 	touch "${CODEX_CONFIG}"
 fi
 
-# Resolve uvx to an absolute path so the Codex sandbox can find it
-# regardless of its PATH. This is the most common cause of
-# "mcp startup: no servers" — uvx is on PATH in the shell but not
-# inside the Codex sandbox environment.
-UVX_PATH="$(command -v uvx 2>/dev/null || true)"
-if [ -z "${UVX_PATH}" ]; then
-	echo "::warning::uvx not found in PATH — Serena MCP server may fail to start in Codex sandbox."
-	UVX_PATH="uvx"
-elif [ "${UVX_PATH#/}" = "${UVX_PATH}" ]; then
-	echo "::warning::uvx resolved to non-absolute path '${UVX_PATH}' — sandbox startup may fail."
+# Resolve the actual serena binary from the uvx cache.
+# The cache was warmed in step 2, so the binary should be available.
+# Using the direct binary avoids the uvx process indirection that causes
+# Codex MCP handshake timeouts ("mcp startup: no servers" / timeout).
+SERENA_BIN="$(uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" which serena 2>/dev/null || true)"
+if [ -z "${SERENA_BIN}" ] || [ ! -x "${SERENA_BIN}" ]; then
+	# Fallback: try to find the binary in the uvx cache
+	SERENA_BIN="$(find "${HOME}/.cache/uv" -name "serena" -type f -executable 2>/dev/null | head -1 || true)"
 fi
-echo "Resolved uvx path: ${UVX_PATH}"
+if [ -z "${SERENA_BIN}" ] || [ ! -x "${SERENA_BIN}" ]; then
+	warn_and_exit "Could not resolve serena binary path from uvx cache"
+fi
+echo "Resolved serena binary: ${SERENA_BIN}"
 
-# Build the env_vars list: forward critical environment variables so the
-# Codex sandbox subprocess can locate uvx dependencies and caches.
-# Without these, the sandbox strips PATH/HOME/UV_CACHE_DIR and the MCP
-# server process fails silently ("mcp startup: no servers").
-ENV_VARS_LINE='env_vars = ["PATH", "HOME", "TMPDIR"'
+# Build the [mcp_servers.serena.env] sub-table with explicit key=value pairs.
+# This is the canonical format that `codex mcp add --env` uses.
+# Forward critical environment variables so the Codex sandbox subprocess
+# can locate dependencies and caches.
+ENV_BLOCK='[mcp_servers.serena.env]'
+ENV_BLOCK="${ENV_BLOCK}\nHOME = \"${HOME}\""
+ENV_BLOCK="${ENV_BLOCK}\nPATH = \"${PATH}\""
+if [ -n "${TMPDIR:-}" ]; then
+	ENV_BLOCK="${ENV_BLOCK}\nTMPDIR = \"${TMPDIR}\""
+fi
 if [ -n "${UV_CACHE_DIR:-}" ]; then
-	ENV_VARS_LINE="${ENV_VARS_LINE}, \"UV_CACHE_DIR\""
+	ENV_BLOCK="${ENV_BLOCK}\nUV_CACHE_DIR = \"${UV_CACHE_DIR}\""
 fi
 if [ -n "${PYTHONDONTWRITEBYTECODE:-}" ]; then
-	ENV_VARS_LINE="${ENV_VARS_LINE}, \"PYTHONDONTWRITEBYTECODE\""
+	ENV_BLOCK="${ENV_BLOCK}\nPYTHONDONTWRITEBYTECODE = \"${PYTHONDONTWRITEBYTECODE}\""
 fi
-ENV_VARS_LINE="${ENV_VARS_LINE}]"
 
 cat >> "${CODEX_CONFIG}" <<MCP_EOF
 
 [mcp_servers.serena]
-command = "${UVX_PATH}"
-args = ["--from", "git+https://github.com/oraios/serena@${SERENA_VERSION}", "serena", "start-mcp-server", "--context", "${SERENA_CONTEXT}", "--mode", "one-shot", "--mode", "${SERENA_MODE}", "--project-from-cwd", "--enable-web-dashboard", "false", "--open-web-dashboard", "false"]
-${ENV_VARS_LINE}
+command = "${SERENA_BIN}"
+args = ["start-mcp-server", "--context", "${SERENA_CONTEXT}", "--mode", "one-shot", "--mode", "${SERENA_MODE}", "--project-from-cwd", "--enable-web-dashboard", "false", "--open-web-dashboard", "false"]
 startup_timeout_sec = 30
 tool_timeout_sec = 240
 required = true
+
+$(printf '%b' "${ENV_BLOCK}")
 MCP_EOF
 
 echo "Serena MCP server appended to ${CODEX_CONFIG}"
