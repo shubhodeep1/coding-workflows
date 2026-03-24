@@ -1065,16 +1065,24 @@ jobs:
             local attempt=1
 
             : > "${log_file}"
+
+            # Each reviewer gets its own CODEX_HOME to prevent MCP server
+            # conflicts (Serena, language servers) when running in parallel.
+            local reviewer_codex_home
+            reviewer_codex_home="$(mktemp -d /tmp/codex_home_reviewer.XXXXXX)"
+            cp -r "${CODEX_HOME}/." "${reviewer_codex_home}/"
+            export CODEX_HOME="${reviewer_codex_home}"
+
             while [ "${attempt}" -le 3 ]; do
               tmp_output="$(mktemp)"
               tmp_stderr="$(mktemp)"
               # Use heartbeat file per reviewer to track activity.
-              # IMPORTANT: writes use atomic rename (write to .tmp then mv)
-              # to avoid a race where the watchdog reads an empty file
+              # IMPORTANT: all writes use atomic rename (write to .tmp then mv)
+              # to avoid a race where the watchdog reads an empty/partial file
               # mid-truncate and computes now-0 = epoch → false idle kill.
               local hb_file
               hb_file="$(mktemp /tmp/heartbeat_reviewer.XXXXXX)"
-              date +%s > "${hb_file}"
+              printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
               local start_time
               start_time="$(date +%s)"
               local codex_pid_file
@@ -1122,10 +1130,13 @@ jobs:
               ) &
               local codex_bg_pid=$!
               echo "${codex_bg_pid}" > "${codex_pid_file}"
-              wait "${codex_bg_pid}" 2>/dev/null
-              local cmd_rc=$?
+              # Use || to prevent set -e from killing the worker subshell
+              # when codex exits non-zero. Without this, the entire retry
+              # loop and error handling are bypassed silently.
+              local cmd_rc=0
+              wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
 
-              kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null
+              kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
               rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
 
               if [ "${cmd_rc}" -eq 0 ]; then
@@ -1135,6 +1146,7 @@ jobs:
                   echo "success" > "${status_file}"
                   echo "Reviewer ${model} succeeded on attempt ${attempt}." | tee -a "${log_file}"
                   rm -f "${tmp_output}" "${tmp_stderr}"
+                  rm -rf "${reviewer_codex_home}" 2>/dev/null || true
                   return 0
                 fi
                 echo "Reviewer ${model} produced empty output on attempt ${attempt}." | tee -a "${log_file}"
@@ -1156,6 +1168,7 @@ jobs:
             echo "Reviewer ${model} failed after retries." > "${output_file}"
             echo "failed" > "${status_file}"
             echo "Reviewer ${model} failed after 3 attempts." | tee -a "${log_file}"
+            rm -rf "${reviewer_codex_home}" 2>/dev/null || true
             return 0
           }
 
