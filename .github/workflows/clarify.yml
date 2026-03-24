@@ -17,7 +17,7 @@ jobs:
       (github.event_name == 'issues' && github.event.action == 'opened') ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 120
     concurrency:
       # NOTE: cancel-in-progress: true means if a /reclarify comment arrives
       # while a clarification run is already in progress, the old run is killed
@@ -403,18 +403,28 @@ jobs:
             cat "${ISSUE_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
 
+          # Heartbeat-based timeout: kill only if no output for 15 min
+          source "${GITHUB_WORKSPACE}/scripts/heartbeat_exec.sh"
+          heartbeat_start --idle-timeout "${HEARTBEAT_IDLE_TIMEOUT:-900}" --max-wall "${HEARTBEAT_MAX_WALL:-7200}"
+
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex clarify attempt ${attempt}/${max_attempts}..."
-            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee "${RUNTIME_DIR}/codex_log.txt" >&2); then
+            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(heartbeat_tee "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex clarify succeeded on attempt ${attempt}."
                 break
               fi
               echo "::warning::Codex returned empty output on attempt ${attempt}."
             else
-              echo "::warning::Codex exited with code $? on attempt ${attempt}."
+              rc=$?
+              if [ "$rc" -eq 142 ]; then
+                echo "::error::Codex clarify killed — no output activity (idle timeout)."
+                heartbeat_stop
+                exit 1
+              fi
+              echo "::warning::Codex exited with code $rc on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$(( 10 * (2 ** (attempt - 1)) + RANDOM % 10 ))
@@ -422,9 +432,12 @@ jobs:
               sleep "${sleep_secs}"
             else
               echo "::error::Codex clarify failed after ${max_attempts} attempts."
+              heartbeat_stop
               exit 1
             fi
           done
+
+          heartbeat_stop
 
       - name: Write run summary
         if: always()
