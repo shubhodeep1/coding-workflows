@@ -38,6 +38,7 @@ jobs:
       MODEL_REASONING_EFFORT: xhigh
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'false' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
     steps:
       - name: Cache Codex CLI
@@ -45,13 +46,12 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ runner.tool_cache }}/codex
-          key: codex-v0.114.0
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          CODEX_VERSION="v0.114.0"
           npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
           # Persist to tool cache for future runs
           CODEX_BIN="$(which codex)"
@@ -74,6 +74,8 @@ jobs:
 
       - name: Install uv for Serena
         uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ vars.UV_VERSION || 'latest' }}
 
       - name: Fetch workflow support scripts
         env:
@@ -422,6 +424,25 @@ jobs:
             Skip straight to activate_project and then use tools directly.
           - Prefer get_symbols_overview and find_symbol over raw file reads.
           - Never read the same file region twice. Plan reads upfront.
+          - For large files (>5000 lines), use get_symbols_overview with depth=0 first to
+            get a high-level map, then drill into specific symbols with find_symbol.
+            Do NOT use depth=1+ on very large files — it will exceed character limits.
+          - When search_for_pattern returns "answer is too long", NARROW the query (target
+            a single function/class name or a specific subdirectory). Do NOT retry the same
+            broad pattern or fall back to shell grep/rg with equivalent patterns.
+
+          EXPLORATION STRATEGY (MANDATORY — prevents over-reading):
+          - When adding a new game/feature/module that follows existing patterns, study ONE
+            representative existing implementation end-to-end rather than reading all of them.
+            For example: to plan a new game, read the most structurally similar existing game
+            (its backend logic, template, JS, and relevant DB contracts) instead of reading
+            every game. Reference the representative in the plan so the implementer knows
+            which pattern to follow.
+          - For the representative, read: (1) its entry in the game/feature registry,
+            (2) its core logic function, (3) its template/frontend, (4) its autobet/auto
+            integration if applicable. Skip the others — they follow the same pattern.
+          - Only read additional games/features if the plan requires behavior that differs
+            from the representative.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
