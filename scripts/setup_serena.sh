@@ -363,8 +363,8 @@ SERENA_HEALTH_OK="false"
 for _health_attempt in $(seq 1 "${SERENA_HEALTH_MAX_RETRIES}"); do
 	echo "Validating Serena MCP server startup (attempt ${_health_attempt}/${SERENA_HEALTH_MAX_RETRIES})..."
 	HEALTH_EXIT=0
-	timeout 30s uvx --from "git+https://github.com/oraios/serena@${SERENA_VERSION}" \
-		serena start-mcp-server --context "${SERENA_CONTEXT}" --mode one-shot --mode "${SERENA_MODE}" \
+	timeout 30s "${SERENA_BIN}" \
+		start-mcp-server --context "${SERENA_CONTEXT}" --mode one-shot --mode "${SERENA_MODE}" \
 		--project-from-cwd --enable-web-dashboard false --open-web-dashboard false </dev/null >"${HEALTH_LOG}" 2>&1 || HEALTH_EXIT=$?
 	if [ "${HEALTH_EXIT}" -eq 0 ] || [ "${HEALTH_EXIT}" -eq 124 ]; then
 		# Exit 0 = clean exit; Exit 124 = timeout killed a still-running server (expected).
