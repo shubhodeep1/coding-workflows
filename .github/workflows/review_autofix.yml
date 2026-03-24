@@ -220,10 +220,35 @@ jobs:
         run: |
           set -euo pipefail
 
-          gh api repos/${{ github.repository }}/pulls/"${PR_NUMBER}" > "${PR_PAYLOAD_FILE}"
-          gh api --paginate repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments | jq -s 'add // []' > "${PR_ISSUE_COMMENTS_FILE}"
-          gh api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/reviews | jq -s 'add // []' > "${PR_REVIEWS_FILE}"
-          gh api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/comments | jq -s 'add // []' > "${PR_REVIEW_COMMENTS_FILE}"
+          # Retry wrapper for gh api calls to handle transient 5xx errors.
+          # Usage: gh_retry <output_file> [gh api args...]
+          # For --paginate endpoints that need jq post-processing, pipe the
+          # output through jq after calling this function.
+          gh_retry() {
+            local outfile="$1"; shift
+            local attempt max_attempts=4 delay=2
+            for attempt in $(seq 1 $max_attempts); do
+              if gh "$@" > "$outfile" 2>/tmp/gh_retry_stderr; then
+                return 0
+              fi
+              cat /tmp/gh_retry_stderr >&2
+              if [ "$attempt" -lt "$max_attempts" ]; then
+                echo "gh call failed (attempt ${attempt}/${max_attempts}), retrying in ${delay}s..." >&2
+                sleep "$delay"
+                delay=$((delay * 2))
+              fi
+            done
+            echo "gh call failed after ${max_attempts} attempts" >&2
+            return 1
+          }
+
+          gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+          gh_retry /tmp/gh_issue_comments_raw.json api --paginate repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments
+          jq -s 'add // []' /tmp/gh_issue_comments_raw.json > "${PR_ISSUE_COMMENTS_FILE}"
+          gh_retry /tmp/gh_reviews_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/reviews
+          jq -s 'add // []' /tmp/gh_reviews_raw.json > "${PR_REVIEWS_FILE}"
+          gh_retry /tmp/gh_review_comments_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/comments
+          jq -s 'add // []' /tmp/gh_review_comments_raw.json > "${PR_REVIEW_COMMENTS_FILE}"
 
           jq '{
             title: (.title // ""),
