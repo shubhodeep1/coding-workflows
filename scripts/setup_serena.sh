@@ -150,7 +150,7 @@ for lang in ${ALL_LANGS}; do
 			if command -v uv >/dev/null 2>&1; then
 				uv tool install python-lsp-server 2>/dev/null || echo "::warning::Python LSP install via uv failed"
 			else
-				pip install --break-system-packages python-lsp-server 2>/dev/null || echo "::warning::Python LSP install failed"
+				(pip install --break-system-packages python-lsp-server 2>/dev/null || pip install python-lsp-server 2>/dev/null) || echo "::warning::Python LSP install failed"
 			fi
 			;;
 		go)
