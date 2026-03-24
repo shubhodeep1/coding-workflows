@@ -181,10 +181,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          # Use search API to find open PRs that mention this issue (catches both
-          # cross-references and commit-message links, unlike the timeline API)
-          LINKED_PR_COUNT="$(gh pr list --repo "${{ github.repository }}" \
-            --search "#${ISSUE_NUMBER}" --state open --json number --jq 'length')"
+          # Use the issue timeline API to find PRs that are actually
+          # cross-referenced to this issue (not just text matches).
+          # The previous gh pr list --search approach produced false positives
+          # when unrelated PRs happened to mention the issue number.
+          LINKED_PR_COUNT="$(gh api --paginate \
+            "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline" \
+            --jq '
+              [.[]
+               | select(.event == "cross-referenced")
+               | select(.source.issue.pull_request != null)
+               | select(.source.issue.state == "open")
+              ] | length
+            ')"
           if [ "${LINKED_PR_COUNT}" -gt 0 ]; then
             echo "Issue #${ISSUE_NUMBER} already has at least one open PR. Skipping planning run."
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
