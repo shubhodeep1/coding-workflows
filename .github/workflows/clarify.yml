@@ -30,7 +30,7 @@ jobs:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
-      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'xhigh' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'medium' }}
 
     steps:
       - name: Log trigger context
@@ -50,6 +50,8 @@ jobs:
 
       - name: Install uv for Serena
         uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ vars.UV_VERSION || 'latest' }}
 
       - name: Install Codex CLI
         run: |
@@ -360,6 +362,18 @@ jobs:
              (e.g., a name in the issue doesn't match the name in the code).
           8. Do NOT write code.
           9. Do NOT propose implementation solutions.
+
+          ANSWER COMPATIBILITY (MANDATORY — prevents wasted planning runs):
+          - When designing multiple-choice questions, check whether any combinations of
+            answers across questions would be logically contradictory or mutually exclusive.
+          - If two options across different questions conflict (e.g., Q3:C requires >=5% edge
+            but Q4:C replicates tables with ~1% edge), you MUST either:
+            (a) Add an explicit note under the conflicting options warning the user, e.g.
+                "**Note:** incompatible with Q3:C — selecting both will require re-clarification", OR
+            (b) Restructure the questions to eliminate the conflict (e.g., merge them into one
+                question with combined options).
+          - The goal is to prevent the user from submitting answers that will just bounce back
+            for re-clarification during the planning phase, wasting a full planning run.
 
           Clarification format requirements (MANDATORY):
 
