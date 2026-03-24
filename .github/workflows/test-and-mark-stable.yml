@@ -309,6 +309,23 @@ jobs:
                   echo "Review run was cancelled — checking for newer run..."
                 fi
               fi
+
+              # While the run is still in_progress, probe job steps to detect
+              # early failure. The review workflow uses if:always() cleanup steps
+              # that keep the run in_progress long after the main work has died.
+              # Without this check the loop waits the full PHASE_TIMEOUT for
+              # cleanup/notification steps that don't affect the review result.
+              if [ "$RUN_STATUS" = "in_progress" ] && [ "$RUN_ID" != "unknown" ]; then
+                FAILED_STEPS=$(gh api "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
+                  --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "0")
+                if [ "$FAILED_STEPS" -gt 0 ]; then
+                  echo "  ⚠ Review run has ${FAILED_STEPS} failed step(s) — main work has failed, cleanup still running"
+                  echo "::warning::Review workflow has failed steps while cleanup is still in_progress"
+                  echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
+                  echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+              fi
             fi
 
             echo "  ... waiting (${ELAPSED}s / ${TIMEOUT_SECS}s)"
