@@ -7,6 +7,13 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 
 ## [Unreleased]
 
+### Added
+- `test-and-mark-stable.yml`: E2E smoke test workflow that exercises all pipeline phases
+  (clarify → plan → implement → review/edit) before marking a version stable. Creates a
+  test issue, polls each phase to completion, verifies success, cleans up, then proceeds
+  with the standard release process. Supports `skip_e2e`, `dry_run`, configurable
+  `phase_timeout`, and testing against external repos via `test_repo`.
+
 ## [v1.1.0] - 2026-03-22
 
 ### Fixed
