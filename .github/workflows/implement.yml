@@ -835,7 +835,7 @@ jobs:
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
 
       - name: Comment on issue failure
-        if: failure()
+        if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -846,11 +846,16 @@ jobs:
             gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            REASON="AI implementation workflow was cancelled/timed out for ${ISSUE_URL}. Run: ${RUN_URL}"
+          else
+            REASON="AI implementation workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
+          fi
           gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="AI implementation workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
+            -f body="${REASON}"
 
       - name: Telegram failure notification
-        if: failure()
+        if: failure() || cancelled()
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -864,7 +869,11 @@ jobs:
           fi
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          MSG="AI implementation workflow failed for issue ${ISSUE_URL}"
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            MSG="AI implementation workflow cancelled/timed out for issue ${ISSUE_URL}"
+          else
+            MSG="AI implementation workflow failed for issue ${ISSUE_URL}"
+          fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           RESPONSE="$(curl -sS -X POST \
@@ -877,7 +886,7 @@ jobs:
           fi
 
       - name: Exit safely
-        if: failure()
+        if: failure() || cancelled()
         run: exit 0
 
       - name: Cleanup temporary artifacts

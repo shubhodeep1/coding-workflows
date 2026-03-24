@@ -600,17 +600,22 @@ jobs:
           fi
 
       - name: Comment on issue failure
-        if: failure()
+        if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            REASON="AI clarification workflow was cancelled/timed out for ${ISSUE_URL}. Run: ${RUN_URL}"
+          else
+            REASON="AI clarification workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
+          fi
           gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="AI clarification workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
+            -f body="${REASON}"
 
       - name: Telegram failure notification
-        if: failure()
+        if: failure() || cancelled()
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -624,7 +629,11 @@ jobs:
           fi
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          MSG="AI clarification failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            MSG="AI clarification cancelled/timed out for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+          else
+            MSG="AI clarification failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+          fi
           MSG+=$'\n'
           MSG+="${ISSUE_URL}"
           MSG+=$'\n'
