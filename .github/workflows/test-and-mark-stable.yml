@@ -244,7 +244,7 @@ jobs:
             if [ -n "$PR_NUMBER" ]; then
               echo "✓ Implementation PR #${PR_NUMBER} created"
               IMPL_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.status == "completed")] | sort_by(.created_at) | .[0].id // empty' 2>/dev/null || echo "")
+                --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.status != "completed" or .conclusion != "skipped")] | sort_by(.created_at) | last.id // empty' 2>/dev/null || echo "")
               echo "run_id=${IMPL_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
