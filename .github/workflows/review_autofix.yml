@@ -34,7 +34,8 @@ env:
     qwen/qwen3.5-397b-a17b
     openai/gpt-5-mini
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
-  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW || 'xhigh' }}
+  REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
+  EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'high' }}
 
 jobs:
   codex-agent:
@@ -153,7 +154,7 @@ jobs:
             echo 'web_search = "disabled"'
             echo 'model_provider = "openrouter"'
             echo "model = \"${MODEL_EDITOR}\""
-              echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+              echo "model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\""
             echo
             echo '[model_providers.openrouter]'
             echo 'name = "OpenRouter"'
@@ -1192,6 +1193,12 @@ jobs:
               echo "(none)"
             fi
           } > "${REVIEWER_CONSENSUS_FILE}"
+
+      - name: Switch reasoning effort for editor
+        run: |
+          set -euo pipefail
+          sed -i "s/model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
+          echo "Updated reasoning effort from ${REVIEWER_REASONING_EFFORT} to ${EDITOR_REASONING_EFFORT} for editor phase"
 
       - name: Apply fixes with editor model
         run: |
