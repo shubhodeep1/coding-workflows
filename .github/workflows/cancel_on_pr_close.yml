@@ -32,6 +32,7 @@ jobs:
             | flatten}'
           queued_runs_json="$(
             gh api \
+              --method GET \
               "repos/${REPOSITORY}/actions/runs" \
               --paginate \
               -f status=queued \
@@ -40,6 +41,7 @@ jobs:
           )"
           in_progress_runs_json="$(
             gh api \
+              --method GET \
               "repos/${REPOSITORY}/actions/runs" \
               --paginate \
               -f status=in_progress \
