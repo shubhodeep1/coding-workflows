@@ -595,6 +595,30 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${PLAN_COMMENT_FILE}")"
 
+      - name: Telegram clarification notification
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          CHAT_ID="${TG_CHAT_ID:-}"
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
+            echo "Warning: Telegram clarification notification skipped (missing TG_BOT_SECRET or chat_id)"
+            exit 0
+          fi
+
+          MSG="Plan needs clarification for issue ${ISSUE_URL}"
+          RESPONSE="$(curl -sS -X POST \
+            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
+            --data-urlencode "text=${MSG}")"
+          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
+            echo "::warning::Telegram clarification notification failed: ${RESPONSE}"
+          fi
+
       - name: Post implementation plan
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
