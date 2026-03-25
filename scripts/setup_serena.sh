@@ -74,8 +74,13 @@ warn_and_exit() {
 	# required=true doesn't prevent Codex from starting at all.
 	CODEX_CFG="${HOME}/.codex/config.toml"
 	if [ -f "${CODEX_CFG}" ] && grep -q '\[mcp_servers\.serena\]' "${CODEX_CFG}"; then
-		# Delete from [mcp_servers.serena] to the next section header or EOF
-		sed -i '/^\[mcp_servers\.serena\]/,/^\[/{/^\[mcp_servers\.serena\]/d;/^\[/!d;}' "${CODEX_CFG}"
+		# Delete [mcp_servers.serena] AND its sub-tables (e.g. [mcp_servers.serena.env])
+		# up to the next non-serena section header or EOF.
+		awk '
+			/^\[mcp_servers\.serena/ { skip=1; next }
+			/^\[/ && !/^\[mcp_servers\.serena/ { skip=0 }
+			!skip
+		' "${CODEX_CFG}" > "${CODEX_CFG}.tmp" && mv "${CODEX_CFG}.tmp" "${CODEX_CFG}"
 		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
 	fi
 	rm -f "${SERENA_DEBUG_LOG}"
@@ -425,9 +430,9 @@ else
 	# Use awk to replace the languages: block in-place.
 	_NEW_LANGS="$(printf '%b' "${LANG_YAML}")"
 	awk -v new_langs="${_NEW_LANGS}" '
-		/^languages:/ { print; printf "%s", new_langs; skip=1; next }
-		skip && /^[^ ]/ { skip=0 }
-		skip && /^  - / { next }
+		/^languages:/ { print; printf "%s\n", new_langs; skip=1; next }
+		skip && /^[a-zA-Z_]/ { skip=0 }
+		skip { next }
 		!skip { print }
 	' .serena/project.yml > .serena/project.yml.tmp && mv .serena/project.yml.tmp .serena/project.yml
 	echo "Languages updated in .serena/project.yml: ${ALL_LANGS}"
