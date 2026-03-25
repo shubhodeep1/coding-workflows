@@ -1,9 +1,5 @@
 name: Codex PR Self-Healing Semantic Agent
 
-concurrency:
-  group: pr-autofix-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
-
 on:
   workflow_call:
     inputs:
@@ -41,6 +37,9 @@ jobs:
   codex-agent:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    concurrency:
+      group: pr-autofix-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
     if: ${{ github.event_name == 'workflow_dispatch' || (!github.event.pull_request.draft && !contains(github.event.pull_request.title || '', '[skip ai]') && !contains(github.event.pull_request.body || '', '[skip ai]')) }}
 
     env:
