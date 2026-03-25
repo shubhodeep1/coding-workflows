@@ -156,7 +156,7 @@ jobs:
           # repo is checked out and this repo's scripts/ directory is absent.
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
-          wf_source="${{ github.repository_owner }}/coding-workflows"
+          wf_source="shubhodeep1/coding-workflows"
           # ALWAYS fetch canonical scripts from coding-workflows, even if the
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
@@ -683,13 +683,20 @@ jobs:
 
           # Re-fetch git_ref_health_check.sh — the commit step deletes fetched
           # artifacts to keep them out of caller repos.
-          wf_source="${{ github.repository_owner }}/coding-workflows"
+          wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           gh api -H 'Accept: application/vnd.github.raw+json' \
             "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=stable" > scripts/git_ref_health_check.sh
           chmod +x scripts/git_ref_health_check.sh
 
+          trap 'rm -f scripts/git_ref_health_check.sh' EXIT
+          if [ ! -s scripts/git_ref_health_check.sh ] || ! head -1 scripts/git_ref_health_check.sh | grep -q '^#!'; then
+            echo "::error::Fetched git_ref_health_check.sh is empty or invalid"
+            exit 1
+          fi
+
           bash scripts/git_ref_health_check.sh repair
+          trap - EXIT
           rm -f scripts/git_ref_health_check.sh
 
           for attempt in 1 2 3; do
