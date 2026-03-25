@@ -427,7 +427,7 @@ jobs:
           _HEARTBEAT_START_TIME="$(date +%s)"
           _HB_IDLE="${HEARTBEAT_IDLE_TIMEOUT:-900}"
           _HB_WALL="${HEARTBEAT_MAX_WALL:-7200}"
-          heartbeat_touch() { [ -n "${HEARTBEAT_FILE}" ] && date +%s > "${HEARTBEAT_FILE}"; }
+          heartbeat_touch() { [ -n "${HEARTBEAT_FILE}" ] && printf '%s' "$(date +%s)" > "${HEARTBEAT_FILE}.tmp" && mv -f "${HEARTBEAT_FILE}.tmp" "${HEARTBEAT_FILE}" 2>/dev/null; }
           heartbeat_tee() {
             local outfile="${1:-}"
             if [ -n "$outfile" ]; then
@@ -438,9 +438,11 @@ jobs:
           }
           heartbeat_stop() {
             [ -n "${HEARTBEAT_WATCHDOG_PID:-}" ] && { kill "${HEARTBEAT_WATCHDOG_PID}" 2>/dev/null; wait "${HEARTBEAT_WATCHDOG_PID}" 2>/dev/null || true; }; HEARTBEAT_WATCHDOG_PID=""
-            [ -n "${HEARTBEAT_FILE:-}" ] && rm -f "${HEARTBEAT_FILE}"; HEARTBEAT_FILE=""
+            [ -n "${HEARTBEAT_FILE:-}" ] && rm -f "${HEARTBEAT_FILE}" "${HEARTBEAT_FILE}.tmp"; HEARTBEAT_FILE=""
           }
           ( while true; do sleep 10; now="$(date +%s)"; last="$(cat "${HEARTBEAT_FILE}" 2>/dev/null || echo "$now")"
+            # Guard against empty/corrupt reads from race condition
+            [[ "${last}" =~ ^[0-9]+$ ]] || last="${now}"
             [ $(( now - last )) -ge "${_HB_IDLE}" ] && echo "" >&2 && echo "::error::heartbeat: no output for $(( now - last ))s (limit: ${_HB_IDLE}s) — terminating" >&2 && kill -TERM "$$" 2>/dev/null && sleep 10 && kill -KILL "$$" 2>/dev/null && exit 142
             [ $(( now - _HEARTBEAT_START_TIME )) -ge "${_HB_WALL}" ] && echo "" >&2 && echo "::error::heartbeat: max wall time ${_HB_WALL}s exceeded — terminating" >&2 && kill -TERM "$$" 2>/dev/null && sleep 10 && kill -KILL "$$" 2>/dev/null && exit 143
           done ) &
