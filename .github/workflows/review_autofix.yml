@@ -1823,12 +1823,20 @@ jobs:
             git clean -f -d -- .github/workflows || true
           fi
 
-          # Remove ALL workflow-generated/fetched artifacts unconditionally so
-          # they are never committed to caller repos.
+          # Remove workflow-generated/fetched artifacts so they are not committed.
+          # This list must cover ALL files fetched from coding-workflows by ANY
+          # reusable workflow so that caller repos never accidentally commit them.
           rm -f ./pre_assembled_static.txt
-          rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-          rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
-          rm -rf .serena
+          for f in codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md; do
+            [ -n "$(git ls-files "${f}")" ] || rm -f "${f}"
+          done
+          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py generate_symbol_diff_summary.py; do
+            [ -n "$(git ls-files "scripts/${f}")" ] || rm -f "scripts/${f}"
+          done
+          # Remove .serena/ directory created by setup_serena.sh (if not already tracked)
+          if [ -d .serena ] && [ -z "$(git ls-files .serena)" ]; then
+            rm -rf .serena
+          fi
 
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
@@ -2113,12 +2121,20 @@ jobs:
             git checkout -- .github/workflows || true
           fi
 
-          # Remove ALL workflow-generated/fetched artifacts unconditionally so
-          # they are never committed to caller repos.
+          # Remove workflow-generated/fetched artifacts so they are not committed.
+          # This list must cover ALL files fetched from coding-workflows by ANY
+          # reusable workflow so that caller repos never accidentally commit them.
           rm -f ./pre_assembled_static.txt
-          rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-          rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
-          rm -rf .serena
+          for f in codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md; do
+            [ -n "$(git ls-files "${f}")" ] || rm -f "${f}"
+          done
+          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py generate_symbol_diff_summary.py; do
+            [ -n "$(git ls-files "scripts/${f}")" ] || rm -f "scripts/${f}"
+          done
+          # Remove .serena/ directory created by setup_serena.sh (if not already tracked)
+          if [ -d .serena ] && [ -z "$(git ls-files .serena)" ]; then
+            rm -rf .serena
+          fi
 
           if [ -n "$(git status --porcelain)" ]; then
             git config user.name "codex-bot"
