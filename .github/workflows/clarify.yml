@@ -346,7 +346,7 @@ jobs:
             2. find_symbol("handle_request", "src/main_module.py")  ← jump to exact function
             3. shell: sed -n '120,140p' src/main_module.py  ← read only the 20 lines you need
             4. search_for_pattern("EDGE_CONFIG|rate_limit|payout", "src/main_module.py")  ← one query, specific terms
-            5. shell: rg -l 'ClassName' src/ && sed -n '50,70p' src/found_file.py  ← batched with &&
+            5. shell: FILE=$(rg -l 'ClassName' src/ | head -1) && sed -n '50,70p' "$FILE"  ← batched with &&
           Rule of thumb: 1 activate + 1 get_symbols_overview + 2-3 find_symbol/search
           calls should cover most clarification needs. If you're past 10 tool calls,
           you are likely over-exploring.
