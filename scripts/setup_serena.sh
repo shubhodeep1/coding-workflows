@@ -353,18 +353,18 @@ done
 # Per-repo overrides via repository variables
 SERENA_IGNORED_DIRS="${SERENA_IGNORED_DIRS:-}"
 
+# Build languages list for YAML
+LANG_YAML=""
+for lang in ${ALL_LANGS}; do
+	LANG_YAML="${LANG_YAML}  - ${lang}\n"
+done
+if [ -z "${LANG_YAML}" ]; then
+	LANG_YAML="  - typescript\n  - python\n"
+fi
+
 if [ ! -f .serena/project.yml ]; then
 	echo "Creating .serena/project.yml..."
 	mkdir -p .serena
-
-	# Build languages list for YAML
-	LANG_YAML=""
-	for lang in ${ALL_LANGS}; do
-		LANG_YAML="${LANG_YAML}  - ${lang}\n"
-	done
-	if [ -z "${LANG_YAML}" ]; then
-		LANG_YAML="  - typescript\n  - python\n"
-	fi
 
 	READ_ONLY="false"
 	if [ "${SERENA_MODE}" = "planning" ]; then
@@ -417,7 +417,20 @@ symbol_info_budget: 10
 initial_prompt: "Skip onboarding. Do not run serena.onboarding(). Proceed directly to the task."
 SERENA_PROJECT_EOF
 else
-	echo ".serena/project.yml already exists — using existing config."
+	echo ".serena/project.yml already exists — syncing languages from auto-detection."
+	# The caller repo may ship a project.yml with a stale or incomplete
+	# languages list (e.g. only "python" when the repo also has .js/.ts/.yml
+	# files). Replace the languages block with the freshly detected set so
+	# Serena indexes all file types and provides accurate symbol resolution.
+	# Use awk to replace the languages: block in-place.
+	_NEW_LANGS="$(printf '%b' "${LANG_YAML}")"
+	awk -v new_langs="${_NEW_LANGS}" '
+		/^languages:/ { print; printf "%s", new_langs; skip=1; next }
+		skip && /^[^ ]/ { skip=0 }
+		skip && /^  - / { next }
+		!skip { print }
+	' .serena/project.yml > .serena/project.yml.tmp && mv .serena/project.yml.tmp .serena/project.yml
+	echo "Languages updated in .serena/project.yml: ${ALL_LANGS}"
 fi
 
 # ── 5. Create global Serena config ───────────────────────────────────────────
