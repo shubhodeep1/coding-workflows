@@ -335,16 +335,18 @@ jobs:
 
           EFFICIENT TOOL CALL EXAMPLES (study before starting):
           WASTEFUL (burns budget on broad, overlapping queries):
-            1. search_for_pattern("game", "db/contracts")  ← broad term, huge result
-            2. search_for_pattern("@app.route('/roulette')", "ft.games/app.py")  ← too specific, misses
-            3. search_for_pattern("@app.route('/(roulette|rps|highlow)')", "ft.games/app.py")  ← retry with different regex
-            4. list_dir("db/contracts")  ← unnecessary when issue is UI-only
-            5. shell: sed -n '1,220p' ft.games/AGENTS.md  ← reads 220 lines when 30 would suffice
+            1. search_for_pattern("user", "src")  ← broad term on broad directory, huge result
+            2. search_for_pattern("@app.route('/foo')", "app.py")  ← too-literal regex, misses dynamic routes
+            3. Same search retried with a slightly different regex  ← overlapping retry wastes a call
+            4. list_dir on directories unrelated to the issue  ← unnecessary exploration
+            5. shell: sed -n '1,200p' some_file  ← reading 200 lines when 20-30 would suffice
+            6. Searching db/schema/contract files for a pure UI/frontend issue  ← wrong scope
           EFFICIENT (targeted, batched, minimal):
-            1. activate_project → get_symbols_overview("ft.games/app.py")  ← see all functions at once
-            2. find_symbol("api_bet", "ft.games/app.py")  ← jump to exact function
-            3. shell: sed -n '3420,3440p' ft.games/app.py  ← read only the 20 lines you need
-            4. search_for_pattern("EDGE_STD|CRASH_HOUSE_EDGE|payout_table", "ft.games/app.py")  ← one query, specific terms
+            1. activate_project → get_symbols_overview("src/main_module.py")  ← see all functions at once
+            2. find_symbol("handle_request", "src/main_module.py")  ← jump to exact function
+            3. shell: sed -n '120,140p' src/main_module.py  ← read only the 20 lines you need
+            4. search_for_pattern("EDGE_CONFIG|rate_limit|payout", "src/main_module.py")  ← one query, specific terms
+            5. shell: rg -l 'ClassName' src/ && sed -n '50,70p' src/found_file.py  ← batched with &&
           Rule of thumb: 1 activate + 1 get_symbols_overview + 2-3 find_symbol/search
           calls should cover most clarification needs. If you're past 10 tool calls,
           you are likely over-exploring.
