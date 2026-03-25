@@ -417,7 +417,18 @@ symbol_info_budget: 10
 initial_prompt: "Skip onboarding. Do not run serena.onboarding(). Proceed directly to the task."
 SERENA_PROJECT_EOF
 else
-	echo ".serena/project.yml already exists — using existing config."
+	echo ".serena/project.yml already exists — syncing languages from auto-detection."
+	_NEW_LANGS="$(for lang in ${ALL_LANGS}; do printf '  - %s\n' "${lang}"; done)"
+	if [ -z "${_NEW_LANGS}" ]; then
+		_NEW_LANGS="$(printf '  - %s\n  - %s\n' typescript python)"
+	fi
+	awk -v new_langs="${_NEW_LANGS}" '
+		/^languages:/ { print; printf "%s", new_langs; skip=1; next }
+		skip && /^[^ ]/ { skip=0 }
+		skip && /^  - / { next }
+		!skip { print }
+	' .serena/project.yml > .serena/project.yml.tmp && mv .serena/project.yml.tmp .serena/project.yml
+	echo "Languages updated in .serena/project.yml: ${ALL_LANGS}"
 fi
 
 # ── 5. Create global Serena config ───────────────────────────────────────────
