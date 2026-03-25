@@ -1823,12 +1823,15 @@ jobs:
             git clean -f -d -- .github/workflows || true
           fi
 
-          # Remove ALL workflow-generated/fetched artifacts unconditionally so
-          # they are never committed to caller repos.
-          rm -f ./pre_assembled_static.txt
-          rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-          rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
-          rm -rf .serena
+          # Remove workflow-generated/fetched artifacts so they are never
+          # committed to caller repos.  Skip when running on coding-workflows
+          # itself — these files are actual source code there, not artifacts.
+          if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
+            rm -f ./pre_assembled_static.txt
+            rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
+            rm -rf .serena
+          fi
 
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
@@ -2113,12 +2116,15 @@ jobs:
             git checkout -- .github/workflows || true
           fi
 
-          # Remove ALL workflow-generated/fetched artifacts unconditionally so
-          # they are never committed to caller repos.
-          rm -f ./pre_assembled_static.txt
-          rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-          rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
-          rm -rf .serena
+          # Remove workflow-generated/fetched artifacts so they are never
+          # committed to caller repos.  Skip when running on coding-workflows
+          # itself — these files are actual source code there, not artifacts.
+          if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
+            rm -f ./pre_assembled_static.txt
+            rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
+            rm -rf .serena
+          fi
 
           if [ -n "$(git status --porcelain)" ]; then
             git config user.name "codex-bot"
