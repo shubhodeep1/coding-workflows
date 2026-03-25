@@ -423,11 +423,12 @@ else
 		_NEW_LANGS="$(printf '  - %s\n  - %s\n' typescript python)"
 	fi
 	awk -v new_langs="${_NEW_LANGS}" '
-		/^languages:/ { print; printf "%s", new_langs; skip=1; next }
-		skip && /^[^ ]/ { skip=0 }
-		skip && /^  - / { next }
+		/^languages:[[:space:]]*\[/ { print "languages:"; print new_langs; skip=1; next }
+		/^languages:/ { print; print new_langs; skip=1; next }
+		skip && /^[[:space:]]*-[[:space:]]/ { next }
+		skip && /^[^[:space:]-]/ { skip=0 }
 		!skip { print }
-	' .serena/project.yml > .serena/project.yml.tmp && mv .serena/project.yml.tmp .serena/project.yml
+	' .serena/project.yml > .serena/project.yml.tmp && mv .serena/project.yml.tmp .serena/project.yml || warn_and_exit "Failed to sync languages in .serena/project.yml"
 	echo "Languages updated in .serena/project.yml: ${ALL_LANGS}"
 fi
 
