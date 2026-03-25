@@ -684,6 +684,10 @@ jobs:
           mkdir -p scripts
           gh api -H 'Accept: application/vnd.github.raw+json' \
             "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=stable" > scripts/git_ref_health_check.sh
+          if [ ! -s scripts/git_ref_health_check.sh ] || ! head -1 scripts/git_ref_health_check.sh | grep -q '^#!/'; then
+            echo "::error::Fetched git_ref_health_check.sh is empty or invalid; aborting push step"
+            exit 1
+          fi
           chmod +x scripts/git_ref_health_check.sh
 
           bash scripts/git_ref_health_check.sh repair
