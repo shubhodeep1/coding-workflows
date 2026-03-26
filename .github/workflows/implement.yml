@@ -157,6 +157,19 @@ jobs:
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
           wf_source="${{ github.repository_owner }}/coding-workflows"
+
+          # Track files fetched by the workflow so cleanup only removes what
+          # we created — never files that already belong to the caller repo.
+          # On coding-workflows itself these files are actual source code, so
+          # the manifest stays empty and cleanup becomes a no-op.
+          FETCHED_MANIFEST="${RUNTIME_DIR}/fetched_files.txt"
+          : > "${FETCHED_MANIFEST}"
+          echo "FETCHED_MANIFEST=${FETCHED_MANIFEST}" >> "$GITHUB_ENV"
+          is_self_repo="false"
+          if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then
+            is_self_repo="true"
+          fi
+
           # ALWAYS fetch canonical scripts from coding-workflows, even if the
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
@@ -165,6 +178,9 @@ jobs:
             gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
             chmod +x "scripts/${f}"
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "scripts/${f}" >> "${FETCHED_MANIFEST}"
+            fi
           done
           # Always use the canonical instruction files from coding-workflows
           # (must not be gated on is_external — caller repos that ship their
@@ -173,8 +189,18 @@ jobs:
             if [ ! -f "${f}" ]; then
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
+              if [ "${is_self_repo}" = "false" ]; then
+                echo "${f}" >> "${FETCHED_MANIFEST}"
+              fi
             fi
           done
+
+          # Fetch canonical agents.md from coding-workflows into the runtime
+          # directory. This is combined with the caller repo's own agents.md
+          # (if any) during prompt assembly — the caller's copy is never
+          # overwritten or deleted.
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/agents.md?ref=stable" > "${RUNTIME_DIR}/agents_canonical.md" 2>/dev/null || true
 
       - name: Fetch issue metadata
         if: env.SKIP_IMPLEMENT != 'true'
@@ -363,6 +389,21 @@ jobs:
             echo "=== AI PIPELINE ==="
             cat ai_pipeline.md
             echo
+            # Include agents.md context: canonical from coding-workflows plus
+            # the caller repo's own agents.md (if present). Both are included
+            # so the model has the full picture.
+            if [ -f "${RUNTIME_DIR}/agents_canonical.md" ] || [ -f agents.md ]; then
+              echo "=== AGENTS.MD ==="
+              if [ -f "${RUNTIME_DIR}/agents_canonical.md" ]; then
+                cat "${RUNTIME_DIR}/agents_canonical.md"
+                echo
+              fi
+              if [ -f agents.md ]; then
+                echo "=== REPO-SPECIFIC AGENTS.MD ==="
+                cat agents.md
+                echo
+              fi
+            fi
           } > ./pre_assembled_static.txt
 
       - name: Run Codex implementation
@@ -390,8 +431,8 @@ jobs:
 
           Your task is to implement the approved implementation plan.
 
-          IMPORTANT: The system instructions and AI pipeline spec are provided ABOVE in
-          this prompt. Do NOT read pre_assembled_static.txt or any of the individual
+          IMPORTANT: The system instructions, AI pipeline spec, and agents.md are provided
+          ABOVE in this prompt. Do NOT read pre_assembled_static.txt or any of the individual
           source files — they are already loaded.
 
           The implementation context (issue description, clarification answers, approved
@@ -647,15 +688,16 @@ jobs:
             exit 0
           fi
 
-          # Remove workflow-generated/fetched artifacts so they are never
-          # committed to caller repos.  Skip when running on coding-workflows
-          # itself — these files are actual source code there, not artifacts.
-          if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
-            rm -f ./pre_assembled_static.txt
-            rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
-            rm -rf .serena
+          # Remove only workflow-generated/fetched artifacts so they are never
+          # committed to caller repos.  The manifest tracks exactly which files
+          # were fetched — caller-repo files that were never touched are safe.
+          rm -f ./pre_assembled_static.txt
+          if [ -f "${FETCHED_MANIFEST}" ]; then
+            while IFS= read -r fetched_file; do
+              [ -n "${fetched_file}" ] && rm -f "${fetched_file}"
+            done < "${FETCHED_MANIFEST}"
           fi
+          rm -rf .serena
 
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
