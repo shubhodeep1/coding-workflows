@@ -73,7 +73,7 @@ warn_and_exit() {
 	# Remove the Serena MCP server block from Codex config so that
 	# required=true doesn't prevent Codex from starting at all.
 	CODEX_CFG="${HOME}/.codex/config.toml"
-	if [ -f "${CODEX_CFG}" ] && grep -q '\[mcp_servers\.serena\]' "${CODEX_CFG}"; then
+	if [ -f "${CODEX_CFG}" ] && grep -q '^\[mcp_servers\.serena' "${CODEX_CFG}"; then
 		# Delete [mcp_servers.serena] AND its sub-tables (e.g. [mcp_servers.serena.env])
 		# up to the next non-serena section header or EOF.
 		awk '
@@ -431,7 +431,7 @@ else
 	_NEW_LANGS="$(printf '%b' "${LANG_YAML}")"
 	awk -v new_langs="${_NEW_LANGS}" '
 		/^languages:/ { print; printf "%s\n", new_langs; skip=1; next }
-		skip && /^[a-zA-Z_]/ { skip=0 }
+		skip && /^[^[:space:]]/ { skip=0 }
 		skip { next }
 		!skip { print }
 	' .serena/project.yml > .serena/project.yml.tmp && mv .serena/project.yml.tmp .serena/project.yml
