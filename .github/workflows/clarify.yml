@@ -300,10 +300,14 @@ jobs:
           - Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
             Skip straight to activate_project and then use tools directly.
           - Prefer get_symbols_overview and find_symbol over raw file reads.
+          - LARGE FILES (>5000 lines): Skip get_symbols_overview entirely — it will
+            exceed character limits and waste a tool call. Use shell rg with | head -n N
+            first to locate relevant functions, then use find_symbol or targeted sed reads.
           - Never read the same file region twice. Plan reads upfront.
-          - Serena search responses are truncated at ~29,000 characters. If a result
-            appears truncated, refine the query or narrow scope — do NOT retry the
-            same query or fall back to shell grep with the same patterns.
+          - Serena search responses are truncated at ~29,000 characters. If
+            get_symbols_overview is truncated, retry ONCE with max_answer_chars=29000
+            before falling back to shell. Do NOT retry search_for_pattern — narrow
+            scope instead. Never fall back to shell grep/rg with the same patterns.
           - If Serena tools are completely unavailable (startup failure), fall back to
             shell grep/rg once per search. Do not attempt Serena calls after a failure.
           - NARROW SEARCH SCOPE: When using search_for_pattern, target a specific
@@ -316,7 +320,8 @@ jobs:
           - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
             request large ranges speculatively. Use Serena symbol tools or targeted line
             ranges (e.g. sed -n '10,30p') instead of full-file reads.
-          - Never read the same file region twice. Plan your reads upfront.
+          - Never read the same file region twice. Plan your reads upfront. When reading
+            multiple nearby ranges, merge them into ONE wider range instead of separate calls.
           - Prefer Serena MCP tools (get_symbols_overview, find_symbol) over raw file reads
             when available — they return only relevant symbols with far fewer tokens.
           - When a Serena search hits its character limit, do NOT fall back to shell grep/rg
@@ -324,6 +329,11 @@ jobs:
           - Aim to keep total tool calls (MCP + shell exec combined) under TOOL_CALL_BUDGET.
             The budget is a guideline to prevent waste, not a hard cap.
           - Batch shell searches with && or ;.
+          - When searching for multiple terms (e.g., game names, route patterns), batch
+            into ONE shell rg call with alternation (rg 'term1|term2|term3') rather than
+            making separate Serena find_file or search_for_pattern calls per term.
+          - After a Serena search returns empty results, do NOT retry with a slightly
+            different regex. Switch to shell rg with broader patterns instead.
           - Do NOT map the full implementation surface. Only inspect code to the extent
             needed to identify genuine ambiguities that would block implementation.
           - Do NOT emit progress/status messages (e.g. "I've parsed the issue…"). Output
@@ -341,6 +351,8 @@ jobs:
             4. list_dir on directories unrelated to the issue  ← unnecessary exploration
             5. shell: sed -n '1,200p' some_file  ← reading 200 lines when 20-30 would suffice
             6. Searching db/schema/contract files for a pure UI/frontend issue  ← wrong scope
+            7. sed -n '100,200p' f then sed -n '180,250p' f  ← overlapping ranges; use sed -n '100,250p' once
+            8. 4× find_file("*term1*"), find_file("*term2*")…  ← use one rg 'term1|term2|…' call instead
           EFFICIENT (targeted, batched, minimal):
             1. activate_project → get_symbols_overview("src/main_module.py")  ← see all functions at once
             2. find_symbol("handle_request", "src/main_module.py")  ← jump to exact function
@@ -360,6 +372,9 @@ jobs:
             * Whether to keep existing storage alongside new integrations
             * Minor format choices (SVG vs PNG icon, inline vs file)
             * Code organization / file structure
+            * Feature phasing (include feature X at launch vs follow-up issue)
+          - Remove obviously-wrong answer choices. Options that contradict your codebase
+            findings waste the user's reading time and add confusion.
           - DO ask about:
             * Ambiguous scope (which pages/components are affected)
             * Conflicting information (e.g., names that don't match between issue and code)
