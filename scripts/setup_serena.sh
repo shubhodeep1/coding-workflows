@@ -425,7 +425,7 @@ else
 	# Use awk to replace the languages: block in-place.
 	_NEW_LANGS="$(printf '%b' "${LANG_YAML}")"
 	awk -v new_langs="${_NEW_LANGS}" '
-		/^languages:/ { print; printf "%s", new_langs; skip=1; next }
+		/^languages:/ { print; printf "%s\n", new_langs; skip=1; next }
 		skip && /^[^ ]/ { skip=0 }
 		skip && /^  - / { next }
 		!skip { print }
