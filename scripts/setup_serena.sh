@@ -582,22 +582,6 @@ if [ "${SERENA_HEALTH_OK}" != "true" ]; then
 	warn_and_exit "Serena MCP server failed to start after ${SERENA_HEALTH_MAX_RETRIES} attempts — check output above for details"
 fi
 
-# ── 8b. Post-activation keepalive advisory ────────────────────────────────
-# Serena MCP connections can silently drop after initial activation (observed
-# as 0ms failures on list_dir/get_symbols_overview while activate_project
-# succeeds). Increase the tool_timeout and add a longer startup_timeout to
-# give the language servers time to fully index before the first real call.
-# Also set required=false so that transient Serena failures cause graceful
-# fallback to shell commands instead of hard Codex errors.
-CODEX_CONFIG="${HOME}/.codex/config.toml"
-if [ -f "${CODEX_CONFIG}" ] && grep -q '\[mcp_servers\.serena\]' "${CODEX_CONFIG}"; then
-	# Bump startup_timeout to give LSPs time to index after activation
-	sed -i 's/startup_timeout_sec = 30/startup_timeout_sec = 60/' "${CODEX_CONFIG}"
-	# Switch to required=false so Serena failures degrade gracefully
-	sed -i 's/required = true/required = false/' "${CODEX_CONFIG}"
-	echo "Serena MCP config hardened: startup_timeout=60s, required=false (graceful fallback on failure)."
-fi
-
 # ── 9. Debug diagnostics ────────────────────────────────────────────────────
 # Print key diagnostic info to CI logs for troubleshooting "no servers" issues.
 echo "--- Serena setup diagnostics ---"
