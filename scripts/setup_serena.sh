@@ -423,9 +423,11 @@ else
 	# files). Replace the languages block with the freshly detected set so
 	# Serena indexes all file types and provides accurate symbol resolution.
 	# Use awk to replace the languages: block in-place.
+	# Note: command substitution strips trailing newlines, so we append \n
+	# to ensure the last language entry doesn't merge with the next YAML key.
 	_NEW_LANGS="$(printf '%b' "${LANG_YAML}")"
 	awk -v new_langs="${_NEW_LANGS}" '
-		/^languages:/ { print; printf "%s", new_langs; skip=1; next }
+		/^languages:/ { print; printf "%s\n", new_langs; skip=1; next }
 		skip && /^[^ ]/ { skip=0 }
 		skip && /^  - / { next }
 		!skip { print }
