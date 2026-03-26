@@ -69,6 +69,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
+          # Planning is read-only — shallow clone is sufficient and faster.
+          # Implementation workflows use fetch-depth: 0 for full history.
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
@@ -91,7 +93,9 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh; do
+          # Only fetch scripts actually used by the plan workflow.
+          # git_ref_health_check.sh is only needed by implement/edit workflows.
+          for f in setup_serena.sh; do
             gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
             chmod +x "scripts/${f}"
@@ -364,6 +368,23 @@ jobs:
           # across all runs, so the provider can cache it and charge reduced rates
           # for subsequent requests. Bundling everything into one file defeats
           # prefix caching because the dynamic issue context changes every run.
+          #
+          # Large docs (README.md, agents.md) are truncated to keep the prompt
+          # lean — the planner can always read the full file via tool calls if
+          # needed. This typically saves 30-50% of static prefix tokens.
+          MAX_DOC_LINES="${MAX_STATIC_DOC_LINES:-150}"
+          truncate_doc() {
+            local file="$1"
+            local total
+            total="$(wc -l < "$file")"
+            if [ "$total" -gt "$MAX_DOC_LINES" ]; then
+              head -n "$MAX_DOC_LINES" "$file"
+              echo ""
+              echo "[... truncated — ${total} lines total. Use tool calls to read specific sections if needed.]"
+            else
+              cat "$file"
+            fi
+          }
           {
             echo "=== SYSTEM INSTRUCTIONS ==="
             cat codex_system_instructions.md
@@ -372,13 +393,13 @@ jobs:
             cat ai_pipeline.md
             echo
             if [ -f agents.md ]; then
-              echo "=== AGENTS.MD ==="
-              cat agents.md
+              echo "=== AGENTS.MD (summary — read full file via tools if needed) ==="
+              truncate_doc agents.md
               echo
             fi
             if [ -f README.md ]; then
-              echo "=== README.MD ==="
-              cat README.md
+              echo "=== README.MD (summary — read full file via tools if needed) ==="
+              truncate_doc README.md
               echo
             fi
           } > ./pre_assembled_static.txt
@@ -432,17 +453,20 @@ jobs:
             broad pattern or fall back to shell grep/rg with equivalent patterns.
 
           EXPLORATION STRATEGY (MANDATORY — prevents over-reading):
-          - When adding a new game/feature/module that follows existing patterns, study ONE
-            representative existing implementation end-to-end rather than reading all of them.
-            For example: to plan a new game, read the most structurally similar existing game
-            (its backend logic, template, JS, and relevant DB contracts) instead of reading
-            every game. Reference the representative in the plan so the implementer knows
-            which pattern to follow.
-          - For the representative, read: (1) its entry in the game/feature registry,
-            (2) its core logic function, (3) its template/frontend, (4) its autobet/auto
-            integration if applicable. Skip the others — they follow the same pattern.
-          - Only read additional games/features if the plan requires behavior that differs
-            from the representative.
+          - When adding a new feature/module/component that follows existing patterns, study
+            ONE representative existing implementation end-to-end rather than reading all of
+            them. Pick the most structurally similar existing module (e.g. to add a new API
+            endpoint, read one existing endpoint's handler, route, tests, and schema — not
+            every endpoint). Reference the representative in the plan so the implementer
+            knows which pattern to follow.
+          - For the representative, read: (1) its registry/config entry, (2) its core logic,
+            (3) its frontend/template/UI if applicable, (4) any integration hooks (auto-play,
+            webhooks, queues, etc.). Skip the rest — they follow the same pattern.
+          - Only read additional modules if the plan requires behavior that differs from the
+            representative.
+          - Before starting exploration, list the specific questions you need answered by
+            reading code, then read ONLY what answers those questions. Do not explore
+            speculatively.
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
@@ -540,9 +564,12 @@ jobs:
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex planning attempt ${attempt}/${max_attempts}..."
+            # stdout → file only (no tee to log — prevents interleaving plan text with status messages)
+            # stderr → heartbeat_tee for watchdog + CI log visibility
             if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(heartbeat_tee "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-                echo "Codex planning succeeded on attempt ${attempt}."
+                PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"
+                echo "Codex planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."
                 break
               fi
               echo "::warning::Codex returned empty output on attempt ${attempt}."
@@ -723,6 +750,10 @@ jobs:
           normalized_flag="$(printf '%s' "${AUTO_IMPLEMENT_ON_CLEAR_PLAN:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
           case "${normalized_flag}" in
             1|true|yes|on)
+              # Brief pause so the plan comment is fully indexed by GitHub before
+              # the auto-approval comment triggers the implement workflow. Without
+              # this, the implement workflow may see stale comment state.
+              sleep 3
               gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
                 -f body=$'/approved [auto-approved-by-plan]\n\nAuto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled.'
               echo "auto_approved=true" >> "$GITHUB_OUTPUT"
