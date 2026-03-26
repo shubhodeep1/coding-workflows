@@ -368,23 +368,6 @@ jobs:
           # across all runs, so the provider can cache it and charge reduced rates
           # for subsequent requests. Bundling everything into one file defeats
           # prefix caching because the dynamic issue context changes every run.
-          #
-          # Large docs (README.md, agents.md) are truncated to keep the prompt
-          # lean — the planner can always read the full file via tool calls if
-          # needed. This typically saves 30-50% of static prefix tokens.
-          MAX_DOC_LINES="${MAX_STATIC_DOC_LINES:-150}"
-          truncate_doc() {
-            local file="$1"
-            local total
-            total="$(wc -l < "$file")"
-            if [ "$total" -gt "$MAX_DOC_LINES" ]; then
-              head -n "$MAX_DOC_LINES" "$file"
-              echo ""
-              echo "[... truncated — ${total} lines total. Use tool calls to read specific sections if needed.]"
-            else
-              cat "$file"
-            fi
-          }
           {
             echo "=== SYSTEM INSTRUCTIONS ==="
             cat codex_system_instructions.md
@@ -393,13 +376,13 @@ jobs:
             cat ai_pipeline.md
             echo
             if [ -f agents.md ]; then
-              echo "=== AGENTS.MD (summary — read full file via tools if needed) ==="
-              truncate_doc agents.md
+              echo "=== AGENTS.MD ==="
+              cat agents.md
               echo
             fi
             if [ -f README.md ]; then
-              echo "=== README.MD (summary — read full file via tools if needed) ==="
-              truncate_doc README.md
+              echo "=== README.MD ==="
+              cat README.md
               echo
             fi
           } > ./pre_assembled_static.txt
