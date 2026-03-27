@@ -69,11 +69,16 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py codex_model_catalog.json; do
+          for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py; do
             gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
             chmod +x "scripts/${f}"
           done
+          # Model catalog: try stable first, fall back to local copy from checkout
+          if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=stable" > "scripts/codex_model_catalog.json" 2>/dev/null; then
+            echo "Model catalog not on stable tag yet; using local copy."
+          fi
           # Always use the canonical instruction files from coding-workflows
           # (must be outside the if-block so they're fetched even when the
           # caller repo ships its own scripts/ directory)
