@@ -75,16 +75,18 @@ warn_and_exit() {
 	# doesn't prevent Codex from starting at all.
 	CODEX_CFG="${HOME}/.codex/config.toml"
 	if [ -f "${CODEX_CFG}" ] && grep -q '\[mcp_servers\.serena' "${CODEX_CFG}"; then
-		# Use awk to cleanly remove [mcp_servers.serena] and all its
-		# sub-tables (e.g. [mcp_servers.serena.env]) while preserving
-		# every other section.
-		awk '
+		cp "${CODEX_CFG}" "${CODEX_CFG}.bak" 2>/dev/null || true
+		if awk '
 			/^\[mcp_servers\.serena\]/ { skip=1; next }
 			/^\[mcp_servers\.serena\./ { skip=1; next }
 			/^\[/ && !/^\[mcp_servers\.serena/ { skip=0 }
 			!skip { print }
-		' "${CODEX_CFG}" > "${CODEX_CFG}.tmp" && mv "${CODEX_CFG}.tmp" "${CODEX_CFG}"
-		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
+		' "${CODEX_CFG}" > "${CODEX_CFG}.tmp" && mv "${CODEX_CFG}.tmp" "${CODEX_CFG}"; then
+			rm -f "${CODEX_CFG}.bak"
+			echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
+		else
+			mv "${CODEX_CFG}.bak" "${CODEX_CFG}" 2>/dev/null || true
+		fi
 	fi
 	rm -f "${SERENA_DEBUG_LOG}"
 	exit 0
@@ -430,13 +432,11 @@ else
 	# languages list (e.g. only "python" when the repo also has .js/.ts/.yml
 	# files). Replace the languages block with the freshly detected set so
 	# Serena indexes all file types and provides accurate symbol resolution.
-	#
 	# The awk script replaces everything between `languages:` and the next
 	# top-level key (non-indented, non-blank, non-comment line) with the
-	# new language entries. It preserves the blank separator line between
-	# sections, and skips all indented content (list items, comments) that
-	# belonged to the old languages block.
+	# new language entries, skipping all old block content.
 	_NEW_LANGS="$(printf '%b' "${LANG_YAML}")"
+	cp .serena/project.yml .serena/project.yml.bak 2>/dev/null || true
 	awk -v new_langs="${_NEW_LANGS}" '
 		/^languages:/ { print; printf "%s\n", new_langs; skip=1; next }
 		skip && /^[^ #]/ && !/^$/ { skip=0 }
@@ -444,7 +444,7 @@ else
 		!skip { print }
 	' .serena/project.yml > .serena/project.yml.tmp && mv .serena/project.yml.tmp .serena/project.yml
 	# Validate the result is parseable YAML; restore original on failure.
-	if command -v python3 >/dev/null 2>&1; then
+	if command -v python3 >/dev/null 2>&1 && python3 -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('yaml') else 1)" >/dev/null 2>&1; then
 		if ! python3 -c "
 import yaml, sys
 try:
@@ -454,9 +454,12 @@ except Exception as e:
     sys.exit(1)
 " 2>/dev/null; then
 			echo "::warning::Language sync produced invalid YAML; restoring original .serena/project.yml."
-			git checkout -- .serena/project.yml 2>/dev/null || true
+			mv .serena/project.yml.bak .serena/project.yml 2>/dev/null || git checkout -- .serena/project.yml 2>/dev/null || true
 		fi
+	else
+		echo "::warning::PyYAML not available; skipping .serena/project.yml validation."
 	fi
+	rm -f .serena/project.yml.bak
 	echo "Languages updated in .serena/project.yml: ${ALL_LANGS}"
 fi
 
