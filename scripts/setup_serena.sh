@@ -70,12 +70,20 @@ warn_and_exit() {
 		tail -50 "${SERENA_DEBUG_LOG}" >&2 || true
 		echo "--- End Serena debug log ---"
 	fi
-	# Remove the Serena MCP server block from Codex config so that
-	# required=true doesn't prevent Codex from starting at all.
+	# Remove ALL Serena MCP server blocks (including sub-tables like
+	# [mcp_servers.serena.env]) from Codex config so that required=true
+	# doesn't prevent Codex from starting at all.
 	CODEX_CFG="${HOME}/.codex/config.toml"
-	if [ -f "${CODEX_CFG}" ] && grep -q '\[mcp_servers\.serena\]' "${CODEX_CFG}"; then
-		# Delete from [mcp_servers.serena] to the next section header or EOF
-		sed -i '/^\[mcp_servers\.serena\]/,/^\[/{/^\[mcp_servers\.serena\]/d;/^\[/!d;}' "${CODEX_CFG}"
+	if [ -f "${CODEX_CFG}" ] && grep -q '\[mcp_servers\.serena' "${CODEX_CFG}"; then
+		# Use awk to cleanly remove [mcp_servers.serena] and all its
+		# sub-tables (e.g. [mcp_servers.serena.env]) while preserving
+		# every other section.
+		awk '
+			/^\[mcp_servers\.serena\]/ { skip=1; next }
+			/^\[mcp_servers\.serena\./ { skip=1; next }
+			/^\[/ && !/^\[mcp_servers\.serena/ { skip=0 }
+			!skip { print }
+		' "${CODEX_CFG}" > "${CODEX_CFG}.tmp" && mv "${CODEX_CFG}.tmp" "${CODEX_CFG}"
 		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
 	fi
 	rm -f "${SERENA_DEBUG_LOG}"
@@ -426,12 +434,19 @@ else
 	# Note: command substitution strips trailing newlines, so we append \n
 	# to ensure the last language entry doesn't merge with the next YAML key.
 	_NEW_LANGS="$(printf '%b' "${LANG_YAML}")"
+	cp .serena/project.yml .serena/project.yml.bak 2>/dev/null || true
 	awk -v new_langs="${_NEW_LANGS}" '
 		/^languages:/ { print; printf "%s\n", new_langs; skip=1; next }
-		skip && /^[^ ]/ { skip=0 }
-		skip && /^  - / { next }
+		skip && /^[^ #]/ && !/^$/ { skip=0 }
+		skip { next }
 		!skip { print }
 	' .serena/project.yml > .serena/project.yml.tmp && mv .serena/project.yml.tmp .serena/project.yml
+	if ! grep -q '^languages:$' .serena/project.yml || ! grep -q '^  - ' .serena/project.yml; then
+		echo "::warning::Language sync produced invalid YAML shape; restoring original .serena/project.yml."
+		mv .serena/project.yml.bak .serena/project.yml 2>/dev/null || git checkout -- .serena/project.yml 2>/dev/null || true
+	else
+		rm -f .serena/project.yml.bak
+	fi
 	echo "Languages updated in .serena/project.yml: ${ALL_LANGS}"
 fi
 
