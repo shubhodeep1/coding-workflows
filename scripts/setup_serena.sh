@@ -70,12 +70,17 @@ warn_and_exit() {
 		tail -50 "${SERENA_DEBUG_LOG}" >&2 || true
 		echo "--- End Serena debug log ---"
 	fi
-	# Remove the Serena MCP server block from Codex config so that
+	# Remove all Serena MCP server blocks from Codex config so that
 	# required=true doesn't prevent Codex from starting at all.
 	CODEX_CFG="${HOME}/.codex/config.toml"
-	if [ -f "${CODEX_CFG}" ] && grep -q '\[mcp_servers\.serena\]' "${CODEX_CFG}"; then
-		# Delete from [mcp_servers.serena] to the next section header or EOF
-		sed -i '/^\[mcp_servers\.serena\]/,/^\[/{/^\[mcp_servers\.serena\]/d;/^\[/!d;}' "${CODEX_CFG}"
+	if [ -f "${CODEX_CFG}" ] && grep -q '\[mcp_servers\.serena' "${CODEX_CFG}"; then
+		# Remove [mcp_servers.serena] and [mcp_servers.serena.*] tables.
+		awk '
+			/^\[mcp_servers\.serena\]/ { skip=1; next }
+			/^\[mcp_servers\.serena\./ { skip=1; next }
+			/^\[/ && !/^\[mcp_servers\.serena/ { skip=0 }
+			!skip { print }
+		' "${CODEX_CFG}" > "${CODEX_CFG}.tmp" && mv "${CODEX_CFG}.tmp" "${CODEX_CFG}"
 		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
 	fi
 	rm -f "${SERENA_DEBUG_LOG}"
