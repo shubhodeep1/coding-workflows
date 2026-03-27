@@ -74,9 +74,15 @@ jobs:
               "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
             chmod +x "scripts/${f}"
           done
-          # Model catalog: try stable first, fall back to local copy from checkout
-          if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=stable" > "scripts/codex_model_catalog.json" 2>/dev/null; then
+          # Model catalog: try stable first, fall back to local copy from checkout.
+          # Write to a temp file first so the redirect doesn't clobber the
+          # local copy when the gh api call fails (the file doesn't exist on
+          # the stable tag yet).
+          if gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=stable" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
+            mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
+          else
+            rm -f "scripts/codex_model_catalog.json.tmp"
             echo "Model catalog not on stable tag yet; using local copy."
           fi
           # Always use the canonical instruction files from coding-workflows
