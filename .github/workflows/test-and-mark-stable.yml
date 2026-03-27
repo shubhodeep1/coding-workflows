@@ -337,8 +337,13 @@ jobs:
                     --jq '.jobs[0].id // empty' 2>/dev/null || echo "")
                   if [ -n "$JOB_ID" ]; then
                     LOG_CONTENT=$(gh api "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" 2>/dev/null || echo "")
-                    SUCCEEDED=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* succeeded" || echo "0")
-                    FAILED_R=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* failed after" || echo "0")
+                    SUCCEEDED=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* succeeded" || true)
+                    FAILED_R=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* failed after" || true)
+                    # Sanitize: grep -c may produce empty output on binary/corrupt logs
+                    SUCCEEDED="${SUCCEEDED:-0}"; SUCCEEDED="${SUCCEEDED##*$'\n'}"
+                    FAILED_R="${FAILED_R:-0}"; FAILED_R="${FAILED_R##*$'\n'}"
+                    [[ "$SUCCEEDED" =~ ^[0-9]+$ ]] || SUCCEEDED=0
+                    [[ "$FAILED_R" =~ ^[0-9]+$ ]] || FAILED_R=0
                     TOTAL_DONE=$((SUCCEEDED + FAILED_R))
                     # Check: succeeded > 50% of finished reviewers, and at least 3 succeeded
                     if [ "$SUCCEEDED" -ge 3 ] && [ $((SUCCEEDED * 2)) -gt "$TOTAL_DONE" ]; then
