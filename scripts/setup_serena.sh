@@ -70,20 +70,12 @@ warn_and_exit() {
 		tail -50 "${SERENA_DEBUG_LOG}" >&2 || true
 		echo "--- End Serena debug log ---"
 	fi
-	# Remove ALL Serena MCP server blocks (including sub-tables like
-	# [mcp_servers.serena.env]) from Codex config so that required=true
-	# doesn't prevent Codex from starting at all.
+	# Remove the Serena MCP server block from Codex config so that
+	# required=true doesn't prevent Codex from starting at all.
 	CODEX_CFG="${HOME}/.codex/config.toml"
-	if [ -f "${CODEX_CFG}" ] && grep -q '\[mcp_servers\.serena' "${CODEX_CFG}"; then
-		# Use awk to cleanly remove [mcp_servers.serena] and all its
-		# sub-tables (e.g. [mcp_servers.serena.env]) while preserving
-		# every other section.
-		awk '
-			/^\[mcp_servers\.serena\]/ { skip=1; next }
-			/^\[mcp_servers\.serena\./ { skip=1; next }
-			/^\[/ && !/^\[mcp_servers\.serena/ { skip=0 }
-			!skip { print }
-		' "${CODEX_CFG}" > "${CODEX_CFG}.tmp" && mv "${CODEX_CFG}.tmp" "${CODEX_CFG}"
+	if [ -f "${CODEX_CFG}" ] && grep -q '\[mcp_servers\.serena\]' "${CODEX_CFG}"; then
+		# Delete from [mcp_servers.serena] to the next section header or EOF
+		sed -i '/^\[mcp_servers\.serena\]/,/^\[/{/^\[mcp_servers\.serena\]/d;/^\[/!d;}' "${CODEX_CFG}"
 		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
 	fi
 	rm -f "${SERENA_DEBUG_LOG}"
@@ -430,33 +422,16 @@ else
 	# languages list (e.g. only "python" when the repo also has .js/.ts/.yml
 	# files). Replace the languages block with the freshly detected set so
 	# Serena indexes all file types and provides accurate symbol resolution.
-	#
-	# The awk script replaces everything between `languages:` and the next
-	# top-level key (non-indented, non-blank, non-comment line) with the
-	# new language entries. It preserves the blank separator line between
-	# sections, and skips all indented content (list items, comments) that
-	# belonged to the old languages block.
+	# Use awk to replace the languages: block in-place.
+	# Note: command substitution strips trailing newlines, so we append \n
+	# to ensure the last language entry doesn't merge with the next YAML key.
 	_NEW_LANGS="$(printf '%b' "${LANG_YAML}")"
 	awk -v new_langs="${_NEW_LANGS}" '
 		/^languages:/ { print; printf "%s\n", new_langs; skip=1; next }
-		skip && /^[^ #]/ && !/^$/ { skip=0 }
-		skip { next }
+		skip && /^[^ ]/ { skip=0 }
+		skip && /^  - / { next }
 		!skip { print }
 	' .serena/project.yml > .serena/project.yml.tmp && mv .serena/project.yml.tmp .serena/project.yml
-	# Validate the result is parseable YAML; restore original on failure.
-	if command -v python3 >/dev/null 2>&1; then
-		if ! python3 -c "
-import yaml, sys
-try:
-    yaml.safe_load(open('.serena/project.yml'))
-except Exception as e:
-    print(f'YAML validation failed: {e}', file=sys.stderr)
-    sys.exit(1)
-" 2>/dev/null; then
-			echo "::warning::Language sync produced invalid YAML; restoring original .serena/project.yml."
-			git checkout -- .serena/project.yml 2>/dev/null || true
-		fi
-	fi
 	echo "Languages updated in .serena/project.yml: ${ALL_LANGS}"
 fi
 
