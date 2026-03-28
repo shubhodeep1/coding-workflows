@@ -415,7 +415,7 @@ jobs:
 
       - name: Detect smoke test and tune LLM settings
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
@@ -431,7 +431,7 @@ jobs:
 
           # Check linked issue title (PR body often contains "issue #N" or issue URL)
           if [ "$IS_SMOKE" = "false" ]; then
-            ISSUE_NUM=$(echo "${PR_BODY}" | grep -oP '(?:issues/|issue\s*#)(\d+)' | head -1 | grep -oP '\d+' || true)
+            ISSUE_NUM=$(echo "${PR_BODY}" | grep -Eo 'issues/[0-9]+|issue[[:space:]]*#[0-9]+|#[0-9]+' | grep -Eo '[0-9]+' | head -1 || true)
             if [ -n "$ISSUE_NUM" ]; then
               ISSUE_TITLE=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' 2>/dev/null || echo "")
               if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
