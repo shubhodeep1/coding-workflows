@@ -67,6 +67,10 @@ jobs:
           INPUT_VERSION="${{ inputs.version_tag }}"
 
           if [ -n "$INPUT_VERSION" ]; then
+            if [[ ! "$INPUT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Provided version '${INPUT_VERSION}' is invalid; must match vX.Y.Z"
+              exit 1
+            fi
             echo "Using user-provided version: ${INPUT_VERSION}"
             echo "version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
             exit 0
@@ -690,6 +694,7 @@ jobs:
     needs: [resolve-version, e2e-smoke-test]
     if: >-
       always() &&
+      needs.resolve-version.result == 'success' &&
       (needs.e2e-smoke-test.result == 'success' || needs.e2e-smoke-test.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 5
