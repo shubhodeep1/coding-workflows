@@ -1102,10 +1102,12 @@ jobs:
 
           {
             echo "SYSTEM INSTRUCTIONS (MANDATORY):"
-            echo "Read pre_assembled_static.txt FIRST — it contains the unattended system"
+            echo "Read ./pre_assembled_static.txt FIRST (in the repository root, NOT under"
+            echo "/tmp or the runtime directory) — it contains the unattended system"
             echo "instructions, codex system instructions (code-style/safety/MongoDB rules),"
             echo "agents.md, and README.md pre-assembled into one file (constant across runs,"
             echo "cached by the LLM provider). Follow these before any review work."
+            echo "Example command: cat ./pre_assembled_static.txt"
             echo
             echo "${PROMPT_ARTIFACT_PATH_HINT}"
             echo
@@ -1640,10 +1642,12 @@ jobs:
           prompt_tmp="$(mktemp)"
           {
             echo "SYSTEM INSTRUCTIONS (MANDATORY):"
-            echo "Read pre_assembled_static.txt FIRST — it contains the unattended system"
+            echo "Read ./pre_assembled_static.txt FIRST (in the repository root, NOT under"
+            echo "/tmp or the runtime directory) — it contains the unattended system"
             echo "instructions, codex system instructions (code-style/safety/MongoDB rules),"
             echo "agents.md, and README.md pre-assembled into one file (constant across runs,"
             echo "cached by the LLM provider). Follow these before any editing work."
+            echo "Example command: cat ./pre_assembled_static.txt"
             echo
             echo "${PROMPT_ARTIFACT_PATH_HINT}"
             echo
@@ -1656,39 +1660,67 @@ jobs:
 
           rm -f "${EDITOR_SUMMARY_FILE}"
 
-          # ── Heartbeat-based timeout for editor (inlined) ──
-          HEARTBEAT_FILE="$(mktemp /tmp/heartbeat.XXXXXX)"
-          date +%s > "${HEARTBEAT_FILE}"
-          _HEARTBEAT_START_TIME="$(date +%s)"
+          # ── Heartbeat-based timeout for editor (per-attempt, kills only codex) ──
           _HB_IDLE="${HEARTBEAT_IDLE_TIMEOUT:-900}"
           _HB_WALL="${HEARTBEAT_MAX_WALL:-10800}"
-          heartbeat_touch() { [ -n "${HEARTBEAT_FILE}" ] && printf '%s' "$(date +%s)" > "${HEARTBEAT_FILE}.tmp" && mv -f "${HEARTBEAT_FILE}.tmp" "${HEARTBEAT_FILE}" 2>/dev/null; }
-          heartbeat_tee() {
-            local outfile="${1:-}"
-            if [ -n "$outfile" ]; then
-              while IFS= read -r line || [ -n "$line" ]; do heartbeat_touch; printf '%s\n' "$line"; printf '%s\n' "$line" >> "$outfile"; done
-            else
-              while IFS= read -r line || [ -n "$line" ]; do heartbeat_touch; printf '%s\n' "$line"; done
-            fi
-          }
-          heartbeat_stop() {
-            [ -n "${HEARTBEAT_WATCHDOG_PID:-}" ] && { kill "${HEARTBEAT_WATCHDOG_PID}" 2>/dev/null; wait "${HEARTBEAT_WATCHDOG_PID}" 2>/dev/null || true; }; HEARTBEAT_WATCHDOG_PID=""
-            [ -n "${HEARTBEAT_FILE:-}" ] && rm -f "${HEARTBEAT_FILE}" "${HEARTBEAT_FILE}.tmp"; HEARTBEAT_FILE=""
-          }
-          ( while true; do sleep 10; now="$(date +%s)"; last="$(cat "${HEARTBEAT_FILE}" 2>/dev/null || echo "$now")"
-            # Guard against empty/corrupt reads from race condition
-            [[ "${last}" =~ ^[0-9]+$ ]] || last="${now}"
-            [ $(( now - last )) -ge "${_HB_IDLE}" ] && echo "" >&2 && echo "::error::heartbeat: no output for $(( now - last ))s (limit: ${_HB_IDLE}s) — terminating" >&2 && kill -TERM "$$" 2>/dev/null && sleep 10 && kill -KILL "$$" 2>/dev/null && exit 142
-            [ $(( now - _HEARTBEAT_START_TIME )) -ge "${_HB_WALL}" ] && echo "" >&2 && echo "::error::heartbeat: max wall time ${_HB_WALL}s exceeded — terminating" >&2 && kill -TERM "$$" 2>/dev/null && sleep 10 && kill -KILL "$$" 2>/dev/null && exit 143
-          done ) &
-          HEARTBEAT_WATCHDOG_PID=$!
-          echo "heartbeat: watchdog started (idle=${_HB_IDLE}s, max_wall=${_HB_WALL}s, pid=${HEARTBEAT_WATCHDOG_PID})"
 
           attempt=1
           while [ "${attempt}" -le 3 ]; do
             tmp_output="$(mktemp)"
             tmp_err="$(mktemp)"
-            if codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${EDITOR_PROMPT_FILE}")" > "${tmp_output}" 2> >(heartbeat_tee "${tmp_err}" >/dev/null); then
+
+            # Per-attempt heartbeat file and watchdog (mirrors reviewer pattern)
+            local_hb_file="$(mktemp /tmp/heartbeat_editor.XXXXXX)"
+            printf '%s' "$(date +%s)" > "${local_hb_file}.tmp" && mv -f "${local_hb_file}.tmp" "${local_hb_file}"
+            local_start_time="$(date +%s)"
+            codex_pid_file="$(mktemp /tmp/codex_pid_editor.XXXXXX)"
+
+            # Background watchdog — kills only the codex process, not $$
+            (
+              while true; do
+                sleep 10
+                now="$(date +%s)"
+                last="$(cat "${local_hb_file}" 2>/dev/null || echo "$now")"
+                [[ "${last}" =~ ^[0-9]+$ ]] || last="${now}"
+                if [ $(( now - last )) -ge "${_HB_IDLE}" ]; then
+                  echo "::error::heartbeat: editor attempt ${attempt} — no output for $(( now - last ))s (limit: ${_HB_IDLE}s) — terminating codex" >&2
+                  cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+                  if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+                  rm -f "${local_hb_file}"
+                  exit 142
+                fi
+                if [ $(( now - local_start_time )) -ge "${_HB_WALL}" ]; then
+                  echo "::error::heartbeat: editor attempt ${attempt} — max wall time ${_HB_WALL}s exceeded — terminating codex" >&2
+                  cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+                  if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+                  rm -f "${local_hb_file}"
+                  exit 143
+                fi
+              done
+            ) &
+            local_wd_pid=$!
+            echo "heartbeat: editor attempt ${attempt} watchdog started (idle=${_HB_IDLE}s, max_wall=${_HB_WALL}s, pid=${local_wd_pid})"
+
+            # Run codex in background subshell so we can capture its PID
+            (
+              exec codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${EDITOR_PROMPT_FILE}")"
+            ) > "${tmp_output}" 2> >(
+              while IFS= read -r line || [ -n "$line" ]; do
+                printf '%s' "$(date +%s)" > "${local_hb_file}.tmp" && mv -f "${local_hb_file}.tmp" "${local_hb_file}" 2>/dev/null
+                printf '%s\n' "$line" >> "${tmp_err}"
+              done
+            ) &
+            codex_bg_pid=$!
+            echo "${codex_bg_pid}" > "${codex_pid_file}"
+
+            cmd_rc=0
+            wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
+
+            # Clean up this attempt's watchdog
+            kill "${local_wd_pid}" 2>/dev/null; wait "${local_wd_pid}" 2>/dev/null || true
+            rm -f "${local_hb_file}" "${local_hb_file}.tmp" "${codex_pid_file}"
+
+            if [ "${cmd_rc}" -eq 0 ]; then
               cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
               if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints" "${tmp_output}"; then
                 reviewer_validation_ok=true
@@ -1778,8 +1810,6 @@ jobs:
             attempt=$((attempt + 1))
             sleep 2
           done
-
-          heartbeat_stop
 
           cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
           Changes made:
