@@ -414,14 +414,33 @@ jobs:
           echo "BASE_BRANCH=${BASE_REF}" >> "$GITHUB_ENV"
 
       - name: Detect smoke test and tune LLM settings
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
           PR_BODY=$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")
 
-          # Detect E2E smoke test PRs by title or linked issue title
+          IS_SMOKE=false
+
+          # Direct match on PR title/body
           if echo "${PR_TITLE}" | grep -qi '\[E2E Smoke Test\]' \
              || echo "${PR_BODY}" | grep -qi '\[E2E Smoke Test\]'; then
+            IS_SMOKE=true
+          fi
+
+          # Check linked issue title (PR body often contains "issue #N" or issue URL)
+          if [ "$IS_SMOKE" = "false" ]; then
+            ISSUE_NUM=$(echo "${PR_BODY}" | grep -oP '(?:issues/|issue\s*#)(\d+)' | head -1 | grep -oP '\d+' || true)
+            if [ -n "$ISSUE_NUM" ]; then
+              ISSUE_TITLE=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' 2>/dev/null || echo "")
+              if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+                IS_SMOKE=true
+              fi
+            fi
+          fi
+
+          if [ "$IS_SMOKE" = "true" ]; then
             echo "🔬 Smoke test PR detected — switching to low reasoning effort and reduced reviewer set"
             echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
