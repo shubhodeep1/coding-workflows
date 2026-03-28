@@ -1668,7 +1668,7 @@ jobs:
           while [ "${attempt}" -le 3 ]; do
             tmp_output="$(mktemp)"
             tmp_err="$(mktemp)"
-            if codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${EDITOR_PROMPT_FILE}")" > "${tmp_output}" 2>"${tmp_err}"; then
+            if timeout 3300 codex exec --model "${MODEL_EDITOR}" --full-auto < "${EDITOR_PROMPT_FILE}" > "${tmp_output}" 2>"${tmp_err}"; then
               cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
               if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints" "${tmp_output}"; then
                 reviewer_validation_ok=true
