@@ -506,7 +506,7 @@ jobs:
         id: retrigger_guard
         run: |
           set -euo pipefail
-          HEAD_MSG="$(git log -1 --format='%s' HEAD)"
+          HEAD_MSG="$(git log -1 --format='%s' HEAD 2>/dev/null || true)"
           if echo "${HEAD_MSG}" | grep -q '^\[ai-autofix\]'; then
             echo "Head commit is an autofix commit — skipping review to avoid re-trigger loop."
             echo "is_autofix_retrigger=true" >> "$GITHUB_OUTPUT"
@@ -2413,7 +2413,7 @@ jobs:
             fi
             echo
             echo "Validation files changed:"
-            if [ "${did_validation_commit:-false}" = "true" ] || [ "$(cat "$GITHUB_OUTPUT" 2>/dev/null | grep did_validation_commit | tail -1 | cut -d= -f2)" = "true" ]; then
+            if [ "${{ steps.validation_commit.outputs.did_validation_commit }}" = "true" ]; then
               git diff-tree --no-commit-id --name-only -r HEAD | sed 's/^/- /'
             else
               echo "- none"
