@@ -1,0 +1,3 @@
+status: ok
+workflow: e2e-smoke-test
+updated-by: ai-pipeline
