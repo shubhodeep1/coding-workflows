@@ -40,3 +40,57 @@ jobs:
     with:
       allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
     secrets: inherit
+
+  # When the review is skipped (autofix commit detected), the reusable
+  # workflow never runs, so its "ready to merge" labeling and Telegram
+  # notification are never reached.  This job fills that gap.
+  post-autofix:
+    needs: [check-skip]
+    if: needs.check-skip.outputs.should_skip == 'true'
+    runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Mark linked issues ready to merge
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          ISSUE_NUMBERS="$(gh api graphql \
+            -f owner="${REPOSITORY%/*}" \
+            -f name="${REPOSITORY#*/}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+
+          if [ -z "${ISSUE_NUMBERS}" ]; then
+            echo "No linked issues found for PR #${PR_NUMBER}."
+            exit 0
+          fi
+
+          while IFS= read -r issue_number; do
+            [ -n "${issue_number}" ] || continue
+            echo "Setting ai:ready-to-merge on issue #${issue_number}"
+            gh issue edit "${issue_number}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
+            gh issue edit "${issue_number}" --add-label 'ai:ready-to-merge'
+          done <<< "${ISSUE_NUMBERS}"
+
+      - name: Telegram notification
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+            echo "Telegram credentials not configured; skipping notification."
+            exit 0
+          fi
+
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
+          MSG="$(printf 'PR autofix applied — ready to merge\nPR: %s' "${PR_URL}")"
+          curl -sS -X POST \
+            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${TG_CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
+            --data-urlencode "text=${MSG}"

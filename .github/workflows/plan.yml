@@ -516,40 +516,10 @@ jobs:
             cat "${PLANNING_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
 
-          # ── Heartbeat-based timeout (inlined — reusable workflows run in caller's workspace) ──
-          HEARTBEAT_FILE="$(mktemp /tmp/heartbeat.XXXXXX)"
-          date +%s > "${HEARTBEAT_FILE}"
-          _HEARTBEAT_START_TIME="$(date +%s)"
-          _HB_IDLE="${HEARTBEAT_IDLE_TIMEOUT:-900}"
-          _HB_WALL="${HEARTBEAT_MAX_WALL:-7200}"
-          heartbeat_touch() { [ -n "${HEARTBEAT_FILE}" ] && printf '%s' "$(date +%s)" > "${HEARTBEAT_FILE}.tmp" && mv -f "${HEARTBEAT_FILE}.tmp" "${HEARTBEAT_FILE}" 2>/dev/null; }
-          heartbeat_tee() {
-            local outfile="${1:-}"
-            if [ -n "$outfile" ]; then
-              while IFS= read -r line || [ -n "$line" ]; do heartbeat_touch; printf '%s\n' "$line"; printf '%s\n' "$line" >> "$outfile"; done
-            else
-              while IFS= read -r line || [ -n "$line" ]; do heartbeat_touch; printf '%s\n' "$line"; done
-            fi
-          }
-          heartbeat_stop() {
-            [ -n "${HEARTBEAT_WATCHDOG_PID:-}" ] && { kill "${HEARTBEAT_WATCHDOG_PID}" 2>/dev/null; wait "${HEARTBEAT_WATCHDOG_PID}" 2>/dev/null || true; }; HEARTBEAT_WATCHDOG_PID=""
-            [ -n "${HEARTBEAT_FILE:-}" ] && rm -f "${HEARTBEAT_FILE}" "${HEARTBEAT_FILE}.tmp"; HEARTBEAT_FILE=""
-          }
-          ( while true; do sleep 10; now="$(date +%s)"; last="$(cat "${HEARTBEAT_FILE}" 2>/dev/null || echo "$now")"
-            # Guard against empty/corrupt reads from race condition
-            [[ "${last}" =~ ^[0-9]+$ ]] || last="${now}"
-            [ $(( now - last )) -ge "${_HB_IDLE}" ] && echo "" >&2 && echo "::error::heartbeat: no output for $(( now - last ))s (limit: ${_HB_IDLE}s) — terminating" >&2 && kill -TERM "$$" 2>/dev/null && sleep 10 && kill -KILL "$$" 2>/dev/null && exit 142
-            [ $(( now - _HEARTBEAT_START_TIME )) -ge "${_HB_WALL}" ] && echo "" >&2 && echo "::error::heartbeat: max wall time ${_HB_WALL}s exceeded — terminating" >&2 && kill -TERM "$$" 2>/dev/null && sleep 10 && kill -KILL "$$" 2>/dev/null && exit 143
-          done ) &
-          HEARTBEAT_WATCHDOG_PID=$!
-          echo "heartbeat: watchdog started (idle=${_HB_IDLE}s, max_wall=${_HB_WALL}s, pid=${HEARTBEAT_WATCHDOG_PID})"
-
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex planning attempt ${attempt}/${max_attempts}..."
-            # stdout → file only (no tee to log — prevents interleaving plan text with status messages)
-            # stderr → heartbeat_tee for watchdog + CI log visibility
-            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(heartbeat_tee "${RUNTIME_DIR}/codex_log.txt" >&2); then
+            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"
                 echo "Codex planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."
@@ -558,11 +528,6 @@ jobs:
               echo "::warning::Codex returned empty output on attempt ${attempt}."
             else
               rc=$?
-              if [ "$rc" -eq 142 ]; then
-                echo "::error::Codex planning killed — no output activity (idle timeout)."
-                heartbeat_stop
-                exit 1
-              fi
               echo "::warning::Codex exited with code $rc on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
@@ -571,12 +536,9 @@ jobs:
               sleep "${sleep_secs}"
             else
               echo "::error::Codex planning failed after ${max_attempts} attempts."
-              heartbeat_stop
               exit 1
             fi
           done
-
-          heartbeat_stop
 
       - name: Write run summary
         if: env.SKIP_PLAN != 'true' && always()
