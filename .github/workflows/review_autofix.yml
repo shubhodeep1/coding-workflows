@@ -432,8 +432,10 @@ jobs:
               echo 'openai/gpt-5-mini'
               echo 'SMOKE_EOF'
             } >> "$GITHUB_ENV"
-            # Patch the already-written codex config to use low reasoning
-            sed -i 's/model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
+            # Patch the already-written codex config to use low reasoning (if present)
+            if [ -f "${HOME}/.codex/config.toml" ]; then
+              sed -i 's/model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
+            fi
           else
             echo "Standard PR — using default LLM settings"
           fi
