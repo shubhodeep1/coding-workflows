@@ -8,10 +8,10 @@ These instructions are **mandatory** and must be followed **before any action**.
 
 Before any task, read:
 - `README.md`
-- `agents.md`
-- all `/db/contracts/*.yml` (or `.json`) relevant to collections that may be touched
+- `AGENTS.md` (if present)
+- all `/db/contracts/*.yml` (or `.json`) relevant to collections that may be touched (for MongoDB-backed repositories)
 
-If any are missing or unclear: **STOP and ask using the mandatory Q/A format.**
+If any required inputs are missing or unclear: **STOP and ask using the mandatory Q/A format.**
 Never assume undocumented behavior.
 
 ---
@@ -31,6 +31,10 @@ If you are **not 100% certain** the outcome matches the user's expectations:
 4. Operational clarity
 5. Performance
 6. Speed
+
+---
+
+Note: Serena/MCP tooling guidance is intentionally omitted here because it is Codex-specific and not required for Claude-only instruction flow.
 
 ---
 
@@ -119,7 +123,7 @@ All renames are **breaking changes**. If a new name is needed:
 
 In every final response:
 - List all files changed with line ranges of major logic changes (skip formatting-only)
-- If behavior changes: update `README.md` / `agents.md` with env vars, DB behavior, indexes, operational steps, failure modes
+- If behavior changes: update `README.md` / `AGENTS.md` (if present) with env vars, DB behavior, indexes, operational steps, failure modes
 
 ---
 
@@ -132,12 +136,14 @@ Logging must be structured, searchable, with context keys.
 
 ## 9. Code Style
 
-- **Tabs** for indentation
+- Use indentation required by the language/syntax (e.g., spaces for YAML)
 - Opening braces on a **new line**
 
 ---
 
 ## 10. MongoDB Rules
+
+Apply this section only when working on repositories or services that use MongoDB.
 
 ### A) DB Contract
 One contract per collection at `/db/contracts/<collection>.yml`. Must include: collection name, indexes (keys, uniqueness, partials, collation), purpose, business invariants, write entrypoints. Any query/write change must update the contract.
