@@ -6,9 +6,11 @@ name: Test & Mark Stable Release
     inputs:
       version_tag:
         description: >
-          Semantic version tag (e.g. v1.2.0). Must match vX.Y.Z format.
-        required: true
+          Semantic version tag (e.g. v1.2.0). Leave blank to auto-increment
+          patch from the latest stable release.
+        required: false
         type: string
+        default: ""
       test_repo:
         description: >
           Repository to run E2E smoke test on (owner/repo).
@@ -43,9 +45,59 @@ permissions:
 
 jobs:
   # ──────────────────────────────────────────────────────────────────
+  # Job 0: Resolve version — auto-increment patch if not provided
+  # ──────────────────────────────────────────────────────────────────
+  resolve-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve version tag
+        id: resolve
+        run: |
+          set -euo pipefail
+          INPUT_VERSION="${{ inputs.version_tag }}"
+
+          if [ -n "$INPUT_VERSION" ]; then
+            if [[ ! "$INPUT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Provided version '${INPUT_VERSION}' is invalid; must match vX.Y.Z"
+              exit 1
+            fi
+            echo "Using user-provided version: ${INPUT_VERSION}"
+            echo "version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Find the latest vX.Y.Z tag reachable from main
+          LATEST=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+
+          if [ -z "$LATEST" ]; then
+            NEXT="v1.0.0"
+            echo "No existing version tags found. Defaulting to ${NEXT}"
+          else
+            # Parse and increment patch
+            MAJOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f1)
+            MINOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f2)
+            PATCH=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f3)
+            NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+            echo "Latest tag: ${LATEST} → next version: ${NEXT}"
+          fi
+
+          echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+
+  # ──────────────────────────────────────────────────────────────────
   # Job 1: End-to-end smoke test — exercises every pipeline phase
   # ──────────────────────────────────────────────────────────────────
   e2e-smoke-test:
+    needs: [resolve-version]
     if: ${{ !inputs.skip_e2e }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -622,7 +674,7 @@ jobs:
 
           **Result:** ${{ steps.verify.outputs.passed == 'true' && '✓ All phases passed' || '✗ Some phases failed' }}
           **Run:** [${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
-          **Version under test:** ${{ inputs.version_tag }}" \
+          **Version under test:** ${{ needs.resolve-version.outputs.version }}" \
               2>/dev/null || echo "Warning: could not post cleanup comment"
             echo "  Closed issue #${ISSUE_NUMBER}"
           fi
@@ -639,9 +691,10 @@ jobs:
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
   # ──────────────────────────────────────────────────────────────────
   validate:
-    needs: [e2e-smoke-test]
+    needs: [resolve-version, e2e-smoke-test]
     if: >-
       always() &&
+      needs.resolve-version.result == 'success' &&
       (needs.e2e-smoke-test.result == 'success' || needs.e2e-smoke-test.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -649,8 +702,9 @@ jobs:
       - name: Validate version format
         run: |
           set -euo pipefail
-          if [[ ! "${{ inputs.version_tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid version tag '${{ inputs.version_tag }}'. Must match vX.Y.Z"
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          if [[ ! "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version tag '${VERSION}'. Must match vX.Y.Z"
             exit 1
           fi
 
@@ -663,8 +717,9 @@ jobs:
       - name: Ensure tag does not already exist
         run: |
           set -euo pipefail
-          if git rev-parse "refs/tags/${{ inputs.version_tag }}" >/dev/null 2>&1; then
-            echo "::error::Tag ${{ inputs.version_tag }} already exists"
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Tag ${VERSION} already exists"
             exit 1
           fi
 
@@ -687,7 +742,7 @@ jobs:
   # Job 3: Create release (same as mark-stable.yml)
   # ──────────────────────────────────────────────────────────────────
   release:
-    needs: [validate]
+    needs: [resolve-version, validate]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -701,7 +756,7 @@ jobs:
         id: changelog
         run: |
           set -euo pipefail
-          VERSION="${{ inputs.version_tag }}"
+          VERSION="${{ needs.resolve-version.outputs.version }}"
           NOTES=$(awk \
             "/^## \\[${VERSION}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" \
             CHANGELOG.md)
@@ -718,7 +773,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          VERSION="${{ inputs.version_tag }}"
+          VERSION="${{ needs.resolve-version.outputs.version }}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
 
           # Immutable version tag
@@ -741,8 +796,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "${{ inputs.version_tag }}" \
-            --title "${{ inputs.version_tag }}" \
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          gh release create "${VERSION}" \
+            --title "${VERSION}" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
             --target main
 
@@ -750,8 +806,9 @@ jobs:
         if: ${{ inputs.dry_run }}
         run: |
           echo "=== DRY RUN ==="
-          echo "Would tag main as: ${{ inputs.version_tag }}"
-          echo "Would update pointers: stable, $(echo '${{ inputs.version_tag }}' | cut -d. -f1)"
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          echo "Would tag main as: ${VERSION}"
+          echo "Would update pointers: stable, $(echo "${VERSION}" | cut -d. -f1)"
           echo ""
           echo "Changelog notes:"
           cat "${{ steps.changelog.outputs.notes_file }}"
@@ -760,7 +817,7 @@ jobs:
   # Job 4: Combined Telegram notification (runs after ALL jobs)
   # ──────────────────────────────────────────────────────────────────
   notify:
-    needs: [e2e-smoke-test, validate, release]
+    needs: [resolve-version, e2e-smoke-test, validate, release]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -784,10 +841,10 @@ jobs:
 
           # Determine overall status
           if [ "$E2E" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$RELEASE" = "success" ]; then
-            MSG="✅ Release ${{ inputs.version_tag }} SUCCEEDED"
+            MSG="✅ Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
             MSG+=$'\n'"All jobs passed: e2e ✓ validate ✓ release ✓"
           else
-            MSG="❌ Release ${{ inputs.version_tag }} FAILED"
+            MSG="❌ Release ${{ needs.resolve-version.outputs.version }} FAILED"
             STATUS_LINE=""
             for JOB_NAME in e2e-smoke-test validate release; do
               case "$JOB_NAME" in
