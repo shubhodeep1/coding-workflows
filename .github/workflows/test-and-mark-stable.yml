@@ -33,7 +33,7 @@ name: Test & Mark Stable Release
           Increase for repos with large codebases or slow LLM providers.
         required: false
         type: number
-        default: 30
+        default: 15
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -48,7 +48,7 @@ jobs:
   e2e-smoke-test:
     if: ${{ !inputs.skip_e2e }}
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 75
     concurrency:
       group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}
       cancel-in-progress: false
@@ -57,8 +57,8 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
-      PHASE_TIMEOUT: ${{ inputs.phase_timeout || 30 }}
-      POLL_INTERVAL: 30
+      PHASE_TIMEOUT: ${{ inputs.phase_timeout || 15 }}
+      POLL_INTERVAL: 10
 
     steps:
       - name: Validate prerequisites
@@ -276,7 +276,7 @@ jobs:
           ELAPSED=0
 
           # Give the review workflow a moment to start
-          sleep 15
+          sleep 5
 
           while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
             # Find the review workflow run for this PR's head branch
@@ -635,62 +635,6 @@ jobs:
 
           echo "Cleanup complete."
 
-      # ── Telegram notifications ─────────────────────────────────
-      - name: Telegram success notification
-        if: success()
-        env:
-          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
-          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
-          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
-        run: |
-          set -euo pipefail
-          CHAT_ID="${TG_CHAT_ID:-}"
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
-            echo "Telegram notification skipped (missing TG_BOT_SECRET or chat_id)"
-            exit 0
-          fi
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          MSG="E2E smoke test PASSED for ${{ inputs.version_tag }}"
-          MSG+=$'\n'"All phases: clarify, plan, implement, review/edit"
-          MSG+=$'\n'"Issue #${ISSUE_NUMBER} → PR #${PR_NUMBER}"
-          MSG+=$'\n'"Run: ${RUN_URL}"
-          set +e
-          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}" >/dev/null 2>&1
-          set -e
-
-      - name: Telegram failure notification
-        if: failure()
-        env:
-          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
-          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
-        run: |
-          set -euo pipefail
-          CHAT_ID="${TG_CHAT_ID:-}"
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
-            echo "Telegram notification skipped (missing TG_BOT_SECRET or chat_id)"
-            exit 0
-          fi
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          MSG="E2E smoke test FAILED for ${{ inputs.version_tag }}"
-          MSG+=$'\n'"Clarify: ${{ steps.wait-clarify.outputs.status || 'not reached' }}"
-          MSG+=$'\n'"Plan: ${{ steps.wait-plan.outputs.status || 'not reached' }}"
-          MSG+=$'\n'"Implement: ${{ steps.wait-implement.outputs.status || 'not reached' }}"
-          MSG+=$'\n'"Review: ${{ steps.wait-review.outputs.status || 'not reached' }}"
-          MSG+=$'\n'"Internals: ${{ steps.deep-verify.outputs.deep_passed == 'true' && 'ok' || 'FAILED' }}"
-          MSG+=$'\n'"Issue #${ISSUE_NUMBER:-unknown}"
-          MSG+=$'\n'"Run: ${RUN_URL}"
-          set +e
-          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}" >/dev/null 2>&1
-          set -e
-
   # ──────────────────────────────────────────────────────────────────
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
   # ──────────────────────────────────────────────────────────────────
@@ -811,3 +755,60 @@ jobs:
           echo ""
           echo "Changelog notes:"
           cat "${{ steps.changelog.outputs.notes_file }}"
+
+  # ──────────────────────────────────────────────────────────────────
+  # Job 4: Combined Telegram notification (runs after ALL jobs)
+  # ──────────────────────────────────────────────────────────────────
+  notify:
+    needs: [e2e-smoke-test, validate, release]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Send Telegram notification
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          CHAT_ID="${TG_CHAT_ID:-}"
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
+            echo "Telegram notification skipped (missing TG_BOT_SECRET or chat_id)"
+            exit 0
+          fi
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          E2E="${{ needs.e2e-smoke-test.result }}"
+          VALIDATE="${{ needs.validate.result }}"
+          RELEASE="${{ needs.release.result }}"
+
+          # Determine overall status
+          if [ "$E2E" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$RELEASE" = "success" ]; then
+            MSG="✅ Release ${{ inputs.version_tag }} SUCCEEDED"
+            MSG+=$'\n'"All jobs passed: e2e ✓ validate ✓ release ✓"
+          else
+            MSG="❌ Release ${{ inputs.version_tag }} FAILED"
+            STATUS_LINE=""
+            for JOB_NAME in e2e-smoke-test validate release; do
+              case "$JOB_NAME" in
+                e2e-smoke-test) RESULT="$E2E" ;;
+                validate) RESULT="$VALIDATE" ;;
+                release) RESULT="$RELEASE" ;;
+              esac
+              case "$RESULT" in
+                success) ICON="✓" ;;
+                skipped) ICON="⊘" ;;
+                *) ICON="✗" ;;
+              esac
+              STATUS_LINE+="${JOB_NAME}: ${ICON} (${RESULT})  "
+            done
+            MSG+=$'\n'"${STATUS_LINE}"
+          fi
+          MSG+=$'\n'"Run: ${RUN_URL}"
+
+          set +e
+          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1
+          set -e
