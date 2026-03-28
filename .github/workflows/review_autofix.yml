@@ -502,7 +502,20 @@ jobs:
           echo "CAN_PUSH=true" >> "$GITHUB_ENV"
           echo "TARGET_BRANCH=${HEAD_REF}" >> "$GITHUB_ENV"
 
+      - name: Check for autofix re-trigger
+        id: retrigger_guard
+        run: |
+          set -euo pipefail
+          HEAD_MSG="$(git log -1 --format='%s' HEAD)"
+          if echo "${HEAD_MSG}" | grep -q '^\[ai-autofix\]'; then
+            echo "Head commit is an autofix commit — skipping review to avoid re-trigger loop."
+            echo "is_autofix_retrigger=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_autofix_retrigger=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Generate diff context
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         run: |
           set -euo pipefail
 
@@ -570,6 +583,7 @@ jobs:
           fi
 
       - name: Generate symbol-level diff summary
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         run: |
           set -euo pipefail
           SYMBOL_DIFF_SUMMARY_FILE="${RUNTIME_DIR}/symbol_diff_summary.txt"
@@ -664,6 +678,7 @@ jobs:
           } > "${RUNTIME_CONTEXT_DIR}/run_logs_best_effort.txt" || true
 
       - name: Run reviewer models
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         id: reviewers
         run: |
           set -euo pipefail
@@ -1286,6 +1301,7 @@ jobs:
           echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
 
       - name: Filter reviewer issues by consensus
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         run: |
           set -euo pipefail
 
@@ -1325,12 +1341,14 @@ jobs:
           } > "${REVIEWER_CONSENSUS_FILE}"
 
       - name: Switch reasoning effort for editor
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         run: |
           set -euo pipefail
           sed -i "s/model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
           echo "Updated reasoning effort from ${REVIEWER_REASONING_EFFORT} to ${EDITOR_REASONING_EFFORT} for editor phase"
 
       - name: Apply fixes with editor model
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         run: |
           set -euo pipefail
 
@@ -1824,6 +1842,7 @@ jobs:
             }
 
       - name: Commit changes
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         id: commit_changes
         run: |
           set -euo pipefail
@@ -1988,14 +2007,12 @@ jobs:
                     printf -- '- %s\n' "${changed_file}"
                   done
             } > "${COMMITTED_FILES_FILE}"
-            git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}
-            git push origin "HEAD:${TARGET_BRANCH}"
             echo "DID_COMMIT=true" >> "$GITHUB_ENV"
             echo "did_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Post editor summary comment
-        if: always()
+        if: always() && steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -2053,8 +2070,373 @@ jobs:
           exit 1
 
 
+      # ── Validation pass ──────────────────────────────────────────────
+      # When the first editor pass committed changes, re-run a lightweight
+      # review+edit cycle on the autofix diff before pushing.  This catches
+      # regressions introduced by the autofix itself without triggering a
+      # synchronize re-run.
+
+      - name: Update diff context for validation pass
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && env.DID_COMMIT == 'true'
+        run: |
+          set -euo pipefail
+
+          echo "Updating diff context for validation pass"
+          git show --stat HEAD > "${LAST_COMMIT_STAT_FILE}" || true
+          git diff "HEAD~1...HEAD" > "${LAST_RUN_DIFF_FILE}" || true
+          git diff --name-only "HEAD~1...HEAD" > "${LAST_RUN_CHANGED_FILES_FILE}" || true
+          git diff --stat "HEAD~1...HEAD" > "${LAST_RUN_DIFF_STAT_FILE}" || true
+
+          if [ -s "${PR_DIFF_FILE}" ] || [ -s "${PR_CHANGED_FILES_FILE}" ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/generate_symbol_diff_summary.py \
+              --diff-file "${LAST_RUN_DIFF_FILE}" \
+              --changed-files "${LAST_RUN_CHANGED_FILES_FILE}" \
+              --output "${SYMBOL_DIFF_SUMMARY_FILE}" \
+              --project-dir "." || {
+                echo "::warning::Symbol diff summary generation failed for validation pass."
+                echo "Symbol diff summary unavailable." > "${SYMBOL_DIFF_SUMMARY_FILE}"
+              }
+          fi
+
+      - name: Switch reasoning effort for validation reviewers
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && env.DID_COMMIT == 'true'
+        run: |
+          set -euo pipefail
+          sed -i "s/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\"/" ~/.codex/config.toml
+          echo "Switched back to reviewer reasoning effort ${REVIEWER_REASONING_EFFORT} for validation pass"
+
+      - name: Run validation reviewers
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && env.DID_COMMIT == 'true'
+        run: |
+          set -euo pipefail
+
+          VALIDATION_REVIEWS_DIR="${RUNTIME_DIR}/validation_reviews"
+          mkdir -p "${VALIDATION_REVIEWS_DIR}"
+          echo "VALIDATION_REVIEWS_DIR=${VALIDATION_REVIEWS_DIR}" >> "$GITHUB_ENV"
+
+          # Use 2 fast models for the validation pass
+          VALIDATION_MODELS="google/gemini-3-flash-preview
+          openai/gpt-5-mini"
+
+          VALIDATION_PROMPT_FILE="${RUNTIME_DIR}/validation_reviewer_prompt.txt"
+
+          {
+            echo "SYSTEM INSTRUCTIONS (MANDATORY):"
+            echo "Read ./pre_assembled_static.txt FIRST (in the repository root, NOT under"
+            echo "/tmp or the runtime directory) — it contains the unattended system"
+            echo "instructions, codex system instructions (code-style/safety/MongoDB rules),"
+            echo "agents.md, and README.md pre-assembled into one file (constant across runs,"
+            echo "cached by the LLM provider). Follow these before any review work."
+            echo "Example command: cat ./pre_assembled_static.txt"
+            echo
+            cat <<'__VALIDATION_PROMPT__'
+          VALIDATION REVIEW — AUTOFIX REGRESSION CHECK
+
+          You are reviewing changes made by an automated AI autofix pass.
+          Your ONLY job is to check whether the autofix introduced NEW bugs,
+          regressions, or incorrect behavior.
+
+          Do NOT review the original PR changes — only review the autofix diff.
+
+          INPUT FILES
+          __VALIDATION_PROMPT__
+            echo "- AUTOFIX DIFF: ${LAST_RUN_DIFF_FILE}"
+            echo "- AUTOFIX CHANGED FILES: ${LAST_RUN_CHANGED_FILES_FILE}"
+            echo "- AUTOFIX COMMIT STAT: ${LAST_COMMIT_STAT_FILE}"
+            echo "- SYMBOL DIFF SUMMARY: ${SYMBOL_DIFF_SUMMARY_FILE}"
+            echo "- PR META: ${PR_META_FILE}"
+            echo
+            cat <<'__VALIDATION_PROMPT2__'
+          Read the autofix diff and changed files listed above.
+
+          REVIEW CRITERIA
+          Check ONLY for:
+          1. Logic errors introduced by the autofix (wrong conditions, inverted checks, off-by-one)
+          2. Missing or broken error handling
+          3. Syntax errors or typos
+          4. Removed functionality that should have been preserved
+          5. Security issues introduced by the fix
+
+          Do NOT flag:
+          - Style preferences
+          - Suggestions for further improvement
+          - Issues in the original PR code that the autofix did not touch
+          - Hypothetical edge cases without concrete evidence
+
+          OUTPUT FORMAT
+          If you find issues, output them as:
+
+          VALIDATION_ISSUE:
+          File: <path>
+          Line: <number>
+          Severity: HIGH | MEDIUM
+          Description: <concrete description with evidence>
+
+          If the autofix changes look correct, output:
+          VALIDATION_CLEAN: No regressions found in autofix changes.
+
+          REVIEWER EXECUTION GUARDRAILS
+          Do not modify any repository files.
+          Do not create patches or scripts.
+          Output ONLY your review findings as plain text.
+          __VALIDATION_PROMPT2__
+          } > "${VALIDATION_PROMPT_FILE}"
+
+          run_validation_reviewer() {
+            local model="$1"
+            local safe_name="$2"
+            local output_file="${VALIDATION_REVIEWS_DIR}/review_${safe_name}.txt"
+            local attempt=1
+
+            local reviewer_codex_home
+            reviewer_codex_home="$(mktemp -d /tmp/codex_home_val_reviewer.XXXXXX)"
+            cp -r "${CODEX_HOME}/." "${reviewer_codex_home}/"
+            export CODEX_HOME="${reviewer_codex_home}"
+
+            while [ "${attempt}" -le 2 ]; do
+              tmp_output="$(mktemp)"
+              if codex exec --model "${model}" --full-auto "$(cat "${VALIDATION_PROMPT_FILE}")" > "${tmp_output}" 2>/dev/null; then
+                if [ -s "${tmp_output}" ]; then
+                  mv "${tmp_output}" "${output_file}"
+                  echo "Validation reviewer ${model} succeeded on attempt ${attempt}."
+                  rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+                  return 0
+                fi
+              fi
+              rm -f "${tmp_output}"
+              attempt=$((attempt + 1))
+              sleep 2
+            done
+
+            echo "Validation reviewer ${model} failed after retries." > "${output_file}"
+            rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+            return 0
+          }
+
+          declare -a val_pids=()
+          while IFS= read -r model; do
+            [ -z "${model}" ] && continue
+            safe_name="$(echo "${model}" | tr '/.:' '___')"
+            run_validation_reviewer "${model}" "${safe_name}" &
+            val_pids+=("$!")
+          done <<< "${VALIDATION_MODELS}"
+
+          for pid in "${val_pids[@]}"; do
+            wait "${pid}" || true
+          done
+
+          echo "Validation reviewers completed."
+
+      - name: Check validation findings
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && env.DID_COMMIT == 'true'
+        id: validation_check
+        run: |
+          set -euo pipefail
+
+          VALIDATION_REVIEWS_DIR="${VALIDATION_REVIEWS_DIR:-${RUNTIME_DIR}/validation_reviews}"
+          HAS_VALIDATION_ISSUES=false
+
+          for review_file in "${VALIDATION_REVIEWS_DIR}"/review_*.txt; do
+            [ -f "${review_file}" ] || continue
+            if grep -q '^VALIDATION_ISSUE:' "${review_file}"; then
+              HAS_VALIDATION_ISSUES=true
+              echo "Validation issues found in: ${review_file}"
+              grep -A 4 '^VALIDATION_ISSUE:' "${review_file}"
+              echo "---"
+            fi
+          done
+
+          if [ "${HAS_VALIDATION_ISSUES}" = "true" ]; then
+            echo "has_issues=true" >> "$GITHUB_OUTPUT"
+
+            # Build a validation consensus file for the editor
+            VALIDATION_CONSENSUS_FILE="${RUNTIME_DIR}/validation_consensus.txt"
+            {
+              echo "VALIDATION PASS FINDINGS"
+              echo "The following issues were found in the autofix commit:"
+              echo
+              for review_file in "${VALIDATION_REVIEWS_DIR}"/review_*.txt; do
+                [ -f "${review_file}" ] || continue
+                if grep -q '^VALIDATION_ISSUE:' "${review_file}"; then
+                  echo "--- $(basename "${review_file}") ---"
+                  cat "${review_file}"
+                  echo
+                fi
+              done
+            } > "${VALIDATION_CONSENSUS_FILE}"
+            echo "VALIDATION_CONSENSUS_FILE=${VALIDATION_CONSENSUS_FILE}" >> "$GITHUB_ENV"
+          else
+            echo "has_issues=false" >> "$GITHUB_OUTPUT"
+            echo "Validation pass clean — no regressions found."
+          fi
+
+      - name: Switch reasoning effort for validation editor
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && env.DID_COMMIT == 'true' && steps.validation_check.outputs.has_issues == 'true'
+        run: |
+          set -euo pipefail
+          sed -i "s/model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
+          echo "Switched to editor reasoning effort ${EDITOR_REASONING_EFFORT} for validation editor"
+
+      - name: Apply validation fixes
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && env.DID_COMMIT == 'true' && steps.validation_check.outputs.has_issues == 'true'
+        run: |
+          set -euo pipefail
+
+          VALIDATION_EDITOR_PROMPT_FILE="${RUNTIME_DIR}/validation_editor_prompt.txt"
+
+          {
+            echo "SYSTEM INSTRUCTIONS (MANDATORY):"
+            echo "Read ./pre_assembled_static.txt FIRST — it contains the unattended system"
+            echo "instructions, codex system instructions, agents.md, and README.md."
+            echo "Example command: cat ./pre_assembled_static.txt"
+            echo
+            cat <<'__VAL_EDITOR_PROMPT__'
+          VALIDATION FIX — AUTOFIX REGRESSION REPAIR
+
+          The automated AI autofix pass introduced issues that were caught by
+          a validation review.  Your job is to fix ONLY the regressions
+          identified below.  Do not make any other changes.
+
+          __VAL_EDITOR_PROMPT__
+            echo "Read the following files:"
+            echo "- ${VALIDATION_CONSENSUS_FILE} (validation findings)"
+            echo "- ${LAST_RUN_DIFF_FILE} (the autofix diff that introduced the issues)"
+            echo "- ${LAST_RUN_CHANGED_FILES_FILE}"
+            echo "- ${PR_META_FILE}"
+            echo
+            cat <<'__VAL_EDITOR_PROMPT2__'
+          RULES
+          • Fix ONLY the issues listed in the validation findings
+          • Do not refactor or improve surrounding code
+          • Do not rename variables or functions
+          • Do not change function signatures
+          • Prefer the smallest safe change that resolves each issue
+          • If unsure about a fix, skip that issue — do not guess
+
+          When done, output a summary:
+
+          VALIDATION_FIXES_APPLIED:
+          - <description of each fix>
+
+          VALIDATION_FIXES_SKIPPED:
+          - <description of any skipped issues and why>
+          __VAL_EDITOR_PROMPT2__
+          } > "${VALIDATION_EDITOR_PROMPT_FILE}"
+
+          VALIDATION_EDITOR_SUMMARY_FILE="${RUNTIME_DIR}/validation_editor_summary.txt"
+          echo "VALIDATION_EDITOR_SUMMARY_FILE=${VALIDATION_EDITOR_SUMMARY_FILE}" >> "$GITHUB_ENV"
+
+          attempt=1
+          while [ "${attempt}" -le 3 ]; do
+            tmp_output="$(mktemp)"
+            if codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${VALIDATION_EDITOR_PROMPT_FILE}")" > "${tmp_output}"; then
+              if [ -s "${tmp_output}" ]; then
+                mv "${tmp_output}" "${VALIDATION_EDITOR_SUMMARY_FILE}"
+                echo "Validation editor succeeded on attempt ${attempt}."
+                break
+              fi
+            fi
+            rm -f "${tmp_output}"
+            if [ "${attempt}" -eq 3 ]; then
+              echo "::warning::Validation editor failed after retries; proceeding without validation fixes."
+              echo "Validation editor failed after retries." > "${VALIDATION_EDITOR_SUMMARY_FILE}"
+            fi
+            attempt=$((attempt + 1))
+            sleep 2
+          done
+
+      - name: Commit validation fixes
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && env.DID_COMMIT == 'true' && steps.validation_check.outputs.has_issues == 'true'
+        id: validation_commit
+        run: |
+          set -euo pipefail
+
+          echo "did_validation_commit=false" >> "$GITHUB_OUTPUT"
+
+          # Remove newly created files (same guard as primary commit)
+          NEW_FILES="$(mktemp)"
+          git ls-files --others --exclude-standard -z > "${NEW_FILES}"
+          if [ -s "${NEW_FILES}" ]; then
+            echo "Removing newly created files before validation commit:"
+            while IFS= read -r -d '' created_file; do
+              [ -n "${created_file}" ] || continue
+              echo "- ${created_file}"
+              rm -rf -- "${created_file}"
+            done < "${NEW_FILES}"
+          fi
+          rm -f "${NEW_FILES}"
+
+          if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && [ -n "$(git status --porcelain .github/workflows)" ]; then
+            git restore --source=HEAD --staged --worktree -- .github/workflows || true
+            git clean -f -d -- .github/workflows || true
+          fi
+
+          # Remove workflow artifacts (same as primary commit step)
+          if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
+            rm -f ./pre_assembled_static.txt
+            rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
+            rm -rf .serena
+          fi
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "Validation pass produced no additional changes."
+          else
+            git commit -m "[ai-autofix] apply validation fixes"
+            {
+              git diff-tree --no-commit-id --name-only -r -z HEAD \
+                | while IFS= read -r -d '' changed_file; do
+                    printf -- '- %s\n' "${changed_file}"
+                  done
+            } >> "${COMMITTED_FILES_FILE}"
+            echo "did_validation_commit=true" >> "$GITHUB_OUTPUT"
+            echo "Validation fixes committed."
+          fi
+
+      - name: Post validation summary comment
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && env.DID_COMMIT == 'true' && steps.validation_check.outputs.has_issues == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          COMMENT_BODY="$(mktemp)"
+          {
+            echo "AI autofix validation pass"
+            echo
+            if [ -s "${VALIDATION_EDITOR_SUMMARY_FILE:-}" ]; then
+              cat "${VALIDATION_EDITOR_SUMMARY_FILE}"
+            else
+              echo "Validation issues were detected but the editor produced no output."
+            fi
+            echo
+            echo "Validation files changed:"
+            if [ "${did_validation_commit:-false}" = "true" ] || [ "$(cat "$GITHUB_OUTPUT" 2>/dev/null | grep did_validation_commit | tail -1 | cut -d= -f2)" = "true" ]; then
+              git diff-tree --no-commit-id --name-only -r HEAD | sed 's/^/- /'
+            else
+              echo "- none"
+            fi
+          } > "${COMMENT_BODY}"
+
+          gh api repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments \
+            -f body="$(cat "${COMMENT_BODY}")" >/dev/null || echo "::warning::Failed to post validation summary comment."
+          rm -f "${COMMENT_BODY}"
+
+      # ── End validation pass ────────────────────────────────────────────
+
+      - name: Push changes
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && env.DID_COMMIT == 'true' && env.CAN_PUSH == 'true'
+        id: push_changes
+        run: |
+          set -euo pipefail
+          git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}
+          git push origin "HEAD:${TARGET_BRANCH}"
+          echo "Pushed autofix changes to ${TARGET_BRANCH}"
+
       - name: Detect merge conflicts
-        if: success() && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true'
+        if: success() && steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -2093,7 +2475,7 @@ jobs:
           fi
 
       - name: Resolve merge conflicts with Codex
-        if: success() && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true'
+        if: success() && steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true'
         run: |
           set -euo pipefail
 
@@ -2190,7 +2572,7 @@ jobs:
           fi
 
       - name: Telegram conflict resolution message
-        if: success() && env.CONFLICT_RESOLVED == 'true'
+        if: success() && steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && env.CONFLICT_RESOLVED == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -2204,7 +2586,7 @@ jobs:
             --data-urlencode "text=${MSG}"
 
       - name: Mark linked issues ready to merge
-        if: success() && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'
+        if: success() && (steps.retrigger_guard.outputs.is_autofix_retrigger == 'true' || (steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -2231,7 +2613,7 @@ jobs:
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Telegram success
-        if: success() && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'
+        if: success() && (steps.retrigger_guard.outputs.is_autofix_retrigger == 'true' || (steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'))
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

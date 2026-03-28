@@ -9,7 +9,7 @@ This repository contains reusable `workflow_call` workflows that power the full 
 1. **Clarify** — Determines if an issue has enough information, asks clarification questions if needed
 2. **Plan** — Generates a structured implementation plan from clarified issues
 3. **Implement** — Executes the approved plan and creates a pull request
-4. **Review & Autofix** — Multi-model PR review with automated fix application
+4. **Review & Autofix** — Multi-model PR review with automated fix application and validation pass
 5. **Issue PR Status** — Syncs issue labels when PRs are merged/closed
 6. **Cancel on PR Close** — Cancels orphaned workflow runs when PRs close
 7. **Memory Maintenance** — Monthly compaction and archival of AI memory records
@@ -227,7 +227,7 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `clarify.yml` | `issues.opened`, `issue_comment.created` | Issue clarity detection |
 | `plan.yml` | `issue_comment.created` (`/answer`) | Implementation plan generation |
 | `implement.yml` | `issue_comment.created` (`/approved`) | Plan execution + PR creation |
-| `review_autofix.yml` | `pull_request.*` | Multi-model review + autofix |
+| `review_autofix.yml` | `pull_request.*` | Multi-model review + autofix + validation pass |
 | `issue_pr_status.yml` | `pull_request.closed` | Label/state sync |
 | `cancel_on_pr_close.yml` | `pull_request.closed` | Active-run cancellation |
 | `memory_maintenance.yml` | `schedule` (monthly) | Memory compaction/archival |
