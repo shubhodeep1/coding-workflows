@@ -2031,6 +2031,8 @@ jobs:
 
       - name: Detect merge conflicts
         if: success() && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -2041,6 +2043,16 @@ jobs:
           git reset --hard HEAD
           git clean -fd
 
+          # The script may have been removed during artifact cleanup in the
+          # commit step (caller repos delete fetched scripts before committing).
+          # Re-fetch it so the merge-conflict check can use it.
+          if [ ! -f scripts/git_ref_health_check.sh ]; then
+            wf_source="${{ github.repository_owner }}/coding-workflows"
+            mkdir -p scripts
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=stable" > scripts/git_ref_health_check.sh
+            chmod +x scripts/git_ref_health_check.sh
+          fi
           bash scripts/git_ref_health_check.sh repair
           git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
 
