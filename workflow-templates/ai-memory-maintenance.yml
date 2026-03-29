@@ -1,0 +1,10 @@
+name: AI Memory Maintenance
+on:
+  schedule:
+    - cron: '0 3 1 * *'
+permissions:
+  contents: write
+jobs:
+  maintenance:
+    uses: shubhodeep1/coding-workflows/.github/workflows/memory_maintenance.yml@stable
+    secrets: inherit

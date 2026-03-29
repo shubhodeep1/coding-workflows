@@ -37,6 +37,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `WORKFLOW_EDITOR_MODEL` | No | `openai/gpt-5.3-codex` | clarify, plan, implement, review_autofix | Model for code editing tasks |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | No | `true` | plan | Auto-trigger implementation when plan is clear |
 | `ALLOW_WORKFLOW_EDITS` | No | `false` | review_autofix | Allow AI edits to `.github/workflows` files |
+| `ENABLE_AUTO_MERGE` | No | `false` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix | Version/branch of the Serena MCP server |
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix | Languages for Serena symbol analysis |
@@ -70,7 +71,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 
 ### 2. Create wrapper workflows
 
-Add thin wrapper workflows in your repo's `.github/workflows/` directory. Reference implementations live in [`.github/workflows/internal-*.yml`](.github/workflows/) in this repository.
+Copy the ready-to-use templates from [`workflow-templates/`](workflow-templates/) into your repo's `.github/workflows/` directory. Reference implementations also live in [`.github/workflows/internal-*.yml`](.github/workflows/) in this repository.
 
 At minimum, create these three core wrappers:
 
@@ -250,6 +251,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `TG_ADMIN_CHAT_ID` | — | Telegram chat ID for notifications |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | `true` | Auto-approve clear plans |
 | `ALLOW_WORKFLOW_EDITS` | `false` | Allow AI edits to workflow files |
+| `ENABLE_AUTO_MERGE` | `false` | Auto-merge PRs (squash) when review passes and checks are green |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
@@ -317,18 +319,27 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 
 ### Enabling auto-merge
 
-For fully hands-off operation, the poller needs to be able to merge PRs. There are three options depending on your repo's branch protection setup:
+Auto-merge works at two levels: the **review workflow** (merges individual PRs right after review passes) and the **orchestrator poller** (merges PRs for orchestrator-managed issues). Both use the same `ENABLE_AUTO_MERGE` variable.
 
-**Option A: No branch protection (simplest)**
-The poller merges PRs directly with `gh pr merge --squash`. No extra config needed.
-
-**Option B: Branch protection with auto-merge enabled**
+**Step 1: Enable in GitHub repo settings**
 1. Go to **Settings → General → Pull Requests** and check **Allow auto-merge**.
-2. The poller uses `gh pr merge --squash --auto`, which queues the PR for merge once all required status checks pass.
-3. Your `GH_PAT` must have permission to enable auto-merge.
+2. If you use branch protection, ensure your required status checks are configured (the PR will auto-merge once they pass).
 
-**Option C: Branch protection with required reviews**
-If your branch protection requires human reviews, the orchestrator cannot fully auto-merge. The poller will attempt to merge but log a warning. You'll need to manually approve PRs or add the bot account as a bypass actor in branch protection settings.
+**Step 2: Set the variable**
+In **Settings → Secrets and variables → Actions → Variables**, add:
+- `ENABLE_AUTO_MERGE` = `true`
+
+This enables `gh pr merge --squash --auto` in both `review_autofix.yml` (right after setting `ai:ready-to-merge`) and the orchestrator poller. GitHub queues the merge and executes it once all required checks pass.
+
+**Branch protection compatibility:**
+
+| Setup | Auto-merge behavior |
+|---|---|
+| No branch protection | PR merged immediately after review passes |
+| Branch protection + required checks | PR queued, merged once checks pass |
+| Branch protection + required human reviews | Cannot auto-merge unless bot account is added as a bypass actor |
+
+Your `GH_PAT` must have permission to enable auto-merge (repo scope with admin or write access).
 
 ### Labels
 

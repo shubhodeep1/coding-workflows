@@ -77,6 +77,25 @@ jobs:
             gh issue edit "${issue_number}" --add-label 'ai:ready-to-merge'
           done <<< "${ISSUE_NUMBERS}"
 
+      - name: Enable auto-merge on PR
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
+            echo "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable)."
+            exit 0
+          fi
+
+          echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
+          if gh pr merge "${PR_NUMBER}" --repo "${{ github.repository }}" --squash --auto; then
+            echo "Auto-merge enabled. PR will merge once all required checks pass."
+          else
+            echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}."
+          fi
+
       - name: Telegram notification
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

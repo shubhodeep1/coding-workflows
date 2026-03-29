@@ -1,0 +1,11 @@
+name: AI Cancel on PR Close
+on:
+  pull_request:
+    types: [closed]
+permissions:
+  actions: write
+  contents: read
+jobs:
+  cancel:
+    uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@stable
+    secrets: inherit

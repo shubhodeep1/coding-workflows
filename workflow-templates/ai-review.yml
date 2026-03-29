@@ -1,0 +1,14 @@
+name: AI Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+jobs:
+  review:
+    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
+    with:
+      allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
+    secrets: inherit
