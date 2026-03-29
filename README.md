@@ -27,8 +27,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | Secret | Required | Used By | Description |
 |---|---|---|---|
 | `GH_PAT` | **Yes** | All workflows | GitHub Personal Access Token with `repo` scope |
-| `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix | [OpenRouter](https://openrouter.ai) API key for LLM access |
-| `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix | Telegram bot token for notifications |
+| `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate | [OpenRouter](https://openrouter.ai) API key for LLM access |
+| `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate | Telegram bot token for notifications |
 
 #### Variables
 
@@ -39,10 +39,12 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ALLOW_WORKFLOW_EDITS` | No | `false` | review_autofix | Allow AI edits to `.github/workflows` files |
 | `ENABLE_AUTO_MERGE` | No | `false` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR ready to merge. |
-| `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
-| `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix | Version/branch of the Serena MCP server |
-| `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix | Languages for Serena symbol analysis |
-| `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix | Disable the Serena MCP server |
+| `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
+| `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate | Version/branch of the Serena MCP server |
+| `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate | Languages for Serena symbol analysis |
+| `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate | Disable the Serena MCP server |
+| `WORKFLOW_ORCHESTRATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | orchestrate, orchestrate_poll | Model override for orchestrator decomposer and judge |
+| `ORCHESTRATE_POLL_INTERVAL` | No | `10` | orchestrate_poll | Minutes between orchestrator poll checks |
 
 **Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs).
 
@@ -53,6 +55,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | review_autofix | Reasoning effort for the editor model (applying fixes) |
+| `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | orchestrate | Reasoning effort for project decomposition |
+| `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation |
 
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 
@@ -61,6 +65,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | clarify | Tool call budget for the clarification phase |
 | `TOOL_CALL_BUDGET_PLAN` | `40` | plan | Tool call budget for the planning phase |
 | `TOOL_CALL_BUDGET_IMPLEMENT` | `50` | implement | Tool call budget for the implementation phase |
+| `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | orchestrate | Tool call budget for the decomposer |
+| `TOOL_CALL_BUDGET_JUDGE` | `60` | orchestrate_poll | Tool call budget for the judge (needs deep repo inspection) |
 
 **Token warning thresholds** — when a phase exceeds this many tokens, a warning appears in the GitHub Actions run summary. Raise these for large repos where deeper exploration is expected.
 
@@ -69,6 +75,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `TOKEN_WARN_THRESHOLD_CLARIFY` | `80000` | clarify | Token usage warning threshold for clarification |
 | `TOKEN_WARN_THRESHOLD_PLAN` | `200000` | plan | Token usage warning threshold for planning |
 | `TOKEN_WARN_THRESHOLD_IMPLEMENT` | `200000` | implement | Token usage warning threshold for implementation |
+| `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | orchestrate | Token usage warning threshold for orchestration |
 
 ### 2. Create wrapper workflows
 
@@ -191,6 +198,47 @@ permissions:
 jobs:
   maintenance:
     uses: shubhodeep1/coding-workflows/.github/workflows/memory_maintenance.yml@stable
+    secrets: inherit
+```
+
+**`.github/workflows/ai-orchestrate.yml`** — Decomposes a project description into issues with a dependency DAG
+```yaml
+name: AI Orchestrate
+on:
+  workflow_dispatch:
+    inputs:
+      project_description:
+        description: >
+          Full project description. The orchestrator will decompose it into
+          issues with a dependency DAG and dispatch them through the AI pipeline.
+        required: true
+        type: string
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+jobs:
+  orchestrate:
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@stable
+    with:
+      project_description: ${{ inputs.project_description }}
+    secrets: inherit
+```
+
+**`.github/workflows/ai-orchestrate-poll.yml`** — Polls orchestrator progress, runs judge, dispatches next waves
+```yaml
+name: AI Orchestrate Poller
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+jobs:
+  poll:
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@stable
     secrets: inherit
 ```
 
