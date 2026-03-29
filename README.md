@@ -38,6 +38,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | No | `true` | plan | Auto-trigger implementation when plan is clear |
 | `ALLOW_WORKFLOW_EDITS` | No | `false` | review_autofix | Allow AI edits to `.github/workflows` files |
 | `ENABLE_AUTO_MERGE` | No | `false` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
+| `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR ready to merge. |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix | Version/branch of the Serena MCP server |
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix | Languages for Serena symbol analysis |
@@ -260,6 +261,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | `true` | Auto-approve clear plans |
 | `ALLOW_WORKFLOW_EDITS` | `false` | Allow AI edits to workflow files |
 | `ENABLE_AUTO_MERGE` | `false` | Auto-merge PRs (squash) when review passes and checks are green |
+| `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before stopping |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
