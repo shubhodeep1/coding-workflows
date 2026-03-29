@@ -297,8 +297,8 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | Secret | Used By | Description |
 |---|---|---|
 | `GH_PAT` | All workflows | GitHub PAT with repo access |
-| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate | OpenRouter API key for LLM access |
-| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate | Telegram bot token (optional) |
+| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | OpenRouter API key for LLM access |
+| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Telegram bot token (optional) |
 
 ## Required Variables
 
