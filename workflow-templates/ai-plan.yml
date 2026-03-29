@@ -1,0 +1,11 @@
+name: AI Plan
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  issues: write
+jobs:
+  plan:
+    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@stable
+    secrets: inherit

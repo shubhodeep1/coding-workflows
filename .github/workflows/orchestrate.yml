@@ -1,0 +1,524 @@
+---
+name: AI Orchestrate (Reusable)
+
+"on":
+  workflow_call:
+    inputs:
+      project_description:
+        description: >
+          Full project description. The orchestrator will clarify scope,
+          decompose into issues with a dependency DAG, create the tracking
+          issue and child issues, and kick off Wave 1.
+        required: true
+        type: string
+    secrets:
+      GH_PAT:
+        required: true
+      OPENROUTER_API_KEY:
+        required: true
+      TG_BOT_SECRET:
+        required: false
+
+env:
+  MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_ORCHESTRATE || 'xhigh' }}
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: ai-orchestrate-${{ github.repository }}-${{ github.run_id }}
+      cancel-in-progress: false
+    env:
+      ORCHESTRATE_POLL_INTERVAL: ${{ vars.ORCHESTRATE_POLL_INTERVAL || '10' }}
+
+    steps:
+      - name: Log trigger context
+        run: |
+          echo "Orchestrate workflow triggered"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Model: ${MODEL_EDITOR}"
+          echo "Reasoning: ${MODEL_REASONING_EFFORT}"
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup runtime
+        uses: ./.github/actions/setup-runtime
+        with:
+          runtime_prefix: codex-orchestrate
+          required_env_csv: OPENROUTER_API_KEY
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+      - name: Create runtime workspace
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/codex-orchestrate-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+          {
+            echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "DECOMPOSITION_FILE=${RUNTIME_DIR}/decomposition.json"
+            echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
+            echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
+            echo "TRACKING_BODY_FILE=${RUNTIME_DIR}/tracking_body.md"
+            echo "STATE_FILE=${RUNTIME_DIR}/state.json"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch workflow support scripts
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          wf_source="${{ github.repository_owner }}/coding-workflows"
+          mkdir -p scripts
+          for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py; do
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
+            chmod +x "scripts/${f}"
+          done
+          # Fetch prompt template
+          mkdir -p prompts
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/prompts/mode-orchestrate.txt?ref=stable" > "prompts/mode-orchestrate.txt"
+          # Fetch schema for reference in prompt
+          mkdir -p .github/ai
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=stable" > ".github/ai/orchestrate_schema.v1.json"
+          # Fetch canonical instruction files
+          for f in codex_system_instructions.md ai_pipeline.md; do
+            if [ ! -f "${f}" ]; then
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
+            fi
+          done
+
+      - name: Create Codex config
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.codex
+          {
+            echo 'web_search = "live"'
+            echo 'model_provider = "openrouter"'
+            echo "model = \"${MODEL_EDITOR}\""
+            echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+            echo
+            echo '[model_providers.openrouter]'
+            echo 'name = "OpenRouter"'
+            echo 'base_url = "https://openrouter.ai/api/v1"'
+            echo 'env_key = "OPENROUTER_API_KEY"'
+            echo 'wire_api = "responses"'
+            echo 'stream_idle_timeout_ms = 600000'
+            echo 'stream_max_retries = 5'
+            echo 'request_max_retries = 3'
+            echo
+            echo '[sandbox_workspace_write]'
+            echo 'network_access = true'
+          } > ~/.codex/config.toml
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Setup Serena MCP server
+        env:
+          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
+          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
+          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/setup_serena.sh --mode planning --context codex
+
+      - name: Pre-assemble static context
+        run: |
+          set -euo pipefail
+
+          {
+            echo "=== SYSTEM INSTRUCTIONS ==="
+            cat codex_system_instructions.md
+            echo
+            echo "=== AI PIPELINE ==="
+            cat ai_pipeline.md
+            echo
+            if [ -f agents.md ]; then
+              echo "=== AGENTS.MD ==="
+              cat agents.md
+              echo
+            fi
+            if [ -f README.md ]; then
+              echo "=== README.MD ==="
+              cat README.md
+              echo
+            fi
+          } > ./pre_assembled_static.txt
+
+          STATIC_LINES="$(wc -l < ./pre_assembled_static.txt)"
+          STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
+          echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
+
+      - name: Build Codex prompt
+        env:
+          TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_ORCHESTRATE || '40' }}
+        run: |
+          set -euo pipefail
+
+          {
+            cat ./pre_assembled_static.txt
+            echo
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo
+            echo "=== ORCHESTRATION TASK ==="
+            echo
+            cat prompts/mode-orchestrate.txt
+            echo
+            echo "=== DECOMPOSITION SCHEMA ==="
+            echo
+            cat .github/ai/orchestrate_schema.v1.json
+            echo
+            echo "=== PROJECT DESCRIPTION ==="
+            echo
+            cat <<'PROJECT_DESC_EOF'
+          ${{ inputs.project_description }}
+          PROJECT_DESC_EOF
+          } > "${CODEX_PROMPT_FILE}"
+
+          echo "Prompt built: $(wc -l < "${CODEX_PROMPT_FILE}") lines, $(wc -c < "${CODEX_PROMPT_FILE}") bytes"
+
+      - name: Run Codex (decomposer)
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          max_attempts=3
+          for attempt in $(seq 1 "${max_attempts}"); do
+            echo "Codex orchestrate attempt ${attempt}/${max_attempts}..."
+            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+              if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+                echo "Codex orchestrate succeeded on attempt ${attempt}."
+                break
+              fi
+              echo "::warning::Codex returned empty output on attempt ${attempt}."
+            else
+              rc=$?
+              echo "::warning::Codex exited with code $rc on attempt ${attempt}."
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$(( 10 * (2 ** (attempt - 1)) + RANDOM % 10 ))
+              echo "Retrying in ${sleep_secs}s (includes jitter)..."
+              sleep "${sleep_secs}"
+            else
+              echo "::error::Codex orchestrate failed after ${max_attempts} attempts."
+              exit 1
+            fi
+          done
+
+      - name: Extract and validate decomposition JSON
+        run: |
+          set -euo pipefail
+
+          # The LLM may wrap output in markdown fences or add prose around the JSON.
+          # Extract the first JSON object from the output.
+          python3 -c "
+          import json, re, sys
+
+          raw = open('${CODEX_OUTPUT_FILE}', 'r').read()
+
+          # Try parsing the whole output as JSON first
+          try:
+              data = json.loads(raw.strip())
+              json.dump(data, open('${DECOMPOSITION_FILE}', 'w'), indent=2)
+              sys.exit(0)
+          except json.JSONDecodeError:
+              pass
+
+          # Strip markdown fences and try again
+          cleaned = re.sub(r'\`\`\`(?:json)?\s*', '', raw)
+          cleaned = re.sub(r'\`\`\`\s*$', '', cleaned, flags=re.MULTILINE)
+
+          # Find the first { ... } block
+          brace_depth = 0
+          start = None
+          for i, ch in enumerate(cleaned):
+              if ch == '{':
+                  if brace_depth == 0:
+                      start = i
+                  brace_depth += 1
+              elif ch == '}':
+                  brace_depth -= 1
+                  if brace_depth == 0 and start is not None:
+                      candidate = cleaned[start:i+1]
+                      try:
+                          data = json.loads(candidate)
+                          json.dump(data, open('${DECOMPOSITION_FILE}', 'w'), indent=2)
+                          sys.exit(0)
+                      except json.JSONDecodeError:
+                          start = None
+
+          print('ERROR: Could not extract valid JSON from Codex output', file=sys.stderr)
+          print('Raw output (first 2000 chars):', file=sys.stderr)
+          print(raw[:2000], file=sys.stderr)
+          sys.exit(1)
+          "
+
+          # Validate against schema rules
+          python3 scripts/orchestrate_lib.py validate --input-file "${DECOMPOSITION_FILE}"
+          echo "Decomposition validated successfully."
+
+          # Compute waves for logging
+          python3 scripts/orchestrate_lib.py compute-waves --input-file "${DECOMPOSITION_FILE}"
+
+      - name: Create tracking issue
+        id: tracking_issue
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          # Build tracking issue body
+          python3 scripts/orchestrate_lib.py build-tracking-body \
+            --input-file "${DECOMPOSITION_FILE}" > "${TRACKING_BODY_FILE}"
+
+          PROJECT_TITLE="$(jq -r '.project_title' "${DECOMPOSITION_FILE}")"
+
+          TRACKING_ISSUE_URL="$(gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "[Orchestrator] ${PROJECT_TITLE}" \
+            --body-file "${TRACKING_BODY_FILE}" \
+            --label "ai:orchestrator-tracking")"
+
+          TRACKING_ISSUE_NUMBER="$(echo "${TRACKING_ISSUE_URL}" | grep -oE '[0-9]+$')"
+
+          echo "Created tracking issue #${TRACKING_ISSUE_NUMBER}: ${TRACKING_ISSUE_URL}"
+          {
+            echo "tracking_issue_number=${TRACKING_ISSUE_NUMBER}"
+            echo "tracking_issue_url=${TRACKING_ISSUE_URL}"
+          } >> "$GITHUB_OUTPUT"
+          echo "TRACKING_ISSUE_NUMBER=${TRACKING_ISSUE_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: Create Wave 1 issues only
+        id: create_issues
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+        run: |
+          set -euo pipefail
+
+          # Only create Wave 1 issues now. Later-wave issues are created by the
+          # poller when their dependencies are met (deferred creation). This
+          # ensures clarify.yml fires on issues.opened at the right time.
+          WAVE1_IDS="$(python3 -c "
+          import json, sys
+          sys.path.insert(0, 'scripts')
+          from orchestrate_lib import validate_decomposition, compute_waves
+
+          with open('${DECOMPOSITION_FILE}') as f:
+              data = json.load(f)
+
+          validate_decomposition(data)
+          waves = compute_waves(data)
+          for issue in waves[0]:
+              print(issue['id'])
+          ")"
+
+          echo "Wave 1 issue IDs: ${WAVE1_IDS}"
+
+          # Build a map of local_id -> github_issue_number (Wave 1 only)
+          declare -A ISSUE_MAP
+
+          ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}")"
+          for idx in $(seq 0 $(( ISSUE_COUNT - 1 ))); do
+            LOCAL_ID="$(jq -r ".issues[${idx}].id" "${DECOMPOSITION_FILE}")"
+
+            # Skip issues not in Wave 1
+            if ! echo "${WAVE1_IDS}" | grep -qxF "${LOCAL_ID}"; then
+              echo "  Deferring ${LOCAL_ID} (not in Wave 1)"
+              continue
+            fi
+
+            TITLE="$(jq -r ".issues[${idx}].title" "${DECOMPOSITION_FILE}")"
+            BODY="$(jq -r ".issues[${idx}].body" "${DECOMPOSITION_FILE}")"
+            PRIORITY="$(jq -r ".issues[${idx}].priority" "${DECOMPOSITION_FILE}")"
+
+            # Append orchestrator metadata to body
+            FULL_BODY="$(cat <<EOF
+          ${BODY}
+
+          ---
+          **Orchestrator metadata** (do not edit)
+          - Tracking issue: #${TRACKING_ISSUE_NUMBER}
+          - Local ID: \`${LOCAL_ID}\`
+          - Priority: ${PRIORITY}
+          - Managed by: AI Orchestrator
+          EOF
+          )"
+
+            ISSUE_URL="$(gh issue create \
+              --repo "${{ github.repository }}" \
+              --title "${TITLE}" \
+              --body "${FULL_BODY}")"
+
+            ISSUE_NUM="$(echo "${ISSUE_URL}" | grep -oE '[0-9]+$')"
+            ISSUE_MAP["${LOCAL_ID}"]="${ISSUE_NUM}"
+            echo "  Created #${ISSUE_NUM}: ${TITLE} (${LOCAL_ID})"
+          done
+
+          # Write issue map as JSON for state tracking
+          MAP_JSON="{"
+          first=true
+          for key in "${!ISSUE_MAP[@]}"; do
+            if [ "${first}" = true ]; then
+              first=false
+            else
+              MAP_JSON+=","
+            fi
+            MAP_JSON+="\"${key}\":${ISSUE_MAP[${key}]}"
+          done
+          MAP_JSON+="}"
+          echo "${MAP_JSON}" | jq '.' > "${RUNTIME_DIR}/issue_map.json"
+          echo "Issue map (Wave 1 only): $(cat "${RUNTIME_DIR}/issue_map.json")"
+
+      - name: Build and post initial state
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+        run: |
+          set -euo pipefail
+
+          # Build state using Python helper
+          python3 -c "
+          import json
+
+          with open('${DECOMPOSITION_FILE}') as f:
+              data = json.load(f)
+
+          with open('${RUNTIME_DIR}/issue_map.json') as f:
+              issue_map_raw = json.load(f)
+
+          # Convert string values to ints
+          issue_map = {k: int(v) for k, v in issue_map_raw.items()}
+
+          # Import the library
+          import sys
+          sys.path.insert(0, 'scripts')
+          from orchestrate_lib import validate_decomposition, compute_waves, build_tracking_state
+
+          validate_decomposition(data)
+          waves = compute_waves(data)
+          state = build_tracking_state(data, waves, issue_map)
+          state['tracking_issue'] = int('${TRACKING_ISSUE_NUMBER}')
+
+          with open('${STATE_FILE}', 'w') as f:
+              json.dump(state, f, indent=2)
+          "
+
+          # Post state as a hidden comment on the tracking issue for the poller
+          STATE_COMMENT="$(cat <<EOF
+          <!-- ORCHESTRATOR_STATE_V1
+          $(cat "${STATE_FILE}")
+          ORCHESTRATOR_STATE_V1 -->
+          EOF
+          )"
+
+          gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+            -f body="${STATE_COMMENT}" >/dev/null
+          echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER}"
+
+      - name: Dispatch Wave 1
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+        run: |
+          set -euo pipefail
+
+          # Get wave 1 issues from state
+          WAVE1_ISSUES="$(python3 scripts/orchestrate_lib.py next-wave --state-file "${STATE_FILE}")"
+          echo "Wave 1 dispatch: ${WAVE1_ISSUES}"
+
+          ACTION="$(echo "${WAVE1_ISSUES}" | jq -r '.action')"
+          if [ "${ACTION}" != "dispatch" ]; then
+            echo "::warning::No issues to dispatch (action=${ACTION})"
+            exit 0
+          fi
+
+          # The existing pipeline triggers on issue creation (clarify.yml).
+          # Issues were just created above, so clarify.yml should fire automatically.
+          # Log what we expect to happen.
+          echo "${WAVE1_ISSUES}" | jq -r '.issues[] | "  Issue #\(.github_issue) (\(.id)) — awaiting clarify pipeline"'
+
+          # Post wave dispatch status to tracking issue
+          WAVE1_COMMENT="## Wave 1 Dispatched
+
+          The following issues have been created and are entering the AI pipeline:
+
+          $(echo "${WAVE1_ISSUES}" | jq -r '.issues[] | "- #\(.github_issue) (\`.id\`\(.id)\`)"')
+
+          The orchestrator poller will monitor progress and dispatch subsequent waves when dependencies are met."
+
+          gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+            -f body="${WAVE1_COMMENT}" >/dev/null
+
+      - name: Write run summary
+        if: always()
+        env:
+          TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_ORCHESTRATE || '200000' }}
+        run: |
+          set -euo pipefail
+          TOKENS=""
+          if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
+            TOKENS="$(grep -A1 'tokens used' "${RUNTIME_DIR}/codex_log.txt" | tail -1 | tr -d '[:space:]' || true)"
+          fi
+          ISSUE_COUNT="0"
+          WAVE_COUNT="0"
+          if [ -f "${DECOMPOSITION_FILE}" ]; then
+            ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
+            WAVE_COUNT="$(jq '.dependency_edges | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
+          fi
+          {
+            echo "## AI Orchestrate Summary"
+            echo "| Key | Value |"
+            echo "|-----|-------|"
+            echo "| Model | \`${MODEL_EDITOR}\` |"
+            echo "| Reasoning | \`${MODEL_REASONING_EFFORT}\` |"
+            if [ -n "${TOKENS}" ]; then
+              echo "| Tokens used | ${TOKENS} |"
+              TOKENS_NUM="${TOKENS//,/}"
+              if [ "${TOKENS_NUM}" -gt "${TOKEN_WARN_THRESHOLD}" ] 2>/dev/null; then
+                echo "| :warning: Token alert | Above ${TOKEN_WARN_THRESHOLD} threshold |"
+              fi
+            fi
+            echo "| Issues created | ${ISSUE_COUNT} |"
+            if [ -n "${TRACKING_ISSUE_NUMBER:-}" ]; then
+              echo "| Tracking issue | #${TRACKING_ISSUE_NUMBER} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify via Telegram
+        if: always()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_BOT_SECRET}" ] || [ -z "${TG_ADMIN_CHAT_ID}" ]; then
+            echo "Telegram not configured, skipping."
+            exit 0
+          fi
+          STATUS="${{ job.status }}"
+          ISSUE_COUNT="0"
+          if [ -f "${DECOMPOSITION_FILE}" ]; then
+            ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
+          fi
+          if [ "${STATUS}" = "success" ]; then
+            MSG="✅ Orchestrator: Decomposed project into ${ISSUE_COUNT} issues. Tracking: #${TRACKING_ISSUE_NUMBER:-?}"
+          else
+            MSG="❌ Orchestrator: Failed (${STATUS}). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d chat_id="${TG_ADMIN_CHAT_ID}" \
+            -d text="${MSG}" \
+            -d parse_mode="Markdown" >/dev/null 2>&1 || echo "::warning::Telegram notification failed"

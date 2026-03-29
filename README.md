@@ -37,6 +37,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `WORKFLOW_EDITOR_MODEL` | No | `openai/gpt-5.3-codex` | clarify, plan, implement, review_autofix | Model for code editing tasks |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | No | `true` | plan | Auto-trigger implementation when plan is clear |
 | `ALLOW_WORKFLOW_EDITS` | No | `false` | review_autofix | Allow AI edits to `.github/workflows` files |
+| `ENABLE_AUTO_MERGE` | No | `false` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix | Version/branch of the Serena MCP server |
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix | Languages for Serena symbol analysis |
@@ -70,7 +71,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 
 ### 2. Create wrapper workflows
 
-Add thin wrapper workflows in your repo's `.github/workflows/` directory. Reference implementations live in [`.github/workflows/internal-*.yml`](.github/workflows/) in this repository.
+Copy the ready-to-use templates from [`workflow-templates/`](workflow-templates/) into your repo's `.github/workflows/` directory. Reference implementations also live in [`.github/workflows/internal-*.yml`](.github/workflows/) in this repository.
 
 At minimum, create these three core wrappers:
 
@@ -226,7 +227,7 @@ jobs:
     secrets: inherit
 ```
 
-See `workflow-templates/` in consumer repos for all wrapper examples.
+See [`workflow-templates/`](workflow-templates/) in this repository for ready-to-copy caller wrappers.
 
 ## Reusable Workflows
 
@@ -239,14 +240,16 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `issue_pr_status.yml` | `pull_request.closed` | Label/state sync |
 | `cancel_on_pr_close.yml` | `pull_request.closed` | Active-run cancellation |
 | `memory_maintenance.yml` | `schedule` (monthly) | Memory compaction/archival |
+| `orchestrate.yml` | `workflow_dispatch` | Project decomposition + multi-issue orchestration |
+| `orchestrate_poll.yml` | `schedule` (every ~10 min) | Orchestrator progress poller + judge + auto-recovery |
 
 ## Required Secrets
 
 | Secret | Used By | Description |
 |---|---|---|
 | `GH_PAT` | All workflows | GitHub PAT with repo access |
-| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix | OpenRouter API key for LLM access |
-| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix | Telegram bot token (optional) |
+| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate | OpenRouter API key for LLM access |
+| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate | Telegram bot token (optional) |
 
 ## Required Variables
 
@@ -256,6 +259,7 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `TG_ADMIN_CHAT_ID` | — | Telegram chat ID for notifications |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | `true` | Auto-approve clear plans |
 | `ALLOW_WORKFLOW_EDITS` | `false` | Allow AI edits to workflow files |
+| `ENABLE_AUTO_MERGE` | `false` | Auto-merge PRs (squash) when review passes and checks are green |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
@@ -271,6 +275,83 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `TOKEN_WARN_THRESHOLD_CLARIFY` | `80000` | Token warning threshold for clarification |
 | `TOKEN_WARN_THRESHOLD_PLAN` | `200000` | Token warning threshold for planning |
 | `TOKEN_WARN_THRESHOLD_IMPLEMENT` | `200000` | Token warning threshold for implementation |
+| `WORKFLOW_ORCHESTRATE_MODEL` | (falls back to `WORKFLOW_EDITOR_MODEL`) | Model override for orchestrator/judge |
+| `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | Reasoning effort for project decomposition |
+| `THINKING_LEVEL_JUDGE` | `xhigh` | Reasoning effort for judge evaluation |
+| `ORCHESTRATE_POLL_INTERVAL` | `10` | Minutes between orchestrator poll checks |
+| `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | Tool call budget for decomposer |
+| `TOOL_CALL_BUDGET_JUDGE` | `60` | Tool call budget for judge (needs deep repo inspection) |
+| `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |
+
+## Project Orchestrator
+
+The orchestrator enables complex, multi-issue projects from a single prompt. It decomposes a project description into a dependency-aware DAG of GitHub issues, dispatches them through the existing AI pipeline in waves, and uses a judge to validate results between waves.
+
+### Architecture
+
+```
+workflow_dispatch (project description)
+    → Decomposer (LLM): breaks project into issues + dependency DAG
+    → Creates tracking issue + child issues
+    → Wave 1 issues enter pipeline (clarify → plan → implement → review → merge)
+    → Poller (scheduled): monitors progress, dispatches next waves
+    → Judge (LLM, xhigh thinking, full repo checkout): evaluates after each wave
+        → complete: close tracking issue
+        → in_progress: create fix-up issues, advance to next wave
+        → failed: auto-recovery (revert + re-plan, retry once), then stop
+```
+
+### Setup
+
+**1.** Copy the two wrapper workflows from [`workflow-templates/`](workflow-templates/) into your consumer repo's `.github/workflows/` directory:
+
+- [`ai-orchestrate.yml`](workflow-templates/ai-orchestrate.yml) — triggers decomposition via `workflow_dispatch`
+- [`ai-orchestrate-poll.yml`](workflow-templates/ai-orchestrate-poll.yml) — scheduled poller (every 10 min)
+
+Or create them manually — see the inline examples in the [Quickstart](#quickstart) section above.
+
+**2.** Ensure your repo has the required secrets (`GH_PAT`, `OPENROUTER_API_KEY`) and optionally configure the orchestrator variables listed in [Required Variables](#required-variables).
+
+**3.** Go to **Actions → AI Orchestrate → Run workflow**, paste your project description, and click **Run workflow**.
+
+### How it works
+
+1. **Decomposition:** The LLM reads your repo, breaks the project into scoped issues with a dependency graph, and creates a tracking issue (labeled `ai:orchestrator-tracking`).
+2. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically.
+3. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
+4. **Polling:** Every 10 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
+5. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
+6. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
+7. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted once; if it still fails, the project stops and the operator is notified via Telegram.
+8. **Completion:** When the judge says "complete", the tracking issue is closed.
+
+### Enabling auto-merge
+
+Auto-merge works at two levels: the **review workflow** (merges individual PRs right after review passes) and the **orchestrator poller** (merges PRs for orchestrator-managed issues). Both use the same `ENABLE_AUTO_MERGE` variable.
+
+**Step 1: Enable in GitHub repo settings**
+1. Go to **Settings → General → Pull Requests** and check **Allow auto-merge**.
+2. If you use branch protection, ensure your required status checks are configured (the PR will auto-merge once they pass).
+
+**Step 2: Set the variable**
+In **Settings → Secrets and variables → Actions → Variables**, add:
+- `ENABLE_AUTO_MERGE` = `true`
+
+This enables `gh pr merge --squash --auto` in both `review_autofix.yml` (right after setting `ai:ready-to-merge`) and the orchestrator poller. GitHub queues the merge and executes it once all required checks pass.
+
+**Branch protection compatibility:**
+
+| Setup | Auto-merge behavior |
+|---|---|
+| No branch protection | PR merged immediately after review passes |
+| Branch protection + required checks | PR queued, merged once checks pass |
+| Branch protection + required human reviews | Cannot auto-merge unless bot account is added as a bypass actor |
+
+Your `GH_PAT` must have permission to enable auto-merge (repo scope with admin or write access).
+
+### Labels
+
+The orchestrator uses `ai:orchestrator-tracking` for tracking issues. Child issues use the standard `ai:*` phase labels. The `ai:orchestrator-tracking` label is defined in the [label contract](/.github/ai/label_contract.v1.json).
 
 ## Repository Structure
 
@@ -280,8 +361,9 @@ coding-workflows/
     workflows/          # Reusable workflow_call workflows
     actions/
       setup-runtime/    # Shared composite action for runtime setup
-  scripts/              # Helper scripts (memory, context, git)
-  prompts/              # LLM prompt templates
+    ai/                 # AI config: label contract, orchestrate schema
+  scripts/              # Helper scripts (memory, context, git, orchestrator)
+  prompts/              # LLM prompt templates (clarify, plan, orchestrate, judge)
   ai-memory/            # Memory schemas, config, and examples
   netwask/              # Agent configuration
   docs/                 # Documentation

@@ -1,0 +1,13 @@
+name: AI Orchestrate Poller
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+jobs:
+  poll:
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@stable
+    secrets: inherit

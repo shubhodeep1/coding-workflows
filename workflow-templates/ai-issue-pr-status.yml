@@ -1,0 +1,10 @@
+name: AI Issue PR Status
+on:
+  pull_request:
+    types: [closed]
+permissions:
+  issues: write
+jobs:
+  status:
+    uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@stable
+    secrets: inherit
