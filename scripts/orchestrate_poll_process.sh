@@ -1,4 +1,4 @@
-#\!/usr/bin/env bash
+#!/usr/bin/env bash
 # orchestrate_poll_process.sh — Process active orchestrator tracking issues.
 # Extracted from orchestrate_poll.yml to stay within GitHub Actions
 # expression length limits (21 000 chars max per run block).
