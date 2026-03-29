@@ -35,7 +35,7 @@ name: Test & Mark Stable Release
           Increase for repos with large codebases or slow LLM providers.
         required: false
         type: number
-        default: 15
+        default: 60
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
