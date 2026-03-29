@@ -142,6 +142,14 @@ jobs:
     secrets: inherit
 ```
 
+> **Warning — do NOT add a top-level `concurrency` block to this wrapper.**
+> The reusable workflow already manages concurrency at the job level. Adding a
+> workflow-level `concurrency` group with the same key (e.g.
+> `pr-autofix-${{ github.event.pull_request.number }}`) causes a deadlock:
+> the caller holds the lock while the called job waits for it, and GitHub
+> Actions cancels the run. If you need to customize the concurrency group,
+> do so only inside the reusable workflow, not in the caller.
+
 **`.github/workflows/ai-issue-pr-status.yml`** — Syncs issue labels when PRs are merged/closed
 ```yaml
 name: AI Issue PR Status
