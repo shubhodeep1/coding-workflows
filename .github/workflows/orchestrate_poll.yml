@@ -212,6 +212,10 @@ jobs:
             LABELS_JSON="{"
             first=true
             for inum in ${ISSUE_NUMS}; do
+              # Skip null/empty entries (not-yet-created issues in deferred waves)
+              if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
+                continue
+              fi
               LABELS="$(gh api "repos/${{ github.repository }}/issues/${inum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
               if [ "${first}" = true ]; then
                 first=false

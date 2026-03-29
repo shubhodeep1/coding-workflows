@@ -32,6 +32,10 @@
     "ai:closed": {
       "color": "6a737d",
       "description": "Linked PR closed without merge"
+    },
+    "ai:orchestrator-tracking": {
+      "color": "a2eeef",
+      "description": "Orchestrator project tracking issue"
     }
   },
   "phase_groups": [
