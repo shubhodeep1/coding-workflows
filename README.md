@@ -218,7 +218,7 @@ jobs:
     secrets: inherit
 ```
 
-See `workflow-templates/` in consumer repos for all wrapper examples.
+See [`workflow-templates/`](workflow-templates/) in this repository for ready-to-copy caller wrappers.
 
 ## Reusable Workflows
 
@@ -293,60 +293,46 @@ workflow_dispatch (project description)
 
 ### Setup
 
-Add these wrapper workflows to your consumer repo:
+**1.** Copy the two wrapper workflows from [`workflow-templates/`](workflow-templates/) into your consumer repo's `.github/workflows/` directory:
 
-**`.github/workflows/ai-orchestrate.yml`** — Decomposes a project and kicks off the pipeline
-```yaml
-name: AI Orchestrate
-on:
-  workflow_dispatch:
-    inputs:
-      project_description:
-        description: Full project description
-        required: true
-        type: string
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-jobs:
-  orchestrate:
-    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@stable
-    with:
-      project_description: ${{ inputs.project_description }}
-    secrets: inherit
-```
+- [`ai-orchestrate.yml`](workflow-templates/ai-orchestrate.yml) — triggers decomposition via `workflow_dispatch`
+- [`ai-orchestrate-poll.yml`](workflow-templates/ai-orchestrate-poll.yml) — scheduled poller (every 10 min)
 
-**`.github/workflows/ai-orchestrate-poll.yml`** — Polls progress and runs the judge
-```yaml
-name: AI Orchestrate Poller
-on:
-  schedule:
-    - cron: '*/10 * * * *'
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-  actions: write
-jobs:
-  poll:
-    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@stable
-    secrets: inherit
-```
+Or create them manually — see the inline examples in the [Quickstart](#quickstart) section above.
+
+**2.** Ensure your repo has the required secrets (`GH_PAT`, `OPENROUTER_API_KEY`) and optionally configure the orchestrator variables listed in [Required Variables](#required-variables).
+
+**3.** Go to **Actions → AI Orchestrate → Run workflow**, paste your project description, and click **Run workflow**.
 
 ### How it works
 
-1. **Trigger:** Go to Actions → AI Orchestrate → Run workflow. Paste your project description.
-2. **Decomposition:** The LLM reads the repo, breaks the project into scoped issues with a dependency graph, and creates a tracking issue.
-3. **Wave dispatch:** Issues with no dependencies (Wave 1) enter the existing clarify → plan → implement pipeline automatically.
+1. **Decomposition:** The LLM reads your repo, breaks the project into scoped issues with a dependency graph, and creates a tracking issue (labeled `ai:orchestrator-tracking`).
+2. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically.
+3. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
 4. **Polling:** Every 10 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
-5. **Judge:** Full repo checkout + tool access. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
-6. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted once; if it fails again, the project stops and the operator is notified.
-7. **Completion:** When the judge says "complete", the tracking issue is closed.
+5. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
+6. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
+7. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted once; if it still fails, the project stops and the operator is notified via Telegram.
+8. **Completion:** When the judge says "complete", the tracking issue is closed.
+
+### Enabling auto-merge
+
+For fully hands-off operation, the poller needs to be able to merge PRs. There are three options depending on your repo's branch protection setup:
+
+**Option A: No branch protection (simplest)**
+The poller merges PRs directly with `gh pr merge --squash`. No extra config needed.
+
+**Option B: Branch protection with auto-merge enabled**
+1. Go to **Settings → General → Pull Requests** and check **Allow auto-merge**.
+2. The poller uses `gh pr merge --squash --auto`, which queues the PR for merge once all required status checks pass.
+3. Your `GH_PAT` must have permission to enable auto-merge.
+
+**Option C: Branch protection with required reviews**
+If your branch protection requires human reviews, the orchestrator cannot fully auto-merge. The poller will attempt to merge but log a warning. You'll need to manually approve PRs or add the bot account as a bypass actor in branch protection settings.
 
 ### Labels
 
-The orchestrator uses `ai:orchestrator-tracking` for tracking issues. Child issues use the standard `ai:*` phase labels.
+The orchestrator uses `ai:orchestrator-tracking` for tracking issues. Child issues use the standard `ai:*` phase labels. The `ai:orchestrator-tracking` label is defined in the [label contract](/.github/ai/label_contract.v1.json).
 
 ## Repository Structure
 

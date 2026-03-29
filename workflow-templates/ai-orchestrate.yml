@@ -1,0 +1,20 @@
+name: AI Orchestrate
+on:
+  workflow_dispatch:
+    inputs:
+      project_description:
+        description: >
+          Full project description. The orchestrator will decompose it into
+          issues with a dependency DAG and dispatch them through the AI pipeline.
+        required: true
+        type: string
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+jobs:
+  orchestrate:
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@stable
+    with:
+      project_description: ${{ inputs.project_description }}
+    secrets: inherit
