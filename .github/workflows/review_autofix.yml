@@ -502,7 +502,20 @@ jobs:
           echo "CAN_PUSH=true" >> "$GITHUB_ENV"
           echo "TARGET_BRANCH=${HEAD_REF}" >> "$GITHUB_ENV"
 
+      - name: Check for autofix re-trigger
+        id: retrigger_guard
+        run: |
+          set -euo pipefail
+          HEAD_MSG="$(git log -1 --format='%s' HEAD 2>/dev/null || true)"
+          if echo "${HEAD_MSG}" | grep -q '^\[ai-autofix\]'; then
+            echo "Head commit is an autofix commit — skipping review/editor to avoid re-trigger loop."
+            echo "is_autofix_retrigger=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_autofix_retrigger=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Generate diff context
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         run: |
           set -euo pipefail
 
@@ -664,7 +677,7 @@ jobs:
           } > "${RUNTIME_CONTEXT_DIR}/run_logs_best_effort.txt" || true
 
       - name: Run reviewer models
-
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         id: reviewers
         run: |
           set -euo pipefail
@@ -1289,7 +1302,7 @@ jobs:
           echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
 
       - name: Filter reviewer issues by consensus
-
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         run: |
           set -euo pipefail
 
@@ -1329,14 +1342,14 @@ jobs:
           } > "${REVIEWER_CONSENSUS_FILE}"
 
       - name: Switch reasoning effort for editor
-
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         run: |
           set -euo pipefail
           sed -i "s/model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
           echo "Updated reasoning effort from ${REVIEWER_REASONING_EFFORT} to ${EDITOR_REASONING_EFFORT} for editor phase"
 
       - name: Apply fixes with editor model
-
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         run: |
           set -euo pipefail
 
@@ -1853,7 +1866,7 @@ jobs:
             }
 
       - name: Commit changes
-
+        if: steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         id: commit_changes
         run: |
           set -euo pipefail
@@ -2025,7 +2038,7 @@ jobs:
           fi
 
       - name: Post editor summary comment
-        if: always()
+        if: always() && steps.retrigger_guard.outputs.is_autofix_retrigger != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -2084,7 +2097,7 @@ jobs:
 
 
       - name: Detect merge conflicts
-        if: success() && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true'
+        if: success() && steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -2123,7 +2136,7 @@ jobs:
           fi
 
       - name: Resolve merge conflicts with Codex
-        if: success() && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true'
+        if: success() && steps.retrigger_guard.outputs.is_autofix_retrigger != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true'
         run: |
           set -euo pipefail
 
@@ -2234,7 +2247,7 @@ jobs:
             --data-urlencode "text=${MSG}"
 
       - name: Mark linked issues ready to merge
-        if: success() && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'
+        if: success() && (steps.retrigger_guard.outputs.is_autofix_retrigger == 'true' || (steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -2261,7 +2274,7 @@ jobs:
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Telegram success
-        if: success() && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'
+        if: success() && (steps.retrigger_guard.outputs.is_autofix_retrigger == 'true' || (steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'))
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
