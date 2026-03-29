@@ -231,14 +231,16 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `issue_pr_status.yml` | `pull_request.closed` | Label/state sync |
 | `cancel_on_pr_close.yml` | `pull_request.closed` | Active-run cancellation |
 | `memory_maintenance.yml` | `schedule` (monthly) | Memory compaction/archival |
+| `orchestrate.yml` | `workflow_dispatch` | Project decomposition + multi-issue orchestration |
+| `orchestrate_poll.yml` | `schedule` (every ~10 min) | Orchestrator progress poller + judge + auto-recovery |
 
 ## Required Secrets
 
 | Secret | Used By | Description |
 |---|---|---|
 | `GH_PAT` | All workflows | GitHub PAT with repo access |
-| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix | OpenRouter API key for LLM access |
-| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix | Telegram bot token (optional) |
+| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate | OpenRouter API key for LLM access |
+| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate | Telegram bot token (optional) |
 
 ## Required Variables
 
@@ -263,6 +265,88 @@ See `workflow-templates/` in consumer repos for all wrapper examples.
 | `TOKEN_WARN_THRESHOLD_CLARIFY` | `80000` | Token warning threshold for clarification |
 | `TOKEN_WARN_THRESHOLD_PLAN` | `200000` | Token warning threshold for planning |
 | `TOKEN_WARN_THRESHOLD_IMPLEMENT` | `200000` | Token warning threshold for implementation |
+| `WORKFLOW_ORCHESTRATE_MODEL` | (falls back to `WORKFLOW_EDITOR_MODEL`) | Model override for orchestrator/judge |
+| `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | Reasoning effort for project decomposition |
+| `THINKING_LEVEL_JUDGE` | `xhigh` | Reasoning effort for judge evaluation |
+| `ORCHESTRATE_POLL_INTERVAL` | `10` | Minutes between orchestrator poll checks |
+| `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | Tool call budget for decomposer |
+| `TOOL_CALL_BUDGET_JUDGE` | `60` | Tool call budget for judge (needs deep repo inspection) |
+| `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |
+
+## Project Orchestrator
+
+The orchestrator enables complex, multi-issue projects from a single prompt. It decomposes a project description into a dependency-aware DAG of GitHub issues, dispatches them through the existing AI pipeline in waves, and uses a judge to validate results between waves.
+
+### Architecture
+
+```
+workflow_dispatch (project description)
+    → Decomposer (LLM): breaks project into issues + dependency DAG
+    → Creates tracking issue + child issues
+    → Wave 1 issues enter pipeline (clarify → plan → implement → review → merge)
+    → Poller (scheduled): monitors progress, dispatches next waves
+    → Judge (LLM, xhigh thinking, full repo checkout): evaluates after each wave
+        → complete: close tracking issue
+        → in_progress: create fix-up issues, advance to next wave
+        → failed: auto-recovery (revert + re-plan, retry once), then stop
+```
+
+### Setup
+
+Add these wrapper workflows to your consumer repo:
+
+**`.github/workflows/ai-orchestrate.yml`** — Decomposes a project and kicks off the pipeline
+```yaml
+name: AI Orchestrate
+on:
+  workflow_dispatch:
+    inputs:
+      project_description:
+        description: Full project description
+        required: true
+        type: string
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+jobs:
+  orchestrate:
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@stable
+    with:
+      project_description: ${{ inputs.project_description }}
+    secrets: inherit
+```
+
+**`.github/workflows/ai-orchestrate-poll.yml`** — Polls progress and runs the judge
+```yaml
+name: AI Orchestrate Poller
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+jobs:
+  poll:
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@stable
+    secrets: inherit
+```
+
+### How it works
+
+1. **Trigger:** Go to Actions → AI Orchestrate → Run workflow. Paste your project description.
+2. **Decomposition:** The LLM reads the repo, breaks the project into scoped issues with a dependency graph, and creates a tracking issue.
+3. **Wave dispatch:** Issues with no dependencies (Wave 1) enter the existing clarify → plan → implement pipeline automatically.
+4. **Polling:** Every 10 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
+5. **Judge:** Full repo checkout + tool access. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
+6. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted once; if it fails again, the project stops and the operator is notified.
+7. **Completion:** When the judge says "complete", the tracking issue is closed.
+
+### Labels
+
+The orchestrator uses `ai:orchestrator-tracking` for tracking issues. Child issues use the standard `ai:*` phase labels.
 
 ## Repository Structure
 
@@ -272,8 +356,9 @@ coding-workflows/
     workflows/          # Reusable workflow_call workflows
     actions/
       setup-runtime/    # Shared composite action for runtime setup
-  scripts/              # Helper scripts (memory, context, git)
-  prompts/              # LLM prompt templates
+    ai/                 # AI config: label contract, orchestrate schema
+  scripts/              # Helper scripts (memory, context, git, orchestrator)
+  prompts/              # LLM prompt templates (clarify, plan, orchestrate, judge)
   ai-memory/            # Memory schemas, config, and examples
   netwask/              # Agent configuration
   docs/                 # Documentation
