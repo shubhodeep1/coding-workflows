@@ -162,6 +162,8 @@ def build_tracking_state(
 		data: Validated decomposition.
 		waves: Computed wave list.
 		issue_number_map: Map of local issue id -> GitHub issue number.
+			Only Wave 1 issues need to be present; later waves are
+			created on demand by the poller (deferred creation).
 
 	Returns:
 		Tracking state dict suitable for JSON serialisation.
@@ -170,15 +172,27 @@ def build_tracking_state(
 	for wave_idx, wave in enumerate(waves):
 		wave_issues = []
 		for issue in wave:
+			gh_num = issue_number_map.get(issue["id"])
 			wave_issues.append({
 				"id": issue["id"],
-				"github_issue": issue_number_map.get(issue["id"]),
-				"status": "pending",
+				"github_issue": gh_num,
+				"status": "pending" if gh_num is not None else "not_created",
 			})
 		wave_list.append({
 			"wave": wave_idx + 1,
 			"issues": wave_issues,
 		})
+
+	# Store full issue definitions for deferred creation by the poller.
+	# Only issues NOT in issue_number_map need to be stored.
+	pending_issue_defs: dict[str, dict[str, Any]] = {}
+	for issue in data["issues"]:
+		if issue["id"] not in issue_number_map:
+			pending_issue_defs[issue["id"]] = {
+				"title": issue["title"],
+				"body": issue["body"],
+				"priority": issue["priority"],
+			}
 
 	return {
 		"schema_version": "orchestrate_state.v1",
@@ -192,6 +206,7 @@ def build_tracking_state(
 		"waves": wave_list,
 		"dependency_edges": data.get("dependency_edges", []),
 		"issue_number_map": issue_number_map,
+		"pending_issue_defs": pending_issue_defs,
 	}
 
 

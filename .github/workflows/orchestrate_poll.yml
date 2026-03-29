@@ -618,20 +618,71 @@ jobs:
                 NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
                 if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
                   echo "Advancing to wave ${NEXT_WAVE}..."
+                  NEXT_WAVE_IDX=$(( NEXT_WAVE - 1 ))
+
+                  # -----------------------------------------------------------
+                  # Deferred issue creation: create issues for this wave now.
+                  # This triggers clarify.yml via the issues.opened event.
+                  # -----------------------------------------------------------
+                  CREATED_NUMS=""
+                  NEXT_WAVE_ISSUE_IDS="$(jq -r ".waves[${NEXT_WAVE_IDX}].issues[].id" "${STATE_FILE}")"
+                  for local_id in ${NEXT_WAVE_ISSUE_IDS}; do
+                    # Check if already created (has a github_issue number)
+                    EXISTING_NUM="$(jq -r ".issue_number_map[\"${local_id}\"] // empty" "${STATE_FILE}")"
+                    if [ -n "${EXISTING_NUM}" ]; then
+                      echo "  ${local_id}: already exists as #${EXISTING_NUM}"
+                      CREATED_NUMS="${CREATED_NUMS} ${EXISTING_NUM}"
+                      continue
+                    fi
+
+                    # Get issue definition from pending_issue_defs in state
+                    ISSUE_DEF="$(jq -c ".pending_issue_defs[\"${local_id}\"] // empty" "${STATE_FILE}")"
+                    if [ -z "${ISSUE_DEF}" ]; then
+                      echo "::warning::No pending definition for ${local_id}, skipping."
+                      continue
+                    fi
+
+                    DEF_TITLE="$(echo "${ISSUE_DEF}" | jq -r '.title')"
+                    DEF_BODY="$(echo "${ISSUE_DEF}" | jq -r '.body')"
+                    DEF_PRIORITY="$(echo "${ISSUE_DEF}" | jq -r '.priority')"
+
+                    FULL_BODY="${DEF_BODY}
+
+          ---
+          **Orchestrator metadata** (do not edit)
+          - Tracking issue: #${TRACKING_NUM}
+          - Local ID: \`${local_id}\`
+          - Priority: ${DEF_PRIORITY}
+          - Managed by: AI Orchestrator"
+
+                    NEW_URL="$(gh issue create \
+                      --repo "${{ github.repository }}" \
+                      --title "${DEF_TITLE}" \
+                      --body "${FULL_BODY}")"
+
+                    NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
+                    echo "  Created #${NEW_NUM}: ${DEF_TITLE} (${local_id})"
+                    CREATED_NUMS="${CREATED_NUMS} ${NEW_NUM}"
+
+                    # Update state: record the new issue number and remove from pending
+                    jq ".issue_number_map[\"${local_id}\"] = ${NEW_NUM} | del(.pending_issue_defs[\"${local_id}\"])" \
+                      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+                    # Update the wave entry with the github issue number
+                    jq "(.waves[${NEXT_WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\")" \
+                      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+                  done
+
                   jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1" \
                     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-                  # Get next wave issue numbers
-                  NEXT_ISSUE_NUMS="$(jq -r ".waves[$((NEXT_WAVE - 1))].issues[].github_issue" "${STATE_FILE}" 2>/dev/null || echo "")"
+                  WAVE_COMMENT="## Wave ${NEXT_WAVE} Dispatched
 
-                  # The issues already exist — the pipeline should have been
-                  # triggered on creation. If they're stuck in clarification,
-                  # the existing pipeline will handle them.
-                  WAVE_COMMENT="## Wave ${NEXT_WAVE} Ready
+          Dependencies from Wave ${CURRENT_WAVE} are met. Created and dispatched:
 
-          Dependencies from Wave ${CURRENT_WAVE} are met. The following issues are now active:
+          $(for inum in ${CREATED_NUMS}; do echo "- #${inum}"; done)
 
-          $(for inum in ${NEXT_ISSUE_NUMS}; do echo "- #${inum}"; done)"
+          These issues will enter the AI pipeline (clarify → plan → implement → review)."
 
                   gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}/comments" \
                     -f body="${WAVE_COMMENT}" >/dev/null

@@ -299,7 +299,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "TRACKING_ISSUE_NUMBER=${TRACKING_ISSUE_NUMBER}" >> "$GITHUB_ENV"
 
-      - name: Create child issues
+      - name: Create Wave 1 issues only
         id: create_issues
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -307,14 +307,38 @@ jobs:
         run: |
           set -euo pipefail
 
-          ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}")"
-          echo "Creating ${ISSUE_COUNT} child issues..."
+          # Only create Wave 1 issues now. Later-wave issues are created by the
+          # poller when their dependencies are met (deferred creation). This
+          # ensures clarify.yml fires on issues.opened at the right time.
+          WAVE1_IDS="$(python3 -c "
+          import json, sys
+          sys.path.insert(0, 'scripts')
+          from orchestrate_lib import validate_decomposition, compute_waves
 
-          # Build a map of local_id -> github_issue_number
+          with open('${DECOMPOSITION_FILE}') as f:
+              data = json.load(f)
+
+          validate_decomposition(data)
+          waves = compute_waves(data)
+          for issue in waves[0]:
+              print(issue['id'])
+          ")"
+
+          echo "Wave 1 issue IDs: ${WAVE1_IDS}"
+
+          # Build a map of local_id -> github_issue_number (Wave 1 only)
           declare -A ISSUE_MAP
 
+          ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}")"
           for idx in $(seq 0 $(( ISSUE_COUNT - 1 ))); do
             LOCAL_ID="$(jq -r ".issues[${idx}].id" "${DECOMPOSITION_FILE}")"
+
+            # Skip issues not in Wave 1
+            if ! echo "${WAVE1_IDS}" | grep -qxF "${LOCAL_ID}"; then
+              echo "  Deferring ${LOCAL_ID} (not in Wave 1)"
+              continue
+            fi
+
             TITLE="$(jq -r ".issues[${idx}].title" "${DECOMPOSITION_FILE}")"
             BODY="$(jq -r ".issues[${idx}].body" "${DECOMPOSITION_FILE}")"
             PRIORITY="$(jq -r ".issues[${idx}].priority" "${DECOMPOSITION_FILE}")"
@@ -355,7 +379,7 @@ jobs:
           done
           MAP_JSON+="}"
           echo "${MAP_JSON}" | jq '.' > "${RUNTIME_DIR}/issue_map.json"
-          echo "Issue map: $(cat "${RUNTIME_DIR}/issue_map.json")"
+          echo "Issue map (Wave 1 only): $(cat "${RUNTIME_DIR}/issue_map.json")"
 
       - name: Build and post initial state
         env:
