@@ -2114,9 +2114,8 @@ jobs:
           mkdir -p "${VALIDATION_REVIEWS_DIR}"
           echo "VALIDATION_REVIEWS_DIR=${VALIDATION_REVIEWS_DIR}" >> "$GITHUB_ENV"
 
-          # Use 2 fast models for the validation pass
-          VALIDATION_MODELS="google/gemini-3-flash-preview
-          openai/gpt-5-mini"
+          # Use the same reviewer models as the primary pass
+          VALIDATION_MODELS="${REVIEWER_MODELS}"
 
           VALIDATION_PROMPT_FILE="${RUNTIME_DIR}/validation_reviewer_prompt.txt"
 
