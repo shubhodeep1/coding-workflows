@@ -509,6 +509,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          if ! echo "${MAX_AUTOFIX_ITERATIONS}" | grep -qE '^[1-9][0-9]*$'; then
+            echo "::warning::Invalid MAX_AUTOFIX_ITERATIONS='${MAX_AUTOFIX_ITERATIONS}', using default of 3"
+            MAX_AUTOFIX_ITERATIONS=3
+          fi
+
           # Count consecutive [ai-autofix] commits from HEAD backwards.
           autofix_count=0
           while true; do
