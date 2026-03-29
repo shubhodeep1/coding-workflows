@@ -10,7 +10,31 @@ permissions:
   issues: write
 
 jobs:
+  check-skip:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.detect.outputs.should_skip }}
+    steps:
+      - name: Checkout HEAD commit
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Detect autofix commit
+        id: detect
+        run: |
+          set -euo pipefail
+          HEAD_MSG="$(git log -1 --format='%s' HEAD 2>/dev/null || true)"
+          if echo "${HEAD_MSG}" | grep -q '^\[ai-autofix\]'; then
+            echo "Autofix commit detected — skipping review."
+            echo "should_skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
   review:
+    needs: [check-skip]
+    if: needs.check-skip.outputs.should_skip != 'true'
     uses: ./.github/workflows/review_autofix.yml
     with:
       allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}

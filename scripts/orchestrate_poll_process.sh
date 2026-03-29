@@ -1,0 +1,634 @@
+#!/usr/bin/env bash
+# orchestrate_poll_process.sh — Process active orchestrator tracking issues.
+# Extracted from orchestrate_poll.yml to stay within GitHub Actions
+# expression length limits (21 000 chars max per run block).
+#
+# Required env vars (set by the workflow step):
+#   RUNTIME_DIR, STATE_FILE, JUDGE_PROMPT_FILE, JUDGE_OUTPUT_FILE,
+#   GH_TOKEN, OPENROUTER_API_KEY, GITHUB_REPOSITORY,
+#   MODEL_EDITOR, MODEL_REASONING_EFFORT_JUDGE,
+#   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, TOOL_CALL_BUDGET_JUDGE,
+#   SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS
+
+set -euo pipefail
+
+# ---------------------------------------------------------------
+# Helper: send Telegram notification
+# ---------------------------------------------------------------
+tg_notify() {
+  local msg="$1"
+  if [ -n "${TG_BOT_SECRET}" ] && [ -n "${TG_ADMIN_CHAT_ID}" ]; then
+    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+      -d chat_id="${TG_ADMIN_CHAT_ID}" \
+      -d text="${msg}" \
+      -d parse_mode="Markdown" >/dev/null 2>&1 || echo "::warning::Telegram notification failed"
+  fi
+}
+
+# ---------------------------------------------------------------
+# Helper: GitHub API with retry
+# ---------------------------------------------------------------
+gh_retry() {
+  local max_attempts=5
+  local attempt=1
+  while [ "${attempt}" -le "${max_attempts}" ]; do
+    if "$@" 2>/dev/null; then
+      return 0
+    fi
+    local wait_secs=$(( 2 ** (attempt - 1) ))
+    echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s..."
+    sleep "${wait_secs}"
+    attempt=$(( attempt + 1 ))
+  done
+  echo "::error::gh command failed after ${max_attempts} attempts: $*"
+  return 1
+}
+
+# ---------------------------------------------------------------
+# Process each tracking issue
+# ---------------------------------------------------------------
+TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
+COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+
+for tidx in $(seq 0 $(( COUNT - 1 ))); do
+  TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
+  TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
+  echo "========================================"
+  echo "Processing tracking issue #${TRACKING_NUM}: ${TRACKING_TITLE}"
+  echo "========================================"
+
+  # ---------------------------------------------------------------
+  # Extract state from the tracking issue's comments
+  # ---------------------------------------------------------------
+  COMMENTS="$(gh api --paginate \
+    "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100" \
+    | jq -s 'add // []')"
+
+  # Find the latest state comment (search from the end)
+  STATE_JSON="$(echo "${COMMENTS}" | jq -r '
+    [.[] | select(.body | contains("ORCHESTRATOR_STATE_V1"))] | last |
+    .body |
+    split("<!-- ORCHESTRATOR_STATE_V1")[1] |
+    split("ORCHESTRATOR_STATE_V1 -->")[0] |
+    ltrimstr("\n") | rtrimstr("\n")
+  ' 2>/dev/null || echo "")"
+
+  if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then
+    echo "::warning::No state found for tracking issue #${TRACKING_NUM}, skipping."
+    continue
+  fi
+
+  echo "${STATE_JSON}" > "${STATE_FILE}"
+  PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+
+  if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ]; then
+    echo "Project already ${PROJECT_STATUS}, skipping."
+    continue
+  fi
+
+  CURRENT_WAVE="$(jq -r '.current_wave' "${STATE_FILE}")"
+  TOTAL_WAVES="$(jq -r '.total_waves' "${STATE_FILE}")"
+  JUDGE_CYCLE="$(jq -r '.judge_cycle' "${STATE_FILE}")"
+  RECOVERY_ATTEMPTED="$(jq -r '.recovery_attempted' "${STATE_FILE}")"
+
+  echo "Current wave: ${CURRENT_WAVE}/${TOTAL_WAVES}, Judge cycle: ${JUDGE_CYCLE}, Recovery attempted: ${RECOVERY_ATTEMPTED}"
+
+  # ---------------------------------------------------------------
+  # Collect label states for all child issues in the current wave
+  # ---------------------------------------------------------------
+  WAVE_IDX=$(( CURRENT_WAVE - 1 ))
+  ISSUE_NUMS="$(jq -r ".waves[${WAVE_IDX}].issues[].github_issue" "${STATE_FILE}" 2>/dev/null || echo "")"
+
+  if [ -z "${ISSUE_NUMS}" ]; then
+    echo "::warning::No issues in wave ${CURRENT_WAVE}, skipping."
+    continue
+  fi
+
+  LABELS_JSON="{"
+  first=true
+  for inum in ${ISSUE_NUMS}; do
+    # Skip null/empty entries (not-yet-created issues in deferred waves)
+    if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
+      continue
+    fi
+    LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+    if [ "${first}" = true ]; then
+      first=false
+    else
+      LABELS_JSON+=","
+    fi
+    LABELS_JSON+="\"${inum}\":${LABELS}"
+  done
+  LABELS_JSON+="}"
+
+  # ---------------------------------------------------------------
+  # Check wave status
+  # ---------------------------------------------------------------
+  WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
+    --state-file "${STATE_FILE}" \
+    --labels-json "${LABELS_JSON}")"
+
+  echo "Wave status: ${WAVE_STATUS}"
+  WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
+  ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
+  PROJECT_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.project_complete')"
+
+  # ---------------------------------------------------------------
+  # Auto-merge: merge PRs that are ready-to-merge
+  # ---------------------------------------------------------------
+  echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "ready-to-merge") | .github_issue' | while read -r rtm_issue; do
+    [ -n "${rtm_issue}" ] && [ "${rtm_issue}" != "null" ] || continue
+    echo "  Issue #${rtm_issue} is ready-to-merge, finding linked PR..."
+    RTM_PR="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rtm_issue}/timeline" \
+      --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+      2>/dev/null || echo "")"
+    if [ -n "${RTM_PR}" ] && [ "${RTM_PR}" != "null" ]; then
+      PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.state' 2>/dev/null || echo "")"
+      PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+      if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
+        echo "  Merging PR #${RTM_PR} (squash)..."
+        if gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null; then
+          echo "  PR #${RTM_PR} merge initiated."
+        elif gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null; then
+          echo "  PR #${RTM_PR} merged directly."
+        else
+          echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
+        fi
+      else
+        echo "  PR #${RTM_PR} state=${PR_STATE} mergeable=${PR_MERGEABLE}, skipping."
+      fi
+    else
+      echo "  No linked PR found for issue #${rtm_issue}."
+    fi
+  done
+
+  if [ "${WAVE_COMPLETE}" != "true" ]; then
+    echo "Wave ${CURRENT_WAVE} not yet complete. Waiting."
+
+    # Update individual issue statuses in state
+    echo "${WAVE_STATUS}" | jq -r '.issues[] | "\(.id) \(.status)"' | while read -r local_id status; do
+      echo "  ${local_id}: ${status}"
+    done
+    continue
+  fi
+
+  echo "Wave ${CURRENT_WAVE} complete!"
+
+  # ---------------------------------------------------------------
+  # Run judge (full repo checkout + Codex call)
+  # ---------------------------------------------------------------
+  echo "Running judge evaluation (cycle $((JUDGE_CYCLE + 1)))..."
+
+  # Setup Codex config for judge
+  mkdir -p ~/.codex
+  {
+    echo 'web_search = "live"'
+    echo 'model_provider = "openrouter"'
+    echo "model = \"${MODEL_EDITOR}\""
+    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE}\""
+    echo
+    echo '[model_providers.openrouter]'
+    echo 'name = "OpenRouter"'
+    echo 'base_url = "https://openrouter.ai/api/v1"'
+    echo 'env_key = "OPENROUTER_API_KEY"'
+    echo 'wire_api = "responses"'
+    echo 'stream_idle_timeout_ms = 600000'
+    echo 'stream_max_retries = 5'
+    echo 'request_max_retries = 3'
+    echo
+    echo '[sandbox_workspace_write]'
+    echo 'network_access = true'
+  } > ~/.codex/config.toml
+
+  # Setup Serena for judge
+  bash scripts/setup_serena.sh --mode planning --context codex || true
+
+  # Collect merged PR diffs for context
+  PR_SUMMARIES=""
+  ISSUE_MAP="$(jq -r '.issue_number_map // {}' "${STATE_FILE}")"
+  for inum in ${ISSUE_NUMS}; do
+    PR_NUM="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${inum}/timeline" \
+      --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+      2>/dev/null || echo "")"
+    if [ -n "${PR_NUM}" ] && [ "${PR_NUM}" != "null" ]; then
+      PR_DIFF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
+        -H 'Accept: application/vnd.github.diff' 2>/dev/null | head -500 || echo "(diff unavailable)")"
+      PR_SUMMARIES+="
+--- PR #${PR_NUM} (Issue #${inum}) ---
+${PR_DIFF}
+
+"
+    fi
+  done
+
+  # Fetch CI status on default branch
+  DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')"
+  CI_STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}/check-runs" \
+    --jq '[.check_runs[] | {name: .name, conclusion: .conclusion}]' 2>/dev/null || echo "[]")"
+
+  # Get original project description from tracking issue body
+  PROJECT_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body')"
+
+  # Assemble static context
+  {
+    echo "=== SYSTEM INSTRUCTIONS ==="
+    cat codex_system_instructions.md
+    echo
+    echo "=== AI PIPELINE ==="
+    cat ai_pipeline.md
+    echo
+    if [ -f agents.md ]; then
+      echo "=== AGENTS.MD ==="
+      cat agents.md
+      echo
+    fi
+    if [ -f README.md ]; then
+      echo "=== README.MD ==="
+      cat README.md
+      echo
+    fi
+  } > "${RUNTIME_DIR}/judge_static.txt"
+
+  # Build judge prompt
+  {
+    cat "${RUNTIME_DIR}/judge_static.txt"
+    echo
+    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
+    echo
+    echo "=== JUDGE TASK ==="
+    echo
+    cat prompts/mode-judge.txt
+    echo
+    echo "=== PROJECT SPEC ==="
+    echo
+    echo "${PROJECT_BODY}"
+    echo
+    echo "=== WAVE ${CURRENT_WAVE} COMPLETION STATUS ==="
+    echo
+    echo "${WAVE_STATUS}" | jq '.'
+    echo
+    echo "=== MERGED PR DIFFS (truncated) ==="
+    echo
+    echo "${PR_SUMMARIES}"
+    echo
+    echo "=== CI STATUS ON ${DEFAULT_BRANCH} ==="
+    echo
+    echo "${CI_STATUS}" | jq '.'
+    echo
+    echo "=== ORCHESTRATOR STATE ==="
+    echo
+    echo "Judge cycle: $((JUDGE_CYCLE + 1))"
+    echo "Waves completed: ${CURRENT_WAVE} of ${TOTAL_WAVES}"
+    echo "Recovery previously attempted: ${RECOVERY_ATTEMPTED}"
+    if [ "${ANY_FAILED}" = "true" ]; then
+      echo "WARNING: Some issues in this wave were closed without merge."
+    fi
+  } > "${JUDGE_PROMPT_FILE}"
+
+  # Run judge via Codex
+  JUDGE_SUCCESS=false
+  max_attempts=2
+  for attempt in $(seq 1 "${max_attempts}"); do
+    echo "Judge attempt ${attempt}/${max_attempts}..."
+    if cat "${JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2); then
+      if grep -q '[^[:space:]]' "${JUDGE_OUTPUT_FILE}"; then
+        JUDGE_SUCCESS=true
+        break
+      fi
+    fi
+    if [ "${attempt}" -lt "${max_attempts}" ]; then
+      sleep $(( 10 * attempt + RANDOM % 10 ))
+    fi
+  done
+
+  if [ "${JUDGE_SUCCESS}" != "true" ]; then
+    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
+    tg_notify "❌ Orchestrator Judge failed for #${TRACKING_NUM}. Manual review needed."
+    continue
+  fi
+
+  # ---------------------------------------------------------------
+  # Parse judge output
+  # ---------------------------------------------------------------
+  JUDGE_JSON="$(python3 -c "
+import json, re, sys
+
+raw = open('${JUDGE_OUTPUT_FILE}', 'r').read()
+
+try:
+    data = json.loads(raw.strip())
+    json.dump(data, sys.stdout)
+    sys.exit(0)
+except json.JSONDecodeError:
+    pass
+
+cleaned = re.sub(r'\`\`\`(?:json)?\s*', '', raw)
+cleaned = re.sub(r'\`\`\`\s*$', '', cleaned, flags=re.MULTILINE)
+
+brace_depth = 0
+start = None
+for i, ch in enumerate(cleaned):
+    if ch == '{':
+        if brace_depth == 0:
+            start = i
+        brace_depth += 1
+    elif ch == '}':
+        brace_depth -= 1
+        if brace_depth == 0 and start is not None:
+            candidate = cleaned[start:i+1]
+            try:
+                data = json.loads(candidate)
+                json.dump(data, sys.stdout)
+                sys.exit(0)
+            except json.JSONDecodeError:
+                start = None
+
+print('Could not parse judge JSON', file=sys.stderr)
+sys.exit(1)
+" 2>/dev/null || echo "")"
+
+  if [ -z "${JUDGE_JSON}" ]; then
+    echo "::error::Could not parse judge output for #${TRACKING_NUM}"
+    tg_notify "❌ Orchestrator Judge output unparseable for #${TRACKING_NUM}. Manual review needed."
+    continue
+  fi
+
+  JUDGE_STATUS="$(echo "${JUDGE_JSON}" | jq -r '.status')"
+  JUDGE_JUSTIFICATION="$(echo "${JUDGE_JSON}" | jq -r '.justification // "no justification provided"')"
+  JUDGE_ASSESSMENT="$(echo "${JUDGE_JSON}" | jq -r '.assessment // ""')"
+  NEW_ISSUES_COUNT="$(echo "${JUDGE_JSON}" | jq '.new_issues | length')"
+  REVERT_COUNT="$(echo "${JUDGE_JSON}" | jq '.issues_to_revert | length')"
+
+  echo "Judge verdict: ${JUDGE_STATUS}"
+  echo "Justification: ${JUDGE_JUSTIFICATION}"
+  echo "New issues: ${NEW_ISSUES_COUNT}, Reverts: ${REVERT_COUNT}"
+
+  # Notify operator after every judge evaluation
+  tg_notify "🔍 Judge evaluated #${TRACKING_NUM} (cycle $((JUDGE_CYCLE + 1))): ${JUDGE_STATUS}. ${JUDGE_JUSTIFICATION}"
+
+  # Post judge assessment to tracking issue
+  JUDGE_COMMENT="## Judge Evaluation — Cycle $((JUDGE_CYCLE + 1))
+
+**Status:** ${JUDGE_STATUS}
+**Justification:** ${JUDGE_JUSTIFICATION}
+
+${JUDGE_ASSESSMENT}
+
+New fix-up issues: ${NEW_ISSUES_COUNT}
+PRs to revert: ${REVERT_COUNT}"
+
+  gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+    -f body="${JUDGE_COMMENT}" >/dev/null
+
+  # ---------------------------------------------------------------
+  # Handle judge verdict
+  # ---------------------------------------------------------------
+  case "${JUDGE_STATUS}" in
+    complete)
+      echo "Project complete!"
+      # Update state
+      jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+      # Post final state
+      STATE_COMMENT="<!-- ORCHESTRATOR_STATE_V1
+$(cat "${STATE_FILE}")
+ORCHESTRATOR_STATE_V1 -->"
+      gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+        -f body="${STATE_COMMENT}" >/dev/null
+
+      # Close tracking issue
+      gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
+        --comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s)." || true
+
+      tg_notify "✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved."
+      ;;
+
+    failed)
+      echo "Judge declared failure."
+
+      # ---------------------------------------------------------------
+      # Auto-recovery: attempt once
+      # ---------------------------------------------------------------
+      if [ "${RECOVERY_ATTEMPTED}" = "true" ]; then
+        echo "Recovery already attempted. Stopping."
+        jq '.status = "failed" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+        STATE_COMMENT="<!-- ORCHESTRATOR_STATE_V1
+$(cat "${STATE_FILE}")
+ORCHESTRATOR_STATE_V1 -->"
+        gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+          -f body="${STATE_COMMENT}" >/dev/null
+
+        gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+          -f body="## Project Failed
+
+Recovery was attempted but the judge still reports failure. Manual intervention required.
+
+**Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null
+
+        tg_notify "❌ Project #${TRACKING_NUM} FAILED after recovery attempt. Manual intervention needed."
+        continue
+      fi
+
+      echo "Attempting auto-recovery..."
+
+      # Revert problematic PRs if judge requested
+      if [ "${REVERT_COUNT}" -gt 0 ]; then
+        echo "Reverting ${REVERT_COUNT} PR(s)..."
+        echo "${JUDGE_JSON}" | jq -r '.issues_to_revert[]' | while read -r revert_issue; do
+          # Find PR linked to this issue
+          PR_TO_REVERT="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${revert_issue}/timeline" \
+            --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+            2>/dev/null || echo "")"
+          if [ -n "${PR_TO_REVERT}" ] && [ "${PR_TO_REVERT}" != "null" ]; then
+            echo "  Reverting PR #${PR_TO_REVERT} (issue #${revert_issue})..."
+            # Create revert PR via gh
+            gh api "repos/${GITHUB_REPOSITORY}/pulls" \
+              -f title="Revert PR #${PR_TO_REVERT} (orchestrator auto-recovery)" \
+              -f head="revert-${PR_TO_REVERT}-$(date +%s)" \
+              -f base="${DEFAULT_BRANCH}" \
+              -f body="Automated revert of PR #${PR_TO_REVERT} by orchestrator judge.
+
+**Reason:** ${JUDGE_JUSTIFICATION}" >/dev/null 2>&1 || {
+              # If API-based revert fails, create a revert via git
+              echo "  API revert failed; creating revert commit..."
+              MERGE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_TO_REVERT}" --jq '.merge_commit_sha' 2>/dev/null || echo "")"
+              if [ -n "${MERGE_SHA}" ] && [ "${MERGE_SHA}" != "null" ]; then
+                REVERT_BRANCH="revert-${PR_TO_REVERT}-$(date +%s)"
+                git checkout -b "${REVERT_BRANCH}" "${DEFAULT_BRANCH}"
+                if git revert --no-edit "${MERGE_SHA}"; then
+                  git push -u origin "${REVERT_BRANCH}"
+                  gh pr create \
+                    --repo "${GITHUB_REPOSITORY}" \
+                    --title "Revert PR #${PR_TO_REVERT} (orchestrator auto-recovery)" \
+                    --body "Automated revert of PR #${PR_TO_REVERT} by orchestrator judge.
+
+**Reason:** ${JUDGE_JUSTIFICATION}" \
+                    --base "${DEFAULT_BRANCH}" \
+                    --head "${REVERT_BRANCH}"
+                else
+                  echo "::warning::Git revert of ${MERGE_SHA} failed (conflicts). Manual revert needed."
+                fi
+                git checkout "${DEFAULT_BRANCH}" 2>/dev/null || true
+              fi
+            }
+          fi
+        done
+      fi
+
+      # Create fix-up issues from judge
+      if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
+        echo "Creating ${NEW_ISSUES_COUNT} fix-up issue(s)..."
+        echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r fix_issue; do
+          FIX_TITLE="$(echo "${fix_issue}" | jq -r '.title')"
+          FIX_BODY="$(echo "${fix_issue}" | jq -r '.body')"
+          FIX_ID="$(echo "${fix_issue}" | jq -r '.id')"
+
+          FULL_FIX_BODY="${FIX_BODY}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #${TRACKING_NUM}
+- Local ID: \`${FIX_ID}\`
+- Type: judge-fix-up (cycle $((JUDGE_CYCLE + 1)))
+- Managed by: AI Orchestrator"
+
+          FIX_URL="$(gh issue create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${FIX_TITLE}" \
+            --body "${FULL_FIX_BODY}")"
+          echo "  Created fix-up: ${FIX_URL}"
+        done
+      fi
+
+      # Update state
+      jq '.judge_cycle += 1 | .recovery_attempted = true | .status = "in_progress"' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+      STATE_COMMENT="<!-- ORCHESTRATOR_STATE_V1
+$(cat "${STATE_FILE}")
+ORCHESTRATOR_STATE_V1 -->"
+      gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+        -f body="${STATE_COMMENT}" >/dev/null
+
+      tg_notify "🔄 Orchestrator auto-recovery started for #${TRACKING_NUM}: ${NEW_ISSUES_COUNT} fix-up issues, ${REVERT_COUNT} reverts."
+      ;;
+
+    in_progress)
+      echo "Project in progress."
+
+      # Create new issues if judge found gaps
+      if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
+        echo "Creating ${NEW_ISSUES_COUNT} new issue(s) from judge..."
+        echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r new_issue; do
+          NEW_TITLE="$(echo "${new_issue}" | jq -r '.title')"
+          NEW_BODY="$(echo "${new_issue}" | jq -r '.body')"
+          NEW_ID="$(echo "${new_issue}" | jq -r '.id')"
+
+          FULL_NEW_BODY="${NEW_BODY}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #${TRACKING_NUM}
+- Local ID: \`${NEW_ID}\`
+- Type: judge-addition (cycle $((JUDGE_CYCLE + 1)))
+- Managed by: AI Orchestrator"
+
+          NEW_URL="$(gh issue create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${NEW_TITLE}" \
+            --body "${FULL_NEW_BODY}")"
+          echo "  Created: ${NEW_URL}"
+        done
+      fi
+
+      # Advance to next wave
+      NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
+      if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
+        echo "Advancing to wave ${NEXT_WAVE}..."
+        NEXT_WAVE_IDX=$(( NEXT_WAVE - 1 ))
+
+        # -----------------------------------------------------------
+        # Deferred issue creation: create issues for this wave now.
+        # This triggers clarify.yml via the issues.opened event.
+        # -----------------------------------------------------------
+        CREATED_NUMS=""
+        NEXT_WAVE_ISSUE_IDS="$(jq -r ".waves[${NEXT_WAVE_IDX}].issues[].id" "${STATE_FILE}")"
+        for local_id in ${NEXT_WAVE_ISSUE_IDS}; do
+          # Check if already created (has a github_issue number)
+          EXISTING_NUM="$(jq -r ".issue_number_map[\"${local_id}\"] // empty" "${STATE_FILE}")"
+          if [ -n "${EXISTING_NUM}" ]; then
+            echo "  ${local_id}: already exists as #${EXISTING_NUM}"
+            CREATED_NUMS="${CREATED_NUMS} ${EXISTING_NUM}"
+            continue
+          fi
+
+          # Get issue definition from pending_issue_defs in state
+          ISSUE_DEF="$(jq -c ".pending_issue_defs[\"${local_id}\"] // empty" "${STATE_FILE}")"
+          if [ -z "${ISSUE_DEF}" ]; then
+            echo "::warning::No pending definition for ${local_id}, skipping."
+            continue
+          fi
+
+          DEF_TITLE="$(echo "${ISSUE_DEF}" | jq -r '.title')"
+          DEF_BODY="$(echo "${ISSUE_DEF}" | jq -r '.body')"
+          DEF_PRIORITY="$(echo "${ISSUE_DEF}" | jq -r '.priority')"
+
+          FULL_BODY="${DEF_BODY}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #${TRACKING_NUM}
+- Local ID: \`${local_id}\`
+- Priority: ${DEF_PRIORITY}
+- Managed by: AI Orchestrator"
+
+          NEW_URL="$(gh issue create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${DEF_TITLE}" \
+            --body "${FULL_BODY}")"
+
+          NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
+          echo "  Created #${NEW_NUM}: ${DEF_TITLE} (${local_id})"
+          CREATED_NUMS="${CREATED_NUMS} ${NEW_NUM}"
+
+          # Update state: record the new issue number and remove from pending
+          jq ".issue_number_map[\"${local_id}\"] = ${NEW_NUM} | del(.pending_issue_defs[\"${local_id}\"])" \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+          # Update the wave entry with the github issue number
+          jq "(.waves[${NEXT_WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\")" \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        done
+
+        jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1" \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+        WAVE_COMMENT="## Wave ${NEXT_WAVE} Dispatched
+
+Dependencies from Wave ${CURRENT_WAVE} are met. Created and dispatched:
+
+$(for inum in ${CREATED_NUMS}; do echo "- #${inum}"; done)
+
+These issues will enter the AI pipeline (clarify → plan → implement → review)."
+
+        gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+          -f body="${WAVE_COMMENT}" >/dev/null
+      else
+        # All waves dispatched but judge says in_progress with new issues
+        jq '.judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      fi
+
+      # Post updated state
+      STATE_COMMENT="<!-- ORCHESTRATOR_STATE_V1
+$(cat "${STATE_FILE}")
+ORCHESTRATOR_STATE_V1 -->"
+      gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+        -f body="${STATE_COMMENT}" >/dev/null
+      ;;
+
+    *)
+      echo "::warning::Unknown judge status: ${JUDGE_STATUS}"
+      ;;
+  esac
+done
