@@ -291,6 +291,8 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `memory_maintenance.yml` | `schedule` (monthly) | Memory compaction/archival |
 | `orchestrate.yml` | `workflow_dispatch` | Project decomposition + multi-issue orchestration |
 | `orchestrate_poll.yml` | `schedule` (every ~10 min) | Orchestrator progress poller + judge + auto-recovery |
+| `auto-extract-workflow-logs.yml` | `workflow_run` (test-and-mark-stable failure) | Extracts failure logs and creates auto-fix issue |
+| `auto-fix-retrigger.yml` | `pull_request.closed` (merged auto-fix PR) | Re-dispatches test-and-mark-stable after fix merges |
 
 ## Required Secrets
 
@@ -402,6 +404,27 @@ Your `GH_PAT` must have permission to enable auto-merge (repo scope with admin o
 ### Labels
 
 The orchestrator uses `ai:orchestrator-tracking` for tracking issues. Child issues use the standard `ai:*` phase labels. The `ai:orchestrator-tracking` label is defined in the [label contract](/.github/ai/label_contract.v1.json).
+
+### Auto-fix for stable release failures
+
+When `test-and-mark-stable` fails during the E2E smoke test, the `auto-extract-workflow-logs` workflow automatically:
+
+1. **Extracts logs** from the failed step(s) in the test-and-mark-stable run and from any failed child pipeline runs (clarify, plan, implement, review)
+2. **Creates a GitHub issue** with the failure context, error lines, and log tails — labeled `auto-fix:stable-release`
+3. The issue enters the standard AI pipeline (clarify → plan → implement → review → merge) using `@stable` (the last known-good version)
+4. When the fix PR merges, `auto-fix-retrigger` **re-dispatches test-and-mark-stable** to validate the fix and promote the new stable release
+
+**Circuit breaker:** Only 1 auto-fix attempt per failure. If an `auto-fix:stable-release` issue is already open, no new issue is created. If the fix doesn't resolve the problem, manual intervention is required.
+
+**Required settings:**
+
+| Setting | Location | Value |
+|---|---|---|
+| `ENABLE_AUTO_MERGE` | Actions variables | `true` |
+| `ALLOW_WORKFLOW_EDITS` | Actions variables | `true` (if failures may be in workflow YAML) |
+| Allow auto-merge | Settings → General → Pull Requests | Checked |
+| Branch protection | Settings → Branches | No required human reviewers, OR bot added as bypass actor |
+| `GH_PAT` scope | Secret | `repo` + `actions:write` (to dispatch workflows) |
 
 ## Repository Structure
 

@@ -1,0 +1,120 @@
+---
+name: "Auto-Fix: Re-trigger Stable Release"
+
+# Fires when any PR closes. If the PR was merged AND its linked issue has
+# the auto-fix:stable-release label, re-dispatch test-and-mark-stable so
+# the fixed code gets validated and promoted.
+
+"on":
+  pull_request:
+    types: [closed]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+jobs:
+  retrigger:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Check if PR is linked to an auto-fix issue
+        id: check
+        run: |
+          set -euo pipefail
+
+          # Find issues linked to this PR via closing references
+          ISSUE_NUMBERS=$(gh api graphql \
+            -f owner="${{ github.repository_owner }}" \
+            -f name="${{ github.event.repository.name }}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!, $name:String!, $number:Int!) {
+              repository(owner:$owner, name:$name) {
+                pullRequest(number:$number) {
+                  closingIssuesReferences(first: 50) {
+                    nodes { number labels(first: 20) { nodes { name } } }
+                  }
+                }
+              }
+            }' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[] |
+              select(.labels.nodes | map(.name) | any(. == "auto-fix:stable-release")) |
+              .number' 2>/dev/null || echo "")
+
+          if [ -z "$ISSUE_NUMBERS" ]; then
+            echo "PR #${PR_NUMBER} is not linked to an auto-fix:stable-release issue. Skipping."
+            echo "should_retrigger=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "PR #${PR_NUMBER} is linked to auto-fix issue(s): ${ISSUE_NUMBERS}"
+          echo "should_retrigger=true" >> "$GITHUB_OUTPUT"
+
+          # Store the first issue number for the notification
+          FIRST_ISSUE=$(echo "$ISSUE_NUMBERS" | head -n1)
+          echo "issue_number=${FIRST_ISSUE}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch test-and-mark-stable
+        if: steps.check.outputs.should_retrigger == 'true'
+        id: dispatch
+        run: |
+          set -euo pipefail
+
+          echo "Re-dispatching test-and-mark-stable workflow..."
+
+          # Dispatch with default inputs (auto-increment version, run e2e)
+          gh api "repos/${{ github.repository }}/actions/workflows/test-and-mark-stable.yml/dispatches" \
+            --method POST \
+            -f ref=main \
+            -f "inputs[version_tag]=" \
+            -f "inputs[skip_e2e]=false" \
+            -f "inputs[dry_run]=false"
+
+          echo "✓ test-and-mark-stable dispatched on main"
+
+      - name: Comment on auto-fix issue
+        if: steps.check.outputs.should_retrigger == 'true'
+        env:
+          ISSUE_NUMBER: ${{ steps.check.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="Fix PR #${PR_NUMBER} has been merged. Re-dispatched **test-and-mark-stable** workflow on \`main\`.
+
+          If the release succeeds, this issue's fix resolved the problem.
+          If it fails again, manual intervention is required (circuit breaker: max 1 auto-fix attempt)." \
+            2>/dev/null || true
+
+      - name: Notify operator
+        if: steps.check.outputs.should_retrigger == 'true'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ISSUE_NUMBER: ${{ steps.check.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+            echo "Telegram notification skipped."
+            exit 0
+          fi
+
+          ISSUE_URL="${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUMBER}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
+          MSG="$(printf '🔄 Auto-fix merged — re-running stable release\nFix PR: %s\nIssue: %s\ntest-and-mark-stable has been re-dispatched.' \
+            "${PR_URL}" "${ISSUE_URL}")"
+
+          set +e
+          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${TG_CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1
+          set -e

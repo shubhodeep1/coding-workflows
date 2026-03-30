@@ -36,6 +36,10 @@
     "ai:orchestrator-tracking": {
       "color": "a2eeef",
       "description": "Orchestrator project tracking issue"
+    },
+    "auto-fix:stable-release": {
+      "color": "d93f0b",
+      "description": "Automated fix for stable release smoke test failure"
     }
   },
   "phase_groups": [

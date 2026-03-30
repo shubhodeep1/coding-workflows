@@ -1,0 +1,336 @@
+---
+name: "Auto-Fix: Extract Logs & Create Issue"
+
+"on":
+  workflow_run:
+    workflows: ["Test & Mark Stable Release"]
+    types: [completed]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  extract-and-create-issue:
+    # Only run when test-and-mark-stable FAILED and the e2e-smoke-test job
+    # was the cause. Skip validate/release failures (config issues the AI
+    # cannot fix) and skip successes.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      FAILED_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      # ── Circuit breaker: skip if an auto-fix issue is already open ──
+      - name: Check for existing auto-fix issue
+        id: circuit-breaker
+        run: |
+          set -euo pipefail
+
+          OPEN_ISSUES=$(gh api "repos/${{ github.repository }}/issues" \
+            --method GET \
+            -f labels="auto-fix:stable-release" \
+            -f state=open \
+            -f per_page=1 \
+            --jq 'length' 2>/dev/null || echo "0")
+
+          if [ "$OPEN_ISSUES" -gt 0 ]; then
+            echo "::warning::An auto-fix issue is already open — skipping to prevent loop."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Identify which job failed ──────────────────────────────────
+      - name: Identify failed e2e-smoke-test job
+        id: find-failure
+        if: steps.circuit-breaker.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+
+          echo "Inspecting run #${FAILED_RUN_ID}..."
+
+          # Get all jobs from the failed test-and-mark-stable run
+          JOBS_JSON=$(gh api "repos/${{ github.repository }}/actions/runs/${FAILED_RUN_ID}/jobs?per_page=100")
+
+          # Check if the e2e-smoke-test job specifically failed
+          E2E_JOB=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.name | test("e2e|smoke"; "i"))] | sort_by(.completed_at) | last')
+
+          if [ "$E2E_JOB" = "null" ] || [ -z "$E2E_JOB" ]; then
+            echo "::warning::No e2e-smoke-test job found in run — may be a validate/release failure. Skipping."
+            echo "is_e2e_failure=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          E2E_CONCLUSION=$(echo "$E2E_JOB" | jq -r '.conclusion')
+          E2E_JOB_ID=$(echo "$E2E_JOB" | jq -r '.id')
+
+          if [ "$E2E_CONCLUSION" != "failure" ]; then
+            echo "e2e-smoke-test job conclusion is '${E2E_CONCLUSION}', not 'failure'. Skipping."
+            echo "is_e2e_failure=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "e2e-smoke-test job #${E2E_JOB_ID} failed."
+          echo "is_e2e_failure=true" >> "$GITHUB_OUTPUT"
+          echo "e2e_job_id=${E2E_JOB_ID}" >> "$GITHUB_OUTPUT"
+
+          # Find the specific step(s) that failed
+          FAILED_STEPS=$(echo "$E2E_JOB" | jq -r '[.steps[] | select(.conclusion == "failure")] | map(.name) | join(", ")')
+          echo "failed_steps=${FAILED_STEPS}" >> "$GITHUB_OUTPUT"
+          echo "Failed steps: ${FAILED_STEPS}"
+
+      # ── Extract logs from the failed step(s) ──────────────────────
+      - name: Extract failed step logs from test-and-mark-stable
+        id: extract-parent-logs
+        if: >-
+          steps.circuit-breaker.outputs.skip != 'true' &&
+          steps.find-failure.outputs.is_e2e_failure == 'true'
+        run: |
+          set -euo pipefail
+
+          E2E_JOB_ID="${{ steps.find-failure.outputs.e2e_job_id }}"
+
+          # Download the full job log
+          JOB_LOG=$(gh api "repos/${{ github.repository }}/actions/jobs/${E2E_JOB_ID}/logs" 2>/dev/null || echo "")
+
+          if [ -z "$JOB_LOG" ]; then
+            echo "::warning::Could not fetch logs for job #${E2E_JOB_ID}"
+            echo "logs=No logs available for the e2e-smoke-test job." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract the last 100 lines to capture the failure context
+          TAIL_LOGS=$(echo "$JOB_LOG" | tail -n 100)
+
+          # Also extract lines containing "error", "failed", "::error::" for
+          # a focused summary
+          ERROR_LINES=$(echo "$JOB_LOG" | grep -iE '::error::|FAILED|Error:|exit code [1-9]|timeout' | head -n 30 || true)
+
+          # Write to files to avoid quoting issues
+          echo "$TAIL_LOGS" > /tmp/parent_tail_logs.txt
+          echo "$ERROR_LINES" > /tmp/parent_error_lines.txt
+
+          echo "parent_tail_file=/tmp/parent_tail_logs.txt" >> "$GITHUB_OUTPUT"
+          echo "parent_error_file=/tmp/parent_error_lines.txt" >> "$GITHUB_OUTPUT"
+
+      # ── Extract logs from the underlying smoke-test pipeline run ──
+      - name: Extract failed smoke-test pipeline logs
+        id: extract-pipeline-logs
+        if: >-
+          steps.circuit-breaker.outputs.skip != 'true' &&
+          steps.find-failure.outputs.is_e2e_failure == 'true'
+        run: |
+          set -euo pipefail
+
+          E2E_JOB_ID="${{ steps.find-failure.outputs.e2e_job_id }}"
+
+          # The e2e-smoke-test job polls child workflow runs. We need to find
+          # which child run (clarify/plan/implement/review) actually failed.
+          # Parse the parent job log to find workflow run IDs.
+          JOB_LOG=$(gh api "repos/${{ github.repository }}/actions/jobs/${E2E_JOB_ID}/logs" 2>/dev/null || echo "")
+
+          PIPELINE_LOGS=""
+
+          # Look for recent failed workflow runs in the repo that overlap with
+          # the test-and-mark-stable run window
+          PARENT_CREATED="${{ github.event.workflow_run.created_at }}"
+          FAILED_RUNS=$(gh api "repos/${{ github.repository }}/actions/runs?status=failure&created=>${PARENT_CREATED}&per_page=20" \
+            --jq '.workflow_runs[] | select(.name | test("Clarif|Plan|Implement|Review"; "i")) | {id: .id, name: .name, conclusion: .conclusion}' 2>/dev/null || echo "")
+
+          if [ -z "$FAILED_RUNS" ]; then
+            echo "No failed pipeline runs found in the time window."
+            echo "pipeline_logs=No failed child workflow runs found." > /tmp/pipeline_logs.txt
+            echo "pipeline_file=/tmp/pipeline_logs.txt" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # For each failed pipeline run, grab the last 50 lines
+          echo "$FAILED_RUNS" | jq -rs '.[]' 2>/dev/null | while IFS= read -r run_json; do
+            RUN_ID=$(echo "$run_json" | jq -r '.id')
+            RUN_NAME=$(echo "$run_json" | jq -r '.name')
+
+            # Get the first job in this run
+            CHILD_JOB_ID=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs?per_page=5" \
+              --jq '.jobs[0].id // empty' 2>/dev/null || echo "")
+
+            if [ -n "$CHILD_JOB_ID" ]; then
+              CHILD_LOG=$(gh api "repos/${{ github.repository }}/actions/jobs/${CHILD_JOB_ID}/logs" 2>/dev/null || echo "")
+              CHILD_TAIL=$(echo "$CHILD_LOG" | tail -n 50)
+              CHILD_ERRORS=$(echo "$CHILD_LOG" | grep -iE '::error::|FAILED|Error:|exit code [1-9]' | head -n 15 || true)
+
+              {
+                echo "### ${RUN_NAME} (run #${RUN_ID})"
+                echo ""
+                if [ -n "$CHILD_ERRORS" ]; then
+                  echo "**Error lines:**"
+                  echo '```'
+                  echo "$CHILD_ERRORS"
+                  echo '```'
+                  echo ""
+                fi
+                echo "**Last 50 lines:**"
+                echo '```'
+                echo "$CHILD_TAIL"
+                echo '```'
+                echo ""
+              } >> /tmp/pipeline_logs.txt
+            fi
+          done
+
+          # Fallback if the loop produced nothing (e.g., jq parsing failed)
+          if [ ! -s /tmp/pipeline_logs.txt ]; then
+            # Try a simpler approach: iterate line by line
+            echo "$FAILED_RUNS" > /tmp/failed_runs_raw.txt
+
+            for RUN_ID in $(echo "$FAILED_RUNS" | jq -r '.id' 2>/dev/null || true); do
+              [ -n "$RUN_ID" ] || continue
+              RUN_NAME=$(echo "$FAILED_RUNS" | jq -r "select(.id == ${RUN_ID}) | .name" 2>/dev/null || echo "unknown")
+
+              CHILD_JOB_ID=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs?per_page=5" \
+                --jq '.jobs[0].id // empty' 2>/dev/null || echo "")
+
+              if [ -n "$CHILD_JOB_ID" ]; then
+                CHILD_LOG=$(gh api "repos/${{ github.repository }}/actions/jobs/${CHILD_JOB_ID}/logs" 2>/dev/null || echo "")
+                CHILD_ERRORS=$(echo "$CHILD_LOG" | grep -iE '::error::|FAILED|Error:|exit code [1-9]' | head -n 15 || true)
+                CHILD_TAIL=$(echo "$CHILD_LOG" | tail -n 50)
+
+                {
+                  echo "### Pipeline run #${RUN_ID} (${RUN_NAME})"
+                  echo ""
+                  if [ -n "$CHILD_ERRORS" ]; then
+                    echo "**Error lines:**"
+                    echo '```'
+                    echo "$CHILD_ERRORS"
+                    echo '```'
+                    echo ""
+                  fi
+                  echo "**Last 50 lines:**"
+                  echo '```'
+                  echo "$CHILD_TAIL"
+                  echo '```'
+                  echo ""
+                } >> /tmp/pipeline_logs.txt
+              fi
+            done
+          fi
+
+          if [ ! -s /tmp/pipeline_logs.txt ]; then
+            echo "No pipeline logs could be extracted." > /tmp/pipeline_logs.txt
+          fi
+
+          echo "pipeline_file=/tmp/pipeline_logs.txt" >> "$GITHUB_OUTPUT"
+
+      # ── Create the auto-fix GitHub issue ───────────────────────────
+      - name: Create auto-fix issue
+        id: create-issue
+        if: >-
+          steps.circuit-breaker.outputs.skip != 'true' &&
+          steps.find-failure.outputs.is_e2e_failure == 'true'
+        run: |
+          set -euo pipefail
+
+          FAILED_STEPS="${{ steps.find-failure.outputs.failed_steps }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${FAILED_RUN_ID}"
+          PARENT_TAIL=$(cat "${{ steps.extract-parent-logs.outputs.parent_tail_file }}" 2>/dev/null || echo "No logs available.")
+          PARENT_ERRORS=$(cat "${{ steps.extract-parent-logs.outputs.parent_error_file }}" 2>/dev/null || echo "")
+          PIPELINE_LOGS=$(cat "${{ steps.extract-pipeline-logs.outputs.pipeline_file }}" 2>/dev/null || echo "No pipeline logs available.")
+
+          # Truncate to stay within GitHub issue body limits (~65000 chars)
+          PARENT_TAIL=$(echo "$PARENT_TAIL" | head -n 80)
+          PIPELINE_LOGS=$(echo "$PIPELINE_LOGS" | head -n 200)
+
+          TITLE="[Auto-Fix] Stable release smoke test failure - ${FAILED_STEPS}"
+          TITLE=$(echo "$TITLE" | cut -c1-256)
+
+          # Build the issue body in a file to avoid YAML/shell quoting issues
+          {
+            printf '## Task\n\n'
+            printf 'The **Test & Mark Stable Release** workflow failed during the E2E smoke test.\n'
+            printf 'Diagnose the root cause from the logs below and fix the failing code.\n\n'
+            printf '## Constraints\n\n'
+            printf -- '- **Only** fix the root cause — do not refactor, clean up, or make unrelated changes\n'
+            printf -- '- The fix must make the E2E smoke test pass when test-and-mark-stable is re-run\n'
+            printf -- '- If the failure is in a script under scripts/, fix it there\n'
+            printf -- '- If the failure is in a prompt under prompts/, fix it there\n'
+            printf -- '- If the failure is in a workflow under .github/workflows/, fix it there\n'
+            printf -- '- Do **not** modify test expectations or weaken validation to make the test pass\n'
+            printf -- '- This is a fully-specified task — **no clarification is needed**\n\n'
+            printf '## Failed Steps\n\n'
+            printf '`%s`\n\n' "${FAILED_STEPS}"
+            printf '**Run:** [#%s](%s)\n\n' "${FAILED_RUN_ID}" "${RUN_URL}"
+            printf '## Error Summary (test-and-mark-stable)\n\n'
+            if [ -n "$PARENT_ERRORS" ]; then
+              printf '```\n%s\n```\n\n' "$PARENT_ERRORS"
+            fi
+            printf '## Log Tail (test-and-mark-stable e2e-smoke-test job)\n\n'
+            printf '```\n%s\n```\n\n' "$PARENT_TAIL"
+            printf '## Failed Pipeline Run Logs\n\n'
+            printf '%s\n\n' "$PIPELINE_LOGS"
+            printf '## Context\n\n'
+            printf 'This issue was automatically created by the auto-extract-workflow-logs workflow.\n'
+            printf 'The AI pipeline should diagnose the failure from the logs above and submit a fix.\n'
+            printf 'After the fix merges, test-and-mark-stable will be re-dispatched automatically.\n\n'
+            printf '**Circuit breaker:** This is an automated fix attempt. Maximum 1 auto-fix attempt\n'
+            printf 'per failure. If this fix does not resolve the issue, manual intervention is required.\n'
+          } > /tmp/issue_body.md
+
+          # Ensure the label exists
+          gh api "repos/${{ github.repository }}/labels" \
+            --method POST \
+            -f name="auto-fix:stable-release" \
+            -f color="d93f0b" \
+            -f description="Automated fix for stable release smoke test failure" \
+            2>/dev/null || true  # Ignore if already exists
+
+          # Create the issue
+          ISSUE_NUMBER=$(gh api "repos/${{ github.repository }}/issues" \
+            -f title="${TITLE}" \
+            -f body="$(cat /tmp/issue_body.md)" \
+            --jq '.number')
+
+          # Add the label
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" \
+            --method POST \
+            --input - <<EOF 2>/dev/null || true
+          {"labels": ["auto-fix:stable-release"]}
+          EOF
+
+          ISSUE_URL=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.html_url')
+
+          echo "issue_number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "✓ Created auto-fix issue #${ISSUE_NUMBER}: ${ISSUE_URL}"
+
+      # ── Notify via Telegram ────────────────────────────────────────
+      - name: Notify operator
+        if: >-
+          always() &&
+          steps.create-issue.outputs.issue_number != ''
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+            echo "Telegram notification skipped (missing credentials)."
+            exit 0
+          fi
+
+          ISSUE_URL="${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUMBER}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${FAILED_RUN_ID}"
+          MSG="$(printf '🔧 Auto-fix triggered for stable release failure\nIssue: %s\nFailed run: %s\nThe AI pipeline will attempt to fix this automatically (1 attempt max).' \
+            "${ISSUE_URL}" "${RUN_URL}")"
+
+          set +e
+          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${TG_CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1
+          set -e
