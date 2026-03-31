@@ -52,7 +52,10 @@ jobs:
         run: |
           set -euo pipefail
           ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
-          if ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
+          if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
+            echo "Issue #${ISSUE_NUMBER} already has ai:implementing label. Another implement run is in progress. Skipping."
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+          elif ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is not in ai:awaiting-approval phase. Skipping implementation steps."
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
           fi
@@ -500,15 +503,39 @@ jobs:
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
 
-          max_attempts=2
+          max_attempts=5
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
-            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+
+            # On retries after a no-op (Codex succeeded but made no file
+            # changes), prepend a nudge so the model knows it must actually
+            # modify files this time.
+            PROMPT_FILE_TO_USE="${CODEX_PROMPT_FILE}"
+            if [ "${attempt}" -gt 1 ] && [ -z "$(git status --porcelain)" ]; then
+              PROMPT_FILE_TO_USE="${RUNTIME_DIR}/codex_prompt_retry.txt"
+              {
+                cat <<'RETRY_EOF'
+          IMPORTANT: Your previous attempt produced NO file changes. The implementation
+          plan requires repository modifications. You MUST create or edit the files
+          described in the plan. Do NOT just describe the changes — execute them by
+          writing to disk. Proceed now.
+
+RETRY_EOF
+                cat "${CODEX_PROMPT_FILE}"
+              } > "${PROMPT_FILE_TO_USE}"
+            fi
+
+            if cat "${PROMPT_FILE_TO_USE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-                echo "Codex implement succeeded on attempt ${attempt}."
-                break
+                # Codex returned output — check if it actually changed files.
+                if [ -n "$(git status --porcelain)" ]; then
+                  echo "Codex implement succeeded with file changes on attempt ${attempt}."
+                  break
+                fi
+                echo "::warning::Codex returned output but produced no file changes on attempt ${attempt}."
+              else
+                echo "::warning::Codex returned empty output on attempt ${attempt}."
               fi
-              echo "::warning::Codex returned empty output on attempt ${attempt}."
             else
               rc=$?
               echo "::warning::Codex exited with code $rc on attempt ${attempt}."
