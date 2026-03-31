@@ -770,7 +770,7 @@ jobs:
             --base "${{ github.event.repository.default_branch }}" \
             --head "${TARGET_BRANCH}" \
             --title "AI implementation for issue #${ISSUE_NUMBER}" \
-            --body "Automated implementation for issue ${ISSUE_URL}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
+            --body "Automated implementation. Closes ${ISSUE_URL}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
             echo "PR creation failed. This may indicate a PR was created by another process during execution."
             if [ -s "${RUNTIME_DIR}/created_pr_url.err" ]; then
               cat "${RUNTIME_DIR}/created_pr_url.err"
