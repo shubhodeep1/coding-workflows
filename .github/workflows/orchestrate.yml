@@ -516,7 +516,7 @@ jobs:
 
           The following issues have been created and are entering the AI pipeline:
 
-          $(echo "${WAVE1_ISSUES}" | jq -r '.issues[] | "- #\(.github_issue) (\`.id\`\(.id)\`)"')
+          $(echo "${WAVE1_ISSUES}" | jq -r '.issues[] | "- #\(.github_issue) (`\(.id)`)"')
 
           The orchestrator poller will monitor progress and dispatch subsequent waves when dependencies are met."
 
