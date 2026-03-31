@@ -5,8 +5,9 @@ name: AI Orchestrate Clarify Respond (Reusable)
 # so the orchestrator pipeline can run fully unattended.
 #
 # Trigger: issue_comment.created (fires when clarify.yml posts questions).
-# Guard:   only runs when the comment is from github-actions[bot], starts with
-#          "Clarification required", and the issue body contains the
+# Guard:   only runs when the comment starts with "Clarification required",
+#          is authored by a trusted actor (github-actions[bot] or repository
+#          owner/member/collaborator), and the issue body contains the
 #          "Managed by: AI Orchestrator" metadata marker.
 
 "on":
@@ -25,8 +26,16 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
       github.event.issue.pull_request == null &&
-      github.event.comment.user.type == 'Bot' &&
-      github.event.comment.user.login == 'github-actions[bot]' &&
+      (
+        (
+          github.event.comment.user.type == 'Bot' &&
+          github.event.comment.user.login == 'github-actions[bot]'
+        ) ||
+        (
+          github.event.comment.user.type == 'User' &&
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+        )
+      ) &&
       startsWith(github.event.comment.body, 'Clarification required')
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -111,6 +120,7 @@ jobs:
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CLARIFICATION_COMMENT: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
 
@@ -128,9 +138,6 @@ jobs:
           if [ -n "${TRACKING_NUM}" ] && [[ "${TRACKING_NUM}" =~ ^[0-9]+$ ]]; then
             TRACKING_BODY="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
           fi
-
-          # Fetch the clarification comment (the one that triggered this workflow)
-          CLARIFICATION_COMMENT="${{ github.event.comment.body }}"
 
           # Save context for prompt assembly
           printf '%s' "${ISSUE_BODY}" > "${RUNTIME_DIR}/issue_body.txt"
@@ -256,7 +263,7 @@ jobs:
         run: |
           set -euo pipefail
           TOKENS=""
-          if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
             TOKENS="$(grep -A1 'tokens used' "${RUNTIME_DIR}/codex_log.txt" | tail -1 | tr -d '[:space:]' || true)"
           fi
           {
@@ -300,7 +307,7 @@ jobs:
           fi
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          MSG="Orchestrator clarify-respond failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+          MSG="Orchestrator clarify-respond failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE:-}"
           MSG+=$'\n'
           MSG+="${ISSUE_URL}"
           MSG+=$'\n'
