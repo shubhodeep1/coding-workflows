@@ -89,7 +89,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          wf_source="shubhodeep1/coding-workflows"
+          wf_source="${{ github.repository_owner }}/coding-workflows"
           mkdir -p scripts
           for f in setup_serena.sh; do
             gh api -H 'Accept: application/vnd.github.raw+json' \
@@ -99,10 +99,8 @@ jobs:
           # Fetch the clarify-respond prompt
           PROMPT_SOURCE="prompts/mode-clarify-respond.txt"
           mkdir -p prompts
-          if [ ! -f "${PROMPT_SOURCE}" ]; then
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=stable" > "${PROMPT_SOURCE}"
-          fi
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=stable" > "${PROMPT_SOURCE}"
 
       - name: Create runtime workspace
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
