@@ -14,7 +14,7 @@ name: AI Clarify (Reusable)
 jobs:
   clarify:
     if: >-
-      (github.event_name == 'issues' && github.event.action == 'opened') ||
+      (github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking')) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     runs-on: ubuntu-latest
     timeout-minutes: 120
