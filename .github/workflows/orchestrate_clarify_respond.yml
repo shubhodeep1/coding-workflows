@@ -80,7 +80,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          wf_source="${{ github.repository_owner }}/coding-workflows"
+          wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           for f in setup_serena.sh; do
             gh api -H 'Accept: application/vnd.github.raw+json' \
@@ -121,11 +121,11 @@ jobs:
           echo "ISSUE_TITLE=${ISSUE_TITLE}" >> "$GITHUB_ENV"
 
           # Extract tracking issue number from orchestrator metadata
-          TRACKING_NUM="$(printf '%s' "${ISSUE_BODY}" | grep -oP 'Tracking issue: #\K[0-9]+' || true)"
+          TRACKING_NUM="$(printf '%s\n' "${ISSUE_BODY}" | sed -nE 's/.*Tracking issue:[[:space:]]*#([0-9]+).*/\1/p' | head -n1 || true)"
 
           # Fetch tracking issue body (contains project description)
           TRACKING_BODY=""
-          if [ -n "${TRACKING_NUM}" ]; then
+          if [ -n "${TRACKING_NUM}" ] && [[ "${TRACKING_NUM}" =~ ^[0-9]+$ ]]; then
             TRACKING_BODY="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
           fi
 
@@ -269,7 +269,7 @@ jobs:
             if [ -n "${TOKENS}" ]; then
               echo "| Tokens used | ${TOKENS} |"
               TOKENS_NUM="${TOKENS//,/}"
-              if [ "${TOKENS_NUM}" -gt "${TOKEN_WARN_THRESHOLD}" ] 2>/dev/null; then
+              if [[ "${TOKENS_NUM}" =~ ^[0-9]+$ ]] && [ "${TOKENS_NUM}" -gt "${TOKEN_WARN_THRESHOLD}" ]; then
                 echo "| :warning: Token alert | Above ${TOKEN_WARN_THRESHOLD} threshold |"
               fi
             fi
