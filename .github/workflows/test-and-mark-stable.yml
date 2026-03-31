@@ -139,7 +139,7 @@ jobs:
 
           BODY="## Task
 
-          The file \`tests/e2e_smoke_canary.txt\` already exists in the repository. Update its content so it is **exactly** these three lines (no more, no less):
+          Create or update \`tests/e2e_smoke_canary.txt\` so its content is **exactly** these three lines (no more, no less):
 
           \`\`\`text
           status: ok
@@ -158,8 +158,8 @@ jobs:
           ## Constraints
 
           - **Only** modify \`tests/e2e_smoke_canary.txt\` — do not touch any other file.
-          - The file already exists — do **not** create any new directories.
-          - Replace the file content completely with the three lines above.
+          - If the \`tests/\` directory does not exist, create it.
+          - If the file already exists, replace its content completely with the three lines above.
           - Do **not** add comments, headers, or any extra content.
           - This is a fully-specified task — **no clarification is needed**."
 
