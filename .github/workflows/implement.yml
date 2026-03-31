@@ -520,7 +520,7 @@ jobs:
           described in the plan. Do NOT just describe the changes — execute them by
           writing to disk. Proceed now.
 
-RETRY_EOF
+          RETRY_EOF
                 cat "${CODEX_PROMPT_FILE}"
               } > "${PROMPT_FILE_TO_USE}"
             fi
