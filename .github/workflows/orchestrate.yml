@@ -331,7 +331,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --color "a2eeef" \
             --description "Orchestrator project tracking issue" \
-            2>/dev/null || true
+            --force
 
       - name: Create tracking issue
         id: tracking_issue
