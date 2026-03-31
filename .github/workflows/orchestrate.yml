@@ -319,6 +319,20 @@ jobs:
           # Compute waves for logging
           python3 scripts/orchestrate_lib.py compute-waves --input-file "${DECOMPOSITION_FILE}"
 
+      - name: Ensure orchestrator labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          # The consumer repo may not have the ai:orchestrator-tracking label yet.
+          # gh issue create --label fails if the label does not exist, so create it
+          # idempotently first.
+          gh label create "ai:orchestrator-tracking" \
+            --repo "${{ github.repository }}" \
+            --color "a2eeef" \
+            --description "Orchestrator project tracking issue" \
+            2>/dev/null || true
+
       - name: Create tracking issue
         id: tracking_issue
         env:
