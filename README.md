@@ -27,8 +27,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | Secret | Required | Used By | Description |
 |---|---|---|---|
 | `GH_PAT` | **Yes** | All workflows | GitHub Personal Access Token with `repo` scope |
-| `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | [OpenRouter](https://openrouter.ai) API key for LLM access |
-| `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Telegram bot token for notifications |
+| `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond | [OpenRouter](https://openrouter.ai) API key for LLM access |
+| `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond | Telegram bot token for notifications |
 
 #### Variables
 
@@ -57,6 +57,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_EDITOR` | `high` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 | `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | orchestrate | Reasoning effort for project decomposition |
 | `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation |
+| `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
 
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 
@@ -67,6 +68,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `TOOL_CALL_BUDGET_IMPLEMENT` | `50` | implement | Tool call budget for the implementation phase |
 | `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | orchestrate | Tool call budget for the decomposer |
 | `TOOL_CALL_BUDGET_JUDGE` | `60` | orchestrate_poll | Tool call budget for the judge (needs deep repo inspection) |
+| `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | orchestrate_clarify_respond | Tool call budget for auto-answering clarification questions |
 
 **Token warning thresholds** — when a phase exceeds this many tokens, a warning appears in the GitHub Actions run summary. Raise these for large repos where deeper exploration is expected.
 
@@ -76,6 +78,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `TOKEN_WARN_THRESHOLD_PLAN` | `200000` | plan | Token usage warning threshold for planning |
 | `TOKEN_WARN_THRESHOLD_IMPLEMENT` | `200000` | implement | Token usage warning threshold for implementation |
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | orchestrate | Token usage warning threshold for orchestration |
+| `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | orchestrate_clarify_respond | Token usage warning threshold for auto-answering clarification questions |
 
 ### 2. Create wrapper workflows
 
@@ -225,6 +228,21 @@ jobs:
     secrets: inherit
 ```
 
+**`.github/workflows/ai-orchestrate-clarify-respond.yml`** — Auto-answers clarification questions on orchestrator-managed issues
+```yaml
+name: AI Orchestrate Clarify Respond
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  issues: write
+jobs:
+  respond:
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_clarify_respond.yml@stable
+    secrets: inherit
+```
+
 **`.github/workflows/ai-orchestrate-poll.yml`** — Polls orchestrator progress, runs judge, dispatches next waves
 ```yaml
 name: AI Orchestrate Poller
@@ -290,6 +308,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `cancel_on_pr_close.yml` | `pull_request.closed` | Active-run cancellation |
 | `memory_maintenance.yml` | `schedule` (monthly) | Memory compaction/archival |
 | `orchestrate.yml` | `workflow_dispatch` | Project decomposition + multi-issue orchestration |
+| `orchestrate_clarify_respond.yml` | `issue_comment.created` | Auto-answers clarification questions on orchestrator issues |
 | `orchestrate_poll.yml` | `schedule` (every ~10 min) | Orchestrator progress poller + judge + auto-recovery |
 
 ## Required Secrets
@@ -297,8 +316,8 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | Secret | Used By | Description |
 |---|---|---|
 | `GH_PAT` | All workflows | GitHub PAT with repo access |
-| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | OpenRouter API key for LLM access |
-| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Telegram bot token (optional) |
+| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond | OpenRouter API key for LLM access |
+| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond | Telegram bot token (optional) |
 
 ## Required Variables
 
@@ -332,6 +351,9 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | Tool call budget for decomposer |
 | `TOOL_CALL_BUDGET_JUDGE` | `60` | Tool call budget for judge (needs deep repo inspection) |
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |
+| `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | Reasoning effort for auto-answering clarification questions |
+| `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
+| `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
 
 ## Project Orchestrator
 
@@ -343,7 +365,7 @@ The orchestrator enables complex, multi-issue projects from a single prompt. It 
 workflow_dispatch (project description)
     → Decomposer (LLM): breaks project into issues + dependency DAG
     → Creates tracking issue + child issues
-    → Wave 1 issues enter pipeline (clarify → plan → implement → review → merge)
+    → Wave 1 issues enter pipeline (clarify → auto-answer → plan → implement → review → merge)
     → Poller (scheduled): monitors progress, dispatches next waves
     → Judge (LLM, xhigh thinking, full repo checkout): evaluates after each wave
         → complete: close tracking issue
@@ -353,9 +375,10 @@ workflow_dispatch (project description)
 
 ### Setup
 
-**1.** Copy the two wrapper workflows from [`workflow-templates/`](workflow-templates/) into your consumer repo's `.github/workflows/` directory:
+**1.** Copy the three wrapper workflows from [`workflow-templates/`](workflow-templates/) into your consumer repo's `.github/workflows/` directory:
 
 - [`ai-orchestrate.yml`](workflow-templates/ai-orchestrate.yml) — triggers decomposition via `workflow_dispatch`
+- [`ai-orchestrate-clarify-respond.yml`](workflow-templates/ai-orchestrate-clarify-respond.yml) — auto-answers clarification questions on orchestrator issues
 - [`ai-orchestrate-poll.yml`](workflow-templates/ai-orchestrate-poll.yml) — scheduled poller (every 10 min)
 
 Or create them manually — see the inline examples in the [Quickstart](#quickstart) section above.
@@ -367,7 +390,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 ### How it works
 
 1. **Decomposition:** The LLM reads your repo, breaks the project into scoped issues with a dependency graph, and creates a tracking issue (labeled `ai:orchestrator-tracking`).
-2. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically.
+2. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically. If clarification questions are raised, the `orchestrate_clarify_respond` workflow answers them automatically using an LLM, so the pipeline runs fully unattended.
 3. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
 4. **Polling:** Every 10 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
 5. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
