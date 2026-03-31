@@ -2285,8 +2285,13 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:ready-to-merge on issue #${issue_number}"
-            gh issue edit "${issue_number}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-            gh issue edit "${issue_number}" --add-label 'ai:ready-to-merge'
+            gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
+            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge'; then
+              echo "::warning::Failed to add ai:ready-to-merge label to issue #${issue_number} — retrying in 2s..."
+              sleep 2
+              gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge' \
+                || echo "::warning::Retry also failed for issue #${issue_number}. Label may need manual application."
+            fi
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Enable auto-merge on PR
