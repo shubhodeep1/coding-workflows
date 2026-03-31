@@ -25,7 +25,10 @@ jobs:
           github.event.comment.user.type == 'Bot' &&
           github.event.comment.user.login == 'github-actions[bot]' &&
           startsWith(github.event.comment.body, '/answer') &&
-          contains(github.event.comment.body, '[auto-answered-by-clarify]')
+          (
+            contains(github.event.comment.body, '[auto-answered-by-clarify]') ||
+            contains(github.event.comment.body, '[auto-answered-by-orchestrator]')
+          )
         )
       )
     runs-on: ubuntu-latest

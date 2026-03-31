@@ -1,0 +1,11 @@
+name: AI Orchestrate Clarify Respond
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  issues: write
+jobs:
+  respond:
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_clarify_respond.yml@stable
+    secrets: inherit

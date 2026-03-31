@@ -1,0 +1,324 @@
+---
+name: AI Orchestrate Clarify Respond (Reusable)
+
+# Automatically answers clarification questions on orchestrator-managed issues
+# so the orchestrator pipeline can run fully unattended.
+#
+# Trigger: issue_comment.created (fires when clarify.yml posts questions).
+# Guard:   only runs when the comment is from github-actions[bot], starts with
+#          "Clarification required", and the issue body contains the
+#          "Managed by: AI Orchestrator" metadata marker.
+
+"on":
+  workflow_call:
+    secrets:
+      GH_PAT:
+        required: true
+      OPENROUTER_API_KEY:
+        required: true
+      TG_BOT_SECRET:
+        required: false
+
+jobs:
+  respond:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      github.event.comment.user.type == 'Bot' &&
+      github.event.comment.user.login == 'github-actions[bot]' &&
+      startsWith(github.event.comment.body, 'Clarification required')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: ai-orchestrate-clarify-respond-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_URL: ${{ github.event.issue.html_url }}
+      MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY_RESPOND || 'medium' }}
+
+    steps:
+      - name: Check orchestrator metadata
+        id: check_orchestrator
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          ISSUE_BODY="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.body // ""')"
+          if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+            echo "is_orchestrator=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Issue #${ISSUE_NUMBER} is not orchestrator-managed. Skipping."
+            echo "is_orchestrator=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Install uv for Serena
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ vars.UV_VERSION || 'latest' }}
+
+      - name: Install Codex CLI
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+          CODEX_VERSION="${{ vars.CODEX_VERSION || 'v0.114.0' }}"
+          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+
+      - name: Fetch workflow support scripts
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          wf_source="${{ github.repository_owner }}/coding-workflows"
+          mkdir -p scripts
+          for f in setup_serena.sh; do
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
+            chmod +x "scripts/${f}"
+          done
+          # Fetch the clarify-respond prompt
+          PROMPT_SOURCE="prompts/mode-clarify-respond.txt"
+          mkdir -p prompts
+          if [ ! -f "${PROMPT_SOURCE}" ]; then
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=stable" > "${PROMPT_SOURCE}"
+          fi
+
+      - name: Create runtime workspace
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/codex-clarify-respond-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+          {
+            echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
+            echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch issue and tracking context
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          # Fetch child issue metadata
+          ISSUE_META="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+          ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+          ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+          echo "ISSUE_TITLE=${ISSUE_TITLE}" >> "$GITHUB_ENV"
+
+          # Extract tracking issue number from orchestrator metadata
+          TRACKING_NUM="$(printf '%s' "${ISSUE_BODY}" | grep -oP 'Tracking issue: #\K[0-9]+' || true)"
+
+          # Fetch tracking issue body (contains project description)
+          TRACKING_BODY=""
+          if [ -n "${TRACKING_NUM}" ]; then
+            TRACKING_BODY="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+          fi
+
+          # Fetch the clarification comment (the one that triggered this workflow)
+          CLARIFICATION_COMMENT="${{ github.event.comment.body }}"
+
+          # Save context for prompt assembly
+          printf '%s' "${ISSUE_BODY}" > "${RUNTIME_DIR}/issue_body.txt"
+          printf '%s' "${TRACKING_BODY}" > "${RUNTIME_DIR}/tracking_body.txt"
+          printf '%s' "${CLARIFICATION_COMMENT}" > "${RUNTIME_DIR}/clarification_comment.txt"
+
+      - name: Create Codex config
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.codex
+          {
+            echo 'web_search = "live"'
+            echo 'model_provider = "openrouter"'
+            echo "model = \"${MODEL_EDITOR}\""
+            echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+            echo
+            echo '[model_providers.openrouter]'
+            echo 'name = "OpenRouter"'
+            echo 'base_url = "https://openrouter.ai/api/v1"'
+            echo 'env_key = "OPENROUTER_API_KEY"'
+            echo 'wire_api = "responses"'
+            echo 'stream_idle_timeout_ms = 600000'
+            echo 'stream_max_retries = 5'
+            echo 'request_max_retries = 3'
+            echo
+            echo '[sandbox_workspace_write]'
+            echo 'network_access = true'
+          } > ~/.codex/config.toml
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Setup Serena MCP server
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
+          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
+          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/setup_serena.sh --mode planning --context codex
+
+      - name: Build prompt and run Codex
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY_RESPOND || '15' }}
+        run: |
+          set -euo pipefail
+
+          {
+            cat prompts/mode-clarify-respond.txt
+            echo
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo
+            echo "=== PROJECT CONTEXT (from tracking issue) ==="
+            cat "${RUNTIME_DIR}/tracking_body.txt"
+            echo
+            echo "=== ISSUE DESCRIPTION ==="
+            cat "${RUNTIME_DIR}/issue_body.txt"
+            echo
+            echo "=== CLARIFICATION QUESTIONS ==="
+            cat "${RUNTIME_DIR}/clarification_comment.txt"
+          } > "${CODEX_PROMPT_FILE}"
+
+          max_attempts=3
+          for attempt in $(seq 1 "${max_attempts}"); do
+            echo "Codex clarify-respond attempt ${attempt}/${max_attempts}..."
+            if cat "${CODEX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+              if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+                echo "Codex clarify-respond succeeded on attempt ${attempt}."
+                break
+              fi
+              echo "::warning::Codex returned empty output on attempt ${attempt}."
+            else
+              rc=$?
+              echo "::warning::Codex exited with code $rc on attempt ${attempt}."
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$(( 10 * (2 ** (attempt - 1)) + RANDOM % 10 ))
+              echo "Retrying in ${sleep_secs}s (includes jitter)..."
+              sleep "${sleep_secs}"
+            else
+              echo "::error::Codex clarify-respond failed after ${max_attempts} attempts."
+              exit 1
+            fi
+          done
+
+      - name: Parse and post answer
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          # Extract the ANSWERS and RATIONALE sections from Codex output
+          ANSWERS_BODY="$(cat "${CODEX_OUTPUT_FILE}")"
+
+          if [ -z "${ANSWERS_BODY}" ]; then
+            echo "::error::Codex output is empty; cannot post answer."
+            exit 1
+          fi
+
+          # Build the /answer comment
+          {
+            echo "/answer [auto-answered-by-orchestrator]"
+            echo
+            echo "Auto-answered by the orchestrator clarify-respond workflow."
+            echo
+            echo "${ANSWERS_BODY}"
+          } > "${RUNTIME_DIR}/answer_comment.md"
+
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${RUNTIME_DIR}/answer_comment.md")"
+
+          echo "Posted auto-answer on issue #${ISSUE_NUMBER}"
+
+      - name: Write run summary
+        if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND || '80000' }}
+        run: |
+          set -euo pipefail
+          TOKENS=""
+          if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
+            TOKENS="$(grep -A1 'tokens used' "${RUNTIME_DIR}/codex_log.txt" | tail -1 | tr -d '[:space:]' || true)"
+          fi
+          {
+            echo "## AI Orchestrate Clarify Respond Summary"
+            echo "| Key | Value |"
+            echo "|-----|-------|"
+            echo "| Issue | #${ISSUE_NUMBER} |"
+            echo "| Model | \`${MODEL_EDITOR}\` |"
+            echo "| Reasoning | \`${MODEL_REASONING_EFFORT}\` |"
+            if [ -n "${TOKENS}" ]; then
+              echo "| Tokens used | ${TOKENS} |"
+              TOKENS_NUM="${TOKENS//,/}"
+              if [ "${TOKENS_NUM}" -gt "${TOKEN_WARN_THRESHOLD}" ] 2>/dev/null; then
+                echo "| :warning: Token alert | Above ${TOKEN_WARN_THRESHOLD} threshold |"
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on issue failure
+        if: failure() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="Orchestrator clarify-respond workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
+
+      - name: Telegram failure notification
+        if: failure() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          CHAT_ID="${TG_CHAT_ID:-}"
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
+            echo "Warning: Telegram failure notification skipped (missing TG_BOT_SECRET or chat_id)"
+            exit 0
+          fi
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="Orchestrator clarify-respond failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+          MSG+=$'\n'
+          MSG+="${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          set +e
+          HTTP_OUTPUT="$(curl -sS -w '\n%{http_code}' -X POST \
+            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
+            --data-urlencode "text=${MSG}")"
+          CURL_EXIT="${?}"
+          set -e
+          RESPONSE="$(printf '%s' "${HTTP_OUTPUT}" | sed '$d')"
+          HTTP_CODE="$(printf '%s' "${HTTP_OUTPUT}" | tail -n1)"
+          if [ "${CURL_EXIT}" -ne 0 ] || [ -z "${RESPONSE}" ]; then
+            echo "::warning::Telegram failure notification failed: curl exit=${CURL_EXIT} http_code=${HTTP_CODE} response=${RESPONSE}"
+            exit 0
+          fi
+          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
+            echo "::warning::Telegram failure notification failed: http_code=${HTTP_CODE} response=${RESPONSE}"
+          fi
