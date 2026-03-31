@@ -15,16 +15,17 @@ jobs:
     outputs:
       should_skip: ${{ steps.detect.outputs.should_skip }}
     steps:
-      - name: Checkout HEAD commit
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-
       - name: Detect autofix commit
         id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          HEAD_MSG="$(git log -1 --format='%s' HEAD 2>/dev/null || true)"
+          # Read the commit message of the actual PR head commit, not the
+          # merge commit that actions/checkout produces by default on
+          # pull_request events.
+          HEAD_MSG="$(gh api "repos/${{ github.repository }}/git/commits/${PR_HEAD_SHA}" --jq '.message' 2>/dev/null | head -1 || true)"
           if echo "${HEAD_MSG}" | grep -q '^\[ai-autofix\]'; then
             echo "Autofix commit detected — skipping review."
             echo "should_skip=true" >> "$GITHUB_OUTPUT"
@@ -72,7 +73,7 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:ready-to-merge on issue #${issue_number}"
-            gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
+            gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
             if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge'; then
               echo "::warning::Failed to add ai:ready-to-merge label to issue #${issue_number} — retrying in 2s..."
               sleep 2
