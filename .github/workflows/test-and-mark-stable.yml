@@ -137,30 +137,31 @@ jobs:
 
           TITLE="[E2E Smoke Test] Update smoke-test canary (run ${RUN_ID})"
 
-          BODY="$(cat <<'ISSUE_EOF'
-          ## Task
+          BODY="## Task
 
-          Create or update the file `tests/e2e_smoke_canary.txt` so its entire content is exactly these three lines:
+          The file \`tests/e2e_smoke_canary.txt\` already exists in the repository. Update its content so it is **exactly** these three lines (no more, no less):
 
-          ```text
+          \`\`\`text
           status: ok
-          workflow: e2e-smoke-test
+          run_id: ${RUN_ID}
           updated-by: ai-pipeline
-          ```
+          \`\`\`
+
+          ## How to do it
+
+          Overwrite the entire file. For example, the equivalent shell command would be:
+
+          \`\`\`bash
+          printf 'status: ok\nrun_id: ${RUN_ID}\nupdated-by: ai-pipeline\n' > tests/e2e_smoke_canary.txt
+          \`\`\`
 
           ## Constraints
 
-          - **Only** modify `tests/e2e_smoke_canary.txt` — do not touch any other file
-          - Create the `tests/` directory if it does not already exist
-          - If the file already exists, overwrite it completely with the content above
-          - Do **not** add comments, headers, or any extra content beyond the three lines shown
-          - This is a fully-specified task — **no clarification is needed**
-
-          ## Context
-
-          This issue is created by an automated end-to-end smoke test that validates all AI workflow phases (clarify → plan → implement → review/edit) execute correctly. The change is intentionally trivial so the test completes quickly and can be run unlimited times.
-          ISSUE_EOF
-          )"
+          - **Only** modify \`tests/e2e_smoke_canary.txt\` — do not touch any other file.
+          - The file already exists — do **not** create any new directories.
+          - Replace the file content completely with the three lines above.
+          - Do **not** add comments, headers, or any extra content.
+          - This is a fully-specified task — **no clarification is needed**."
 
           # Create the issue and extract number in one call
           ISSUE_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
