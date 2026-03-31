@@ -261,7 +261,11 @@ jobs:
         run: |
           set -euo pipefail
           ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
-          if ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
+          if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
+            echo "Issue #${ISSUE_NUMBER} already has ai:implementing label. Another implement run is in progress. Exiting safely."
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          elif ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is not in ai:awaiting-approval phase. Exiting safely."
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
@@ -503,6 +507,7 @@ jobs:
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
 
+          BASELINE_GIT_STATUS="$(git status --porcelain)"
           max_attempts=5
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
@@ -511,7 +516,7 @@ jobs:
             # changes), prepend a nudge so the model knows it must actually
             # modify files this time.
             PROMPT_FILE_TO_USE="${CODEX_PROMPT_FILE}"
-            if [ "${attempt}" -gt 1 ] && [ -z "$(git status --porcelain)" ]; then
+            if [ "${attempt}" -gt 1 ] && [ "$(git status --porcelain)" = "${BASELINE_GIT_STATUS}" ]; then
               PROMPT_FILE_TO_USE="${RUNTIME_DIR}/codex_prompt_retry.txt"
               {
                 cat <<'RETRY_EOF'
@@ -526,12 +531,11 @@ RETRY_EOF
             fi
 
             if cat "${PROMPT_FILE_TO_USE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+              if [ "$(git status --porcelain)" != "${BASELINE_GIT_STATUS}" ]; then
+                echo "Codex implement succeeded with file changes on attempt ${attempt}."
+                break
+              fi
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-                # Codex returned output — check if it actually changed files.
-                if [ -n "$(git status --porcelain)" ]; then
-                  echo "Codex implement succeeded with file changes on attempt ${attempt}."
-                  break
-                fi
                 echo "::warning::Codex returned output but produced no file changes on attempt ${attempt}."
               else
                 echo "::warning::Codex returned empty output on attempt ${attempt}."
