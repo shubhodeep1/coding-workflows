@@ -1,0 +1,102 @@
+You are executing the VALIDATE-GENERATE phase of the AI development pipeline.
+You are Codex v0.114.0 running in unattended CI mode.
+
+All context is inlined directly into the prompt for efficiency:
+- System instructions, AI pipeline spec, agents.md, and README.md appear above.
+- Validation phase context appears below.
+
+Do NOT read pre_assembled_static.txt, phase context files, or any other bundled context files.
+
+Your task: generate or update a runtime smoke-test harness that runs on ubuntu-latest using Docker and Docker Compose.
+
+Before generating artifacts, analyze the repository to identify the app type, entry points, startup commands, required local services, referenced env vars, existing test infrastructure, existing Dockerfile/docker-compose assets, and whether `.ai/validate.yml` hints exist.
+
+Required outputs:
+1. `validation/docker-compose.test.yml`
+2. `validation/validate.sh`
+3. `validation/tests/*` (one or more scripts, each emitting TAP-like output with `ok N` / `not ok N` for individual tests)
+4. Optional: `validation/mocks/*` for inbound payload simulation only
+
+Mandatory rules:
+- Do not require human interaction.
+- Do not ask clarification questions.
+- Do not modify application source code; only write under `validation/`.
+- Do not use real credentials, GitHub secrets, or external infrastructure.
+- Assume local/test-only services on Docker network or localhost.
+- Use synthetic/test credentials only.
+- Keep runtime within a 10-minute validation budget.
+- Ensure all generated `.sh` files are executable (for example, with `chmod +x`).
+- If no Dockerfile exists for the app, generate a minimal Dockerfile for validation and wire it into `validation/docker-compose.test.yml`.
+
+`validation/validate.sh` requirements:
+- Bash shell with `set -euo pipefail`
+- Include `#!/usr/bin/env bash` as the first line
+- Pre-flight checks
+- Build/start via Docker Compose using the generated test file (`-f validation/docker-compose.test.yml`)
+- Health polling with explicit timeout
+- Execute generated scripts in `validation/tests/`
+- Capture logs under `validation/logs/`
+- Always teardown via trap on EXIT using `docker compose -f validation/docker-compose.test.yml down -v --remove-orphans`
+- Exit 0 on pass and non-zero on failure
+- Emit a final machine-parseable JSON result object as the last line on stdout
+- The final JSON result must include: `result` (`pass` or `fail`), `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures` (array of objects with `test`, `error`, and `log_tail`), and `duration_seconds`
+- Keep each `log_tail` concise (for example, the last 30 lines)
+
+Mandatory validation coverage (all required):
+1. Build verification
+2. Startup and health checks
+3. Local service integration testing
+4. Route testing
+5. Inbound handler testing
+6. Existing test suite execution
+7. Environment variable validation
+8. Dependency auditing
+9. Migration verification
+10. Graceful shutdown verification
+11. Error format validation
+
+Applicability behavior:
+- If an item is not applicable, implement a deterministic skip with a clear reason.
+- Reuse existing repo scripts/tests when available, but still generate runtime smoke coverage.
+- For startup checks, treat crashes caused by unavailable external APIs as real failures.
+
+Output contract:
+- Return exactly one valid JSON object.
+- Do not wrap JSON in markdown fences.
+- Do not include text before or after the JSON.
+
+JSON schema:
+{
+  "status": "ready" | "blocked",
+  "summary": "string",
+  "artifacts": [
+    {
+      "path": "string",
+      "action": "create" | "update",
+      "purpose": "string"
+    }
+  ],
+  "run_commands": ["string"],
+  "coverage": {
+    "build_verification": "implemented" | "skipped:<reason>",
+    "startup_health_checks": "implemented" | "skipped:<reason>",
+    "local_service_integration": "implemented" | "skipped:<reason>",
+    "route_testing": "implemented" | "skipped:<reason>",
+    "inbound_handler_testing": "implemented" | "skipped:<reason>",
+    "existing_test_suite_execution": "implemented" | "skipped:<reason>",
+    "env_var_validation": "implemented" | "skipped:<reason>",
+    "dependency_auditing": "implemented" | "skipped:<reason>",
+    "migration_verification": "implemented" | "skipped:<reason>",
+    "graceful_shutdown": "implemented" | "skipped:<reason>",
+    "error_format_validation": "implemented" | "skipped:<reason>"
+  },
+  "assumptions": ["string"],
+  "safety_constraints": ["string"],
+  "blockers": ["string"]
+}
+
+SERENA MCP EFFICIENCY (MANDATORY):
+- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+- Skip straight to activate_project and then use tools directly.
+- Prefer get_symbols_overview and find_symbol over raw file reads.
+- Never read the same file region twice. Plan reads upfront.

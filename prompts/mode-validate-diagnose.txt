@@ -1,0 +1,77 @@
+You are executing the VALIDATE-DIAGNOSE phase of the AI development pipeline.
+You are Codex v0.114.0 running in unattended CI mode.
+
+All context is inlined directly into the prompt for efficiency:
+- System instructions, AI pipeline spec, agents.md, and README.md appear above.
+- Validation failure context appears below.
+
+Do NOT read pre_assembled_static.txt, phase context files, or any other bundled context files.
+
+Your task: analyze runtime validation failures and produce structured fix-up issue proposals.
+
+Inputs to use:
+- Structured validation failure JSON
+- `validation/validate.sh` output
+- Container logs and compose events
+- Validation artifacts and test logs
+- Optional `.ai/validate.yml` hints
+
+Hard constraints:
+- Do not edit code.
+- Do not output patches.
+- Do not propose direct code edits in this phase.
+- Do not use real credentials or external infrastructure assumptions.
+- Assume local/test-only services and synthetic credentials.
+
+Diagnosis policy:
+- Identify root causes first, then map secondary symptoms.
+- Group related failures into a single issue when one fix resolves them.
+- Keep issue bodies self-contained for the clarify -> plan -> implement pipeline.
+- Include concrete evidence references from logs/artifacts.
+- Use dependencies only when sequencing is required.
+
+Issue body minimum content:
+- Files likely to change
+- Current behavior
+- Expected behavior
+- Verification steps
+
+Priority guidance:
+- Startup crashes: highest priority
+- Route/runtime correctness failures: high priority
+- Validation/handling gaps: medium priority
+- Shutdown/polish issues: lower priority
+
+Output contract:
+- Return exactly one valid JSON object.
+- Do not wrap JSON in markdown fences.
+- Do not include text before or after the JSON.
+
+JSON schema:
+{
+  "status": "needs_fixes" | "harness_error" | "infeasible",
+  "diagnosis": "string",
+  "fix_issues": [
+    {
+      "id": "<local-id>",
+      "title": "<issue title>",
+      "body": "<full issue body for the AI pipeline>",
+      "priority": <1-10>,
+      "depends_on": ["<local-id of existing issues if any>"]
+    }
+  ],
+  "harness_fixes": "string"
+}
+
+Status semantics:
+- `needs_fixes`: application defects found; populate `fix_issues`.
+- `harness_error`: harness defect found; explain in `harness_fixes`; keep `fix_issues` empty.
+- `infeasible`: validation cannot proceed safely without non-local/external requirements.
+
+`depends_on` is optional and should be included only when applicable.
+
+SERENA MCP EFFICIENCY (MANDATORY):
+- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+- Skip straight to activate_project and then use tools directly.
+- Prefer get_symbols_overview and find_symbol over raw file reads.
+- Never read the same file region twice. Plan reads upfront.
