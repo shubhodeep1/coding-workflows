@@ -111,8 +111,10 @@ jobs:
               "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
             chmod +x "scripts/${f}"
           done
-          gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/prompts/mode-judge.txt?ref=stable" > "prompts/mode-judge.txt"
+          for pf in mode-judge.txt mode-judge-review-blocked.txt; do
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/${pf}?ref=stable" > "prompts/${pf}"
+          done
           gh api -H 'Accept: application/vnd.github.raw+json' \
             "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=stable" > ".github/ai/orchestrate_schema.v1.json"
           for f in codex_system_instructions.md ai_pipeline.md; do
@@ -161,6 +163,7 @@ jobs:
           SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
           SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
           SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
+          MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: bash scripts/orchestrate_poll_process.sh
 

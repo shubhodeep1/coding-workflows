@@ -202,6 +202,7 @@ def build_tracking_state(
 		"current_wave": 1,
 		"judge_cycle": 0,
 		"recovery_attempted": False,
+		"review_blocked_retries": {},
 		"status": "in_progress",
 		"waves": wave_list,
 		"dependency_edges": data.get("dependency_edges", []),
@@ -355,6 +356,7 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 	wave = waves[current_wave_idx]
 	all_merged = True
 	any_failed = False
+	any_review_blocked = False
 	statuses: list[dict[str, Any]] = []
 
 	for issue in wave["issues"]:
@@ -366,6 +368,10 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		elif "ai:closed" in labels:
 			status = "closed"
 			any_failed = True
+		elif "ai:review-blocked" in labels:
+			status = "review-blocked"
+			any_review_blocked = True
+			all_merged = False
 		elif "ai:ready-to-merge" in labels:
 			status = "ready-to-merge"
 			all_merged = False
@@ -385,6 +391,7 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		"wave": current_wave_idx + 1,
 		"wave_complete": all_merged,
 		"any_failed": any_failed,
+		"any_review_blocked": any_review_blocked,
 		"project_complete": project_complete,
 		"issues": statuses,
 	})

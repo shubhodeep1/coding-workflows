@@ -162,6 +162,439 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     fi
   done
 
+  # ---------------------------------------------------------------
+  # Handle review-blocked issues: invoke judge to decide
+  # ---------------------------------------------------------------
+  ANY_REVIEW_BLOCKED="$(echo "${WAVE_STATUS}" | jq -r '.any_review_blocked')"
+  if [ "${ANY_REVIEW_BLOCKED}" = "true" ]; then
+    echo "Detected review-blocked issues in wave ${CURRENT_WAVE}. Invoking judge to unblock..."
+
+    # Ensure codex config exists for the judge
+    mkdir -p ~/.codex
+    {
+      echo 'web_search = "live"'
+      echo 'model_provider = "openrouter"'
+      echo "model = \"${MODEL_EDITOR}\""
+      echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE}\""
+      echo
+      echo '[model_providers.openrouter]'
+      echo 'name = "OpenRouter"'
+      echo 'base_url = "https://openrouter.ai/api/v1"'
+      echo 'env_key = "OPENROUTER_API_KEY"'
+      echo 'wire_api = "responses"'
+      echo 'stream_idle_timeout_ms = 600000'
+      echo 'stream_max_retries = 5'
+      echo 'request_max_retries = 3'
+      echo
+      echo '[sandbox_workspace_write]'
+      echo 'network_access = true'
+    } > ~/.codex/config.toml
+
+    # Setup Serena for judge
+    bash scripts/setup_serena.sh --mode editing --context codex || true
+
+    MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
+    REVIEW_BLOCKED_STATE_CHANGED=false
+
+    echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "review-blocked") | .github_issue' | while read -r rb_issue; do
+      [ -n "${rb_issue}" ] && [ "${rb_issue}" != "null" ] || continue
+      echo "  Processing review-blocked issue #${rb_issue}..."
+
+      # Track retries per issue
+      RETRY_COUNT="$(jq -r ".review_blocked_retries[\"${rb_issue}\"] // 0" "${STATE_FILE}")"
+      echo "  Retry count for #${rb_issue}: ${RETRY_COUNT}/${MAX_REVIEW_BLOCKED_RETRIES}"
+
+      # Find linked PR
+      RB_PR="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/timeline" \
+        --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+        2>/dev/null || echo "")"
+      if [ -z "${RB_PR}" ] || [ "${RB_PR}" = "null" ]; then
+        echo "  No linked PR found for issue #${rb_issue}, skipping."
+        continue
+      fi
+      echo "  Linked PR: #${RB_PR}"
+
+      # Collect full PR context for the judge
+      PR_DIFF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
+        -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
+      PR_COMMENTS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
+        | jq -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null || echo "[]")"
+      PR_REVIEW_COMMENTS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" \
+        | jq -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo "[]")"
+      PR_META="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
+        --jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
+      ISSUE_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' 2>/dev/null || echo "")"
+
+      # Determine if this is a final decision (retries exhausted) or a fix attempt
+      IS_FINAL="false"
+      if [ "${RETRY_COUNT}" -ge "${MAX_REVIEW_BLOCKED_RETRIES}" ]; then
+        IS_FINAL="true"
+        echo "  Retries exhausted — judge will make final decision (merge or close+reissue)."
+      fi
+
+      # Build the judge prompt for review-blocked evaluation
+      RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
+      RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
+
+      {
+        if [ -f "${RUNTIME_DIR}/judge_static.txt" ]; then
+          cat "${RUNTIME_DIR}/judge_static.txt"
+        else
+          # Build static context if not already assembled
+          if [ -f codex_system_instructions.md ]; then
+            echo "=== SYSTEM INSTRUCTIONS ==="
+            cat codex_system_instructions.md
+            echo
+          fi
+          if [ -f ai_pipeline.md ]; then
+            echo "=== AI PIPELINE ==="
+            cat ai_pipeline.md
+            echo
+          fi
+        fi
+        echo
+        echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
+        echo
+        echo "=== REVIEW-BLOCKED JUDGE TASK ==="
+        echo
+        cat prompts/mode-judge-review-blocked.txt
+        echo
+        echo "=== ISSUE #${rb_issue} (original requirement) ==="
+        echo
+        echo "${ISSUE_BODY}"
+        echo
+        echo "=== PR #${RB_PR} METADATA ==="
+        echo
+        echo "${PR_META}" | jq '.'
+        echo
+        echo "=== PR #${RB_PR} DIFF ==="
+        echo
+        echo "${PR_DIFF}" | head -1000
+        echo
+        echo "=== PR #${RB_PR} COMMENTS (editor summaries, reviewer findings) ==="
+        echo
+        echo "${PR_COMMENTS}" | jq '.'
+        echo
+        echo "=== PR #${RB_PR} INLINE REVIEW COMMENTS ==="
+        echo
+        echo "${PR_REVIEW_COMMENTS}" | jq '.'
+        echo
+        echo "=== ORCHESTRATOR CONTEXT ==="
+        echo "Review-blocked retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
+        echo "Retries exhausted: ${IS_FINAL}"
+        if [ "${IS_FINAL}" = "true" ]; then
+          echo
+          echo "IMPORTANT: This is the FINAL attempt. You MUST choose either 'merge' or"
+          echo "'close_and_reissue'. The 'fix' option is NOT available because previous"
+          echo "fix attempts did not resolve the issues. Pick the action that best serves"
+          echo "the project: merge if the PR is good enough, or close and reissue if the"
+          echo "approach is fundamentally wrong."
+        fi
+      } > "${RB_JUDGE_PROMPT_FILE}"
+
+      # Run the judge
+      RB_JUDGE_SUCCESS=false
+      for attempt in 1 2; do
+        echo "  Review-blocked judge attempt ${attempt}/2..."
+        if cat "${RB_JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null; then
+          if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
+            RB_JUDGE_SUCCESS=true
+            break
+          fi
+        fi
+        if [ "${attempt}" -lt 2 ]; then
+          sleep 10
+        fi
+      done
+
+      if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
+        echo "::warning::Review-blocked judge failed for issue #${rb_issue}"
+        tg_notify "⚠️ Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle."
+        continue
+      fi
+
+      # Parse judge output
+      RB_JUDGE_JSON="$(python3 -c "
+import json, re, sys
+
+raw = open('${RB_JUDGE_OUTPUT_FILE}', 'r').read()
+
+try:
+    data = json.loads(raw.strip())
+    json.dump(data, sys.stdout)
+    sys.exit(0)
+except json.JSONDecodeError:
+    pass
+
+cleaned = re.sub(r'\`\`\`(?:json)?\s*', '', raw)
+cleaned = re.sub(r'\`\`\`\s*$', '', cleaned, flags=re.MULTILINE)
+
+brace_depth = 0
+start = None
+for i, ch in enumerate(cleaned):
+    if ch == '{':
+        if brace_depth == 0:
+            start = i
+        brace_depth += 1
+    elif ch == '}':
+        brace_depth -= 1
+        if brace_depth == 0 and start is not None:
+            candidate = cleaned[start:i+1]
+            try:
+                data = json.loads(candidate)
+                json.dump(data, sys.stdout)
+                sys.exit(0)
+            except json.JSONDecodeError:
+                start = None
+
+print('Could not parse review-blocked judge JSON', file=sys.stderr)
+sys.exit(1)
+" 2>/dev/null || echo "")"
+
+      if [ -z "${RB_JUDGE_JSON}" ]; then
+        echo "::warning::Could not parse review-blocked judge output for #${rb_issue}"
+        continue
+      fi
+
+      RB_ACTION="$(echo "${RB_JUDGE_JSON}" | jq -r '.action')"
+      RB_JUSTIFICATION="$(echo "${RB_JUDGE_JSON}" | jq -r '.justification // "no justification"')"
+      RB_FIX_DESC="$(echo "${RB_JUDGE_JSON}" | jq -r '.fix_description // ""')"
+      RB_REMAINING="$(echo "${RB_JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')"
+
+      echo "  Judge decision for #${rb_issue}: ${RB_ACTION}"
+      echo "  Justification: ${RB_JUSTIFICATION}"
+
+      # Post judge assessment to PR
+      RB_COMMENT="## Orchestrator Review-Blocked Judge — Issue #${rb_issue}
+
+**Decision:** ${RB_ACTION}
+**Retry:** $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}
+**Justification:** ${RB_JUSTIFICATION}
+
+**Remaining issues:** ${RB_REMAINING}"
+
+      gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
+        -f body="${RB_COMMENT}" >/dev/null 2>&1 || true
+
+      case "${RB_ACTION}" in
+        merge)
+          echo "  Judge says merge PR #${RB_PR} as-is."
+          # Remove review-blocked, set ready-to-merge
+          gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+            --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
+
+          # Attempt squash merge
+          PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
+          PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+          if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
+            if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null; then
+              echo "  PR #${RB_PR} merge initiated (auto)."
+            elif gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null; then
+              echo "  PR #${RB_PR} merged directly."
+            else
+              echo "::warning::Could not merge PR #${RB_PR}."
+            fi
+          else
+            echo "  PR #${RB_PR} state=${PR_STATE} mergeable=${PR_MERGEABLE}, cannot merge yet."
+          fi
+
+          REVIEW_BLOCKED_STATE_CHANGED=true
+          tg_notify "✅ Orchestrator judge merged review-blocked PR #${RB_PR} (issue #${rb_issue}): ${RB_JUSTIFICATION}"
+          ;;
+
+        fix)
+          if [ "${IS_FINAL}" = "true" ]; then
+            echo "  Judge returned 'fix' but retries exhausted — treating as merge."
+            gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+              --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
+            PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
+            if [ "${PR_STATE}" = "open" ]; then
+              gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
+                || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+            fi
+            REVIEW_BLOCKED_STATE_CHANGED=true
+            tg_notify "✅ Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"
+          else
+            echo "  Judge is applying fixes to PR #${RB_PR}..."
+            # The judge (codex) already modified files in the working directory.
+            # We need to checkout the PR branch, apply the changes, and push.
+            HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
+            if [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
+              git fetch --no-tags origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null || true
+              git checkout -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}" 2>/dev/null || true
+
+              # Re-run the judge in editing mode on the actual PR branch
+              RB_FIX_PROMPT_FILE="${RUNTIME_DIR}/rb_fix_prompt_${rb_issue}.txt"
+              RB_FIX_OUTPUT_FILE="${RUNTIME_DIR}/rb_fix_output_${rb_issue}.txt"
+              {
+                cat "${RB_JUDGE_PROMPT_FILE}"
+                echo
+                echo "=== APPLY FIXES NOW ==="
+                echo "You are now on the PR branch (${HEAD_REF})."
+                echo "Apply the fixes you identified directly to the repository files."
+                echo "Focus only on the issues that blocked the review."
+                echo "Do not create new files unless absolutely required."
+                echo "After applying fixes, output the same JSON with action='fix' and"
+                echo "fix_description describing what you changed."
+              } > "${RB_FIX_PROMPT_FILE}"
+
+              if cat "${RB_FIX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${RB_FIX_OUTPUT_FILE}" 2>/dev/null; then
+                echo "  Fix codex completed."
+              else
+                echo "::warning::Fix codex failed for PR #${RB_PR}."
+              fi
+
+              # Check if there are changes to commit
+              if [ -n "$(git status --porcelain)" ]; then
+                git config user.name "codex-bot"
+                git config user.email "codex@users.noreply.github.com"
+                git add -A
+                git commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}
+
+Orchestrator judge applied fixes to unblock the review pipeline.
+Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
+
+${RB_FIX_DESC}" || true
+
+                git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+                if git push origin "HEAD:${HEAD_REF}" 2>/dev/null; then
+                  echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
+                  # Remove review-blocked label — the push triggers synchronize
+                  # which re-runs review_autofix with a reset autofix counter.
+                  gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                    --remove-label 'ai:review-blocked' 2>/dev/null || true
+                  tg_notify "🔧 Orchestrator judge pushed fix for review-blocked PR #${RB_PR} (issue #${rb_issue}, retry $((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES})"
+                else
+                  echo "::warning::Failed to push orchestrator fix for PR #${RB_PR}."
+                fi
+              else
+                echo "  Judge produced no file changes. Treating as merge decision."
+                gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                  --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
+                PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
+                if [ "${PR_STATE}" = "open" ]; then
+                  gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
+                    || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+                fi
+                tg_notify "✅ Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"
+              fi
+
+              # Switch back to default branch for remaining processing
+              git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
+            else
+              echo "::warning::Cannot determine PR head branch for #${RB_PR}."
+            fi
+
+            # Increment retry counter
+            jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
+              "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+            REVIEW_BLOCKED_STATE_CHANGED=true
+          fi
+          ;;
+
+        close_and_reissue)
+          echo "  Judge says close PR #${RB_PR} and reissue."
+          # Close the PR
+          gh pr close "${RB_PR}" --repo "${GITHUB_REPOSITORY}" \
+            --comment "Closed by orchestrator judge — the approach needs rework. A new issue will be created with refined guidance." \
+            2>/dev/null || true
+
+          # Label issue as closed
+          gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+            --remove-label 'ai:review-blocked' --remove-label 'ai:done' \
+            --add-label 'ai:closed' 2>/dev/null || true
+
+          # Create replacement issue
+          NEW_ISSUE_TITLE="$(echo "${RB_JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
+          NEW_ISSUE_BODY="$(echo "${RB_JUDGE_JSON}" | jq -r '.new_issue.body // empty')"
+          if [ -n "${NEW_ISSUE_TITLE}" ] && [ -n "${NEW_ISSUE_BODY}" ]; then
+            FULL_NEW_BODY="${NEW_ISSUE_BODY}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #${TRACKING_NUM}
+- Replaces: #${rb_issue} (PR #${RB_PR} closed — approach rework)
+- Type: review-blocked-reissue
+- Managed by: AI Orchestrator"
+
+            NEW_URL="$(gh issue create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${NEW_ISSUE_TITLE}" \
+              --body "${FULL_NEW_BODY}")"
+            NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
+            echo "  Created replacement issue #${NEW_NUM}: ${NEW_ISSUE_TITLE}"
+
+            # Get local_id for the blocked issue and remap it
+            LOCAL_ID="$(echo "${WAVE_STATUS}" | jq -r ".issues[] | select(.github_issue == \"${rb_issue}\") | .id")"
+            if [ -n "${LOCAL_ID}" ] && [ "${LOCAL_ID}" != "null" ]; then
+              jq ".issue_number_map[\"${LOCAL_ID}\"] = ${NEW_NUM}" \
+                "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+              # Update the wave entry
+              jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${LOCAL_ID}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\")" \
+                "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+            fi
+
+            tg_notify "🔄 Orchestrator closed PR #${RB_PR} and reissued as #${NEW_NUM} (issue #${rb_issue}): ${RB_JUSTIFICATION}"
+          else
+            echo "::warning::Judge chose close_and_reissue but provided no new issue details."
+            tg_notify "⚠️ Orchestrator closed PR #${RB_PR} (issue #${rb_issue}) but could not create replacement issue."
+          fi
+
+          REVIEW_BLOCKED_STATE_CHANGED=true
+          ;;
+
+        *)
+          echo "::warning::Unknown review-blocked judge action: ${RB_ACTION}"
+          ;;
+      esac
+    done
+
+    # Persist updated state if any review-blocked issues were handled
+    if [ "${REVIEW_BLOCKED_STATE_CHANGED}" = "true" ]; then
+      STATE_COMMENT="<!-- ORCHESTRATOR_STATE_V1
+$(cat "${STATE_FILE}")
+ORCHESTRATOR_STATE_V1 -->"
+      gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+        -f body="${STATE_COMMENT}" >/dev/null
+
+      # Re-check wave status after handling review-blocked issues
+      # (some may have been merged or reissued)
+      echo "Re-checking wave status after review-blocked handling..."
+      LABELS_JSON="{"
+      first=true
+      for inum in ${ISSUE_NUMS}; do
+        if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
+          continue
+        fi
+        # Re-read labels since we may have changed them
+        LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+        if [ "${first}" = true ]; then
+          first=false
+        else
+          LABELS_JSON+=","
+        fi
+        LABELS_JSON+="\"${inum}\":${LABELS}"
+      done
+      LABELS_JSON+="}"
+
+      # Also check any reissued issue numbers
+      REISSUED_NUMS="$(jq -r '.waves['"${WAVE_IDX}"'].issues[].github_issue' "${STATE_FILE}" 2>/dev/null | sort -u)"
+      for rnum in ${REISSUED_NUMS}; do
+        if [ -z "${rnum}" ] || [ "${rnum}" = "null" ]; then continue; fi
+        if echo "${LABELS_JSON}" | grep -q "\"${rnum}\""; then continue; fi
+        LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+        LABELS_JSON="$(echo "${LABELS_JSON}" | sed "s/}$/,\"${rnum}\":${LABELS}}/")"
+      done
+
+      WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
+        --state-file "${STATE_FILE}" \
+        --labels-json "${LABELS_JSON}")"
+      WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
+      ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
+      echo "Updated wave status after review-blocked handling: complete=${WAVE_COMPLETE}, failed=${ANY_FAILED}"
+    fi
+  fi
+
   if [ "${WAVE_COMPLETE}" != "true" ]; then
     echo "Wave ${CURRENT_WAVE} not yet complete. Waiting."
 

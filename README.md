@@ -38,7 +38,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | No | `true` | plan | Auto-trigger implementation when plan is clear |
 | `ALLOW_WORKFLOW_EDITS` | No | `false` | review_autofix | Allow AI edits to `.github/workflows` files |
 | `ENABLE_AUTO_MERGE` | No | `false` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
-| `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR ready to merge. |
+| `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
+| `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | orchestrate_poll | Maximum orchestrator judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Version/branch of the Serena MCP server |
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Languages for Serena symbol analysis |
@@ -369,7 +370,8 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | `true` | Auto-approve clear plans |
 | `ALLOW_WORKFLOW_EDITS` | `false` | Allow AI edits to workflow files |
 | `ENABLE_AUTO_MERGE` | `false` | Auto-merge PRs (squash) when review passes and checks are green |
-| `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before stopping |
+| `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before marking `ai:review-blocked` |
+| `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum orchestrator judge retries for review-blocked PRs |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
@@ -436,8 +438,9 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 4. **Polling:** Every 10 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
 5. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
 6. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
-7. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted once; if it still fails, the project stops and the operator is notified via Telegram.
-8. **Completion:** When the judge says "complete", the tracking issue is closed.
+7. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge can: (a) merge the PR as-is if remaining issues are cosmetic, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts.
+8. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted once; if it still fails, the project stops and the operator is notified via Telegram.
+9. **Completion:** When the judge says "complete", the tracking issue is closed.
 
 ### Enabling auto-merge
 
