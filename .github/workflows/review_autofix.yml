@@ -2312,7 +2312,7 @@ jobs:
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
             PR_DATA="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
-            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE '(issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)' | grep -oE '[0-9]+' | sort -un || true)"
+            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY}/issues/[0-9]+|${REPOSITORY}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
               echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
               exit 0
@@ -2351,7 +2351,7 @@ jobs:
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
             PR_DATA="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
-            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE '(issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)' | grep -oE '[0-9]+' | sort -un || true)"
+            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY}/issues/[0-9]+|${REPOSITORY}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
               echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
               exit 0
@@ -2469,7 +2469,7 @@ jobs:
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
             PR_DATA="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
-            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE '(issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)' | grep -oE '[0-9]+' | sort -un || true)"
+            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY}/issues/[0-9]+|${REPOSITORY}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
               echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
               exit 0
