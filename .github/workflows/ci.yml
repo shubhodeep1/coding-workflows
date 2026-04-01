@@ -38,6 +38,13 @@ jobs:
           python3 -m py_compile scripts/issue_attachment_bundle.py
           python3 -m py_compile scripts/generate_symbol_diff_summary.py
           python3 -m py_compile scripts/serena_efficiency_report.py
+          python3 -m py_compile scripts/orchestrate_lib.py
+          python3 -m py_compile scripts/ai_labels.py
+
+      - name: Orchestrate lib unit tests
+        run: |
+          set -euo pipefail
+          python3 tests/test_orchestrate_lib.py
 
       - name: JSON schema validation
         run: |
@@ -46,6 +53,19 @@ jobs:
           for f in schemas/*.json examples/*.json; do
             python3 -c "import json; json.load(open('$f'))" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
+          # Validate label contract
+          python3 scripts/ai_labels.py contract-validate --contract-file .github/ai/label_contract.v1.json
+
+      - name: Prompt files validation
+        run: |
+          set -euo pipefail
+          for f in prompts/*.txt; do
+            if [ ! -s "$f" ]; then
+              echo "FAIL: $f is empty"
+              exit 1
+            fi
+            echo "OK: $f ($(wc -c < "$f") bytes)"
+          done
 
       - name: Shell script lint
         run: |
@@ -53,3 +73,4 @@ jobs:
           bash -n scripts/git_ref_health_check.sh
           bash -n scripts/setup_serena.sh
           bash -n scripts/mark-stable.sh
+          bash -n scripts/orchestrate_poll_process.sh

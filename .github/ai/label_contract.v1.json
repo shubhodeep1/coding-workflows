@@ -29,6 +29,10 @@
       "color": "5319e7",
       "description": "Linked PR merged"
     },
+    "ai:review-blocked": {
+      "color": "e11d48",
+      "description": "PR review/autofix could not resolve all issues — needs human intervention"
+    },
     "ai:closed": {
       "color": "6a737d",
       "description": "Linked PR closed without merge"
@@ -49,6 +53,7 @@
         "ai:implementing",
         "ai:done",
         "ai:ready-to-merge",
+        "ai:review-blocked",
         "ai:merged",
         "ai:closed"
       ]

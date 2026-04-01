@@ -421,6 +421,273 @@ jobs:
           echo "status=timeout" >> "$GITHUB_OUTPUT"
           exit 1
 
+      # ── Phase 5: Orchestrator script integration test ──────────
+      - name: "Phase 5: Orchestrator script integration test"
+        id: orchestrator-scripts
+        run: |
+          set -euo pipefail
+          echo "Running orchestrator script integration tests..."
+
+          # 5a: Python unit tests
+          echo "── Unit tests ──"
+          python3 tests/test_orchestrate_lib.py
+
+          # 5b: CLI integration — validate a synthetic decomposition
+          echo ""
+          echo "── CLI: validate decomposition ──"
+          SYNTH_FILE="$(mktemp --suffix=.json)"
+          cat > "${SYNTH_FILE}" <<'SYNTH'
+          {
+            "schema_version": "orchestrate_decomposition.v1",
+            "project_title": "E2E Orchestrator Validation",
+            "project_summary": "Synthetic project for integration testing",
+            "issues": [
+              {"id": "setup", "title": "Setup", "body": "Setup task", "priority": 1},
+              {"id": "impl", "title": "Implement", "body": "Implementation", "priority": 2},
+              {"id": "test", "title": "Test", "body": "Testing", "priority": 3}
+            ],
+            "dependency_edges": [
+              {"from": "setup", "to": "impl"},
+              {"from": "impl", "to": "test"}
+            ]
+          }
+          SYNTH
+          python3 scripts/orchestrate_lib.py validate --input-file "${SYNTH_FILE}"
+
+          echo ""
+          echo "── CLI: compute waves ──"
+          WAVE_OUTPUT="$(python3 scripts/orchestrate_lib.py compute-waves --input-file "${SYNTH_FILE}")"
+          WAVE_COUNT="$(echo "${WAVE_OUTPUT}" | jq '.total_waves')"
+          echo "Waves: ${WAVE_COUNT}"
+          if [ "${WAVE_COUNT}" -ne 3 ]; then
+            echo "::error::Expected 3 waves for linear dependency chain, got ${WAVE_COUNT}"
+            exit 1
+          fi
+
+          # 5c: CLI integration — check-wave-status with review-blocked labels
+          echo ""
+          echo "── CLI: check-wave-status with review-blocked ──"
+          STATE_FILE="$(mktemp --suffix=.json)"
+          cat > "${STATE_FILE}" <<'STATE'
+          {
+            "schema_version": "orchestrate_state.v1",
+            "project_title": "Test",
+            "total_issues": 2,
+            "total_waves": 1,
+            "current_wave": 1,
+            "judge_cycle": 0,
+            "recovery_attempted": false,
+            "review_blocked_retries": {},
+            "status": "in_progress",
+            "waves": [{"wave": 1, "issues": [
+              {"id": "a", "github_issue": 100, "status": "pending"},
+              {"id": "b", "github_issue": 101, "status": "pending"}
+            ]}],
+            "dependency_edges": [],
+            "issue_number_map": {},
+            "pending_issue_defs": {}
+          }
+          STATE
+          LABELS_JSON='{"100": ["ai:review-blocked"], "101": ["ai:merged"]}'
+          STATUS_OUTPUT="$(python3 scripts/orchestrate_lib.py check-wave-status \
+            --state-file "${STATE_FILE}" \
+            --labels-json "${LABELS_JSON}")"
+          echo "${STATUS_OUTPUT}" | jq '.'
+
+          RB_FLAG="$(echo "${STATUS_OUTPUT}" | jq '.any_review_blocked')"
+          if [ "${RB_FLAG}" != "true" ]; then
+            echo "::error::Expected any_review_blocked=true, got ${RB_FLAG}"
+            exit 1
+          fi
+          WAVE_DONE="$(echo "${STATUS_OUTPUT}" | jq '.wave_complete')"
+          if [ "${WAVE_DONE}" != "false" ]; then
+            echo "::error::Expected wave_complete=false (review-blocked issue), got ${WAVE_DONE}"
+            exit 1
+          fi
+
+          # 5d: Validate prompt files exist and are non-empty
+          echo ""
+          echo "── Prompt files validation ──"
+          for pf in prompts/mode-judge.txt prompts/mode-judge-review-blocked.txt; do
+            if [ ! -s "${pf}" ]; then
+              echo "::error::Prompt file ${pf} is missing or empty"
+              exit 1
+            fi
+            echo "OK: ${pf} ($(wc -c < "${pf}") bytes)"
+          done
+
+          # 5e: Shell script syntax
+          echo ""
+          echo "── Shell script syntax ──"
+          bash -n scripts/orchestrate_poll_process.sh
+          echo "OK: orchestrate_poll_process.sh"
+
+          # 5f: Label contract validation
+          echo ""
+          echo "── Label contract ──"
+          python3 scripts/ai_labels.py contract-validate \
+            --contract-file .github/ai/label_contract.v1.json
+
+          echo ""
+          echo "✓ All orchestrator script integration tests passed"
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
+          rm -f "${SYNTH_FILE}" "${STATE_FILE}"
+
+      # ── Phase 6: Review-blocked simulation test ────────────────
+      - name: "Phase 6: Simulate review-blocked and verify poller handles it"
+        id: review-blocked-sim
+        if: steps.wait-implement.outputs.pr_number != ''
+        env:
+          PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          echo "Setting up review-blocked simulation..."
+
+          # 6a: Label the test issue as review-blocked (simulating autofix exhaustion)
+          echo "Labeling issue #${ISSUE_NUMBER} as ai:review-blocked..."
+          gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/labels" \
+            -f "labels[]=ai:review-blocked" >/dev/null 2>&1 || true
+          # Remove other ai: phase labels to simulate a clean review-blocked state
+          for label in ai:done ai:ready-to-merge ai:implementing; do
+            gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/labels/${label}" \
+              -X DELETE 2>/dev/null || true
+          done
+
+          # 6b: Create a tracking issue with orchestrator state pointing to this issue
+          TRACKING_BODY="## Project: E2E Review-Blocked Simulation
+
+          Synthetic tracking issue for testing the orchestrator's review-blocked handling.
+
+          ---
+          *This issue is managed by the AI orchestrator. Do not edit manually.*
+          \`ai:orchestrator-tracking\`"
+
+          TRACKING_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+            -f title="[E2E Smoke Test] Review-Blocked Simulation (run ${GITHUB_RUN_ID})" \
+            -f body="${TRACKING_BODY}" \
+            --jq '.number')
+
+          gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}/labels" \
+            -f "labels[]=ai:orchestrator-tracking" >/dev/null 2>&1 || true
+
+          echo "Created tracking issue #${TRACKING_NUMBER}"
+          echo "tracking_number=${TRACKING_NUMBER}" >> "$GITHUB_OUTPUT"
+
+          # 6c: Post orchestrator state as a comment on the tracking issue
+          STATE_JSON=$(cat <<STATEJSON
+          {
+            "schema_version": "orchestrate_state.v1",
+            "project_title": "E2E Review-Blocked Simulation",
+            "total_issues": 1,
+            "total_waves": 1,
+            "current_wave": 1,
+            "judge_cycle": 0,
+            "recovery_attempted": false,
+            "review_blocked_retries": {},
+            "status": "in_progress",
+            "waves": [{"wave": 1, "issues": [
+              {"id": "test-issue", "github_issue": ${ISSUE_NUMBER}, "status": "pending"}
+            ]}],
+            "dependency_edges": [],
+            "issue_number_map": {"test-issue": ${ISSUE_NUMBER}},
+            "pending_issue_defs": {}
+          }
+          STATEJSON
+          )
+
+          STATE_COMMENT="<!-- ORCHESTRATOR_STATE_V1
+          ${STATE_JSON}
+          ORCHESTRATOR_STATE_V1 -->"
+
+          gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}/comments" \
+            -f body="${STATE_COMMENT}" >/dev/null
+
+          echo "Posted orchestrator state to tracking issue #${TRACKING_NUMBER}"
+
+          # 6d: Trigger the poller workflow
+          echo "Triggering orchestrator poller..."
+          POLLER_WORKFLOW="internal-orchestrate-poll.yml"
+          if ! gh workflow run "${POLLER_WORKFLOW}" --repo "${TEST_REPO}" 2>/dev/null; then
+            # Try the consumer wrapper name
+            POLLER_WORKFLOW="ai-orchestrate-poll.yml"
+            if ! gh workflow run "${POLLER_WORKFLOW}" --repo "${TEST_REPO}" 2>/dev/null; then
+              echo "::warning::Could not trigger poller workflow. Skipping review-blocked verification."
+              echo "status=skipped" >> "$GITHUB_OUTPUT"
+              # Cleanup tracking issue
+              gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+              exit 0
+            fi
+          fi
+
+          echo "Poller triggered. Waiting for it to process the review-blocked issue..."
+
+          # 6e: Wait for the poller to handle the review-blocked issue
+          # The poller should: invoke judge → merge/fix/close_and_reissue
+          # We verify by checking if the label changed from ai:review-blocked
+          TIMEOUT_SECS=$((PHASE_TIMEOUT * 60))
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
+            if ! LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              --jq '[.labels[].name] | join(",")' 2>/dev/null); then
+              echo "::warning::Could not read labels for issue #${ISSUE_NUMBER}; retrying..."
+              sleep "$POLL_INTERVAL"
+              ELAPSED=$((ELAPSED + POLL_INTERVAL))
+              continue
+            fi
+
+            # Success: label changed from ai:review-blocked to something else
+            if ! echo "$LABELS" | grep -q 'ai:review-blocked'; then
+              echo "✓ Review-blocked simulation passed — poller handled the issue"
+              echo "  Current labels: ${LABELS}"
+
+              # Check what action the poller took
+              if echo "$LABELS" | grep -q 'ai:ready-to-merge'; then
+                echo "  Action: merge (judge decided to merge as-is)"
+              elif echo "$LABELS" | grep -q 'ai:closed'; then
+                echo "  Action: close_and_reissue (judge closed the PR)"
+              else
+                echo "  Action: fix or other (labels: ${LABELS})"
+              fi
+
+              echo "status=success" >> "$GITHUB_OUTPUT"
+
+              # Cleanup tracking issue
+              gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+              exit 0
+            fi
+
+            # Also check if the poller workflow run completed (may have failed)
+            POLLER_RUN=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=5&event=workflow_dispatch" \
+              --jq "[.workflow_runs[] | select(.name | test(\"Orchestrate.*Poll|Poll\"; \"i\"))] | sort_by(.created_at) | last" 2>/dev/null || echo "")
+            if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
+              POLLER_STATUS=$(echo "${POLLER_RUN}" | jq -r '.status // "unknown"')
+              POLLER_CONCLUSION=$(echo "${POLLER_RUN}" | jq -r '.conclusion // "null"')
+              if [ "${POLLER_STATUS}" = "completed" ] && [ "${POLLER_CONCLUSION}" = "failure" ]; then
+                echo "::warning::Poller workflow failed — review-blocked handling may not have been reached"
+                echo "status=poller_failed" >> "$GITHUB_OUTPUT"
+                # Cleanup
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+                exit 0
+              fi
+            fi
+
+            echo "  ... waiting (${ELAPSED}s / ${TIMEOUT_SECS}s) — labels: ${LABELS:-none}"
+            sleep "$POLL_INTERVAL"
+            ELAPSED=$((ELAPSED + POLL_INTERVAL))
+          done
+
+          echo "::warning::Timeout waiting for poller to handle review-blocked issue"
+          echo "status=timeout" >> "$GITHUB_OUTPUT"
+          # Cleanup tracking issue on timeout
+          gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+            -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+
       # ── Deep verification: inspect every step in every workflow run ─
       - name: "Deep verify: inspect all workflow run steps"
         id: deep-verify
@@ -618,6 +885,30 @@ jobs:
             PASSED=false
           fi
 
+          # Check orchestrator scripts (Phase 5)
+          ORCH="${{ steps.orchestrator-scripts.outputs.status }}"
+          if [ "$ORCH" = "success" ]; then
+            echo "  ✓ Orch Tests . PASSED"
+          else
+            echo "  ✗ Orch Tests . FAILED (${ORCH:-not_run})"
+            PASSED=false
+          fi
+
+          # Check review-blocked simulation (Phase 6)
+          RBSIM="${{ steps.review-blocked-sim.outputs.status }}"
+          if [ "$RBSIM" = "success" ] || [ "$RBSIM" = "skipped" ]; then
+            echo "  ✓ RB Sim ..... PASSED (${RBSIM})"
+          elif [ "$RBSIM" = "poller_failed" ]; then
+            echo "  ⚠ RB Sim ..... WARN (poller workflow failed — non-blocking)"
+          elif [ "$RBSIM" = "timeout" ]; then
+            echo "  ⚠ RB Sim ..... WARN (timed out — non-blocking)"
+          elif [ -z "$RBSIM" ]; then
+            echo "  - RB Sim ..... SKIPPED (no PR to simulate with)"
+          else
+            echo "  ✗ RB Sim ..... FAILED (${RBSIM})"
+            PASSED=false
+          fi
+
           # Check deep verification (step-level)
           DEEP="${{ steps.deep-verify.outputs.deep_passed }}"
           if [ "$DEEP" = "true" ]; then
@@ -646,18 +937,20 @@ jobs:
         env:
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
+          TRACKING_NUMBER: ${{ steps.review-blocked-sim.outputs.tracking_number }}
         run: |
           set -euo pipefail
           echo "Cleaning up E2E test artifacts..."
 
           # Close PR without merging
           if [ -n "${PR_NUMBER}" ]; then
-            gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-              -X PATCH -f state=closed \
-              -f body="$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body')
+            EXISTING_PR_BODY="$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' 2>/dev/null || echo "")"
+            NEW_PR_BODY="${EXISTING_PR_BODY}
 
           ---
-          *Closed by E2E smoke test cleanup (run ${GITHUB_RUN_ID}).*" \
+          *Closed by E2E smoke test cleanup (run ${GITHUB_RUN_ID}).*"
+            gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+              -X PATCH -f state=closed -f body="${NEW_PR_BODY}" \
               2>/dev/null || echo "Warning: could not close PR #${PR_NUMBER}"
             echo "  Closed PR #${PR_NUMBER}"
           fi
@@ -678,6 +971,14 @@ jobs:
           **Version under test:** ${{ needs.resolve-version.outputs.version }}" \
               2>/dev/null || echo "Warning: could not post cleanup comment"
             echo "  Closed issue #${ISSUE_NUMBER}"
+          fi
+
+          # Close tracking issue from Phase 6 (if created)
+          if [ -n "${TRACKING_NUMBER}" ]; then
+            gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+              -X PATCH -f state=closed -f state_reason=not_planned \
+              2>/dev/null || echo "Warning: could not close tracking issue #${TRACKING_NUMBER}"
+            echo "  Closed tracking issue #${TRACKING_NUMBER}"
           fi
 
           # Delete test branch

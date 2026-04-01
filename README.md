@@ -38,7 +38,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | No | `true` | plan | Auto-trigger implementation when plan is clear |
 | `ALLOW_WORKFLOW_EDITS` | No | `false` | review_autofix | Allow AI edits to `.github/workflows` files |
 | `ENABLE_AUTO_MERGE` | No | `false` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
-| `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR ready to merge. |
+| `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
+| `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | orchestrate_poll | Maximum orchestrator judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Version/branch of the Serena MCP server |
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Languages for Serena symbol analysis |
@@ -147,12 +148,53 @@ permissions:
   pull-requests: write
   issues: write
 jobs:
+  check-skip:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.detect.outputs.should_skip }}
+    steps:
+      - name: Detect autofix commit
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          HEAD_MSG="$(gh api "repos/${{ github.repository }}/git/commits/${PR_HEAD_SHA}" --jq '.message' 2>/dev/null | head -1 || true)"
+          if echo "${HEAD_MSG}" | grep -q '^\[ai-autofix\]'; then
+            echo "should_skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
   review:
+    needs: [check-skip]
+    if: needs.check-skip.outputs.should_skip != 'true'
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
     with:
       allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
     secrets: inherit
+
+  post-autofix:
+    needs: [check-skip]
+    if: needs.check-skip.outputs.should_skip == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark linked issues ready to merge
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          # See workflow-templates/ai-review.yml for full implementation
+          echo "Autofix commit detected — marking issues ready to merge"
 ```
+
+> **Note:** The `check-skip` job uses the GitHub API to read the actual PR
+> head commit message (via `github.event.pull_request.head.sha`). On
+> `pull_request` events, `actions/checkout` checks out a merge commit whose
+> message never starts with `[ai-autofix]`, so reading `git log -1 HEAD`
+> would always miss autofix commits. See
+> [`workflow-templates/ai-review.yml`](workflow-templates/ai-review.yml) for
+> the full ready-to-copy template including the `post-autofix` job.
 
 > **Warning — do NOT add a top-level `concurrency` block to this wrapper.**
 > The reusable workflow already manages concurrency at the job level. Adding a
@@ -328,7 +370,8 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | `true` | Auto-approve clear plans |
 | `ALLOW_WORKFLOW_EDITS` | `false` | Allow AI edits to workflow files |
 | `ENABLE_AUTO_MERGE` | `false` | Auto-merge PRs (squash) when review passes and checks are green |
-| `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before stopping |
+| `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before marking `ai:review-blocked` |
+| `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum orchestrator judge retries for review-blocked PRs |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
@@ -395,8 +438,9 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 4. **Polling:** Every 10 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
 5. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
 6. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
-7. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted once; if it still fails, the project stops and the operator is notified via Telegram.
-8. **Completion:** When the judge says "complete", the tracking issue is closed.
+7. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge can: (a) merge the PR as-is if remaining issues are cosmetic, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts.
+8. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted once; if it still fails, the project stops and the operator is notified via Telegram.
+9. **Completion:** When the judge says "complete", the tracking issue is closed.
 
 ### Enabling auto-merge
 
