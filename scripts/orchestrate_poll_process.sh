@@ -581,9 +581,12 @@ ORCHESTRATOR_STATE_V1 -->"
       REISSUED_NUMS="$(jq -r '.waves['"${WAVE_IDX}"'].issues[].github_issue' "${STATE_FILE}" 2>/dev/null | sort -u)"
       for rnum in ${REISSUED_NUMS}; do
         if [ -z "${rnum}" ] || [ "${rnum}" = "null" ]; then continue; fi
-        if echo "${LABELS_JSON}" | grep -q "\"${rnum}\""; then continue; fi
+        if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then
+          continue
+        fi
         LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
-        LABELS_JSON="$(echo "${LABELS_JSON}" | sed "s/}$/,\"${rnum}\":${LABELS}}/")"
+        [ -z "${LABELS}" ] && LABELS='[]'
+        LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}')"
       done
 
       WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
