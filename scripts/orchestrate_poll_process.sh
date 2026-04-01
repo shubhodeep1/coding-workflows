@@ -585,6 +585,7 @@ ORCHESTRATOR_STATE_V1 -->"
           continue
         fi
         LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+        [ -z "${LABELS}" ] && LABELS='[]'
         LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}')"
       done
 
