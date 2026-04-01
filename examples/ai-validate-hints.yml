@@ -38,9 +38,9 @@ custom_tests:
   - npm run test:webhook-signature-invalid
 
 bot_commands:
-  build: npm run build
-  start: npm run start
-  test: npm test
+  # For telegram-bot projects, list commands to exercise via webhook.
+  - /start
+  - /help
 
 worker_verify:
   enabled: true

@@ -28,6 +28,7 @@ Mandatory rules:
 
 `validation/validate.sh` requirements:
 - Bash shell with `set -euo pipefail`
+- Include `#!/usr/bin/env bash` as the first line
 - Pre-flight checks
 - Build/start via Docker Compose
 - Health polling with explicit timeout
@@ -35,8 +36,9 @@ Mandatory rules:
 - Capture logs under `validation/logs/`
 - Always teardown via trap on EXIT using `docker compose down -v --remove-orphans`
 - Exit 0 on pass and non-zero on failure
-- Emit a final machine-parseable JSON result object as the last stdout output
+- Emit a final machine-parseable JSON result object as the last line on stdout
 - The final JSON result must include: `result` (`pass` or `fail`), `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures` (array of objects with `test`, `error`, and `log_tail`), and `duration_seconds`
+- Keep each `log_tail` concise (for example, the last 30 lines)
 
 Mandatory validation coverage (all required):
 1. Build verification
