@@ -17,6 +17,22 @@
       "color": "0052cc",
       "description": "AI implementation in progress"
     },
+    "ai:validating": {
+      "color": "1d76db",
+      "description": "Runtime validation in progress (post-judge)"
+    },
+    "ai:validated": {
+      "color": "0e8a16",
+      "description": "Runtime validation passed - ready for release"
+    },
+    "ai:validation-failed": {
+      "color": "e11d48",
+      "description": "Runtime validation failed - manual review needed"
+    },
+    "ai:validation-fixing": {
+      "color": "d93f0b",
+      "description": "Validation fix-up issues in pipeline"
+    },
     "ai:done": {
       "color": "0e8a16",
       "description": "Implementation PR created"
@@ -51,6 +67,10 @@
         "ai:planning",
         "ai:awaiting-approval",
         "ai:implementing",
+        "ai:validating",
+        "ai:validated",
+        "ai:validation-failed",
+        "ai:validation-fixing",
         "ai:done",
         "ai:ready-to-merge",
         "ai:review-blocked",
