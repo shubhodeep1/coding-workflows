@@ -1,82 +1,153 @@
-# Spec: Runtime Validation Phase (Post-Judge Dry Run)
+# Spec: Runtime Validation Phase
 
-## Problem Statement
+## Problem
 
-The current pipeline ends at the judge phase, which performs **static code inspection only** — reading files, checking symbols, verifying CI status. It never actually **runs** the application. The `codex_system_instructions.md` (line 138) even says "Do NOT create test scripts unless asked."
-
-This means a project can pass the judge while having runtime failures: missing dependencies at import time, startup crashes, broken HTTP routes returning 500, Telegram webhook handlers that crash on real payloads, database migrations that don't apply, misconfigured environment variables, etc.
+The pipeline ends at the judge, which inspects code statically — reads files, checks symbols, verifies CI status. It never runs the application. `codex_system_instructions.md` line 138 says "Do NOT create test scripts unless asked." A project can pass the judge while having runtime failures that only manifest when the application actually starts.
 
 ## Goal
 
-Add a new **validate** phase that sits between the judge's "complete" verdict and the tracking issue being closed. It builds, starts, and exercises the application in an ephemeral Docker environment on the GitHub runner, with AI-powered self-healing when tests fail. The entire process is unattended — no human intervention.
+Add a `validate` phase between the judge's "complete" verdict and the tracking issue being closed. It builds, starts, and exercises the application in Docker on the GitHub runner, with **zero real credentials required**. On failure, it creates fix-up issues that go through the full AI pipeline (clarify → plan → implement → review → merge), then re-validates. The entire process is fully unattended.
 
-## New Pipeline
+## Scope — What We Test
 
-```
-Before: ... → Judge (complete) → close tracking issue
-After:  ... → Judge (complete) → Validate (runtime dry-run) → close tracking issue
-```
+Only things that can run without real external API credentials. All testing uses local Docker services and synthetic test data.
 
-The validate phase is **opt-in** via `ENABLE_VALIDATION=true` (default `false`). When disabled, the existing behavior (close immediately on judge complete) is preserved exactly.
+### Core tests (always generated)
 
-## Architecture Overview
+1. **Build verification.** Dependency installation (`npm ci`, `pip install`, etc.), compilation (TypeScript, Go, Rust), type-checking, linting. Tests that the project produces a runnable artifact.
 
-```
-orchestrate_poll detects judge "complete" + ENABLE_VALIDATION=true
-  → transitions state to "validating"
-  → dispatches validate.yml via: gh workflow run ai-validate.yml -f tracking_issue=NUM
-  → next poll cycles check for ai:validated or ai:validation-failed labels
+2. **Startup verification.** The process boots and reaches a ready state. For HTTP servers: binds to its port. For bots: process starts without crashing within 30 seconds. For workers: process starts and connects to its local queue/DB. The app must tolerate missing external API connections gracefully — the test verifies the process doesn't crash, not that external calls succeed.
 
-validate.yml runs on ubuntu-latest:
-  Phase 1: Codex (xhigh) reads full repo → generates validation/ harness
-  Phase 2: Runner executes harness (docker compose on the runner)
-  Phase 3: On failure → Codex diagnoses + fixes → re-run (up to N iterations)
-  Phase 4: Pass → add ai:validated label. Exhausted → add ai:validation-failed label.
-```
+3. **Local service integration.** Real Postgres, Redis, MongoDB, or RabbitMQ containers in Docker with test credentials. Real queries, real pub/sub, real migrations — not mocked. If the project has database migrations (Prisma, Knex, TypeORM, Alembic, Django, etc.), run them against a fresh database and verify the schema applies cleanly.
+
+4. **Inbound handler testing.** POST realistically-shaped payloads to webhook endpoints, API routes, and message handlers. For Telegram bots: POST a well-formed Telegram Update JSON (with `/start` command) to the webhook endpoint. For HTTP APIs: POST valid request bodies to each POST/PUT/PATCH route. Verify the app responds with non-5xx status codes and valid response shapes.
+
+5. **Route smoke testing.** Hit every HTTP endpoint the app defines. GET routes: expect 200 or valid redirect. POST/PUT/PATCH routes: send minimal valid payloads, expect non-5xx. Check content-type headers. If the app serves static assets, verify they load.
+
+6. **Existing test suite execution.** Run whatever `npm test`, `pytest`, `go test`, `cargo test`, etc. the project already has. These run inside Docker with local services available. If no test suite exists, skip this — the other categories still cover the critical paths.
+
+7. **Environment variable validation.** Grep the codebase for all referenced env vars (`process.env.X`, `os.environ["X"]`, `Deno.env.get("X")`, etc.). Verify every one either has a default value in code, is set in the Docker Compose config, or is explicitly optional. Flag any env var that would cause a crash if missing.
+
+8. **Dependency auditing.** Verify all runtime imports resolve — no missing modules, no broken import paths, no packages in devDependencies that should be in dependencies. Test by importing/requiring the entry point in a clean container.
+
+### Extended tests (generated when applicable)
+
+9. **Database migration verification.** If the project uses a migration framework, apply all migrations to a fresh empty database, then verify the resulting schema matches expectations (tables exist, columns exist, indexes exist). Catches migration ordering bugs and schema conflicts.
+
+10. **Graceful shutdown.** Send SIGTERM to the running process, verify it exits cleanly within 10 seconds without orphaned connections or error logs. Catches missing signal handlers that cause data loss or zombie processes in production.
+
+11. **Error response format.** Send deliberately malformed requests (missing required fields, wrong types, invalid JSON). Verify the app returns structured error responses (JSON with error message), not raw stack traces or HTML error pages. Catches missing input validation and error handling middleware.
+
+12. **Concurrent request handling.** Send 10 simultaneous requests to the same endpoint. Verify the app handles them all without crashing, deadlocking, or returning 5xx. Catches race conditions and connection pool exhaustion.
+
+13. **Configuration validation.** Start the app with a deliberately invalid config (wrong database URL format, invalid port number). Verify it fails fast with a clear error message rather than hanging indefinitely or crashing with an obscure stack trace. Catches missing config validation.
+
+14. **API schema compliance.** If the project has an OpenAPI/Swagger spec, validate that actual API responses match the documented schema. Catches drift between documentation and implementation.
+
+15. **Log output verification.** Verify the app produces meaningful log output on startup and during request handling. Verify errors are logged, not swallowed silently. Catches misconfigured loggers and silent failure modes.
+
+### What we explicitly do NOT test
+
+- Outbound calls to external APIs (Telegram, Stripe, SendGrid, etc.) — no real credentials
+- OAuth/SSO flows — require real app registration
+- Visual appearance — no headless browser testing
+- Performance/load — no baselines defined
+- Security scanning — separate concern, not part of validation
 
 ---
 
-## Deliverable 1: Prompt files
+## Architecture
 
-### prompts/mode-validate-generate.txt
+### State machine
 
-LLM prompt for the harness generation phase. Must follow the same conventions as existing prompts in `prompts/` (e.g., `mode-judge.txt`, `mode-orchestrate.txt`):
-- Opens with "You are executing the VALIDATE-GENERATE phase..."
-- References that static context is already inlined above
-- Includes SERENA MCP EFFICIENCY block (mandatory, copy pattern from mode-judge.txt)
-- No markdown fences in output — just write files to disk and explain
+```
+Judge says "complete" + ENABLE_VALIDATION=true
+  │
+  ▼
+State: "validating"
+  │ dispatch validate.yml via workflow_dispatch
+  ▼
+validate.yml runs:
+  Phase 1: Codex (xhigh) generates validation/ harness
+  Phase 2: Runner builds app in Docker, runs tests
+  │
+  ├─ All tests pass
+  │   → add ai:validated label
+  │   → poller detects label → close tracking issue ✅
+  │
+  └─ Tests fail
+      → Codex analyzes failures → outputs fix-up issues (same schema as judge)
+      → validate_process.sh creates issues via GitHub API
+      → add ai:validation-fixing label
+      → State: "validation-fixing"
+          │
+          ▼
+        Fix-up issues enter pipeline:
+          clarify → plan → implement → review → merge
+          │
+          ▼
+        Poller detects all fix-ups merged
+          → re-dispatch validate.yml (validation_cycle += 1)
+          → State: "validating"
+          │
+          ├─ Tests pass → ai:validated → close ✅
+          └─ Tests fail again
+              ├─ Cycles remaining → create more fix-ups → loop
+              └─ MAX_VALIDATE_CYCLES exhausted
+                  → ai:validation-failed → Telegram → manual review ❌
+```
 
-The prompt must instruct the LLM to:
+### Self-healing via issue creation (not direct commits)
 
-1. **Analyze the repository** by reading the codebase to identify:
-   - Language/framework (package.json, requirements.txt, go.mod, Cargo.toml, Dockerfile, etc.)
-   - Application type: `http-server` | `telegram-bot` | `worker` | `cli` | `library` | `multi`
-   - Entry point(s) and startup command(s)
-   - Required external services (databases, caches, message queues)
-   - Environment variables referenced in code (grep for `process.env`, `os.environ`, `Deno.env`, etc.)
-   - Existing test infrastructure (npm test scripts, pytest, etc.)
-   - Existing Dockerfile or docker-compose.yml (reuse when available)
-   - Health check endpoints or readiness probes
-   - Whether a `.ai/validate.yml` hints file exists (use its hints if present)
+This is critical. When validation fails, Codex does NOT directly edit application code. Instead, it:
 
-2. **Generate files under `validation/` directory** at the repo root:
+1. Reads the test failure output (structured JSON + logs)
+2. Diagnoses the root cause
+3. Outputs fix-up issues in JSON — same schema as the judge's `new_issues` (id, title, body, priority)
+4. `validate_process.sh` creates those issues via `gh issue create` with orchestrator metadata
+5. The issues go through the **full AI pipeline** — clarify, plan, implement, review, merge
+6. After all fix-up issues merge, the poller re-dispatches validation
 
-   **`validation/docker-compose.test.yml`** — ephemeral Docker Compose config that:
-   - Builds the application from its Dockerfile (or generates a minimal Dockerfile if none exists)
-   - Spins up required service dependencies (postgres, redis, etc.) with test credentials
-   - Uses an isolated Docker network
-   - Sets health checks on every service
-   - All secrets/credentials are test values like `test-secret-XXXX`, `testpassword`, never real
+This is better than direct patching because:
+- Fixes go through code review (review_autofix)
+- Each fix is a proper PR with a reviewable diff
+- The existing self-heal mechanisms (review autofix iterations) apply to the fix
+- Failed fixes get caught by the review phase, not just by re-running the same tests
+- The fix process itself is observable (issues, PRs, comments)
 
-   **`validation/validate.sh`** — POSIX-compliant master runner script that:
-   - Runs pre-flight checks (docker available, required ports free)
-   - Builds and starts services: `docker compose -f docker-compose.test.yml up -d --build`
-   - Polls health checks with timeout (max 120 seconds)
-   - Runs each test script in `validation/tests/`
-   - Captures container logs to `validation/logs/`
-   - Tears down: `docker compose -f docker-compose.test.yml down -v --remove-orphans`
-   - Uses `trap` for cleanup on both success and failure
-   - Outputs a **structured JSON result** to stdout as the last output:
+---
+
+## Deliverables
+
+### 1. prompts/mode-validate-generate.txt
+
+Prompt for the harness generation phase. Conventions: same as `mode-judge.txt` and `mode-orchestrate.txt`.
+
+Opens with "You are executing the VALIDATE-GENERATE phase..."
+
+Instructs the LLM to:
+
+1. **Analyze the repository** to identify: language/framework, application type (http-server | telegram-bot | worker | cli | library), entry points, startup commands, required local services, referenced env vars, existing test infrastructure, existing Dockerfile/docker-compose, health check endpoints, whether `.ai/validate.yml` hints exist.
+
+2. **Generate files under `validation/`**:
+
+   **`validation/docker-compose.test.yml`**:
+   - Builds the app from its Dockerfile (or generates a minimal one if none exists)
+   - Includes required service containers (postgres, redis, etc.) with test credentials
+   - Isolated Docker network
+   - Health checks on every service
+   - All credentials are invented test values (`testpassword`, `test-db`, etc.) — never real
+   - If the project already has a Dockerfile, reference it; if not, generate a minimal one
+
+   **`validation/validate.sh`**:
+   - POSIX-compliant, `set -euo pipefail`
+   - Pre-flight checks (docker available, ports free)
+   - Build and start: `docker compose -f docker-compose.test.yml up -d --build`
+   - Health-check polling with 120-second timeout
+   - Execute each test script in `validation/tests/`
+   - Capture container logs to `validation/logs/`
+   - Teardown: `docker compose down -v --remove-orphans` (via `trap` on EXIT)
+   - Output structured JSON result to stdout as last output:
      ```json
      {
        "result": "pass" | "fail",
@@ -90,209 +161,175 @@ The prompt must instruct the LLM to:
        "duration_seconds": <int>
      }
      ```
-   - Exits 0 on pass, 1 on fail
+   - Exit 0 on pass, 1 on fail
 
-   **`validation/tests/*.sh`** — project-type-specific test scripts. Each script outputs TAP-like results: `ok N description` or `not ok N description`. Types:
+   **`validation/tests/*.sh`**: Individual test scripts. Each outputs TAP-like lines (`ok N description` / `not ok N description`). Which scripts to generate depends on project type — the prompt must list all categories from the "Scope" section above and instruct the LLM to generate every test that applies.
 
-   - **http-server**: `test_build.sh` (docker build succeeds), `test_startup.sh` (process starts, binds port), `test_health.sh` (health endpoint returns 200), `test_routes.sh` (smoke-test each defined route — GET for 200, POST/PUT for non-5xx), `test_env.sh` (required env vars are set), `test_dependencies.sh` (no missing modules at import time)
-   - **telegram-bot**: `test_build.sh`, `test_startup.sh` (bot process starts without crashing), `test_mock_webhook.sh` (mock Telegram API server → bot registers via getMe → send test update → verify response), `test_env.sh`, `test_dependencies.sh`
-   - **worker**: `test_build.sh`, `test_startup.sh` (worker connects to queue/DB), `test_processing.sh` (enqueue test payload, verify processing), `test_env.sh`, `test_dependencies.sh`
-   - **cli**: `test_build.sh`, `test_help.sh` (--help exits 0), `test_basic.sh` (sample input → expected output), `test_dependencies.sh`
-   - **library**: `test_build.sh`, `test_import.sh` (import without errors), `test_exports.sh` (public exports exist)
+   **`validation/mocks/*.js` or `*.py`** (only if needed): For inbound handler testing of bots — a tiny mock server that generates realistically-shaped webhook payloads (Telegram Update objects, etc.) and POSTs them to the app's webhook endpoint. These are NOT for mocking outbound calls — they are for simulating inbound traffic.
 
-   **`validation/mocks/*.js` or `*.py`** (if needed) — lightweight single-file mock servers for external APIs (Telegram Bot API, payment gateways, etc.). Each mock returns structurally valid responses and logs requests to stdout. Referenced as services in docker-compose.test.yml.
-
-3. **Rules the prompt must enforce**:
-   - Use REAL dependency installs and builds — no mocking the build step
-   - Total test execution budget: 10 minutes
-   - If existing tests exist (npm test, pytest), include them but also add the runtime smoke tests
+3. **Rules**:
+   - Use real builds and real dependency installs — never mock the build step
+   - All credentials are synthetic test values — never reference GitHub Secrets or real credentials
+   - Total test budget: 10 minutes
+   - If existing tests exist, include them as one of the test scripts, but always also generate the runtime smoke tests
    - Do NOT modify application source code — only create files under `validation/`
-   - Make validate.sh and all test scripts executable
-   - Use `set -euo pipefail` in all shell scripts
-   - Prefer `curl` for HTTP testing (available in all Docker images)
+   - Make all `.sh` files executable
+   - Prefer `curl` for HTTP testing
+   - For startup testing: the app must tolerate missing external API connections. If the app crashes because it can't reach `api.telegram.org`, that IS a valid failure — the app should handle missing external connections gracefully (retry, degrade, etc.), not crash on startup
 
-### prompts/mode-validate-fix.txt
+Include the SERENA MCP EFFICIENCY block (same as mode-judge.txt).
 
-LLM prompt for the self-healing phase. Conventions same as above.
+### 2. prompts/mode-validate-diagnose.txt
 
-The prompt must instruct the LLM to:
-1. Read the structured failure JSON and container logs provided below the prompt
-2. Diagnose the root cause
-3. Fix it with minimal changes
+Prompt for the failure diagnosis phase. This is different from the old "validate-fix" prompt because it does NOT instruct the LLM to edit code. Instead, it outputs fix-up issues.
 
-Key rules to encode:
-- **Prioritize application code fixes over test harness fixes.** If a test fails, the most likely cause is an app bug, not a bad test.
-- **Only fix the harness if the test itself is provably wrong** (e.g., wrong port, wrong endpoint path).
-- **Fix the root cause, not the symptom.** Don't catch errors — fix the underlying bug.
-- **Minimize change scope.** No refactoring unrelated code.
-- **Do NOT weaken tests** — no `|| true`, no `set +e`, no deleting failing tests.
-- **After fixing, the same validate.sh must pass.**
-- Output a summary: root cause, files modified, category (application-fix | harness-fix | config-fix | dependency-fix), confidence (high | medium | low).
+Instructs the LLM to:
 
----
+1. Read the structured failure JSON, container logs, and validation log
+2. Diagnose the root cause of each failure
+3. Output a JSON object with fix-up issues — same schema as the judge's output:
 
-## Deliverable 2: scripts/validate_process.sh
+```json
+{
+  "status": "needs_fixes" | "harness_error" | "infeasible",
+  "diagnosis": "<overall diagnosis of what went wrong>",
+  "fix_issues": [
+    {
+      "id": "<local-id>",
+      "title": "<issue title>",
+      "body": "<full issue body with enough context for the AI pipeline>",
+      "priority": <1-10>
+    }
+  ],
+  "harness_fixes": "<if status is harness_error: description of what's wrong with the test harness itself>"
+}
+```
 
-The main validation orchestration script, extracted from the workflow for maintainability (same pattern as `scripts/orchestrate_poll_process.sh` being extracted from `orchestrate_poll.yml`).
+- `needs_fixes`: application has bugs that need fixing. `fix_issues` contains the issues to create.
+- `harness_error`: the test harness itself is wrong (e.g., testing the wrong port, wrong endpoint path, expecting the wrong response shape). The harness should be regenerated, not the app fixed. `harness_fixes` explains what's wrong.
+- `infeasible`: the test requires something that can't be done without real credentials (e.g., the app has no graceful degradation for missing external APIs and we can't fix that in a single issue). Escalate to human.
 
-### Required environment variables (set by the workflow step)
+Rules:
+- Each fix-up issue body must be **self-contained** — enough context for the AI pipeline to clarify, plan, and implement without knowing about the validation phase. Include: what file(s) need to change, what the current behavior is, what the expected behavior is, and how to verify the fix.
+- Focus on root causes. If 5 tests fail because of one missing error handler, create one issue for the error handler, not 5 issues.
+- Prioritize: startup crashes (priority 1) > route errors (priority 3) > missing validation (priority 5) > graceful shutdown (priority 7)
+
+Include the SERENA MCP EFFICIENCY block.
+
+### 3. scripts/validate_process.sh
+
+Main orchestration script, extracted from the workflow (same pattern as `orchestrate_poll_process.sh`).
+
+**Required env vars:**
 
 ```
 RUNTIME_DIR, GH_TOKEN, OPENROUTER_API_KEY, GITHUB_REPOSITORY,
 MODEL_EDITOR, MODEL_REASONING_EFFORT,
 TG_BOT_SECRET, TG_ADMIN_CHAT_ID,
-TRACKING_ISSUE, MAX_VALIDATE_ITERATIONS, VALIDATION_TIMEOUT,
-TOOL_CALL_BUDGET_VALIDATE,
+TRACKING_ISSUE, VALIDATION_TIMEOUT, TOOL_CALL_BUDGET_VALIDATE,
 SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS
 ```
 
-### Script structure
-
-Must include the standard helpers copied from `orchestrate_poll_process.sh`:
-- `tg_notify()` — send Telegram notification (same pattern)
-- `gh_retry()` — GitHub API with exponential backoff retry (same pattern)
+**Helpers** — copy from `orchestrate_poll_process.sh`:
+- `tg_notify()` — Telegram notification
+- `gh_retry()` — GitHub API with exponential backoff
 - `post_comment()` — post comment to tracking issue
-- `add_label()` — add label to tracking issue (call `python3 scripts/ai_labels.py ensure-labels` first)
+- `add_label()` — add label (call `python3 scripts/ai_labels.py ensure-labels` first)
 
-### Phase 1: Generate harness
+**Phase 1: Generate harness**
 
-1. Setup Codex config at `~/.codex/config.toml` (same pattern as orchestrate_poll_process.sh lines 195-201)
+1. Setup Codex config (`~/.codex/config.toml`) — same pattern as `orchestrate_poll_process.sh` lines 195-201
 2. Setup Serena: `bash scripts/setup_serena.sh --mode editing --context codex`
-3. Assemble static context (same pattern as orchestrate_poll_process.sh lines 232-250): system instructions + ai_pipeline.md + agents.md + README.md
-4. Get project spec from tracking issue body (via `gh api`), or from `${RUNTIME_DIR}/project_spec.txt`
-5. Check for optional `.ai/validate.yml` hints file in the repo
-6. Build the generate prompt: static context + `TOOL_CALL_BUDGET` + `mode-validate-generate.txt` + project spec + hints
+3. Assemble static context — same pattern as `orchestrate_poll_process.sh` lines 232-250
+4. Get project spec from tracking issue body via `gh api`, or `${RUNTIME_DIR}/project_spec.txt`
+5. Check for `.ai/validate.yml` hints
+6. Build prompt: static context + TOOL_CALL_BUDGET + mode-validate-generate.txt + project spec + hints
 7. Run Codex: `cat prompt | codex exec --model "${MODEL_EDITOR}" --full-auto > output 2> log`
-   - Retry up to 2 times
-   - Verify `validation/validate.sh` was actually created on disk
-   - If generation fails after retries: post failure comment, notify via Telegram, exit 1
-8. `chmod +x` all generated `.sh` files and mock server files
+   - Retry up to 2 attempts
+   - Verify `validation/validate.sh` was created
+   - On failure: post comment, Telegram, exit 1
+8. `chmod +x` all `.sh` files in `validation/`
 
-### Phase 2 + 3: Execute and self-heal loop
+**Phase 2: Execute validation**
 
-Loop from iteration 1 to `MAX_VALIDATE_ITERATIONS`:
+1. Run `validation/validate.sh` with `timeout ${VALIDATION_TIMEOUT}m`
+2. Capture output to `${VALIDATION_LOG}`
+3. Extract structured JSON result from output — use the brace-matching Python pattern from `orchestrate_poll_process.sh` lines 313-348 to find last JSON with `"result"` key
+4. If timeout (exit 124): synthesize failure JSON with `"phase": "timeout"`
 
-1. Clean previous results
-2. Run `validation/validate.sh` with `timeout ${VALIDATION_TIMEOUT}m`
-   - Capture full output to `${VALIDATION_LOG}`
-   - Handle timeout (exit code 124)
-3. Extract structured JSON result from the log output
-   - Use Python to find the last JSON object containing `"result"` key in the output (same brace-matching pattern as orchestrate_poll_process.sh lines 313-348)
-   - If no JSON found, synthesize a failure result
-4. Check result:
-   - If `"pass"` → break loop, set FINAL_RESULT=pass
-   - If `"fail"` and iterations remain → proceed to self-heal
-   - If `"fail"` and no iterations remain → break loop, FINAL_RESULT=fail
-5. Self-heal:
-   - Collect failure details from the JSON result
-   - Collect container logs from `validation/logs/`
-   - Build fix prompt: static context + `mode-validate-fix.txt` + project spec + failure report + container logs + validation log tail
-   - Run Codex: `cat prompt | codex exec --model "${MODEL_EDITOR}" --full-auto > output`
-   - Check if files were modified (`git status --porcelain`)
-   - If modified: `git add -A && git commit -m "validate: self-heal fix (iteration N)"`
-   - Clean up docker state: `docker compose -f validation/docker-compose.test.yml down -v --remove-orphans`
+**Phase 3: Handle result**
 
-### Phase 4: Report results
+**If result is "pass":**
+- Add `ai:validated` label
+- Post success comment with test count and duration
+- Telegram notification
+- Exit 0
 
-**On pass:**
-- Add `ai:validated` label to tracking issue
-- Post success comment with test count and iterations used
-- Send Telegram notification
-- Push self-heal commits if any (git push to current branch)
+**If result is "fail":**
+- Build diagnosis prompt: static context + mode-validate-diagnose.txt + project spec + failure JSON + container logs (tail) + validation log (tail 200 lines)
+- Run Codex to diagnose
+- Parse the diagnosis JSON (same brace-matching pattern)
+- Handle by status:
+  - `needs_fixes`: Create fix-up issues via `gh issue create` with orchestrator metadata (same pattern as `orchestrate_poll_process.sh` lines 480-501, but with `Type: validation-fix-up (cycle N)`)
+  - `harness_error`: Log warning, post comment explaining the harness was wrong, add `ai:validation-failed` label, Telegram. A harness error means the AI generated bad tests — don't loop, escalate.
+  - `infeasible`: Post comment explaining why, add `ai:validation-failed` label, Telegram.
+- For `needs_fixes`: add `ai:validation-fixing` label, post comment listing fix-up issues created, Telegram notification
+- Exit 0 (the poller manages the re-validation cycle, not this script)
 
-**On fail:**
-- Add `ai:validation-failed` label to tracking issue
-- Post detailed failure comment with: failed phase, failure list (first 5), last 50 lines of validation log in a `<details>` block
-- Send Telegram notification
-- Exit 1
+### 4. .github/workflows/validate.yml
 
----
+Reusable `workflow_call` workflow. Follow conventions of `orchestrate_poll.yml` and `implement.yml`.
 
-## Deliverable 3: .github/workflows/validate.yml
-
-Reusable `workflow_call` workflow. Follow the exact conventions of the existing workflows (see `orchestrate_poll.yml` and `implement.yml` for patterns).
-
-### Inputs
-
+**Inputs:**
 ```yaml
 inputs:
   tracking_issue:
-    description: Tracking issue number for status updates. 0 or empty for standalone.
+    description: Tracking issue number. 0 or empty for standalone.
     required: false
     type: string
     default: "0"
 ```
 
-### Secrets
+**Secrets:** GH_PAT (required), OPENROUTER_API_KEY (required), TG_BOT_SECRET (optional)
 
-```yaml
-secrets:
-  GH_PAT:
-    required: true
-  OPENROUTER_API_KEY:
-    required: true
-  TG_BOT_SECRET:
-    required: false
-```
-
-### Env
-
+**Env:**
 ```yaml
 env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_VALIDATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_VALIDATE || 'xhigh' }}
 ```
 
-### Job: validate
-
+**Job:** validate
 - `runs-on: ubuntu-latest`
-- `timeout-minutes: 120`
-- Concurrency: `ai-validate-${{ github.repository }}-${{ inputs.tracking_issue || github.run_id }}`, `cancel-in-progress: false`
+- `timeout-minutes: 60`
+- Concurrency: `ai-validate-${{ github.repository }}-${{ inputs.tracking_issue || github.run_id }}`, cancel-in-progress false
 
-### Steps (follow exact patterns from orchestrate_poll.yml)
+**Steps** (match patterns from orchestrate_poll.yml):
+1. Checkout (v5, fetch-depth 0, GH_PAT token)
+2. Setup Node.js 22
+3. Setup Python 3.12
+4. Install Codex CLI v0.114.0 + core tools (jq, curl, gh) — same install block as orchestrate_poll.yml
+5. Install uv for Serena
+6. Verify Docker available (`docker --version && docker compose version`)
+7. Validate required env vars
+8. Create runtime workspace (`/tmp/codex-validate-...`)
+9. Fetch support scripts from coding-workflows@stable: `setup_serena.sh`, `validate_process.sh`, `ai_labels.py`, `mode-validate-generate.txt`, `mode-validate-diagnose.txt`, `codex_system_instructions.md`, `ai_pipeline.md`
+10. Configure git identity (github-actions[bot])
+11. Run `bash scripts/validate_process.sh` with env vars: GH_TOKEN, OPENROUTER_API_KEY, TG_BOT_SECRET, TG_ADMIN_CHAT_ID, TRACKING_ISSUE, VALIDATION_TIMEOUT (default 15), TOOL_CALL_BUDGET_VALIDATE (default 60), SERENA vars
+12. Upload artifacts (validation/logs/, runtime dir files) — `actions/upload-artifact@v4`, retention 14 days, `if: always()`
+13. Clean up Docker (`docker compose down -v`, `docker image prune -f`) — `if: always()`
+14. Write run summary to `$GITHUB_STEP_SUMMARY`
 
-1. **Checkout** — `actions/checkout@v5`, `fetch-depth: 0`, token from GH_PAT
-2. **Setup Node.js** — `actions/setup-node@v4`, node 22
-3. **Setup Python** — `actions/setup-python@v5`, python 3.12
-4. **Install Codex CLI and core tools** — same pattern as orchestrate_poll.yml (npm install codex@v0.114.0, check for jq/curl/gh, apt-get install if missing)
-5. **Install uv for Serena** — `astral-sh/setup-uv@v7`
-6. **Verify Docker is available** — `docker --version && docker compose version`
-7. **Validate required env vars** — check OPENROUTER_API_KEY is set
-8. **Create runtime workspace** — `/tmp/codex-validate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`
-9. **Fetch workflow support scripts** — fetch from `coding-workflows@stable` via `gh api`:
-   - `scripts/setup_serena.sh`
-   - `scripts/validate_process.sh`
-   - `scripts/ai_labels.py`
-   - `prompts/mode-validate-generate.txt`
-   - `prompts/mode-validate-fix.txt`
-   - `codex_system_instructions.md` (if not in consumer repo)
-   - `ai_pipeline.md` (if not in consumer repo)
-10. **Configure git identity** — same pattern as implement.yml (github-actions[bot])
-11. **Run validation process** — `bash scripts/validate_process.sh` with env vars:
-    - `GH_TOKEN`, `OPENROUTER_API_KEY`, `TG_BOT_SECRET`, `TG_ADMIN_CHAT_ID`
-    - `TRACKING_ISSUE` from input
-    - `MAX_VALIDATE_ITERATIONS` from vars (default 3)
-    - `VALIDATION_TIMEOUT` from vars (default 15)
-    - `TOOL_CALL_BUDGET_VALIDATE` from vars (default 60)
-    - `SERENA_VERSION`, `SERENA_LANGUAGES`, `SERENA_DISABLED`, `SERENA_IGNORED_DIRS`
-12. **Push self-heal commits** — if success, check for unpushed commits, push to default branch. If direct push fails (branch protection), create a PR from a `validate/self-heal-*` branch.
-13. **Upload validation artifacts** — `actions/upload-artifact@v4`: validation/logs/, runtime dir files, retention 14 days
-14. **Clean up Docker resources** — `docker compose down -v`, `docker image prune -f` (in `if: always()`)
-15. **Write run summary** — `$GITHUB_STEP_SUMMARY` table with tracking issue, model, reasoning, result, max iterations
+### 5. workflow-templates/ai-validate.yml
 
----
-
-## Deliverable 4: workflow-templates/ai-validate.yml
-
-Consumer wrapper template. Follow exact pattern of existing templates in `workflow-templates/`.
-
+Consumer wrapper:
 ```yaml
 name: AI Validate
 on:
   workflow_dispatch:
     inputs:
       tracking_issue:
-        description: Tracking issue number for status updates
+        description: Tracking issue number
         required: false
         type: string
         default: "0"
@@ -308,46 +345,54 @@ jobs:
     secrets: inherit
 ```
 
-Also create `.github/workflows/internal-validate.yml` for this repo (same pattern as `internal-orchestrate.yml` but using `./.github/workflows/validate.yml`).
+Also create `.github/workflows/internal-validate.yml` — same pattern as `internal-orchestrate.yml` but referencing `./.github/workflows/validate.yml`.
 
----
+### 6. Modify scripts/orchestrate_poll_process.sh
 
-## Deliverable 5: Orchestrator integration (modify existing files)
+**Change 1: Add state handlers for "validating" and "validation-fixing".**
 
-### 5a: Modify scripts/orchestrate_poll_process.sh
+Insert after the existing status check at line 84 (`if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ]`) — add these two states to the early-exit/special-handling section, BEFORE the wave-completion check.
 
-**Change 1: Add "validating" state handler** — insert BEFORE the existing wave-completion check and judge invocation section (around the area where the script checks if all issues in the current wave have reached `ai:merged`). When `jq -r '.status'` on the state file returns `"validating"`:
-
+**"validating" state handler:**
 - Check tracking issue labels via `gh api`
-- If `ai:validated` present: set state to `"complete"`, post state comment, close tracking issue with comment "Project completed — judge approved and runtime validation passed.", notify via Telegram. Then `continue` (skip the rest of the loop for this tracking issue).
-- If `ai:validation-failed` present: set state to `"validation-failed"`, post state comment, notify via Telegram. Then `continue`.
-- Otherwise: log "Validation still running", `continue`.
+- If `ai:validated`: set state to `"complete"`, post state comment, close tracking issue with "Project completed — judge approved and runtime validation passed.", Telegram. `continue`.
+- If `ai:validation-failed`: set state to `"validation-failed"`, post state comment, Telegram. `continue`.
+- Otherwise: log "Validation running", `continue`.
 
-**Change 2: Modify the `complete)` case** (currently at approximately line 387-404). Read `ENABLE_VALIDATION` env var (default `false`):
+**"validation-fixing" state handler:**
+- Get the list of fix-up issue numbers from state (stored when validate_process.sh created them)
+- Check labels on each fix-up issue
+- If all fix-up issues have `ai:merged`: 
+  - Read `validation_cycle` from state. If `>= MAX_VALIDATE_CYCLES` (default 3): set state to `"validation-failed"`, post comment, Telegram, `continue`.
+  - Otherwise: increment `validation_cycle`, set state to `"validating"`, re-dispatch validate.yml (`gh workflow run ai-validate.yml -f tracking_issue=NUM`), Telegram ("Re-running validation after fix-ups merged"), `continue`.
+- If any fix-up issue has `ai:closed` (closed without merge): set state to `"validation-failed"`, Telegram ("Fix-up issue closed without merge"), `continue`.
+- Otherwise: log "Fix-ups still in progress", `continue`.
 
+Also add `"validation-failed"` to the early-exit check at line 84.
+
+**Change 2: Modify the `complete)` case** (approximately line 387-404).
+
+Read `ENABLE_VALIDATION` env var (default `false`):
 - If `true`:
-  - Set state to `"validating"`, increment judge_cycle
+  - Set state to `"validating"`, set `validation_cycle` to 1, increment judge_cycle
   - Post state comment
-  - Post comment: "## 🧪 Runtime Validation Dispatched\n\nJudge approved all waves. Now running runtime validation..."
+  - Post comment: "## 🧪 Runtime Validation Dispatched\n\nJudge approved all waves. Running runtime validation (build → start → test) before marking complete."
   - Dispatch: `gh workflow run ai-validate.yml --repo "${GITHUB_REPOSITORY}" -f tracking_issue="${TRACKING_NUM}"`
-  - If dispatch fails (workflow not found): fall back to original behavior — set state to `"complete"`, close tracking issue, notify
-  - Notify via Telegram
+  - If dispatch fails: fall back to original behavior (close immediately), Telegram with note that validation workflow is not configured
 - If `false`:
-  - Preserve the existing behavior exactly (set state to complete, close issue, notify)
+  - Existing behavior exactly — set state to complete, close tracking issue, Telegram
 
-### 5b: Modify .github/workflows/orchestrate_poll.yml
+### 7. Modify .github/workflows/orchestrate_poll.yml
 
-Add to the "Process each tracking issue" step's `env:` block:
-
+Add to "Process each tracking issue" step's `env:` block:
 ```yaml
 ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'false' }}
-MAX_VALIDATE_ITERATIONS: ${{ vars.MAX_VALIDATE_ITERATIONS || '3' }}
+MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
 ```
 
-### 5c: Modify .github/ai/label_contract.v1.json
+### 8. Modify .github/ai/label_contract.v1.json
 
-Add three new labels under `"labels"`:
-
+Add labels:
 ```json
 "ai:validating": {
   "color": "1d76db",
@@ -359,63 +404,63 @@ Add three new labels under `"labels"`:
 },
 "ai:validation-failed": {
   "color": "e11d48",
-  "description": "Runtime validation failed after self-heal attempts"
+  "description": "Runtime validation failed — manual review needed"
+},
+"ai:validation-fixing": {
+  "color": "d93f0b",
+  "description": "Validation fix-up issues in pipeline"
 }
 ```
 
-Add `"ai:validating"`, `"ai:validated"`, `"ai:validation-failed"` to the `"issue_phase"` → `"members"` array (after `"ai:closed"`).
+Add all four to the `"issue_phase"` → `"members"` array after `"ai:closed"`.
 
----
+### 9. Update README.md
 
-## Deliverable 6: Documentation
-
-### 6a: Update README.md
-
-Add a new section **"Runtime Validation"** after the "Project Orchestrator" section. Cover:
+Add a "Runtime Validation" section after "Project Orchestrator". Cover:
 - What it does (1 paragraph)
-- Architecture diagram (ASCII)
+- Architecture diagram (the state machine from this spec)
+- What it tests (the full scope list)
+- What it doesn't test and why
 - Setup steps (copy wrapper, set ENABLE_VALIDATION=true, optional hints file)
 - New variables table
 - New labels table
-- What gets tested per project type (table: http-server, telegram-bot, worker, cli, library)
-- Updated pipeline diagram showing the full flow
+- Updated full pipeline diagram
 
-### 6b: Add examples/ai-validate-hints.yml
+### 10. Add examples/ai-validate-hints.yml
 
-An annotated example `.ai/validate.yml` hints file that consumer repos can optionally place at `.ai/validate.yml` to guide the harness generator. Include:
-- `type` (http-server | telegram-bot | worker | cli | library)
-- `entry` (entry point path)
-- `port` (listen port)
-- `health_check` (health endpoint)
-- `services` (list of docker images: postgres:16, redis:7, etc.)
-- `env_overrides` (map of env var → test value)
-- `custom_tests` (list of shell commands to run as additional tests)
-- `bot_commands` (for telegram-bot: list of commands to test)
-- `worker_verify` (for worker: queue name, test payload, success check SQL)
-- `timeout` (minutes)
-
-All fields optional. Annotate with comments explaining each field.
+Annotated example of the optional `.ai/validate.yml` hints file for consumer repos. Fields (all optional):
+- `type`: http-server | telegram-bot | worker | cli | library
+- `entry`: entry point path
+- `port`: listen port
+- `health_check`: health endpoint path
+- `services`: list of docker images (postgres:16, redis:7, etc.)
+- `env_overrides`: map of env var → test value
+- `custom_tests`: list of shell commands to run as additional tests
+- `bot_commands`: for telegram-bot, list of commands to test via webhook
+- `worker_verify`: for worker, queue name + test payload + success check
+- `timeout`: minutes
+- `skip_tests`: list of test categories to skip
 
 ---
 
 ## Constraints
 
-- **No breaking changes.** When `ENABLE_VALIDATION=false` (the default), the entire system must behave identically to today.
-- **Follow existing conventions exactly.** Match the code style, error handling, retry patterns, Telegram notification format, label management, git identity setup, Codex invocation pattern, and YAML structure of the existing workflows.
+- **No breaking changes.** `ENABLE_VALIDATION` defaults to `false`. When disabled, behavior is identical to today.
+- **No real credentials.** Everything runs with synthetic test values. The validation harness never reads GitHub Secrets. Consumer repos do NOT need to add any new secrets.
+- **Follow existing conventions exactly.** Code style, error handling, retry patterns, Telegram notification format, label management, git identity setup, Codex invocation (`codex exec --model X --full-auto`), YAML structure, orchestrator metadata format on issues.
+- **Codex CLI pinned to v0.114.0.**
 - **Shell scripts use `set -euo pipefail`.**
-- **Codex CLI version is pinned to `v0.114.0`** (match existing workflows).
-- **Python scripts use `PYTHONDONTWRITEBYTECODE=1`.**
-- **The validate workflow must work on `ubuntu-latest` runners** which have Docker and Docker Compose pre-installed.
-- **All secrets/credentials used in the validation harness must be fake test values.** Never reference real secrets.
-- **The validation/ directory is ephemeral** — generated fresh each run, never committed to the consumer repo (it's gitignored or exists only during the workflow run).
+- **Python uses `PYTHONDONTWRITEBYTECODE=1`.**
+- **Runs on `ubuntu-latest`** which has Docker and Docker Compose pre-installed.
+- **`validation/` directory is ephemeral** — generated fresh each validate run, never committed to consumer repos.
 
-## Variables Summary
+## Variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `ENABLE_VALIDATION` | `false` | Master switch — opt-in per consumer repo |
-| `MAX_VALIDATE_ITERATIONS` | `3` | Self-heal attempts before escalating |
-| `THINKING_LEVEL_VALIDATE` | `xhigh` | Reasoning effort for harness gen + diagnosis |
+| `MAX_VALIDATE_CYCLES` | `3` | Full validate → fix → re-validate cycles before escalating |
+| `THINKING_LEVEL_VALIDATE` | `xhigh` | Reasoning effort for harness generation + diagnosis |
 | `TOOL_CALL_BUDGET_VALIDATE` | `60` | Tool call budget |
-| `VALIDATION_TIMEOUT` | `15` | Minutes per validation attempt |
-| `WORKFLOW_VALIDATE_MODEL` | falls back to `WORKFLOW_EDITOR_MODEL` | Model override for validation |
+| `VALIDATION_TIMEOUT` | `15` | Minutes for the Docker test run |
+| `WORKFLOW_VALIDATE_MODEL` | falls back to `WORKFLOW_EDITOR_MODEL` | Model override |
