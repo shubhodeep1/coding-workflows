@@ -372,7 +372,7 @@ Also add `"validation-failed"` to the early-exit check at line 84.
 
 **Change 2: Modify the `complete)` case** (approximately line 387-404).
 
-Read `ENABLE_VALIDATION` env var (default `false`):
+Read `ENABLE_VALIDATION` env var (default `true`):
 - If `true`:
   - Set state to `"validating"`, set `validation_cycle` to 1, increment judge_cycle
   - Post state comment
@@ -386,7 +386,7 @@ Read `ENABLE_VALIDATION` env var (default `false`):
 
 Add to "Process each tracking issue" step's `env:` block:
 ```yaml
-ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'false' }}
+ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
 MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
 ```
 
@@ -445,7 +445,7 @@ Annotated example of the optional `.ai/validate.yml` hints file for consumer rep
 
 ## Constraints
 
-- **No breaking changes.** `ENABLE_VALIDATION` defaults to `false`. When disabled, behavior is identical to today.
+- **No breaking changes.** `ENABLE_VALIDATION` defaults to `true`. When disabled, behavior is identical to today.
 - **No real credentials.** Everything runs with synthetic test values. The validation harness never reads GitHub Secrets. Consumer repos do NOT need to add any new secrets.
 - **Follow existing conventions exactly.** Code style, error handling, retry patterns, Telegram notification format, label management, git identity setup, Codex invocation (`codex exec --model X --full-auto`), YAML structure, orchestrator metadata format on issues.
 - **Codex CLI pinned to v0.114.0.**
@@ -458,9 +458,9 @@ Annotated example of the optional `.ai/validate.yml` hints file for consumer rep
 
 | Variable | Default | Description |
 |---|---|---|
-| `ENABLE_VALIDATION` | `false` | Master switch — opt-in per consumer repo |
+| `ENABLE_VALIDATION` | `true` | Master switch — opt-in per consumer repo |
 | `MAX_VALIDATE_CYCLES` | `3` | Full validate → fix → re-validate cycles before escalating |
 | `THINKING_LEVEL_VALIDATE` | `xhigh` | Reasoning effort for harness generation + diagnosis |
 | `TOOL_CALL_BUDGET_VALIDATE` | `60` | Tool call budget |
-| `VALIDATION_TIMEOUT` | `15` | Minutes for the Docker test run |
+| `VALIDATION_TIMEOUT` | `60` | Minutes for the Docker test run |
 | `WORKFLOW_VALIDATE_MODEL` | falls back to `WORKFLOW_EDITOR_MODEL` | Model override |
