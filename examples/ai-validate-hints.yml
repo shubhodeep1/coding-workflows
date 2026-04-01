@@ -4,13 +4,7 @@
 type: http-server
 entry: src/server.ts
 port: 3000
-
-health_check:
-  path: /health
-  method: GET
-  expected_status: 200
-  expected_contains:
-    - ok
+health_check: /health
 
 timeout: 10  # minutes
 
@@ -24,13 +18,6 @@ env_overrides:
   REDIS_URL: redis://redis:6379
   API_KEY: test_api_key_only
 
-seed_setup:
-  before_start:
-    - npm ci
-  before_tests:
-    - npm run db:migrate
-    - npm run db:seed
-
 custom_tests:
   # Additional validation commands to run after the main test suite.
   - npm run test:health-endpoint
@@ -43,10 +30,11 @@ bot_commands:
   - /help
 
 worker_verify:
-  enabled: true
-  checks:
-    - queue processing loop started
-    - worker shuts down cleanly on SIGTERM
+  queue: default
+  payload:
+    type: health_check
+    message: test job
+  success_check: "job marked as processed in the jobs table"
 
 skip_tests:
   # Optional exclusions for non-applicable checks.
