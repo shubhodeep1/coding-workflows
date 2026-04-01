@@ -631,8 +631,13 @@ jobs:
           ELAPSED=0
 
           while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
-            LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
-              --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+            if ! LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+              --jq '[.labels[].name] | join(",")' 2>/dev/null); then
+              echo "::warning::Could not read labels for issue #${ISSUE_NUMBER}; retrying..."
+              sleep "$POLL_INTERVAL"
+              ELAPSED=$((ELAPSED + POLL_INTERVAL))
+              continue
+            fi
 
             # Success: label changed from ai:review-blocked to something else
             if ! echo "$LABELS" | grep -q 'ai:review-blocked'; then
@@ -939,12 +944,13 @@ jobs:
 
           # Close PR without merging
           if [ -n "${PR_NUMBER}" ]; then
-            gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-              -X PATCH -f state=closed \
-              -f body="$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body')
+            EXISTING_PR_BODY="$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' 2>/dev/null || echo "")"
+            NEW_PR_BODY="${EXISTING_PR_BODY}
 
           ---
-          *Closed by E2E smoke test cleanup (run ${GITHUB_RUN_ID}).*" \
+          *Closed by E2E smoke test cleanup (run ${GITHUB_RUN_ID}).*"
+            gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+              -X PATCH -f state=closed -f body="${NEW_PR_BODY}" \
               2>/dev/null || echo "Warning: could not close PR #${PR_NUMBER}"
             echo "  Closed PR #${PR_NUMBER}"
           fi

@@ -196,7 +196,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
     REVIEW_BLOCKED_STATE_CHANGED=false
 
-    echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "review-blocked") | .github_issue' | while read -r rb_issue; do
+    while read -r rb_issue; do
       [ -n "${rb_issue}" ] && [ "${rb_issue}" != "null" ] || continue
       echo "  Processing review-blocked issue #${rb_issue}..."
 
@@ -547,7 +547,7 @@ ${RB_FIX_DESC}" || true
           echo "::warning::Unknown review-blocked judge action: ${RB_ACTION}"
           ;;
       esac
-    done
+    done < <(echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "review-blocked") | .github_issue')
 
     # Persist updated state if any review-blocked issues were handled
     if [ "${REVIEW_BLOCKED_STATE_CHANGED}" = "true" ]; then

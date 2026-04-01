@@ -345,6 +345,9 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		return 1
 
 	issue_labels: dict[str, list[str]] = json.loads(labels_json)
+	if not isinstance(issue_labels, dict) or any(not isinstance(v, list) for v in issue_labels.values()):
+		_print_json({"ok": False, "error": "labels_json must be an object mapping issue numbers to label arrays"})
+		return 1
 
 	current_wave_idx = state.get("current_wave", 1) - 1
 	waves = state.get("waves", [])

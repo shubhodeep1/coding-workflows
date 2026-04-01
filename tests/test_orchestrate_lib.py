@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -175,12 +176,15 @@ def _run_check_wave_status(state: dict, labels: dict[str, list[str]]) -> dict:
 	import io
 	from contextlib import redirect_stdout
 
-	buf = io.StringIO()
-	with redirect_stdout(buf):
-		orchestrate_lib.cmd_check_wave_status(
-			type("Args", (), {"state_file": state_path, "labels_json": json.dumps(labels)})()
-		)
-	return json.loads(buf.getvalue())
+	try:
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			orchestrate_lib.cmd_check_wave_status(
+				type("Args", (), {"state_file": state_path, "labels_json": json.dumps(labels)})()
+			)
+		return json.loads(buf.getvalue())
+	finally:
+		os.unlink(state_path)
 
 
 def test_check_wave_status_all_merged():
