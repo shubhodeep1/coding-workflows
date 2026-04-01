@@ -1,0 +1,86 @@
+# Optional `.ai/validate.yml` overrides for repository-specific runtime validation tuning.
+# Use only local/test values. Never place real credentials in this file.
+
+type: node
+entry: src/server.ts
+port: 3000
+
+health_check:
+  path: /health
+  method: GET
+  expected_status: 200
+  expected_contains:
+    - ok
+
+timeout:
+  startup_seconds: 120
+  health_seconds: 45
+  test_seconds: 300
+
+services:
+  - name: app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    exposed_port: 3000
+    healthcheck:
+      path: /health
+      expected_status: 200
+  - name: postgres
+    image: postgres:16
+    port: 5432
+    env:
+      POSTGRES_DB: app_test
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password
+  - name: redis
+    image: redis:7
+    port: 6379
+
+env_overrides:
+  NODE_ENV: test
+  DATABASE_URL: postgresql://test_user:test_password@postgres:5432/app_test
+  REDIS_URL: redis://redis:6379
+  API_KEY: test_api_key_only
+
+seed_setup:
+  before_start:
+    - npm ci
+  before_tests:
+    - npm run db:migrate
+    - npm run db:seed
+
+custom_tests:
+  routes:
+    - name: health endpoint
+      method: GET
+      path: /health
+      expect_status: 200
+    - name: error payload shape
+      method: GET
+      path: /api/non-existent
+      expect_status: 404
+      expect_json_keys:
+        - error
+        - code
+        - message
+  inbound_handlers:
+    - name: webhook signature invalid
+      handler: webhook:stripe
+      input_fixture: validation/fixtures/stripe-invalid-signature.json
+      expect_status: 400
+
+bot_commands:
+  build: npm run build
+  start: npm run start
+  test: npm test
+
+worker_verify:
+  enabled: true
+  checks:
+    - queue processing loop started
+    - worker shuts down cleanly on SIGTERM
+
+skip_tests:
+  # Optional exclusions for non-applicable checks.
+  - migration_verification
