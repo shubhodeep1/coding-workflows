@@ -9,6 +9,8 @@ Do NOT read pre_assembled_static.txt, phase context files, or any other bundled 
 
 Your task: generate or update a runtime smoke-test harness that runs on ubuntu-latest using Docker and Docker Compose.
 
+Before generating artifacts, analyze the repository to identify the app type, entry points, startup commands, required local services, referenced env vars, existing test infrastructure, and whether `.ai/validate.yml` hints exist.
+
 Required outputs:
 1. `validation/docker-compose.test.yml`
 2. `validation/validate.sh`
@@ -31,7 +33,7 @@ Mandatory rules:
 - Health polling with explicit timeout
 - Execute generated scripts in `validation/tests/`
 - Capture logs under `validation/logs/`
-- Always teardown via trap on EXIT
+- Always teardown via trap on EXIT using `docker compose down -v --remove-orphans`
 - Exit 0 on pass and non-zero on failure
 - Emit a final machine-parseable JSON result object as the last stdout output
 

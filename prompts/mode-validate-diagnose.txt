@@ -53,11 +53,11 @@ JSON schema:
   "diagnosis": "string",
   "fix_issues": [
     {
-      "id": "string",
-      "title": "string",
-      "body": "string",
-      "priority": 1,
-      "depends_on": ["string"]
+      "id": "<local-id>",
+      "title": "<issue title>",
+      "body": "<full issue body for the AI pipeline>",
+      "priority": <1-10>,
+      "depends_on": ["<local-id of existing issues if any>"]
     }
   ],
   "harness_fixes": "string"

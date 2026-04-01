@@ -1,7 +1,7 @@
 # Optional `.ai/validate.yml` overrides for repository-specific runtime validation tuning.
 # Use only local/test values. Never place real credentials in this file.
 
-type: node
+type: http-server
 entry: src/server.ts
 port: 3000
 
