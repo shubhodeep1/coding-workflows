@@ -1,0 +1,14 @@
+name: "Internal: AI Orchestrate Clarify Respond"
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  respond:
+    uses: ./.github/workflows/orchestrate_clarify_respond.yml
+    secrets: inherit
