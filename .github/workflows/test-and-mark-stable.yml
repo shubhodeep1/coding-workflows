@@ -422,6 +422,11 @@ jobs:
           exit 1
 
       # ── Phase 5: Orchestrator script integration test ──────────
+      - name: Checkout repository for integration tests
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
       - name: "Phase 5: Orchestrator script integration test"
         id: orchestrator-scripts
         run: |
