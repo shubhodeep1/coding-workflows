@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""Unit tests for orchestrate_lib.py — wave computation, status checks, and state schema."""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+# Add scripts/ to path so we can import orchestrate_lib
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+import orchestrate_lib
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _write_json(path: Path, data: dict) -> None:
+	with path.open("w", encoding="utf-8") as f:
+		json.dump(data, f)
+
+
+def _make_decomposition(
+	issues: list[dict] | None = None,
+	edges: list[dict] | None = None,
+) -> dict:
+	"""Build a minimal valid decomposition."""
+	if issues is None:
+		issues = [
+			{"id": "issue-1", "title": "First task", "body": "Do the first thing", "priority": 1},
+			{"id": "issue-2", "title": "Second task", "body": "Do the second thing", "priority": 2},
+		]
+	if edges is None:
+		edges = []
+	return {
+		"schema_version": "orchestrate_decomposition.v1",
+		"project_title": "Test Project",
+		"project_summary": "A test project for unit tests",
+		"issues": issues,
+		"dependency_edges": edges,
+	}
+
+
+def _make_state(
+	waves: list[list[dict]] | None = None,
+	current_wave: int = 1,
+	review_blocked_retries: dict | None = None,
+) -> dict:
+	"""Build a minimal valid tracking state."""
+	if waves is None:
+		waves = [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "pending"},
+					{"id": "issue-2", "github_issue": 11, "status": "pending"},
+				],
+			}
+		]
+	return {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": sum(len(w["issues"]) for w in waves),
+		"total_waves": len(waves),
+		"current_wave": current_wave,
+		"judge_cycle": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": review_blocked_retries or {},
+		"status": "in_progress",
+		"waves": waves,
+		"dependency_edges": [],
+		"issue_number_map": {},
+		"pending_issue_defs": {},
+	}
+
+
+# ---------------------------------------------------------------------------
+# Tests: validation
+# ---------------------------------------------------------------------------
+
+def test_validate_decomposition_valid():
+	data = _make_decomposition()
+	result = orchestrate_lib.validate_decomposition(data)
+	assert result["project_title"] == "Test Project"
+
+
+def test_validate_decomposition_invalid_schema():
+	data = _make_decomposition()
+	data["schema_version"] = "wrong"
+	try:
+		orchestrate_lib.validate_decomposition(data)
+		assert False, "Should have raised OrchestrateError"
+	except orchestrate_lib.OrchestrateError:
+		pass
+
+
+def test_validate_decomposition_duplicate_ids():
+	issues = [
+		{"id": "dup", "title": "A", "body": "B", "priority": 1},
+		{"id": "dup", "title": "C", "body": "D", "priority": 2},
+	]
+	try:
+		orchestrate_lib.validate_decomposition(_make_decomposition(issues=issues))
+		assert False, "Should have raised OrchestrateError"
+	except orchestrate_lib.OrchestrateError as e:
+		assert "Duplicate" in str(e)
+
+
+def test_validate_decomposition_cycle_detection():
+	issues = [
+		{"id": "a", "title": "A", "body": "B", "priority": 1},
+		{"id": "b", "title": "C", "body": "D", "priority": 2},
+	]
+	edges = [{"from": "a", "to": "b"}, {"from": "b", "to": "a"}]
+	try:
+		orchestrate_lib.validate_decomposition(_make_decomposition(issues=issues, edges=edges))
+		assert False, "Should have raised OrchestrateError"
+	except orchestrate_lib.OrchestrateError as e:
+		assert "cycle" in str(e).lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests: wave computation
+# ---------------------------------------------------------------------------
+
+def test_compute_waves_no_deps():
+	data = _make_decomposition()
+	waves = orchestrate_lib.compute_waves(data)
+	assert len(waves) == 1
+	assert len(waves[0]) == 2
+
+
+def test_compute_waves_with_deps():
+	issues = [
+		{"id": "a", "title": "A", "body": "A body", "priority": 1},
+		{"id": "b", "title": "B", "body": "B body", "priority": 2},
+		{"id": "c", "title": "C", "body": "C body", "priority": 3},
+	]
+	edges = [{"from": "a", "to": "b"}, {"from": "b", "to": "c"}]
+	data = _make_decomposition(issues=issues, edges=edges)
+	waves = orchestrate_lib.compute_waves(data)
+	assert len(waves) == 3
+	assert waves[0][0]["id"] == "a"
+	assert waves[1][0]["id"] == "b"
+	assert waves[2][0]["id"] == "c"
+
+
+def test_compute_waves_parallel_deps():
+	issues = [
+		{"id": "root", "title": "Root", "body": "Root body", "priority": 1},
+		{"id": "child-1", "title": "Child 1", "body": "Body", "priority": 2},
+		{"id": "child-2", "title": "Child 2", "body": "Body", "priority": 3},
+	]
+	edges = [{"from": "root", "to": "child-1"}, {"from": "root", "to": "child-2"}]
+	data = _make_decomposition(issues=issues, edges=edges)
+	waves = orchestrate_lib.compute_waves(data)
+	assert len(waves) == 2
+	assert len(waves[0]) == 1  # root
+	assert len(waves[1]) == 2  # child-1, child-2
+
+
+# ---------------------------------------------------------------------------
+# Tests: check-wave-status
+# ---------------------------------------------------------------------------
+
+def _run_check_wave_status(state: dict, labels: dict[str, list[str]]) -> dict:
+	"""Run check-wave-status via the CLI and return parsed JSON."""
+	with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+		json.dump(state, f)
+		state_path = f.name
+
+	import io
+	from contextlib import redirect_stdout
+
+	buf = io.StringIO()
+	with redirect_stdout(buf):
+		orchestrate_lib.cmd_check_wave_status(
+			type("Args", (), {"state_file": state_path, "labels_json": json.dumps(labels)})()
+		)
+	return json.loads(buf.getvalue())
+
+
+def test_check_wave_status_all_merged():
+	state = _make_state()
+	labels = {"10": ["ai:merged"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is True
+	assert result["any_failed"] is False
+	assert result["any_review_blocked"] is False
+	assert result["project_complete"] is True
+	assert all(i["status"] == "merged" for i in result["issues"])
+
+
+def test_check_wave_status_some_in_progress():
+	state = _make_state()
+	labels = {"10": ["ai:merged"], "11": ["ai:implementing"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_review_blocked"] is False
+
+
+def test_check_wave_status_ready_to_merge():
+	state = _make_state()
+	labels = {"10": ["ai:ready-to-merge"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh["10"]["status"] == "ready-to-merge"
+	assert issues_by_gh["11"]["status"] == "merged"
+
+
+def test_check_wave_status_review_blocked():
+	state = _make_state()
+	labels = {"10": ["ai:review-blocked"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_review_blocked"] is True
+	assert result["any_failed"] is False
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh["10"]["status"] == "review-blocked"
+
+
+def test_check_wave_status_review_blocked_and_failed():
+	state = _make_state()
+	labels = {"10": ["ai:review-blocked"], "11": ["ai:closed"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_review_blocked"] is True
+	assert result["any_failed"] is True
+
+
+def test_check_wave_status_all_review_blocked():
+	state = _make_state()
+	labels = {"10": ["ai:review-blocked"], "11": ["ai:review-blocked"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_review_blocked"] is True
+	assert all(i["status"] == "review-blocked" for i in result["issues"])
+
+
+def test_check_wave_status_no_labels_means_in_progress():
+	state = _make_state()
+	labels = {"10": [], "11": []}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_review_blocked"] is False
+	assert all(i["status"] == "in_progress" for i in result["issues"])
+
+
+def test_check_wave_status_multi_wave_not_project_complete():
+	waves = [
+		{"wave": 1, "issues": [{"id": "a", "github_issue": 10, "status": "pending"}]},
+		{"wave": 2, "issues": [{"id": "b", "github_issue": 11, "status": "pending"}]},
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is True
+	assert result["project_complete"] is False  # wave 2 still exists
+
+
+def test_check_wave_status_closed_counts_as_failed():
+	state = _make_state()
+	labels = {"10": ["ai:closed"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["any_failed"] is True
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh["10"]["status"] == "closed"
+
+
+# ---------------------------------------------------------------------------
+# Tests: state schema
+# ---------------------------------------------------------------------------
+
+def test_build_tracking_state_has_review_blocked_retries():
+	data = _make_decomposition()
+	waves = orchestrate_lib.compute_waves(data)
+	issue_map = {"issue-1": 10, "issue-2": 11}
+	state = orchestrate_lib.build_tracking_state(data, waves, issue_map)
+	assert "review_blocked_retries" in state
+	assert isinstance(state["review_blocked_retries"], dict)
+	assert len(state["review_blocked_retries"]) == 0
+
+
+def test_build_tracking_state_schema():
+	data = _make_decomposition()
+	waves = orchestrate_lib.compute_waves(data)
+	issue_map = {"issue-1": 10}
+	state = orchestrate_lib.build_tracking_state(data, waves, issue_map)
+	assert state["schema_version"] == "orchestrate_state.v1"
+	assert state["total_issues"] == 2
+	assert state["total_waves"] == 1
+	assert state["current_wave"] == 1
+	assert state["judge_cycle"] == 0
+	assert state["recovery_attempted"] is False
+	assert state["status"] == "in_progress"
+	# issue-2 should be in pending_issue_defs (not in issue_map)
+	assert "issue-2" in state["pending_issue_defs"]
+
+
+# ---------------------------------------------------------------------------
+# Tests: label priority (review-blocked takes precedence over in_progress)
+# ---------------------------------------------------------------------------
+
+def test_review_blocked_label_priority_over_other_labels():
+	"""ai:review-blocked should be detected even if other non-phase labels are present."""
+	state = _make_state()
+	labels = {"10": ["bug", "ai:review-blocked", "enhancement"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["any_review_blocked"] is True
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh["10"]["status"] == "review-blocked"
+
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
