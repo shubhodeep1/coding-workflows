@@ -12,30 +12,11 @@ health_check:
   expected_contains:
     - ok
 
-timeout:
-  startup_seconds: 120
-  health_seconds: 45
-  test_seconds: 300
+timeout: 10  # minutes
 
 services:
-  - name: app
-    build:
-      context: .
-      dockerfile: Dockerfile
-    exposed_port: 3000
-    healthcheck:
-      path: /health
-      expected_status: 200
-  - name: postgres
-    image: postgres:16
-    port: 5432
-    env:
-      POSTGRES_DB: app_test
-      POSTGRES_USER: test_user
-      POSTGRES_PASSWORD: test_password
-  - name: redis
-    image: redis:7
-    port: 6379
+  - postgres:16
+  - redis:7
 
 env_overrides:
   NODE_ENV: test
@@ -51,24 +32,10 @@ seed_setup:
     - npm run db:seed
 
 custom_tests:
-  routes:
-    - name: health endpoint
-      method: GET
-      path: /health
-      expect_status: 200
-    - name: error payload shape
-      method: GET
-      path: /api/non-existent
-      expect_status: 404
-      expect_json_keys:
-        - error
-        - code
-        - message
-  inbound_handlers:
-    - name: webhook signature invalid
-      handler: webhook:stripe
-      input_fixture: validation/fixtures/stripe-invalid-signature.json
-      expect_status: 400
+  # Additional validation commands to run after the main test suite.
+  - npm run test:health-endpoint
+  - npm run test:error-payload-shape
+  - npm run test:webhook-signature-invalid
 
 bot_commands:
   build: npm run build

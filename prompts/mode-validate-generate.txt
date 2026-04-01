@@ -14,7 +14,7 @@ Before generating artifacts, analyze the repository to identify the app type, en
 Required outputs:
 1. `validation/docker-compose.test.yml`
 2. `validation/validate.sh`
-3. `validation/tests/*` (one or more scripts)
+3. `validation/tests/*` (one or more scripts, each emitting TAP-like output with `ok N` / `not ok N` for individual tests)
 4. Optional: `validation/mocks/*` for inbound payload simulation only
 
 Mandatory rules:
@@ -27,7 +27,7 @@ Mandatory rules:
 - Keep runtime within a 10-minute validation budget.
 
 `validation/validate.sh` requirements:
-- POSIX shell with `set -euo pipefail`
+- Bash shell with `set -euo pipefail`
 - Pre-flight checks
 - Build/start via Docker Compose
 - Health polling with explicit timeout
@@ -36,17 +36,20 @@ Mandatory rules:
 - Always teardown via trap on EXIT using `docker compose down -v --remove-orphans`
 - Exit 0 on pass and non-zero on failure
 - Emit a final machine-parseable JSON result object as the last stdout output
+- The final JSON result must include: `result` (`pass` or `fail`), `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures` (array of objects with `test`, `error`, and `log_tail`), and `duration_seconds`
 
 Mandatory validation coverage (all required):
 1. Build verification
 2. Startup and health checks
-3. Route testing
-4. Inbound handler testing
-5. Environment variable validation
-6. Dependency auditing
-7. Migration verification
-8. Graceful shutdown verification
-9. Error format validation
+3. Local service integration testing
+4. Route testing
+5. Inbound handler testing
+6. Existing test suite execution
+7. Environment variable validation
+8. Dependency auditing
+9. Migration verification
+10. Graceful shutdown verification
+11. Error format validation
 
 Applicability behavior:
 - If an item is not applicable, implement a deterministic skip with a clear reason.
@@ -73,8 +76,10 @@ JSON schema:
   "coverage": {
     "build_verification": "implemented" | "skipped:<reason>",
     "startup_health_checks": "implemented" | "skipped:<reason>",
+    "local_service_integration": "implemented" | "skipped:<reason>",
     "route_testing": "implemented" | "skipped:<reason>",
     "inbound_handler_testing": "implemented" | "skipped:<reason>",
+    "existing_test_suite_execution": "implemented" | "skipped:<reason>",
     "env_var_validation": "implemented" | "skipped:<reason>",
     "dependency_auditing": "implemented" | "skipped:<reason>",
     "migration_verification": "implemented" | "skipped:<reason>",
@@ -89,5 +94,5 @@ JSON schema:
 SERENA MCP EFFICIENCY (MANDATORY):
 - Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
 - Skip straight to activate_project and then use tools directly.
-- Prefer get_symbols_overview and find_symbol over raw file reads.
+- Prefer mcp__serena__get_symbols_overview and mcp__serena__find_symbol over raw file reads.
 - Never read the same file region twice. Plan reads upfront.
