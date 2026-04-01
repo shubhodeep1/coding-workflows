@@ -148,53 +148,18 @@ permissions:
   pull-requests: write
   issues: write
 jobs:
-  check-skip:
-    runs-on: ubuntu-latest
-    outputs:
-      should_skip: ${{ steps.detect.outputs.should_skip }}
-    steps:
-      - name: Detect autofix commit
-        id: detect
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          HEAD_MSG="$(gh api "repos/${{ github.repository }}/git/commits/${PR_HEAD_SHA}" --jq '.message' 2>/dev/null | head -1 || true)"
-          if echo "${HEAD_MSG}" | grep -q '^\[ai-autofix\]'; then
-            echo "should_skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
   review:
-    needs: [check-skip]
-    if: needs.check-skip.outputs.should_skip != 'true'
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
     with:
       allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
     secrets: inherit
-
-  post-autofix:
-    needs: [check-skip]
-    if: needs.check-skip.outputs.should_skip == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Mark linked issues ready to merge
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          # See workflow-templates/ai-review.yml for full implementation
-          echo "Autofix commit detected — marking issues ready to merge"
 ```
 
-> **Note:** The `check-skip` job uses the GitHub API to read the actual PR
-> head commit message (via `github.event.pull_request.head.sha`). On
-> `pull_request` events, `actions/checkout` checks out a merge commit whose
-> message never starts with `[ai-autofix]`, so reading `git log -1 HEAD`
-> would always miss autofix commits. See
-> [`workflow-templates/ai-review.yml`](workflow-templates/ai-review.yml) for
-> the full ready-to-copy template including the `post-autofix` job.
+> The reusable workflow handles autofix iteration counting internally. It
+> counts consecutive `[ai-autofix]` commits and stops after
+> `MAX_AUTOFIX_ITERATIONS` (default `3`), labeling the PR `ai:review-blocked`.
+> When review passes with no fixes needed, it labels linked issues
+> `ai:ready-to-merge` and enables auto-merge if configured.
 
 > **Warning — do NOT add a top-level `concurrency` block to this wrapper.**
 > The reusable workflow already manages concurrency at the job level. Adding a
