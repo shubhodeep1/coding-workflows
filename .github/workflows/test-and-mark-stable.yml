@@ -31,11 +31,19 @@ name: Test & Mark Stable Release
         default: false
       phase_timeout:
         description: >
-          Max minutes to wait for each workflow phase (clarify, plan, implement, review).
+          Max minutes to wait for each workflow phase (clarify, plan, implement).
           Increase for repos with large codebases or slow LLM providers.
         required: false
         type: number
         default: 60
+      review_timeout:
+        description: >
+          Max minutes to wait for the review & autofix phase specifically.
+          Review runs longer than other phases (multiple reviewer models +
+          editor). Falls back to phase_timeout when not set.
+        required: false
+        type: number
+        default: 90
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -100,7 +108,7 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e }}
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 120
     concurrency:
       group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}
       cancel-in-progress: false
@@ -110,6 +118,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
       PHASE_TIMEOUT: ${{ inputs.phase_timeout || 15 }}
+      REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 90 }}
       POLL_INTERVAL: 10
 
     steps:
@@ -325,8 +334,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "Waiting for review workflow on PR #${PR_NUMBER}..."
-          TIMEOUT_SECS=$((PHASE_TIMEOUT * 60))
+          TIMEOUT_SECS=$((REVIEW_TIMEOUT * 60))
           ELAPSED=0
+          echo "Review timeout: ${REVIEW_TIMEOUT} minutes (${TIMEOUT_SECS}s)"
 
           # Give the review workflow a moment to start
           sleep 5
