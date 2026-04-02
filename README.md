@@ -354,6 +354,10 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `implement.yml` | `issue_comment.created` (`/approved`) | Plan execution + PR creation |
 | `review_autofix.yml` | `pull_request.*` | Multi-model review + autofix |
 | `validate.yml` | `workflow_dispatch` or explicit call from orchestrator/poller | Runtime validation harness generation + Docker smoke execution |
+
+`validate.yml` secret isolation note:
+- `scripts/validate_process.sh` now executes generated `validation/validate.sh` with a restricted `env -i` allowlist so runtime smoke tests receive only explicit non-secret CI/runtime variables and synthetic test credentials (`VALIDATION_TEST_*`, `TEST_*`).
+- Orchestration credentials (`GH_TOKEN`, `OPENROUTER_API_KEY`, `TG_BOT_SECRET`, and token-like vars such as `*_TOKEN`, `*_SECRET`, `*_API_KEY`) are blocked from the harness context and still remain available to the parent validation process for post-run diagnosis and issue operations.
 | `issue_pr_status.yml` | `pull_request.closed` | Label/state sync |
 | `cancel_on_pr_close.yml` | `pull_request.closed` | Active-run cancellation |
 | `memory_maintenance.yml` | `schedule` (monthly) | Memory compaction/archival |

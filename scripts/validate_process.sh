@@ -235,6 +235,130 @@ with open(output_file, "w", encoding="utf-8") as handle:
 PY
 }
 
+run_validation_harness_restricted_env()
+{
+  local log_file="$1"
+  local timeout_minutes="$2"
+  local -a env_args
+  local -a allowed_vars
+  local var_name=""
+  local var_value=""
+
+  env_args=(env -i "PATH=${PATH:-/usr/bin:/bin}")
+
+  if [ -n "${HOME:-}" ]; then
+    env_args+=("HOME=${HOME}")
+  fi
+
+  allowed_vars=(
+    CI
+    GITHUB_ACTION
+    GITHUB_ACTIONS
+    GITHUB_ACTOR
+    GITHUB_ACTOR_ID
+    GITHUB_API_URL
+    GITHUB_BASE_REF
+    GITHUB_ENV
+    GITHUB_EVENT_NAME
+    GITHUB_EVENT_PATH
+    GITHUB_GRAPHQL_URL
+    GITHUB_HEAD_REF
+    GITHUB_JOB
+    GITHUB_OUTPUT
+    GITHUB_PATH
+    GITHUB_REF
+    GITHUB_REF_NAME
+    GITHUB_REF_PROTECTED
+    GITHUB_REF_TYPE
+    GITHUB_REPOSITORY
+    GITHUB_REPOSITORY_ID
+    GITHUB_REPOSITORY_OWNER
+    GITHUB_REPOSITORY_OWNER_ID
+    GITHUB_RETENTION_DAYS
+    GITHUB_RUN_ATTEMPT
+    GITHUB_RUN_ID
+    GITHUB_RUN_NUMBER
+    GITHUB_SERVER_URL
+    GITHUB_SHA
+    GITHUB_STEP_SUMMARY
+    GITHUB_TRIGGERING_ACTOR
+    GITHUB_WORKFLOW
+    GITHUB_WORKFLOW_REF
+    GITHUB_WORKFLOW_SHA
+    GITHUB_WORKSPACE
+    LANG
+    LC_ALL
+    PWD
+    RUNNER_ARCH
+    RUNNER_DEBUG
+    RUNNER_NAME
+    RUNNER_OS
+    RUNNER_TEMP
+    RUNNER_TOOL_CACHE
+    RUNNER_WORKSPACE
+    RUNTIME_DIR
+    SHLVL
+    TERM
+    TEST_API_KEY
+    TEST_PASSWORD
+    TEST_USERNAME
+    TMPDIR
+    TZ
+    VALIDATION_COMPOSE_FILE
+    VALIDATION_CYCLE
+    VALIDATION_TEST_API_KEY
+    VALIDATION_TEST_PASSWORD
+    VALIDATION_TEST_USERNAME
+    VALIDATION_TIMEOUT
+  )
+
+  for var_name in "${allowed_vars[@]}"; do
+    if [ "${!var_name+x}" = "x" ]; then
+      var_value="${!var_name}"
+      env_args+=("${var_name}=${var_value}")
+    fi
+  done
+
+  while IFS='=' read -r var_name _; do
+    case "${var_name}" in
+      VALIDATION_TEST_*|TEST_*)
+        if [ "${!var_name+x}" = "x" ]; then
+          env_args+=("${var_name}=${!var_name}")
+        fi
+        ;;
+    esac
+  done < <(env)
+
+  timeout -k 30s "${timeout_minutes}m" "${env_args[@]}" bash -euo pipefail -c '
+for protected_var in GH_TOKEN GITHUB_TOKEN OPENROUTER_API_KEY TG_BOT_SECRET TG_ADMIN_CHAT_ID; do
+  if [ "${!protected_var+x}" = "x" ]; then
+    echo "Protected environment variable leaked into validation harness: ${protected_var}" >&2
+    exit 97
+  fi
+done
+
+for protected_var in OPENAI_API_KEY ANTHROPIC_API_KEY COHERE_API_KEY GEMINI_API_KEY MISTRAL_API_KEY; do
+  if [ "${!protected_var+x}" = "x" ]; then
+    echo "Token-equivalent environment variable leaked into validation harness: ${protected_var}" >&2
+    exit 97
+  fi
+done
+
+while IFS='=' read -r protected_var _; do
+  case "${protected_var}" in
+    VALIDATION_TEST_*|TEST_*)
+      ;;
+    *_TOKEN|*_SECRET|*_API_KEY)
+      echo "Token-equivalent environment variable leaked into validation harness: ${protected_var}" >&2
+      exit 97
+      ;;
+  esac
+done < <(env)
+
+exec bash validation/validate.sh
+' > "${log_file}" 2>&1
+}
+
 write_status_file()
 {
   local status="$1"
@@ -501,13 +625,30 @@ find validation -type f -name '*.sh' -exec chmod +x {} +
 # ---------------------------------------------------------------
 VALIDATION_EXIT=0
 set +e
-timeout -k 30s "${VALIDATION_TIMEOUT}m" bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1
+run_validation_harness_restricted_env "${VALIDATION_LOG_FILE}" "${VALIDATION_TIMEOUT}"
 VALIDATION_EXIT=$?
 set -e
 
 tail -n 200 "${VALIDATION_LOG_FILE}" > "${VALIDATION_LOG_TAIL_FILE}" 2>/dev/null || true
 
-if [ "${VALIDATION_EXIT}" -eq 124 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
+if [ "${VALIDATION_EXIT}" -eq 97 ]; then
+  jq -n \
+    '{
+      result: "fail",
+      phase: "env_isolation_error",
+      total_tests: 0,
+      passed_tests: 0,
+      failed_tests: 1,
+      failures: [
+        {
+          test: "validation-env-isolation",
+          error: "Protected environment variable leaked into validation harness context",
+          log_tail: "See validation.log tail in artifacts"
+        }
+      ],
+      duration_seconds: 0
+    }' > "${VALIDATION_RESULT_FILE}"
+elif [ "${VALIDATION_EXIT}" -eq 124 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
   timeout_test="validation-timeout"
   timeout_error="Validation timed out after ${VALIDATION_TIMEOUT} minute(s)"
   if [ "${VALIDATION_EXIT}" -eq 137 ]; then
