@@ -3,5 +3,7 @@ __pycache__/
 
 .serena/
 
+node_modules/
+
 # Workflow-generated artifacts (created at repo root during CI runs)
 pre_assembled_static.txt
