@@ -206,6 +206,7 @@ sync_validation_fix_issues_from_comments() {
   local last_fix_comment_id
   local new_fix_issues_json
   local new_fix_count
+  local validation_cycle
 
   latest_fix_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select(.body | startswith("## 🧪 Runtime validation found fixable issues"))] | last // empty')"
   if [ -z "${latest_fix_comment_json}" ]; then
@@ -239,8 +240,12 @@ sync_validation_fix_issues_from_comments() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   else
     jq --argjson comment_id "${fix_comment_id}" \
-      '.status = "validation-fixing" | .validation_last_fix_comment_id = $comment_id' \
+      '.validation_last_fix_comment_id = $comment_id' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+    validation_cycle="$(jq -r '.validation_cycle // 1' "${STATE_FILE}")"
+    mark_validation_failed "Validation fix-up synchronization failed in cycle ${validation_cycle}: the latest fix comment (#${fix_comment_id}) did not contain any parseable issue numbers."
+    return 0
   fi
 
   set_tracking_phase_label "ai:validation-fixing"
@@ -324,7 +329,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     ACTIVE_FIX_COUNT="$(echo "${ACTIVE_FIX_ISSUES_JSON}" | jq 'length')"
 
     if [ "${ACTIVE_FIX_COUNT}" -le 0 ]; then
-      echo "Validation is in fixing state but no active fix issues are tracked yet."
+      mark_validation_failed "Validation entered fixing state in cycle ${VALIDATION_CYCLE} but no active fix issues were tracked."
       continue
     fi
 

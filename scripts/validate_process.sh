@@ -759,17 +759,23 @@ case "${DIAG_STATUS}" in
       exit 0
     fi
 
-    issue_list_md="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq -r '.[] | "- #\(.)"')"
-    if [ -z "${issue_list_md}" ]; then
-      issue_list_md='- (no issue numbers captured)'
+    CREATED_FIX_COUNT="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq 'length')"
+    if [ "${CREATED_FIX_COUNT}" -le 0 ]; then
+      failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s), but no fix-up issue numbers were captured."
+      post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
+      set_tracking_phase_label "ai:validation-failed"
+      write_result_files "fail" "Validation needs fixes" "${failure_summary}"
+      tg_notify "❌ Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: no fix-up issue numbers were captured."
+      exit 0
     fi
 
+    issue_list_md="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq -r '.[] | "- #\(.)"')"
     post_tracking_comment "## 🧪 Runtime validation found fixable issues\n\n${DIAG_TEXT}\n\nCreated fix-up issues:\n${issue_list_md}"
     set_tracking_phase_label "ai:validation-fixing"
 
     failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). Fix-up issues were created."
     write_result_files "fail" "Validation needs fixes" "${failure_summary}"
-    tg_notify "🔧 Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes (${FIX_COUNT} issue(s) created)."
+    tg_notify "🔧 Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes (${CREATED_FIX_COUNT} issue(s) created)."
     ;;
 
   harness_error)
