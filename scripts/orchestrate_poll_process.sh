@@ -44,6 +44,12 @@ gh_retry() {
   return 1
 }
 
+catalog_path() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  printf '%s/codex_model_catalog.json\n' "${script_dir}"
+}
+
 # ---------------------------------------------------------------
 # Process each tracking issue
 # ---------------------------------------------------------------
@@ -171,7 +177,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
     # Ensure codex config exists for the judge
     mkdir -p ~/.codex
-    CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
+    CATALOG_PATH="$(catalog_path)"
     {
       echo 'web_search = "live"'
       echo 'model_provider = "openrouter"'
@@ -621,7 +627,7 @@ ORCHESTRATOR_STATE_V1 -->"
 
   # Setup Codex config for judge
   mkdir -p ~/.codex
-  CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
+  CATALOG_PATH="$(catalog_path)"
   {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
