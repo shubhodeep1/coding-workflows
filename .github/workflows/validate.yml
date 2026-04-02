@@ -213,29 +213,42 @@ jobs:
 
       - name: Write run summary
         if: always()
+        env:
+          SUMMARY_TRACKING_ISSUE: ${{ inputs.tracking_issue }}
+          SUMMARY_COMPOSE_FILE: ${{ inputs.compose_file }}
+          SUMMARY_TIMEOUT: ${{ inputs.validation_timeout }}
+          SUMMARY_STATUS: ${{ steps.collect_status.outputs.status }}
+          SUMMARY_TEXT: ${{ steps.collect_status.outputs.summary }}
+          SUMMARY_FAILURE_TEXT: ${{ steps.collect_status.outputs.failure_summary }}
         run: |
           set -euo pipefail
+
+          summary_text_escaped="${SUMMARY_TEXT//|/\\|}"
+          failure_text_escaped="${SUMMARY_FAILURE_TEXT//|/\\|}"
+
           {
             echo "## AI Validate Summary"
             echo "| Key | Value |"
             echo "|-----|-------|"
             echo "| Model | \`${MODEL_EDITOR}\` |"
             echo "| Reasoning effort | \`${MODEL_REASONING_EFFORT}\` |"
-            echo "| Tracking issue | \`${{ inputs.tracking_issue }}\` |"
-            echo "| Compose fallback | \`${{ inputs.compose_file }}\` |"
-            echo "| Timeout (minutes) | \`${{ inputs.validation_timeout }}\` |"
-            echo "| Status | \`${{ steps.collect_status.outputs.status }}\` |"
-            echo "| Summary | ${{ steps.collect_status.outputs.summary }} |"
-            if [ -n "${{ steps.collect_status.outputs.failure_summary }}" ]; then
-              echo "| Failure summary | ${{ steps.collect_status.outputs.failure_summary }} |"
+            printf '| Tracking issue | `%s` |\n' "${SUMMARY_TRACKING_ISSUE}"
+            printf '| Compose fallback | `%s` |\n' "${SUMMARY_COMPOSE_FILE}"
+            printf '| Timeout (minutes) | `%s` |\n' "${SUMMARY_TIMEOUT}"
+            printf '| Status | `%s` |\n' "${SUMMARY_STATUS}"
+            printf '| Summary | %s |\n' "${summary_text_escaped}"
+            if [ -n "${SUMMARY_FAILURE_TEXT}" ]; then
+              printf '| Failure summary | %s |\n' "${failure_text_escaped}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce validation outcome
         if: always()
+        env:
+          VALIDATION_STATUS: ${{ steps.collect_status.outputs.status }}
         run: |
           set -euo pipefail
-          if [ "${{ steps.collect_status.outputs.status }}" != "pass" ]; then
+          if [ "${VALIDATION_STATUS}" != "pass" ]; then
             echo "Validation did not pass."
             exit 1
           fi
