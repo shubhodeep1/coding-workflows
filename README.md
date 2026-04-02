@@ -13,6 +13,7 @@ This repository contains reusable `workflow_call` workflows that power the full 
 5. **Issue PR Status** — Syncs issue labels when PRs are merged/closed
 6. **Cancel on PR Close** — Cancels orphaned workflow runs when PRs close
 7. **Memory Maintenance** — Monthly compaction and archival of AI memory records
+8. **Validate** — Runtime harness generation + local Docker smoke validation with machine-readable results
 
 ## Quickstart
 
@@ -27,23 +28,24 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | Secret | Required | Used By | Description |
 |---|---|---|---|
 | `GH_PAT` | **Yes** | All workflows | GitHub Personal Access Token with `repo` scope |
-| `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond | [OpenRouter](https://openrouter.ai) API key for LLM access |
-| `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond | Telegram bot token for notifications |
+| `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | [OpenRouter](https://openrouter.ai) API key for LLM access |
+| `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Telegram bot token for notifications |
 
 #### Variables
 
 | Variable | Required | Default | Used By | Description |
 |---|---|---|---|---|
 | `WORKFLOW_EDITOR_MODEL` | No | `openai/gpt-5.3-codex` | clarify, plan, implement, review_autofix | Model for code editing tasks |
+| `WORKFLOW_VALIDATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | validate | Model override for validation harness generation/diagnosis |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | No | `true` | plan | Auto-trigger implementation when plan is clear |
 | `ALLOW_WORKFLOW_EDITS` | No | `false` | review_autofix | Allow AI edits to `.github/workflows` files |
 | `ENABLE_AUTO_MERGE` | No | `false` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
 | `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | orchestrate_poll | Maximum orchestrator judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). |
-| `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
-| `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Version/branch of the Serena MCP server |
-| `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Languages for Serena symbol analysis |
-| `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll | Disable the Serena MCP server |
+| `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
+| `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Version/branch of the Serena MCP server |
+| `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Languages for Serena symbol analysis |
+| `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Disable the Serena MCP server |
 | `WORKFLOW_ORCHESTRATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | orchestrate, orchestrate_poll | Model override for orchestrator decomposer and judge |
 | `ORCHESTRATE_POLL_INTERVAL` | No | `10` | orchestrate | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
 | `EDITOR_IDLE_TIMEOUT` | No | `1200` | review_autofix | Editor watchdog idle timeout in seconds. The editor is killed if it produces no output for this long and has no active network connections. |
@@ -62,6 +64,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | orchestrate | Reasoning effort for project decomposition |
 | `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation |
 | `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
+| `THINKING_LEVEL_VALIDATE` | `xhigh` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
 
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 
@@ -73,6 +76,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | orchestrate | Tool call budget for the decomposer |
 | `TOOL_CALL_BUDGET_JUDGE` | `60` | orchestrate_poll | Tool call budget for the judge (needs deep repo inspection) |
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | orchestrate_clarify_respond | Tool call budget for auto-answering clarification questions |
+| `TOOL_CALL_BUDGET_VALIDATE` | `60` | validate | Tool call budget for runtime validation harness generation and diagnosis |
 
 **Token warning thresholds** — when a phase exceeds this many tokens, a warning appears in the GitHub Actions run summary. Raise these for large repos where deeper exploration is expected.
 
@@ -270,6 +274,41 @@ jobs:
     secrets: inherit
 ```
 
+**`.github/workflows/ai-validate.yml`** — Runs runtime validation (generate harness -> execute -> structured artifacts)
+```yaml
+name: AI Validate
+on:
+  workflow_dispatch:
+    inputs:
+      tracking_issue:
+        description: Tracking issue number
+        required: false
+        type: string
+        default: "0"
+      compose_file:
+        description: Compose file path fallback
+        required: false
+        type: string
+        default: "docker-compose.yml"
+      validation_timeout:
+        description: Validation timeout in minutes
+        required: false
+        type: string
+        default: "15"
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+jobs:
+  validate:
+    uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@stable
+    with:
+      tracking_issue: ${{ inputs.tracking_issue || '0' }}
+      compose_file: ${{ inputs.compose_file || 'docker-compose.yml' }}
+      validation_timeout: ${{ inputs.validation_timeout || '15' }}
+    secrets: inherit
+```
+
 > All internal wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
 
 ### 3. Open an issue
@@ -314,6 +353,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `plan.yml` | `issue_comment.created` (`/answer`) | Implementation plan generation |
 | `implement.yml` | `issue_comment.created` (`/approved`) | Plan execution + PR creation |
 | `review_autofix.yml` | `pull_request.*` | Multi-model review + autofix |
+| `validate.yml` | `workflow_dispatch` or explicit call from orchestrator/poller | Runtime validation harness generation + Docker smoke execution |
 | `issue_pr_status.yml` | `pull_request.closed` | Label/state sync |
 | `cancel_on_pr_close.yml` | `pull_request.closed` | Active-run cancellation |
 | `memory_maintenance.yml` | `schedule` (monthly) | Memory compaction/archival |
@@ -326,8 +366,8 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | Secret | Used By | Description |
 |---|---|---|
 | `GH_PAT` | All workflows | GitHub PAT with repo access |
-| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond | OpenRouter API key for LLM access |
-| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond | Telegram bot token (optional) |
+| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | OpenRouter API key for LLM access |
+| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Telegram bot token (optional) |
 
 ## Required Variables
 
