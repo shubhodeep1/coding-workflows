@@ -329,24 +329,24 @@ run_validation_harness_restricted_env()
 for protected_var in GH_TOKEN GITHUB_TOKEN OPENROUTER_API_KEY TG_BOT_SECRET TG_ADMIN_CHAT_ID; do
   if [ "${!protected_var+x}" = "x" ]; then
     echo "Protected environment variable leaked into validation harness: ${protected_var}" >&2
-    exit 97
+    exit 200
   fi
 done
 
 for protected_var in OPENAI_API_KEY ANTHROPIC_API_KEY COHERE_API_KEY GEMINI_API_KEY MISTRAL_API_KEY; do
   if [ "${!protected_var+x}" = "x" ]; then
     echo "Token-equivalent environment variable leaked into validation harness: ${protected_var}" >&2
-    exit 97
+    exit 200
   fi
 done
 
 while IFS='=' read -r protected_var _; do
   case "${protected_var}" in
-    VALIDATION_TEST_*|TEST_*)
+    VALIDATION_TEST_USERNAME|VALIDATION_TEST_PASSWORD|VALIDATION_TEST_API_KEY|TEST_USERNAME|TEST_PASSWORD|TEST_API_KEY)
       ;;
     *_TOKEN|*_SECRET|*_API_KEY)
       echo "Token-equivalent environment variable leaked into validation harness: ${protected_var}" >&2
-      exit 97
+      exit 200
       ;;
   esac
 done < <(env)
@@ -627,7 +627,7 @@ set -e
 
 tail -n 200 "${VALIDATION_LOG_FILE}" > "${VALIDATION_LOG_TAIL_FILE}" 2>/dev/null || true
 
-if [ "${VALIDATION_EXIT}" -eq 97 ]; then
+if [ "${VALIDATION_EXIT}" -eq 200 ]; then
   jq -n \
     '{
       result: "fail",
