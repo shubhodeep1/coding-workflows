@@ -138,6 +138,14 @@ jobs:
           gh api -H 'Accept: application/vnd.github.raw+json' \
             "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=stable" > ".github/ai/orchestrate_schema.v1.json"
           # Fetch canonical instruction files
+          # Model catalog: try stable first, fall back to local copy from checkout.
+          if gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=stable" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
+            mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
+          else
+            rm -f "scripts/codex_model_catalog.json.tmp"
+            echo "Model catalog not on stable tag yet; using local copy."
+          fi
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               gh api -H 'Accept: application/vnd.github.raw+json' \
@@ -149,11 +157,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.codex
+          CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
           {
             echo 'web_search = "live"'
             echo 'model_provider = "openrouter"'
             echo "model = \"${MODEL_EDITOR}\""
             echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+            if [ -f "${CATALOG_PATH}" ]; then
+              echo "model_catalog_json = \"${CATALOG_PATH}\""
+            fi
             echo
             echo '[model_providers.openrouter]'
             echo 'name = "OpenRouter"'

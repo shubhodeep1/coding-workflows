@@ -171,11 +171,15 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
     # Ensure codex config exists for the judge
     mkdir -p ~/.codex
+    CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
     {
       echo 'web_search = "live"'
       echo 'model_provider = "openrouter"'
       echo "model = \"${MODEL_EDITOR}\""
       echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE}\""
+      if [ -f "${CATALOG_PATH}" ]; then
+        echo "model_catalog_json = \"${CATALOG_PATH}\""
+      fi
       echo
       echo '[model_providers.openrouter]'
       echo 'name = "OpenRouter"'
@@ -617,11 +621,15 @@ ORCHESTRATOR_STATE_V1 -->"
 
   # Setup Codex config for judge
   mkdir -p ~/.codex
+  CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
   {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR}\""
     echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE}\""
+    if [ -f "${CATALOG_PATH}" ]; then
+      echo "model_catalog_json = \"${CATALOG_PATH}\""
+    fi
     echo
     echo '[model_providers.openrouter]'
     echo 'name = "OpenRouter"'
