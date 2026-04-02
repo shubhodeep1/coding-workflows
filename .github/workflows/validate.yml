@@ -84,7 +84,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          wf_source="${{ github.repository_owner }}/coding-workflows"
+          wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts prompts .github/ai
 
           fetch_from_stable_or_local() {
