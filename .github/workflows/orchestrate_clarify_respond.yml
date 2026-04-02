@@ -96,6 +96,14 @@ jobs:
               "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
             chmod +x "scripts/${f}"
           done
+          # Model catalog: try stable first, fall back to local copy from checkout.
+          if gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=stable" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
+            mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
+          else
+            rm -f "scripts/codex_model_catalog.json.tmp"
+            echo "Model catalog not on stable tag yet; using local copy."
+          fi
           # Fetch the clarify-respond prompt
           PROMPT_SOURCE="prompts/mode-clarify-respond.txt"
           mkdir -p prompts
@@ -149,11 +157,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.codex
+          CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
           {
             echo 'web_search = "live"'
             echo 'model_provider = "openrouter"'
             echo "model = \"${MODEL_EDITOR}\""
             echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+            if [ -f "${CATALOG_PATH}" ]; then
+              echo "model_catalog_json = \"${CATALOG_PATH}\""
+            fi
             echo
             echo '[model_providers.openrouter]'
             echo 'name = "OpenRouter"'
