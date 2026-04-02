@@ -1826,9 +1826,13 @@ jobs:
                   cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
                   net_active=false
                   if [ -n "${cpid}" ] && [ -d "/proc/${cpid}/fd" ]; then
-                    sock_count="$(find "/proc/${cpid}/fd" -lname 'socket:*' 2>/dev/null | head -20 | wc -l || echo 0)"
-                    if [ "${sock_count}" -gt 0 ]; then
-                      net_active=true
+                    if [ -r "/proc/${cpid}/fd" ]; then
+                      sock_count="$(find "/proc/${cpid}/fd" -lname 'socket:*' 2>/dev/null | head -20 | wc -l)"
+                      if [ "${sock_count}" -gt 0 ]; then
+                        net_active=true
+                      fi
+                    else
+                      echo "Warning: /proc/${cpid}/fd is not readable; skipping network-activity probe." >&2
                     fi
                   fi
                   if [ "${net_active}" = true ]; then
@@ -1851,7 +1855,9 @@ jobs:
               exec codex exec --model "${MODEL_EDITOR}" --full-auto < "${EDITOR_PROMPT_FILE}"
             ) > "${tmp_output}" 2> >(
               while IFS= read -r line || [ -n "$line" ]; do
-                printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
+                if [ -f "${hb_file}" ]; then
+                  printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
+                fi
                 printf '%s\n' "$line"
               done > "${tmp_err}"
             ) &
