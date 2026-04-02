@@ -19,6 +19,8 @@ set -euo pipefail
 : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 [[ "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]] || { echo "GITHUB_REPOSITORY must be in owner/repo format" >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "jq is required but not installed" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "python3 is required but not installed" >&2; exit 1; }
 
 TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
 TRACKING_ISSUE_NUM=0
@@ -204,25 +206,16 @@ if trimmed:
 cleaned = re.sub(r"```(?:json)?\s*", "", raw)
 cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
 
-brace_depth = 0
-start = None
+decoder = json.JSONDecoder()
 for index, ch in enumerate(cleaned):
-    if ch == "{":
-        if brace_depth == 0:
-            start = index
-        brace_depth += 1
-    elif ch == "}":
-        if brace_depth > 0:
-            brace_depth -= 1
-            if brace_depth == 0 and start is not None:
-                candidate = cleaned[start:index + 1]
-                try:
-                    parsed = json.loads(candidate)
-                    if isinstance(parsed, dict) and required_key in parsed:
-                        candidates.append(parsed)
-                except json.JSONDecodeError:
-                    pass
-                start = None
+    if ch != "{":
+        continue
+    try:
+        parsed, _ = decoder.raw_decode(cleaned[index:])
+        if isinstance(parsed, dict) and required_key in parsed:
+            candidates.append(parsed)
+    except json.JSONDecodeError:
+        pass
 
 if not candidates:
     print(f"No JSON object with key '{required_key}' found", file=sys.stderr)
@@ -359,6 +352,7 @@ mkdir -p ~/.codex
 } > ~/.codex/config.toml
 
 bash scripts/setup_serena.sh --mode editing --context codex || true
+export PATH="${HOME}/.local/bin:${PATH}"
 
 
 # ---------------------------------------------------------------
@@ -387,7 +381,11 @@ fi
     cat ai_pipeline.md
     echo
   fi
-  if [ -f agents.md ]; then
+  if [ -f AGENTS.md ]; then
+    echo "=== AGENTS.MD ==="
+    cat AGENTS.md
+    echo
+  elif [ -f agents.md ]; then
     echo "=== AGENTS.MD ==="
     cat agents.md
     echo
@@ -405,8 +403,13 @@ fi
 # ---------------------------------------------------------------
 set_tracking_phase_label "ai:validating"
 
+if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
+  echo "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." >&2
+  exit 1
+fi
 rm -rf validation
 mkdir -p validation/logs
+touch validation/.ai-validation-owned
 
 {
   cat "${STATIC_CONTEXT_FILE}"
@@ -427,9 +430,9 @@ mkdir -p validation/logs
   echo "TRACKING_ISSUE: ${TRACKING_ISSUE_RAW}"
   echo "VALIDATION_TIMEOUT_MINUTES: ${VALIDATION_TIMEOUT}"
   echo "PREFERRED_COMPOSE_FILE: ${VALIDATION_COMPOSE_FILE}"
-  echo "SYNTHETIC_TEST_USERNAME: ${VALIDATION_TEST_USERNAME}"
-  echo "SYNTHETIC_TEST_PASSWORD: ${VALIDATION_TEST_PASSWORD}"
-  echo "SYNTHETIC_TEST_API_KEY: ${VALIDATION_TEST_API_KEY}"
+  echo "SYNTHETIC_TEST_USERNAME_ENV_VAR: VALIDATION_TEST_USERNAME"
+  echo "SYNTHETIC_TEST_PASSWORD_ENV_VAR: VALIDATION_TEST_PASSWORD"
+  echo "SYNTHETIC_TEST_API_KEY_ENV_VAR: VALIDATION_TEST_API_KEY"
   echo
   echo "Generate the harness directly in the repository workspace for immediate execution."
 } > "${GENERATE_PROMPT_FILE}"
@@ -465,7 +468,7 @@ find validation -type f -name '*.sh' -exec chmod +x {} +
 # ---------------------------------------------------------------
 VALIDATION_EXIT=0
 set +e
-timeout --preserve-status "${VALIDATION_TIMEOUT}m" bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1
+timeout "${VALIDATION_TIMEOUT}m" bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1
 VALIDATION_EXIT=$?
 set -e
 
