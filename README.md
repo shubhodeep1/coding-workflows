@@ -455,7 +455,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 6. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
 7. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge can: (a) merge the PR as-is if remaining issues are cosmetic, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts.
 8. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted once; if it still fails, the project stops and the operator is notified via Telegram.
-9. **Validation gate:** When the judge says "complete" and `ENABLE_VALIDATION=true`, the poller dispatches `ai-validate.yml`, marks the tracking issue `ai:validating`, and only closes after `ai:validated` is reported. Validation failures or validation dispatch failures are terminal and move the tracking issue to `ai:validation-failed`.
+9. **Validation gate:** When the judge says "complete" and `ENABLE_VALIDATION=true`, the poller dispatches `ai-validate.yml`, marks the tracking issue `ai:validating`, and only closes after `ai:validated` is reported. See [Runtime Validation Phase](#runtime-validation-phase) for the full lifecycle and operational guidance.
 10. **Completion:** When validation is disabled, completion remains judge-driven and immediate.
 
 ### Enabling auto-merge
@@ -485,6 +485,56 @@ Your `GH_PAT` must have permission to enable auto-merge (repo scope with admin o
 ### Labels
 
 The orchestrator uses `ai:orchestrator-tracking` for tracking issues. Child issues use the standard `ai:*` phase labels. The `ai:orchestrator-tracking` label is defined in the [label contract](/.github/ai/label_contract.v1.json).
+
+## Runtime Validation Phase
+
+This phase starts only after the orchestrator judge returns `complete`.
+
+### Lifecycle After Judge Approval
+
+1. The poller transitions the tracking issue to `ai:validating` and dispatches `.github/workflows/ai-validate.yml`.
+2. The wrapper workflow calls reusable `.github/workflows/validate.yml@stable`, which runs `scripts/validate_process.sh`.
+3. If validation passes, `validate_process.sh` sets `ai:validated`; the poller marks the project `complete` and closes the tracking issue.
+4. If validation fails with fixable findings (`needs_fixes`), `validate_process.sh` creates fix-up issues, comments them on the tracking issue, and sets `ai:validation-fixing`.
+5. While in `ai:validation-fixing`, the poller waits for all active validation fix-up issues to reach `ai:merged`.
+6. After all fix-up issues merge, the poller increments the validation cycle, returns to `ai:validating`, and redispatches `ai-validate.yml`.
+
+### Pass/Fail and Stop Conditions
+
+- Terminal success: `ai:validated`.
+- Non-terminal failure: `needs_fixes` diagnosis with fix-up issues (enters the fix/revalidate loop).
+- Terminal failure: validation dispatch failure, harness error, infeasible diagnosis, unknown diagnosis payload, closed fix-up issues, or cycle limit exceeded.
+- Terminal failure label: `ai:validation-failed`.
+
+### Validation Controls
+
+| Variable | Default | Behavior |
+|---|---|---|
+| `ENABLE_VALIDATION` | `true` | Truthy values (`1/true/yes/on`, case-insensitive) enable the validation gate. Any other value disables it, so judge `complete` closes immediately without runtime validation. |
+| `MAX_VALIDATE_CYCLES` | `3` | Maximum cycles across initial validation plus fix/revalidate loops. Must be a positive integer; invalid values are coerced to `3`. Exceeding the limit forces `ai:validation-failed`. |
+
+### Wrapper Setup and Reusable Workflow Relationship
+
+- Consumer repos must provide `.github/workflows/ai-validate.yml` so the poller can dispatch validation by workflow name.
+- Use [`workflow-templates/ai-validate.yml`](workflow-templates/ai-validate.yml) as the wrapper template.
+- The wrapper must call reusable [`/.github/workflows/validate.yml`](.github/workflows/validate.yml) with these inputs:
+- `tracking_issue` (tracking issue number)
+- `compose_file` (compose fallback path, default `docker-compose.yml`)
+- `validation_timeout` (minutes, default `15`)
+- If the wrapper is missing or dispatch permissions are insufficient, the poller marks the tracking issue `ai:validation-failed`.
+
+### Runtime Constraints
+
+- Validation runs on `ubuntu-latest`.
+- Validation must execute against local runtime dependencies only (Docker/Compose services on the runner).
+- Use synthetic/test credentials only; defaults are test-safe (`VALIDATION_TEST_USERNAME`, `VALIDATION_TEST_PASSWORD`, `VALIDATION_TEST_API_KEY`).
+- Do not require external infrastructure (managed cloud databases, private VPC services, external queues, or production-only endpoints) for validation success.
+
+### Hints Configuration (`.ai/validate.yml`)
+
+- You can optionally add `.ai/validate.yml` in a consumer repo to guide harness generation and diagnosis.
+- Baseline example: [`examples/ai-validate-hints.yml`](examples/ai-validate-hints.yml).
+- If `.ai/validate.yml` is absent, validation still runs with defaults and generic harness prompts.
 
 ## Repository Structure
 
