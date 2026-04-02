@@ -174,7 +174,7 @@ dispatch_validation_if_needed() {
 
 mark_validation_failed() {
   local reason="$1"
-  jq --arg reason "${reason}" '.status = "validation-failed" | .validation_failure_reason = $reason' \
+  jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
   set_tracking_phase_label "ai:validation-failed"
