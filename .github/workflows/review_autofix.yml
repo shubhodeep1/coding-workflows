@@ -515,12 +515,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Count consecutive [ai-autofix] commits from HEAD backwards.
+          # Count consecutive [ai-autofix] commits from HEAD backwards,
+          # skipping [ai-merge-resolve] commits so conflict-only commits do
+          # not reset the autofix iteration guard.
           autofix_count=0
+          offset=0
           while true; do
-            msg="$(git log -1 --format='%s' "HEAD~${autofix_count}" 2>/dev/null || true)"
+            msg="$(git log -1 --format='%s' "HEAD~${offset}" 2>/dev/null || true)"
             if echo "${msg}" | grep -q '^\[ai-autofix\]'; then
               autofix_count=$((autofix_count + 1))
+              offset=$((offset + 1))
+            elif echo "${msg}" | grep -q '^\[ai-merge-resolve\]'; then
+              offset=$((offset + 1))
             else
               break
             fi
