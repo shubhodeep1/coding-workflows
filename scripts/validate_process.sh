@@ -31,6 +31,10 @@ fi
 MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.3-codex}"
 MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-xhigh}"
 VALIDATION_TIMEOUT="${VALIDATION_TIMEOUT:-15}"
+if ! [[ "${VALIDATION_TIMEOUT}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_TIMEOUT}" -le 0 ]; then
+  echo "VALIDATION_TIMEOUT must be a positive integer (got: ${VALIDATION_TIMEOUT})" >&2
+  exit 1
+fi
 TOOL_CALL_BUDGET_VALIDATE="${TOOL_CALL_BUDGET_VALIDATE:-60}"
 VALIDATION_COMPOSE_FILE="${VALIDATION_COMPOSE_FILE:-docker-compose.yml}"
 VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-test-user}"
@@ -208,15 +212,18 @@ cleaned = re.sub(r"```(?:json)?\s*", "", raw)
 cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
 
 decoder = json.JSONDecoder()
-for index, ch in enumerate(cleaned):
-    if ch != "{":
-        continue
+pos = 0
+while pos < len(cleaned):
+    start = cleaned.find("{", pos)
+    if start == -1:
+        break
     try:
-        parsed, _ = decoder.raw_decode(cleaned[index:])
+        parsed, end = decoder.raw_decode(cleaned[start:])
         if isinstance(parsed, dict) and required_key in parsed:
             candidates.append(parsed)
+        pos = start + end
     except json.JSONDecodeError:
-        pass
+        pos = start + 1
 
 if not candidates:
     print(f"No JSON object with key '{required_key}' found", file=sys.stderr)
@@ -408,6 +415,10 @@ if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
   echo "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." >&2
   exit 1
 fi
+if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then
+  echo "Refusing to delete non-directory 'validation' path." >&2
+  exit 1
+fi
 rm -rf validation
 mkdir -p validation/logs
 touch validation/.ai-validation-owned
@@ -496,10 +507,10 @@ set -e
 
 tail -n 200 "${VALIDATION_LOG_FILE}" > "${VALIDATION_LOG_TAIL_FILE}" 2>/dev/null || true
 
-if [ "${VALIDATION_EXIT}" -eq 124 ] || [ "${VALIDATION_EXIT}" -eq 143 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
+if [ "${VALIDATION_EXIT}" -eq 124 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
   timeout_test="validation-timeout"
   timeout_error="Validation timed out after ${VALIDATION_TIMEOUT} minute(s)"
-  if [ "${VALIDATION_EXIT}" -eq 143 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
+  if [ "${VALIDATION_EXIT}" -eq 137 ]; then
     timeout_test="validation-timeout-signal"
     timeout_error="Validation likely timed out and was terminated (exit code ${VALIDATION_EXIT}) after ${VALIDATION_TIMEOUT} minute(s)"
   fi
