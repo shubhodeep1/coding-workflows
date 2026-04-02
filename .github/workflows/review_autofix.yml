@@ -52,6 +52,12 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v5
         with:
+          # Use the PR head SHA instead of the default merge ref
+          # (refs/pull/<number>/merge). When the PR has merge conflicts,
+          # the merge ref may not exist, causing checkout to fail and
+          # preventing the entire workflow — including conflict resolution
+          # — from running.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
 
@@ -2147,7 +2153,12 @@ jobs:
 
 
       - name: Detect merge conflicts
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true'
+        # Run conflict detection regardless of max_iterations_reached or
+        # did_commit — merge conflicts are independent of the autofix cycle.
+        # When did_commit is true the autofix push already happened and HEAD
+        # is up to date, so the merge-base check is still valid.  Actual
+        # resolution is gated separately below.
+        if: success() && env.CAN_PUSH == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -2186,7 +2197,11 @@ jobs:
           fi
 
       - name: Resolve merge conflicts with Codex
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true'
+        # Run conflict resolution even when max_iterations_reached — conflict
+        # resolution is not an autofix iteration and should not be blocked by
+        # the iteration cap.  Skip when did_commit is true to avoid racing
+        # with the next synchronize run triggered by the autofix push.
+        if: success() && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true'
         run: |
           set -euo pipefail
 
@@ -2275,7 +2290,7 @@ jobs:
             git rm -r --cached node_modules 2>/dev/null || true
             git add -u -- ':!node_modules'
             git ls-files --others --exclude-standard -z -- ':!node_modules' | xargs -0 -r git add --
-            git commit -m "[ai-autofix] resolve merge conflicts"
+            git commit -m "[ai-merge-resolve] resolve merge conflicts"
             git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}
             git push origin "HEAD:${TARGET_BRANCH}"
             echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
