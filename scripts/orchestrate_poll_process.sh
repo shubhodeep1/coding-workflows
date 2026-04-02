@@ -188,7 +188,7 @@ mark_validation_complete() {
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
   set_tracking_phase_label "ai:validated"
-  gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
+  gh_retry gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
     --comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle})." || true
   tg_notify "✅ Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
 }
@@ -243,6 +243,7 @@ sync_validation_fix_issues_from_comments() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   fi
 
+  set_tracking_phase_label "ai:validation-fixing"
   post_state_comment
 }
 
