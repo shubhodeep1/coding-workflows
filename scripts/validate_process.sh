@@ -57,7 +57,6 @@ CONTAINER_LOG_TAIL_FILE="${RUNTIME_DIR}/container_logs_tail.txt"
 NULL_JSON_FILE="${RUNTIME_DIR}/null.json"
 
 mkdir -p "${RUNTIME_DIR}"
-mkdir -p validation/logs
 printf 'null\n' > "${NULL_JSON_FILE}"
 
 export VALIDATION_TEST_USERNAME
@@ -522,7 +521,7 @@ FAILED_TESTS="$(jq -r '.failed_tests // 0' "${VALIDATION_RESULT_FILE}")"
 DURATION_SECONDS="$(jq -r '.duration_seconds // 0' "${VALIDATION_RESULT_FILE}")"
 FIRST_FAILURE="$(jq -r '.failures[0].error // ""' "${VALIDATION_RESULT_FILE}")"
 
-if [ "${RESULT_KIND}" = "pass" ]; then
+if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ]; then
   summary_text="Runtime validation passed (${PASSED_TESTS}/${TOTAL_TESTS} tests, ${DURATION_SECONDS}s)."
   post_tracking_comment "## ✅ Runtime validation passed\n\n- Passed tests: ${PASSED_TESTS}/${TOTAL_TESTS}\n- Duration: ${DURATION_SECONDS}s"
   set_tracking_phase_label "ai:validated"
