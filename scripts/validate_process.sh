@@ -18,6 +18,7 @@ set -euo pipefail
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+[[ "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]] || { echo "GITHUB_REPOSITORY must be in owner/repo format" >&2; exit 1; }
 
 TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
 TRACKING_ISSUE_NUM=0
@@ -200,8 +201,8 @@ if trimmed:
     except json.JSONDecodeError:
         pass
 
-cleaned = re.sub(r"```(?:json)?\\s*", "", raw)
-cleaned = re.sub(r"```\\s*$", "", cleaned, flags=re.MULTILINE)
+cleaned = re.sub(r"```(?:json)?\s*", "", raw)
+cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
 
 brace_depth = 0
 start = None
@@ -283,8 +284,8 @@ write_metadata_file()
     --arg generated_validate_file "validation/validate.sh" \
     --arg generated_compose_file "validation/docker-compose.test.yml" \
     --argjson created_fix_issues "${CREATED_FIX_ISSUES_JSON}" \
-    --argfile validation_result "${validation_file}" \
-    --argfile diagnosis "${diagnosis_file}" \
+    --slurpfile validation_result "${validation_file}" \
+    --slurpfile diagnosis "${diagnosis_file}" \
     '{
       status: $status,
       summary: $summary,
@@ -294,8 +295,8 @@ write_metadata_file()
       compose_file: $compose_file,
       generated_at_utc: (now | todateiso8601),
       created_fix_issues: $created_fix_issues,
-      validation_result: $validation_result,
-      diagnosis: $diagnosis,
+      validation_result: ($validation_result[0] // null),
+      diagnosis: ($diagnosis[0] // null),
       artifact_paths: {
         runtime_dir: $runtime_dir,
         validation_log: $validation_log_file,
