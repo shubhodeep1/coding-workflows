@@ -112,6 +112,14 @@ jobs:
             chmod +x "scripts/${f}"
           done
 
+          if gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=stable" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
+            mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
+          else
+            rm -f "scripts/codex_model_catalog.json.tmp"
+            echo "Model catalog not on stable tag yet; using local copy."
+          fi
+
           for pf in mode-validate-generate.txt mode-validate-diagnose.txt; do
             fetch_from_stable_or_local "prompts/${pf}" "prompts/${pf}"
           done
