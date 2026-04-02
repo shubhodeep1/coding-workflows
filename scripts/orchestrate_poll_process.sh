@@ -286,7 +286,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 
-  if [ "${ENABLE_VALIDATION}" = "true" ] && { [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; }; then
+  if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
     sync_validation_fix_issues_from_comments "${COMMENTS}"
     PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
   fi
@@ -360,7 +360,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       continue
     fi
 
-    tg_notify "🔁 Re-dispatching validation for project #${TRACKING_NUM} (cycle ${NEXT_VALIDATION_CYCLE}) after fix-up issues merged."
+    tg_notify "🔁 Attempting to re-dispatch validation for project #${TRACKING_NUM} (cycle ${NEXT_VALIDATION_CYCLE}) after fix-up issues merged."
 
     jq --argjson cycle "${NEXT_VALIDATION_CYCLE}" \
       '.status = "validating" |
