@@ -340,11 +340,15 @@ trap cleanup_runtime_containers EXIT
 # Setup Codex + Serena
 # ---------------------------------------------------------------
 mkdir -p ~/.codex
+CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
 {
   echo 'web_search = "live"'
   echo 'model_provider = "openrouter"'
   echo "model = \"${MODEL_EDITOR}\""
   echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+  if [ -f "${CATALOG_PATH}" ]; then
+    echo "model_catalog_json = \"${CATALOG_PATH}\""
+  fi
   echo
   echo '[model_providers.openrouter]'
   echo 'name = "OpenRouter"'
