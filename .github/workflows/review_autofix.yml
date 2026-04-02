@@ -131,6 +131,7 @@ jobs:
           mkdir -p "${PREVIOUS_REVIEWS_DIR}" "${RUNTIME_CONTEXT_DIR}"
 
           {
+            echo "JOB_START_EPOCH=$(date +%s)"
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR}"
             echo "RUNTIME_CONTEXT_DIR=${RUNTIME_CONTEXT_DIR}"
@@ -1756,15 +1757,113 @@ jobs:
 
           rm -f "${EDITOR_SUMMARY_FILE}"
 
-          # No per-attempt heartbeat for the editor: GPT with high thinking
-          # can legitimately go quiet for extended periods during reasoning.
-          # The job-level timeout-minutes (180) is the safety net.
+          # ── Adaptive progress-aware watchdog for the editor ──────────
+          # Unlike the reviewer heartbeat (15 min idle kill), the editor uses
+          # a longer idle threshold (20 min) because high-thinking models can
+          # legitimately go quiet during extended reasoning.  Before killing
+          # an idle process the watchdog probes /proc/<pid>/fd for active
+          # network sockets — if the process still has open connections it is
+          # likely waiting on an API response, so the idle window is extended.
+          #
+          # The retry loop is budget-aware: before each attempt it calculates
+          # the remaining time until the job deadline and skips attempts that
+          # cannot complete within the remaining budget.
+          # ──────────────────────────────────────────────────────────────────
+
+          EDITOR_IDLE_TIMEOUT="${EDITOR_IDLE_TIMEOUT:-1200}"   # 20 min
+          EDITOR_MAX_WALL="${EDITOR_MAX_WALL:-3300}"            # 55 min
+          EDITOR_MIN_ATTEMPT_SECS="${EDITOR_MIN_ATTEMPT_SECS:-300}"  # 5 min minimum
+          JOB_TIMEOUT_SECS=$((180 * 60))
+          JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 
           attempt=1
           while [ "${attempt}" -le 3 ]; do
+            now_epoch="$(date +%s)"
+            remaining=$(( JOB_DEADLINE - now_epoch ))
+            if [ "${remaining}" -lt "${EDITOR_MIN_ATTEMPT_SECS}" ]; then
+              echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before job deadline (need ${EDITOR_MIN_ATTEMPT_SECS}s minimum)."
+              break
+            fi
+            # Cap this attempt's wall time to the lesser of EDITOR_MAX_WALL
+            # and the remaining budget minus a 2-min buffer for cleanup steps.
+            attempt_wall="${EDITOR_MAX_WALL}"
+            budget_cap=$(( remaining - 120 ))
+            if [ "${budget_cap}" -lt "${attempt_wall}" ]; then
+              attempt_wall="${budget_cap}"
+              echo "Editor attempt ${attempt}: capping wall time to ${attempt_wall}s (budget-limited, ${remaining}s remain)."
+            fi
+
             tmp_output="$(mktemp)"
             tmp_err="$(mktemp)"
-            if timeout 3300 codex exec --model "${MODEL_EDITOR}" --full-auto < "${EDITOR_PROMPT_FILE}" > "${tmp_output}" 2>"${tmp_err}"; then
+
+            # ── Heartbeat file for progress tracking ──
+            hb_file="$(mktemp /tmp/heartbeat_editor.XXXXXX)"
+            printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
+            editor_start="$(date +%s)"
+            codex_pid_file="$(mktemp /tmp/codex_pid_editor.XXXXXX)"
+
+            # ── Background watchdog: heartbeat + network-activity aware ──
+            (
+              while true; do
+                sleep 15
+                wd_now="$(date +%s)"
+                last="$(cat "${hb_file}" 2>/dev/null || echo "${wd_now}")"
+                if ! [[ "${last}" =~ ^[0-9]+$ ]]; then last="${wd_now}"; fi
+                idle_secs=$(( wd_now - last ))
+                wall_secs=$(( wd_now - editor_start ))
+
+                # Hard wall-time limit (budget-aware)
+                if [ "${wall_secs}" -ge "${attempt_wall}" ]; then
+                  echo "Editor killed — wall time ${attempt_wall}s exceeded (attempt ${attempt})." >&2
+                  cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+                  if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+                  rm -f "${hb_file}"
+                  exit 143
+                fi
+
+                # Idle check with network-activity probe
+                if [ "${idle_secs}" -ge "${EDITOR_IDLE_TIMEOUT}" ]; then
+                  cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+                  net_active=false
+                  if [ -n "${cpid}" ] && [ -d "/proc/${cpid}/fd" ]; then
+                    sock_count="$(find "/proc/${cpid}/fd" -lname 'socket:*' 2>/dev/null | head -20 | wc -l || echo 0)"
+                    if [ "${sock_count}" -gt 0 ]; then
+                      net_active=true
+                    fi
+                  fi
+                  if [ "${net_active}" = true ]; then
+                    echo "Editor idle for ${idle_secs}s but has ${sock_count} active socket(s) — likely waiting on API, extending." >&2
+                    # Reset heartbeat to grant another idle window
+                    printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
+                  else
+                    echo "Editor killed — no output for ${idle_secs}s and no active network connections (idle limit: ${EDITOR_IDLE_TIMEOUT}s, attempt ${attempt})." >&2
+                    if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+                    rm -f "${hb_file}"
+                    exit 142
+                  fi
+                fi
+              done
+            ) &
+            wd_pid=$!
+
+            # Run codex with stderr-based heartbeat tracking
+            (
+              exec codex exec --model "${MODEL_EDITOR}" --full-auto < "${EDITOR_PROMPT_FILE}"
+            ) > "${tmp_output}" 2> >(
+              while IFS= read -r line || [ -n "$line" ]; do
+                printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
+                printf '%s\n' "$line"
+              done > "${tmp_err}"
+            ) &
+            codex_bg_pid=$!
+            echo "${codex_bg_pid}" > "${codex_pid_file}"
+            cmd_rc=0
+            wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
+
+            kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
+            rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
+
+            if [ "${cmd_rc}" -eq 0 ]; then
               cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
               if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints" "${tmp_output}"; then
                 reviewer_validation_ok=true
