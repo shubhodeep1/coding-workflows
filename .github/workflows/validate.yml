@@ -1,0 +1,241 @@
+---
+name: AI Validate (Reusable)
+
+"on":
+  workflow_call:
+    inputs:
+      tracking_issue:
+        description: "Tracking issue number (0 for standalone validation run)"
+        required: false
+        type: string
+        default: "0"
+      compose_file:
+        description: "Fallback compose file path"
+        required: false
+        type: string
+        default: "docker-compose.yml"
+      validation_timeout:
+        description: "Validation timeout in minutes"
+        required: false
+        type: string
+        default: "15"
+    secrets:
+      GH_PAT:
+        required: true
+      OPENROUTER_API_KEY:
+        required: true
+      TG_BOT_SECRET:
+        required: false
+    outputs:
+      status:
+        description: "Validation status (pass|fail|error)"
+        value: ${{ jobs.validate.outputs.status }}
+      summary:
+        description: "Validation summary"
+        value: ${{ jobs.validate.outputs.summary }}
+      failure_summary:
+        description: "Failure summary for poller consumption"
+        value: ${{ jobs.validate.outputs.failure_summary }}
+      status_file:
+        description: "Path to validation_status.json"
+        value: ${{ jobs.validate.outputs.status_file }}
+      metadata_file:
+        description: "Path to validation_metadata.json"
+        value: ${{ jobs.validate.outputs.metadata_file }}
+
+env:
+  MODEL_EDITOR: ${{ vars.WORKFLOW_VALIDATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
+  MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_VALIDATE || 'xhigh' }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    outputs:
+      status: ${{ steps.collect_status.outputs.status }}
+      summary: ${{ steps.collect_status.outputs.summary }}
+      failure_summary: ${{ steps.collect_status.outputs.failure_summary }}
+      status_file: ${{ steps.collect_status.outputs.status_file }}
+      metadata_file: ${{ steps.collect_status.outputs.metadata_file }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup shared runtime
+        id: runtime
+        uses: ./.github/actions/setup-runtime
+        with:
+          runtime_prefix: codex-validate
+          required_env_csv: OPENROUTER_API_KEY
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+      - name: Install uv for Serena
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ vars.UV_VERSION || 'latest' }}
+
+      - name: Fetch workflow support files
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          wf_source="${{ github.repository_owner }}/coding-workflows"
+          mkdir -p scripts prompts .github/ai
+
+          fetch_from_stable_or_local() {
+            local repo_path="$1"
+            local target_path="$2"
+            local tmp_path="${target_path}.tmp"
+            if gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${repo_path}?ref=stable" > "${tmp_path}" 2>/dev/null; then
+              mv "${tmp_path}" "${target_path}"
+              return 0
+            fi
+
+            rm -f "${tmp_path}"
+            if [ -f "${target_path}" ]; then
+              echo "Using local fallback for ${target_path} (not found on stable: ${repo_path})"
+              return 0
+            fi
+
+            echo "Missing required file: ${repo_path} (stable) and local fallback ${target_path}" >&2
+            exit 1
+          }
+
+          for f in setup_serena.sh ai_labels.py validate_process.sh; do
+            fetch_from_stable_or_local "scripts/${f}" "scripts/${f}"
+            chmod +x "scripts/${f}"
+          done
+
+          for pf in mode-validate-generate.txt mode-validate-diagnose.txt; do
+            fetch_from_stable_or_local "prompts/${pf}" "prompts/${pf}"
+          done
+
+          for f in codex_system_instructions.md ai_pipeline.md; do
+            if [ ! -f "${f}" ]; then
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
+            fi
+          done
+
+          if [ ! -f .github/ai/label_contract.v1.json ]; then
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/.github/ai/label_contract.v1.json?ref=stable" > .github/ai/label_contract.v1.json 2>/dev/null || true
+          fi
+
+      - name: Run validation process
+        id: validate_run
+        continue-on-error: true
+        env:
+          RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TRACKING_ISSUE: ${{ inputs.tracking_issue }}
+          VALIDATION_TIMEOUT: ${{ inputs.validation_timeout }}
+          VALIDATION_COMPOSE_FILE: ${{ inputs.compose_file }}
+          TOOL_CALL_BUDGET_VALIDATE: ${{ vars.TOOL_CALL_BUDGET_VALIDATE || '60' }}
+          MODEL_EDITOR: ${{ env.MODEL_EDITOR }}
+          MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
+          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
+          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
+        run: |
+          set -euo pipefail
+          bash scripts/validate_process.sh
+
+      - name: Collect validation status
+        id: collect_status
+        if: always()
+        env:
+          RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
+        run: |
+          set -euo pipefail
+
+          STATUS_FILE_PATH="${RUNTIME_DIR}/validation_status.json"
+          METADATA_FILE_PATH="${RUNTIME_DIR}/validation_metadata.json"
+
+          if [ ! -f "${STATUS_FILE_PATH}" ]; then
+            jq -n \
+              --arg status "error" \
+              --arg summary "Validation process did not produce validation_status.json." \
+              --arg failure_summary "Missing status artifact. Check validate_process.sh output and uploaded artifacts." \
+              '{
+                status: $status,
+                summary: $summary,
+                failure_summary: $failure_summary
+              }' > "${STATUS_FILE_PATH}"
+          fi
+
+          status="$(jq -r '.status // "error"' "${STATUS_FILE_PATH}")"
+          summary="$(jq -r '.summary // ""' "${STATUS_FILE_PATH}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
+          failure_summary="$(jq -r '.failure_summary // ""' "${STATUS_FILE_PATH}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
+
+          if [ ! -f "${METADATA_FILE_PATH}" ]; then
+            jq -n \
+              --arg status "${status}" \
+              --arg summary "${summary}" \
+              --arg failure_summary "${failure_summary}" \
+              '{
+                status: $status,
+                summary: $summary,
+                failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
+                generated_at_utc: (now | todateiso8601)
+              }' > "${METADATA_FILE_PATH}"
+          fi
+
+          {
+            echo "status=${status}"
+            echo "summary=${summary}"
+            echo "failure_summary=${failure_summary}"
+            echo "status_file=${STATUS_FILE_PATH}"
+            echo "metadata_file=${METADATA_FILE_PATH}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ steps.runtime.outputs.runtime_dir }}/
+            validation/
+
+      - name: Write run summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## AI Validate Summary"
+            echo "| Key | Value |"
+            echo "|-----|-------|"
+            echo "| Model | \`${MODEL_EDITOR}\` |"
+            echo "| Reasoning effort | \`${MODEL_REASONING_EFFORT}\` |"
+            echo "| Tracking issue | \`${{ inputs.tracking_issue }}\` |"
+            echo "| Compose fallback | \`${{ inputs.compose_file }}\` |"
+            echo "| Timeout (minutes) | \`${{ inputs.validation_timeout }}\` |"
+            echo "| Status | \`${{ steps.collect_status.outputs.status }}\` |"
+            echo "| Summary | ${{ steps.collect_status.outputs.summary }} |"
+            if [ -n "${{ steps.collect_status.outputs.failure_summary }}" ]; then
+              echo "| Failure summary | ${{ steps.collect_status.outputs.failure_summary }} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce validation outcome
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.collect_status.outputs.status }}" != "pass" ]; then
+            echo "Validation did not pass."
+            exit 1
+          fi

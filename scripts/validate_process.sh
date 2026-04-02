@@ -55,6 +55,8 @@ STATUS_FILE="${RUNTIME_DIR}/validation_status.json"
 VALIDATION_LOG_TAIL_FILE="${RUNTIME_DIR}/validation_log_tail.txt"
 CONTAINER_LOG_TAIL_FILE="${RUNTIME_DIR}/container_logs_tail.txt"
 NULL_JSON_FILE="${RUNTIME_DIR}/null.json"
+PRE_GENERATE_STATUS_FILE="${RUNTIME_DIR}/pre_generate_git_status.txt"
+POST_GENERATE_STATUS_FILE="${RUNTIME_DIR}/post_generate_git_status.txt"
 
 mkdir -p "${RUNTIME_DIR}"
 printf 'null\n' > "${NULL_JSON_FILE}"
@@ -410,6 +412,10 @@ rm -rf validation
 mkdir -p validation/logs
 touch validation/.ai-validation-owned
 
+if command -v git >/dev/null 2>&1; then
+  git status --porcelain --untracked-files=all -- . ':!validation/**' | sort > "${PRE_GENERATE_STATUS_FILE}" 2>/dev/null || true
+fi
+
 {
   cat "${STATIC_CONTEXT_FILE}"
   echo
@@ -459,6 +465,23 @@ if [ "${GENERATE_SUCCESS}" != "true" ]; then
   exit 1
 fi
 
+if command -v git >/dev/null 2>&1; then
+  git status --porcelain --untracked-files=all -- . ':!validation/**' | sort > "${POST_GENERATE_STATUS_FILE}" 2>/dev/null || true
+  NON_VALIDATION_CHANGES=""
+  if [ -f "${PRE_GENERATE_STATUS_FILE}" ] && [ -f "${POST_GENERATE_STATUS_FILE}" ] && ! cmp -s "${PRE_GENERATE_STATUS_FILE}" "${POST_GENERATE_STATUS_FILE}"; then
+    NON_VALIDATION_CHANGES="$(diff -u "${PRE_GENERATE_STATUS_FILE}" "${POST_GENERATE_STATUS_FILE}" || true)"
+  fi
+
+  if [ -n "${NON_VALIDATION_CHANGES}" ]; then
+    local_failure_summary="Codex modified files outside validation/ during harness generation."
+    post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nUnexpected changes:\n\n\`\`\`\n${NON_VALIDATION_CHANGES}\n\`\`\`"
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "error" "Validation harness generation violated path constraints" "${local_failure_summary}"
+    tg_notify "❌ Validation harness generation touched non-validation files for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}."
+    exit 1
+  fi
+fi
+
 find validation -type f -name '*.sh' -exec chmod +x {} +
 
 
@@ -467,15 +490,23 @@ find validation -type f -name '*.sh' -exec chmod +x {} +
 # ---------------------------------------------------------------
 VALIDATION_EXIT=0
 set +e
-timeout "${VALIDATION_TIMEOUT}m" bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1
+timeout -k 30s "${VALIDATION_TIMEOUT}m" bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1
 VALIDATION_EXIT=$?
 set -e
 
 tail -n 200 "${VALIDATION_LOG_FILE}" > "${VALIDATION_LOG_TAIL_FILE}" 2>/dev/null || true
 
-if [ "${VALIDATION_EXIT}" -eq 124 ]; then
+if [ "${VALIDATION_EXIT}" -eq 124 ] || [ "${VALIDATION_EXIT}" -eq 143 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
+  timeout_test="validation-timeout"
+  timeout_error="Validation timed out after ${VALIDATION_TIMEOUT} minute(s)"
+  if [ "${VALIDATION_EXIT}" -eq 143 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
+    timeout_test="validation-timeout-signal"
+    timeout_error="Validation likely timed out and was terminated (exit code ${VALIDATION_EXIT}) after ${VALIDATION_TIMEOUT} minute(s)"
+  fi
+
   jq -n \
-    --arg timeout_minutes "${VALIDATION_TIMEOUT}" \
+    --arg timeout_test "${timeout_test}" \
+    --arg timeout_error "${timeout_error}" \
     --arg duration_seconds "$((VALIDATION_TIMEOUT * 60))" \
     '{
       result: "fail",
@@ -485,8 +516,8 @@ if [ "${VALIDATION_EXIT}" -eq 124 ]; then
       failed_tests: 1,
       failures: [
         {
-          test: "validation-timeout",
-          error: ("Validation timed out after " + $timeout_minutes + " minute(s)"),
+          test: $timeout_test,
+          error: $timeout_error,
           log_tail: "See validation.log tail in artifacts"
         }
       ],
@@ -521,7 +552,50 @@ FAILED_TESTS="$(jq -r '.failed_tests // 0' "${VALIDATION_RESULT_FILE}")"
 DURATION_SECONDS="$(jq -r '.duration_seconds // 0' "${VALIDATION_RESULT_FILE}")"
 FIRST_FAILURE="$(jq -r '.failures[0].error // ""' "${VALIDATION_RESULT_FILE}")"
 
+PASS_SCHEMA_OK="false"
 if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ]; then
+  if jq -e '
+    (.total_tests | type == "number") and
+    (.passed_tests | type == "number") and
+    (.failed_tests | type == "number") and
+    (.duration_seconds | type == "number") and
+    (.failures | type == "array") and
+    (.failed_tests == 0) and
+    (.total_tests >= 0) and
+    (.passed_tests >= 0) and
+    (.passed_tests <= .total_tests) and
+    (.failed_tests <= .total_tests) and
+    ((.passed_tests + .failed_tests) == .total_tests)
+  ' "${VALIDATION_RESULT_FILE}" >/dev/null 2>&1; then
+    PASS_SCHEMA_OK="true"
+  else
+    jq -n \
+      --arg reason "Pass payload schema consistency check failed" \
+      '{
+        result: "fail",
+        phase: "result_schema_error",
+        total_tests: 0,
+        passed_tests: 0,
+        failed_tests: 1,
+        failures: [
+          {
+            test: "validation-result-schema",
+            error: $reason,
+            log_tail: "See validation.log in artifacts"
+          }
+        ],
+        duration_seconds: 0
+      }' > "${VALIDATION_RESULT_FILE}"
+    RESULT_KIND="fail"
+    TOTAL_TESTS="0"
+    PASSED_TESTS="0"
+    FAILED_TESTS="1"
+    DURATION_SECONDS="0"
+    FIRST_FAILURE="Pass payload schema consistency check failed"
+  fi
+fi
+
+if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ] && [ "${PASS_SCHEMA_OK}" = "true" ]; then
   summary_text="Runtime validation passed (${PASSED_TESTS}/${TOTAL_TESTS} tests, ${DURATION_SECONDS}s)."
   post_tracking_comment "## ✅ Runtime validation passed\n\n- Passed tests: ${PASSED_TESTS}/${TOTAL_TESTS}\n- Duration: ${DURATION_SECONDS}s"
   set_tracking_phase_label "ai:validated"
