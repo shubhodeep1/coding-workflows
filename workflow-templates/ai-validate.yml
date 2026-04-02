@@ -1,0 +1,31 @@
+name: AI Validate
+on:
+  workflow_dispatch:
+    inputs:
+      tracking_issue:
+        description: Tracking issue number
+        required: false
+        type: string
+        default: "0"
+      compose_file:
+        description: Compose file path fallback
+        required: false
+        type: string
+        default: "docker-compose.yml"
+      validation_timeout:
+        description: Validation timeout in minutes
+        required: false
+        type: string
+        default: "15"
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+jobs:
+  validate:
+    uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@stable
+    with:
+      tracking_issue: ${{ inputs.tracking_issue || '0' }}
+      compose_file: ${{ inputs.compose_file || 'docker-compose.yml' }}
+      validation_timeout: ${{ inputs.validation_timeout || '15' }}
+    secrets: inherit
