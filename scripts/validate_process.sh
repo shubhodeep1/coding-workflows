@@ -340,7 +340,7 @@ trap cleanup_runtime_containers EXIT
 # Setup Codex + Serena
 # ---------------------------------------------------------------
 mkdir -p ~/.codex
-CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
+CATALOG_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_model_catalog.json"
 {
   echo 'web_search = "live"'
   echo 'model_provider = "openrouter"'
@@ -348,6 +348,8 @@ CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
   echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
   if [ -f "${CATALOG_PATH}" ]; then
     echo "model_catalog_json = \"${CATALOG_PATH}\""
+  else
+    echo "::warning::Codex model catalog not found at ${CATALOG_PATH}" >&2
   fi
   echo
   echo '[model_providers.openrouter]'
