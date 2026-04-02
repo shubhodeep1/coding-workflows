@@ -44,6 +44,209 @@ gh_retry() {
   return 1
 }
 
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|True|yes|YES|Yes|on|ON|On)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ENABLE_VALIDATION_RAW="${ENABLE_VALIDATION:-true}"
+ENABLE_VALIDATION="false"
+if is_truthy "${ENABLE_VALIDATION_RAW}"; then
+  ENABLE_VALIDATION="true"
+fi
+
+MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
+if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
+  echo "::warning::MAX_VALIDATE_CYCLES must be a positive integer; defaulting to 3"
+  MAX_VALIDATE_CYCLES="3"
+fi
+
+post_tracking_comment() {
+  local comment_body="$1"
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+    -f body="${comment_body}" >/dev/null || true
+}
+
+post_state_comment() {
+  local state_comment
+  state_comment="<!-- ORCHESTRATOR_STATE_V1
+$(cat "${STATE_FILE}")
+ORCHESTRATOR_STATE_V1 -->"
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+    -f body="${state_comment}" >/dev/null || true
+}
+
+ensure_label_exists() {
+  local label_name="$1"
+  local contract_file=".github/ai/label_contract.v1.json"
+  local color="1d76db"
+  local description="AI workflow label"
+
+  if [ -f "${contract_file}" ]; then
+    color="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].color // "1d76db"' "${contract_file}" 2>/dev/null || echo "1d76db")"
+    description="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].description // "AI workflow label"' "${contract_file}" 2>/dev/null || echo "AI workflow label")"
+  fi
+
+  gh_retry gh label create "${label_name}" \
+    --repo "${GITHUB_REPOSITORY}" \
+    --color "${color}" \
+    --description "${description}" >/dev/null || true
+}
+
+set_tracking_phase_label() {
+  local phase_label="$1"
+  local contract_file=".github/ai/label_contract.v1.json"
+
+  ensure_label_exists "${phase_label}"
+
+  if [ -f "${contract_file}" ]; then
+    local phase_changes
+    if phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>/dev/null)"; then
+      while IFS= read -r remove_label; do
+        [ -n "${remove_label}" ] || continue
+        gh_retry gh issue edit "${TRACKING_NUM}" \
+          --repo "${GITHUB_REPOSITORY}" \
+          --remove-label "${remove_label}" >/dev/null || true
+      done < <(echo "${phase_changes}" | jq -r '.remove[]?')
+
+      while IFS= read -r add_label; do
+        [ -n "${add_label}" ] || continue
+        ensure_label_exists "${add_label}"
+        gh_retry gh issue edit "${TRACKING_NUM}" \
+          --repo "${GITHUB_REPOSITORY}" \
+          --add-label "${add_label}" >/dev/null || true
+      done < <(echo "${phase_changes}" | jq -r '.add[]?')
+      return 0
+    fi
+  fi
+
+  gh_retry gh issue edit "${TRACKING_NUM}" \
+    --repo "${GITHUB_REPOSITORY}" \
+    --add-label "${phase_label}" >/dev/null || true
+}
+
+get_issue_labels_json() {
+  local issue_num="$1"
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]'
+}
+
+has_label() {
+  local labels_json="$1"
+  local label="$2"
+  echo "${labels_json}" | jq -e --arg label "${label}" 'index($label) != null' >/dev/null 2>&1
+}
+
+dispatch_validation_workflow() {
+  local validation_cycle="$1"
+  echo "Dispatching ai-validate.yml for tracking #${TRACKING_NUM} (cycle ${validation_cycle})"
+  gh_retry gh workflow run ai-validate.yml \
+    --repo "${GITHUB_REPOSITORY}" \
+    -f tracking_issue="${TRACKING_NUM}" >/dev/null
+}
+
+dispatch_validation_if_needed() {
+  local validation_cycle="$1"
+  local last_dispatch_cycle
+
+  last_dispatch_cycle="$(jq -r '.validation_last_dispatch_cycle // 0' "${STATE_FILE}")"
+  if [ "${last_dispatch_cycle}" = "${validation_cycle}" ]; then
+    echo "Validation workflow already dispatched for cycle ${validation_cycle}."
+    return 0
+  fi
+
+  if dispatch_validation_workflow "${validation_cycle}"; then
+    jq --argjson cycle "${validation_cycle}" '.validation_last_dispatch_cycle = $cycle' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    post_tracking_comment "## 🧪 Runtime validation dispatched\n\n- Cycle: ${validation_cycle}\n- Workflow: \`ai-validate.yml\`"
+    tg_notify "🧪 Validation dispatched for project #${TRACKING_NUM} (cycle ${validation_cycle})."
+    return 0
+  fi
+
+  return 1
+}
+
+mark_validation_failed() {
+  local reason="$1"
+  jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment
+  set_tracking_phase_label "ai:validation-failed"
+  post_tracking_comment "## ❌ Runtime validation failed\n\n${reason}"
+  tg_notify "❌ Project #${TRACKING_NUM} validation failed: ${reason}"
+}
+
+mark_validation_complete() {
+  local validation_cycle="$1"
+  jq --argjson cycle "${validation_cycle}" '.status = "complete" | .validation_completed_cycle = $cycle' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment
+  set_tracking_phase_label "ai:validated"
+  gh_retry gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
+    --comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle})." || true
+  tg_notify "✅ Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
+}
+
+extract_fix_issues_from_comment() {
+  local comment_body="$1"
+  echo "${comment_body}" | sed -n 's/^- #\([0-9][0-9]*\).*$/\1/p' | awk '!seen[$0]++'
+}
+
+sync_validation_fix_issues_from_comments() {
+  local comments_json="$1"
+  local latest_fix_comment_json
+  local fix_comment_id
+  local fix_comment_body
+  local last_fix_comment_id
+  local new_fix_issues_json
+  local new_fix_count
+
+  latest_fix_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select(.body | startswith("## 🧪 Runtime validation found fixable issues"))] | last // empty')"
+  if [ -z "${latest_fix_comment_json}" ]; then
+    return 0
+  fi
+
+  fix_comment_id="$(echo "${latest_fix_comment_json}" | jq -r '.id // 0')"
+  if ! [[ "${fix_comment_id}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+
+  last_fix_comment_id="$(jq -r '.validation_last_fix_comment_id // 0' "${STATE_FILE}")"
+  if ! [[ "${last_fix_comment_id}" =~ ^[0-9]+$ ]]; then
+    last_fix_comment_id="0"
+  fi
+
+  if [ "${fix_comment_id}" -le "${last_fix_comment_id}" ]; then
+    return 0
+  fi
+
+  fix_comment_body="$(echo "${latest_fix_comment_json}" | jq -r '.body // ""')"
+  new_fix_issues_json="$(extract_fix_issues_from_comment "${fix_comment_body}" | jq -R 'select(length > 0) | tonumber' | jq -s '.')"
+  new_fix_count="$(echo "${new_fix_issues_json}" | jq 'length')"
+
+  if [ "${new_fix_count}" -gt 0 ]; then
+    jq --argjson comment_id "${fix_comment_id}" --argjson active_fix_issues "${new_fix_issues_json}" \
+      '.status = "validation-fixing" |
+       .validation_last_fix_comment_id = $comment_id |
+       .validation_active_fix_issues = $active_fix_issues |
+       .validation_seen_fix_issues = ((.validation_seen_fix_issues // []) + $active_fix_issues | unique)' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  else
+    jq --argjson comment_id "${fix_comment_id}" \
+      '.status = "validation-fixing" | .validation_last_fix_comment_id = $comment_id' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  fi
+
+  set_tracking_phase_label "ai:validation-fixing"
+  post_state_comment
+}
+
 # ---------------------------------------------------------------
 # Process each tracking issue
 # ---------------------------------------------------------------
@@ -80,6 +283,96 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+
+  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+
+  if [ "${ENABLE_VALIDATION}" = "true" ]; then
+    sync_validation_fix_issues_from_comments "${COMMENTS}"
+    PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+  fi
+
+  if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
+    VALIDATION_CYCLE="$(jq -r '.validation_cycle // 1' "${STATE_FILE}")"
+    if ! [[ "${VALIDATION_CYCLE}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_CYCLE}" -lt 1 ]; then
+      VALIDATION_CYCLE="1"
+    fi
+
+    if has_label "${TRACKING_LABELS}" "ai:validation-failed"; then
+      mark_validation_failed "Validation workflow reported failure (label ai:validation-failed)."
+      continue
+    fi
+
+    if has_label "${TRACKING_LABELS}" "ai:validated"; then
+      mark_validation_complete "${VALIDATION_CYCLE}"
+      continue
+    fi
+
+    if [ "${PROJECT_STATUS}" = "validating" ]; then
+      if has_label "${TRACKING_LABELS}" "ai:validation-fixing"; then
+        jq '.status = "validation-fixing"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment
+        continue
+      fi
+
+      if ! dispatch_validation_if_needed "${VALIDATION_CYCLE}"; then
+        mark_validation_failed "Unable to dispatch ai-validate.yml for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+      fi
+      continue
+    fi
+
+    ACTIVE_FIX_ISSUES_JSON="$(jq -c '.validation_active_fix_issues // []' "${STATE_FILE}")"
+    ACTIVE_FIX_COUNT="$(echo "${ACTIVE_FIX_ISSUES_JSON}" | jq 'length')"
+
+    if [ "${ACTIVE_FIX_COUNT}" -le 0 ]; then
+      echo "Validation is in fixing state but no active fix issues are tracked yet."
+      continue
+    fi
+
+    FIX_ANY_CLOSED="false"
+    FIX_ALL_MERGED="true"
+    CLOSED_FIX_NUMS=""
+
+    while IFS= read -r fix_num; do
+      [ -n "${fix_num}" ] || continue
+      FIX_LABELS="$(get_issue_labels_json "${fix_num}")"
+      if has_label "${FIX_LABELS}" "ai:closed"; then
+        FIX_ANY_CLOSED="true"
+        CLOSED_FIX_NUMS="${CLOSED_FIX_NUMS} #${fix_num}"
+      fi
+      if ! has_label "${FIX_LABELS}" "ai:merged"; then
+        FIX_ALL_MERGED="false"
+      fi
+    done < <(echo "${ACTIVE_FIX_ISSUES_JSON}" | jq -r '.[]')
+
+    if [ "${FIX_ANY_CLOSED}" = "true" ]; then
+      mark_validation_failed "Validation fix-up issue(s) closed without merge:${CLOSED_FIX_NUMS}"
+      continue
+    fi
+
+    if [ "${FIX_ALL_MERGED}" != "true" ]; then
+      echo "Validation fix-up issues are still in progress."
+      continue
+    fi
+
+    NEXT_VALIDATION_CYCLE=$(( VALIDATION_CYCLE + 1 ))
+    if [ "${NEXT_VALIDATION_CYCLE}" -gt "${MAX_VALIDATE_CYCLES}" ]; then
+      mark_validation_failed "Validation exceeded MAX_VALIDATE_CYCLES=${MAX_VALIDATE_CYCLES} without passing."
+      continue
+    fi
+
+    jq --argjson cycle "${NEXT_VALIDATION_CYCLE}" \
+      '.status = "validating" |
+       .validation_cycle = $cycle |
+       .validation_active_fix_issues = []' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    set_tracking_phase_label "ai:validating"
+
+    if ! dispatch_validation_if_needed "${NEXT_VALIDATION_CYCLE}"; then
+      mark_validation_failed "Unable to dispatch ai-validate.yml for cycle ${NEXT_VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+    fi
+    continue
+  fi
 
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ]; then
     echo "Project already ${PROJECT_STATUS}, skipping."
@@ -555,11 +848,7 @@ ${RB_FIX_DESC}" || true
 
     # Persist updated state if any review-blocked issues were handled
     if [ "${REVIEW_BLOCKED_STATE_CHANGED}" = "true" ]; then
-      STATE_COMMENT="<!-- ORCHESTRATOR_STATE_V1
-$(cat "${STATE_FILE}")
-ORCHESTRATOR_STATE_V1 -->"
-      gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-        -f body="${STATE_COMMENT}" >/dev/null
+      post_state_comment
 
       # Re-check wave status after handling review-blocked issues
       # (some may have been merged or reissued)
@@ -829,22 +1118,43 @@ PRs to revert: ${REVERT_COUNT}"
   # ---------------------------------------------------------------
   case "${JUDGE_STATUS}" in
     complete)
-      echo "Project complete!"
-      # Update state
-      jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      if [ "${ENABLE_VALIDATION}" != "true" ]; then
+        echo "Project complete!"
+        jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment
 
-      # Post final state
-      STATE_COMMENT="<!-- ORCHESTRATOR_STATE_V1
-$(cat "${STATE_FILE}")
-ORCHESTRATOR_STATE_V1 -->"
-      gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-        -f body="${STATE_COMMENT}" >/dev/null
+        gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
+          --comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s)." || true
 
-      # Close tracking issue
-      gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
-        --comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s)." || true
+        tg_notify "✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved."
+        continue
+      fi
 
-      tg_notify "✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved."
+      VALIDATION_CYCLE="$(jq -r '.validation_cycle // 1' "${STATE_FILE}")"
+      if ! [[ "${VALIDATION_CYCLE}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_CYCLE}" -lt 1 ]; then
+        VALIDATION_CYCLE="1"
+      fi
+
+      if [ "${VALIDATION_CYCLE}" -gt "${MAX_VALIDATE_CYCLES}" ]; then
+        mark_validation_failed "Validation cycle ${VALIDATION_CYCLE} exceeds MAX_VALIDATE_CYCLES=${MAX_VALIDATE_CYCLES}."
+        continue
+      fi
+
+      jq --argjson cycle "${VALIDATION_CYCLE}" \
+        '.status = "validating" |
+         .judge_cycle += 1 |
+         .validation_cycle = $cycle |
+         .validation_active_fix_issues = (.validation_active_fix_issues // []) |
+         .validation_seen_fix_issues = (.validation_seen_fix_issues // []) |
+         .validation_last_fix_comment_id = (.validation_last_fix_comment_id // 0) |
+         .validation_last_dispatch_cycle = (.validation_last_dispatch_cycle // 0)' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment
+      set_tracking_phase_label "ai:validating"
+
+      if ! dispatch_validation_if_needed "${VALIDATION_CYCLE}"; then
+        mark_validation_failed "Unable to dispatch ai-validate.yml for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+      fi
       ;;
 
     failed)
@@ -857,11 +1167,7 @@ ORCHESTRATOR_STATE_V1 -->"
         echo "Recovery already attempted. Stopping."
         jq '.status = "failed" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-        STATE_COMMENT="<!-- ORCHESTRATOR_STATE_V1
-$(cat "${STATE_FILE}")
-ORCHESTRATOR_STATE_V1 -->"
-        gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-          -f body="${STATE_COMMENT}" >/dev/null
+        post_state_comment
 
         gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
           -f body="## Project Failed
@@ -949,11 +1255,7 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
       jq '.judge_cycle += 1 | .recovery_attempted = true | .status = "in_progress"' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-      STATE_COMMENT="<!-- ORCHESTRATOR_STATE_V1
-$(cat "${STATE_FILE}")
-ORCHESTRATOR_STATE_V1 -->"
-      gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-        -f body="${STATE_COMMENT}" >/dev/null
+      post_state_comment
 
       tg_notify "🔄 Orchestrator auto-recovery started for #${TRACKING_NUM}: ${NEW_ISSUES_COUNT} fix-up issues, ${REVERT_COUNT} reverts."
       ;;
@@ -1064,11 +1366,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       fi
 
       # Post updated state
-      STATE_COMMENT="<!-- ORCHESTRATOR_STATE_V1
-$(cat "${STATE_FILE}")
-ORCHESTRATOR_STATE_V1 -->"
-      gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-        -f body="${STATE_COMMENT}" >/dev/null
+      post_state_comment
       ;;
 
     *)
