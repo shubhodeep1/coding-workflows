@@ -1393,6 +1393,19 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
           FIX_BODY="$(echo "${fix_issue}" | jq -r '.body')"
           FIX_ID="$(echo "${fix_issue}" | jq -r '.id')"
 
+          # --- Dedup guard: skip if this local ID already has a GitHub issue ---
+          if [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
+            EXISTING_NUM="$(jq -r --arg fix_id "${FIX_ID}" '.issue_number_map[$fix_id] // empty' "${STATE_FILE}")"
+            if [ -n "${EXISTING_NUM}" ]; then
+              EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
+              if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
+                echo "  ${FIX_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate fix-up."
+                continue
+              fi
+              echo "  ${FIX_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new fix-up."
+            fi
+          fi
+
           FULL_FIX_BODY="${FIX_BODY}
 
 ---
@@ -1407,6 +1420,13 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
             --title "${FIX_TITLE}" \
             --body "${FULL_FIX_BODY}")"
           echo "  Created fix-up: ${FIX_URL}"
+
+          # Record in state so subsequent cycles/iterations won't recreate
+          FIX_NEW_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$')"
+          if [ -n "${FIX_NEW_NUM}" ] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
+            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" '.issue_number_map[$fix_id] = $fix_new_num' \
+              "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          fi
         done
       fi
 
@@ -1430,6 +1450,19 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
           NEW_BODY="$(echo "${new_issue}" | jq -r '.body')"
           NEW_ID="$(echo "${new_issue}" | jq -r '.id')"
 
+          # --- Dedup guard: skip if this local ID already has a GitHub issue ---
+          if [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
+            EXISTING_NUM="$(jq -r --arg new_id "${NEW_ID}" '.issue_number_map[$new_id] // empty' "${STATE_FILE}")"
+            if [ -n "${EXISTING_NUM}" ]; then
+              EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
+              if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
+                echo "  ${NEW_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate addition."
+                continue
+              fi
+              echo "  ${NEW_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new addition."
+            fi
+          fi
+
           FULL_NEW_BODY="${NEW_BODY}
 
 ---
@@ -1444,6 +1477,13 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
             --title "${NEW_TITLE}" \
             --body "${FULL_NEW_BODY}")"
           echo "  Created: ${NEW_URL}"
+
+          # Record in state so subsequent cycles/iterations won't recreate
+          ADD_NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
+          if [ -n "${ADD_NEW_NUM}" ] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
+            jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" '.issue_number_map[$new_id] = $add_new_num' \
+              "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          fi
         done
       fi
 
