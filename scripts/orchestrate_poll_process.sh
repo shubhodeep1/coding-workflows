@@ -1238,12 +1238,12 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
 
           # --- Dedup guard: skip if this local ID already has a GitHub issue ---
           if [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
-            EXISTING_NUM="$(jq -r ".issue_number_map[\"${FIX_ID}\"] // empty" "${STATE_FILE}")"
+            EXISTING_NUM="$(jq -r --arg fix_id "${FIX_ID}" '.issue_number_map[$fix_id] // empty' "${STATE_FILE}")"
             if [ -n "${EXISTING_NUM}" ]; then
               echo "  ${FIX_ID}: already exists as #${EXISTING_NUM}, skipping duplicate fix-up."
               continue
             fi
-            PENDING_DEF="$(jq -r ".pending_issue_defs[\"${FIX_ID}\"] // empty" "${STATE_FILE}")"
+            PENDING_DEF="$(jq -r --arg fix_id "${FIX_ID}" '.pending_issue_defs[$fix_id] // empty' "${STATE_FILE}")"
             if [ -n "${PENDING_DEF}" ]; then
               echo "  ${FIX_ID}: already in pending wave defs, skipping duplicate fix-up."
               continue
@@ -1268,7 +1268,7 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
           # Record in state so subsequent cycles/iterations won't recreate
           FIX_NEW_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$')"
           if [ -n "${FIX_NEW_NUM}" ] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
-            jq ".issue_number_map[\"${FIX_ID}\"] = ${FIX_NEW_NUM}" \
+            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" '.issue_number_map[$fix_id] = $fix_new_num' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
           fi
         done
@@ -1296,12 +1296,12 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
 
           # --- Dedup guard: skip if this local ID already has a GitHub issue ---
           if [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
-            EXISTING_NUM="$(jq -r ".issue_number_map[\"${NEW_ID}\"] // empty" "${STATE_FILE}")"
+            EXISTING_NUM="$(jq -r --arg new_id "${NEW_ID}" '.issue_number_map[$new_id] // empty' "${STATE_FILE}")"
             if [ -n "${EXISTING_NUM}" ]; then
               echo "  ${NEW_ID}: already exists as #${EXISTING_NUM}, skipping duplicate addition."
               continue
             fi
-            PENDING_DEF="$(jq -r ".pending_issue_defs[\"${NEW_ID}\"] // empty" "${STATE_FILE}")"
+            PENDING_DEF="$(jq -r --arg new_id "${NEW_ID}" '.pending_issue_defs[$new_id] // empty' "${STATE_FILE}")"
             if [ -n "${PENDING_DEF}" ]; then
               echo "  ${NEW_ID}: already in pending wave defs, skipping duplicate addition."
               continue
@@ -1326,7 +1326,7 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
           # Record in state so subsequent cycles/iterations won't recreate
           ADD_NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
           if [ -n "${ADD_NEW_NUM}" ] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
-            jq ".issue_number_map[\"${NEW_ID}\"] = ${ADD_NEW_NUM}" \
+            jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" '.issue_number_map[$new_id] = $add_new_num' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
           fi
         done
