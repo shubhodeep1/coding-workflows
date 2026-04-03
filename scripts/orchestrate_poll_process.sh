@@ -1369,7 +1369,7 @@ PRs to revert: ${REVERT_COUNT}"
          .validation_active_fix_issues = [] |
          .validation_seen_fix_issues = (.validation_seen_fix_issues // []) |
          .validation_last_fix_comment_id = (.validation_last_fix_comment_id // 0) |
-         .validation_last_dispatch_cycle = (.validation_last_dispatch_cycle // 0) |
+         .validation_last_dispatch_cycle = 0 |
          .validation_failure_reason = null |
          .validation_completed_cycle = null' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
