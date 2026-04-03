@@ -402,6 +402,20 @@ def test_complete_verdict_enters_validation_mode_when_enabled():
 	assert len(result["validation_dispatches"]) == 1
 
 
+def test_complete_verdict_enters_validation_mode_when_enable_validation_is_mixed_case_truthy():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="TrUe",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+	)
+	assert result["latest_state"]["status"] == "validating"
+	assert "ai:validating" in result["tracking_labels"]
+	assert result["tracking_closed"] is False
+	assert len(result["validation_dispatches"]) == 1
+
+
 
 def test_complete_verdict_closes_when_validation_disabled():
 	state = _base_state(status="in_progress")

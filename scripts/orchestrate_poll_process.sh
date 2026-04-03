@@ -45,8 +45,10 @@ gh_retry() {
 }
 
 is_truthy() {
-  case "${1:-}" in
-    1|true|TRUE|True|yes|YES|Yes|on|ON|On)
+  local value
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "${value}" in
+    1|true|yes|on)
       return 0
       ;;
     *)
