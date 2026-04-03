@@ -1481,10 +1481,12 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
             --body "${FULL_NEW_BODY}")"
           echo "  Created: ${NEW_URL}"
 
-          # Record in state so subsequent cycles/iterations won't recreate
+          # Record in state so subsequent cycles/iterations won't recreate,
+          # and add to the current wave so the poller tracks merge progress.
           ADD_NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
           if [ -n "${ADD_NEW_NUM}" ] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
-            jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" '.issue_number_map[$new_id] = $add_new_num' \
+            jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
+              '.issue_number_map[$new_id] = $add_new_num | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $add_new_num, "status": "pending"}]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
           fi
         done
