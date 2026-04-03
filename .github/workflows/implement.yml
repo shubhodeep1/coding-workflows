@@ -885,8 +885,8 @@ jobs:
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:done' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
 
-      - name: Restore awaiting approval label on no-op implementation
-        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false'
+      - name: Restore awaiting approval label on skipped implementation
+        if: env.SKIP_IMPLEMENT == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
