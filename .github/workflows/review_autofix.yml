@@ -102,10 +102,15 @@ jobs:
           done
           # Fetch judge prompt for review-blocked judge feature
           mkdir -p prompts
-          if [ ! -f prompts/mode-judge-review-blocked.txt ]; then
-            gh api -H 'Accept: application/vnd.github.raw+json' \
+          if [ ! -s prompts/mode-judge-review-blocked.txt ]; then
+            prompt_tmp="prompts/mode-judge-review-blocked.txt.tmp"
+            if gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=stable" \
-              > prompts/mode-judge-review-blocked.txt 2>/dev/null || true
+              > "${prompt_tmp}" 2>/dev/null && [ -s "${prompt_tmp}" ]; then
+              mv "${prompt_tmp}" prompts/mode-judge-review-blocked.txt
+            else
+              rm -f "${prompt_tmp}"
+            fi
           fi
 
       - name: Validate PR number input
@@ -544,14 +549,21 @@ jobs:
             echo "max_iterations_reached=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # Count [judge-fix] commits in the branch history for retry tracking.
+          # Count [judge-fix] commits in the PR branch range for retry tracking.
           judge_fix_count=0
+          judge_fix_range="HEAD"
+          if [ -n "${BASE_BRANCH:-}" ]; then
+            git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" >/dev/null 2>&1 || true
+            if git rev-parse --verify "origin/${BASE_BRANCH}" >/dev/null 2>&1; then
+              judge_fix_range="origin/${BASE_BRANCH}..HEAD"
+            fi
+          fi
           while IFS= read -r line; do
             if echo "${line}" | grep -q '^\[judge-fix\]'; then
               judge_fix_count=$((judge_fix_count + 1))
             fi
-          done < <(git log --format='%s' 2>/dev/null || true)
-          echo "Judge-fix commits in history: ${judge_fix_count}"
+          done < <(git log --format='%s' "${judge_fix_range}" 2>/dev/null || true)
+          echo "Judge-fix commits in range (${judge_fix_range}): ${judge_fix_count}"
           echo "judge_fix_count=${judge_fix_count}" >> "$GITHUB_OUTPUT"
 
       - name: Generate diff context
@@ -2210,6 +2222,7 @@ jobs:
             # fires.  Pushing here causes a concurrency self-cancel race
             # that kills all subsequent steps.
             echo "DID_COMMIT=true" >> "$GITHUB_ENV"
+            echo "did_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Post editor summary comment
@@ -2588,7 +2601,7 @@ jobs:
             echo
             echo "=== REVIEW-BLOCKED JUDGE TASK ==="
             echo
-            if [ -f prompts/mode-judge-review-blocked.txt ]; then
+            if [ -s prompts/mode-judge-review-blocked.txt ]; then
               cat prompts/mode-judge-review-blocked.txt
             else
               echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."
@@ -2807,6 +2820,7 @@ jobs:
                   echo "Fix codex completed."
                 else
                   echo "::warning::Fix codex failed for PR #${PR_NUMBER}."
+                  exit 0
                 fi
 
                 # Restore editor reasoning effort
@@ -2825,7 +2839,10 @@ jobs:
                     rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
                     rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
                     rm -rf .serena
-                    rm -rf prompts
+                    if ! git ls-files --error-unmatch prompts/mode-judge-review-blocked.txt >/dev/null 2>&1; then
+                      rm -f prompts/mode-judge-review-blocked.txt
+                      rmdir prompts 2>/dev/null || true
+                    fi
                   fi
 
                   git add -u -- ':!node_modules'
@@ -2845,24 +2862,10 @@ jobs:
                       echo "::warning::Failed to push judge fix — falling back to manual intervention."
                     fi
                   else
-                    echo "Judge staged no effective changes. Treating as merge."
-                    while IFS= read -r issue_number; do
-                      [ -n "${issue_number}" ] || continue
-                      gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
-                        --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
-                    done <<< "${ISSUE_NUMBERS}"
-                    echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-                    echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+                    echo "::warning::Judge fix produced no effective staged changes — falling back to manual intervention."
                   fi
                 else
-                  echo "Judge produced no file changes. Treating as merge."
-                  while IFS= read -r issue_number; do
-                    [ -n "${issue_number}" ] || continue
-                    gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
-                      --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
-                  done <<< "${ISSUE_NUMBERS}"
-                  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-                  echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+                  echo "::warning::Judge fix produced no file changes — falling back to manual intervention."
                 fi
               fi
               ;;
@@ -3046,7 +3049,7 @@ jobs:
           if [ "${JUDGE_HANDLED}" = "true" ]; then
             case "${JUDGE_ACTION}" in
               merge)
-                MSG="$(printf 'Review-blocked judge merged PR as-is\nPR: %s' "${PR_URL}")" ;;
+                MSG="$(printf 'Review-blocked judge approved merge decision (ready-to-merge)\nPR: %s' "${PR_URL}")" ;;
               fix)
                 MSG="$(printf 'Review-blocked judge pushed fix commit\nPR: %s' "${PR_URL}")" ;;
               close_and_reissue)
