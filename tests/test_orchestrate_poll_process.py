@@ -380,6 +380,12 @@ print(json.dumps(parsed))
 
 def test_complete_verdict_enters_validation_mode_when_enabled():
 	state = _base_state(status="in_progress")
+	state["validation_cycle"] = 2
+	state["validation_active_fix_issues"] = [501]
+	state["validation_seen_fix_issues"] = [500]
+	state["validation_last_dispatch_cycle"] = 2
+	state["validation_failure_reason"] = "stale"
+	state["validation_completed_cycle"] = 1
 	result = _run_poller(
 		state=state,
 		enable_validation="true",
@@ -388,7 +394,12 @@ def test_complete_verdict_enters_validation_mode_when_enabled():
 	)
 	assert result["latest_state"]["status"] == "validating"
 	assert result["latest_state"]["judge_cycle"] == 1
-	assert result["latest_state"]["validation_cycle"] == 1
+	assert result["latest_state"]["validation_cycle"] == 2
+	assert result["latest_state"]["validation_active_fix_issues"] == []
+	assert result["latest_state"]["validation_seen_fix_issues"] == []
+	assert result["latest_state"]["validation_last_dispatch_cycle"] == 2
+	assert result["latest_state"]["validation_failure_reason"] == ""
+	assert result["latest_state"]["validation_completed_cycle"] == 0
 	assert "ai:validating" in result["tracking_labels"]
 	assert result["tracking_closed"] is False
 	assert len(result["validation_dispatches"]) == 1
@@ -414,6 +425,8 @@ def test_validation_fixing_redispatches_when_fix_issues_merged():
 	state["validation_cycle"] = 1
 	state["validation_last_dispatch_cycle"] = 1
 	state["validation_active_fix_issues"] = [501]
+	state["validation_failure_reason"] = "prior failure"
+	state["validation_completed_cycle"] = 1
 	result = _run_poller(
 		state=state,
 		enable_validation="true",
@@ -423,7 +436,25 @@ def test_validation_fixing_redispatches_when_fix_issues_merged():
 	assert result["latest_state"]["status"] == "validating"
 	assert result["latest_state"]["validation_cycle"] == 2
 	assert result["latest_state"]["validation_active_fix_issues"] == []
+	assert result["latest_state"]["validation_last_dispatch_cycle"] == 2
+	assert result["latest_state"]["validation_failure_reason"] == ""
+	assert result["latest_state"]["validation_completed_cycle"] == 0
 	assert len(result["validation_dispatches"]) == 1
+
+
+def test_invalid_max_validate_cycles_defaults_to_three():
+	state = _base_state(status="validation-fixing")
+	state["validation_cycle"] = 3
+	state["validation_last_dispatch_cycle"] = 3
+	state["validation_active_fix_issues"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="invalid",
+		issue_labels={10: ["ai:merged"], 501: ["ai:merged"]},
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert "MAX_VALIDATE_CYCLES=3" in result["latest_state"].get("validation_failure_reason", "")
 
 
 

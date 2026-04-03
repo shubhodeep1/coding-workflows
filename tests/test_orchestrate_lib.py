@@ -301,6 +301,13 @@ def test_build_tracking_state_schema():
 	assert state["judge_cycle"] == 0
 	assert state["recovery_attempted"] is False
 	assert state["status"] == "in_progress"
+	assert state["validation_cycle"] == 1
+	assert state["validation_last_dispatch_cycle"] == 0
+	assert state["validation_last_fix_comment_id"] == 0
+	assert state["validation_active_fix_issues"] == []
+	assert state["validation_seen_fix_issues"] == []
+	assert state["validation_failure_reason"] == ""
+	assert state["validation_completed_cycle"] == 0
 	# issue-2 should be in pending_issue_defs (not in issue_map)
 	assert "issue-2" in state["pending_issue_defs"]
 

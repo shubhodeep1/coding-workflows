@@ -365,7 +365,10 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     jq --argjson cycle "${NEXT_VALIDATION_CYCLE}" \
       '.status = "validating" |
        .validation_cycle = $cycle |
-       .validation_active_fix_issues = []' \
+       .validation_active_fix_issues = [] |
+       .validation_last_dispatch_cycle = 0 |
+       .validation_failure_reason = "" |
+       .validation_completed_cycle = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     set_tracking_phase_label "ai:validating"
@@ -1146,10 +1149,12 @@ PRs to revert: ${REVERT_COUNT}"
         '.status = "validating" |
          .judge_cycle += 1 |
          .validation_cycle = $cycle |
-         .validation_active_fix_issues = (.validation_active_fix_issues // []) |
-         .validation_seen_fix_issues = (.validation_seen_fix_issues // []) |
+         .validation_active_fix_issues = [] |
+         .validation_seen_fix_issues = [] |
          .validation_last_fix_comment_id = (.validation_last_fix_comment_id // 0) |
-         .validation_last_dispatch_cycle = (.validation_last_dispatch_cycle // 0)' \
+         .validation_last_dispatch_cycle = 0 |
+         .validation_failure_reason = "" |
+         .validation_completed_cycle = 0' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
       set_tracking_phase_label "ai:validating"
