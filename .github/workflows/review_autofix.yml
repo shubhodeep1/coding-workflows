@@ -2187,9 +2187,12 @@ jobs:
                   done
             } > "${COMMITTED_FILES_FILE}"
             git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}
-            git push origin "HEAD:${TARGET_BRANCH}"
+            # NOTE: do NOT push here. The push is deferred to the final
+            # "Push all pending commits" step so that conflict resolution,
+            # labeling, and auto-merge complete before the synchronize event
+            # fires.  Pushing here causes a concurrency self-cancel race
+            # that kills all subsequent steps.
             echo "DID_COMMIT=true" >> "$GITHUB_ENV"
-            echo "did_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Post editor summary comment
@@ -2254,8 +2257,9 @@ jobs:
       - name: Detect merge conflicts
         # Run conflict detection regardless of max_iterations_reached or
         # did_commit — merge conflicts are independent of the autofix cycle.
-        # When did_commit is true the autofix push already happened and HEAD
-        # is up to date, so the merge-base check is still valid.  Actual
+        # When did_commit is true the autofix commit already happened (push is
+        # deferred), and HEAD is up to date, so the merge-base check is valid.
+        # Actual
         # resolution is gated separately below.
         if: success() && env.CAN_PUSH == 'true'
         env:
@@ -2287,20 +2291,27 @@ jobs:
 
           if [ -z "$(git ls-files --unmerged)" ]; then
             echo "No merge conflicts detected"
-            git merge --abort || true
+            # Only abort if a merge is actually in progress (MERGE_HEAD exists).
+            # When the branch is already up-to-date, git merge succeeds immediately
+            # without entering merge state, so there is nothing to abort.
+            if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+              git merge --abort
+            fi
             exit 0
           else
             echo "Merge conflict detected"
             echo "MERGE_CONFLICT=true" >> "$GITHUB_ENV"
-            git merge --abort || true
+            if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+              git merge --abort
+            fi
           fi
 
       - name: Resolve merge conflicts with Codex
         # Run conflict resolution even when max_iterations_reached — conflict
         # resolution is not an autofix iteration and should not be blocked by
-        # the iteration cap.  Skip when did_commit is true to avoid racing
-        # with the next synchronize run triggered by the autofix push.
-        if: success() && steps.commit_changes.outputs.did_commit != 'true' && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true'
+        # the iteration cap.  Also runs when did_commit is true since the push
+        # is deferred — both autofix and conflict resolution are pushed together.
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true'
         run: |
           set -euo pipefail
 
@@ -2391,9 +2402,9 @@ jobs:
             git ls-files --others --exclude-standard -z -- ':!node_modules' | xargs -0 -r git add --
             git commit -m "[ai-merge-resolve] resolve merge conflicts"
             git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}
-            git push origin "HEAD:${TARGET_BRANCH}"
+            # NOTE: push deferred to final "Push all pending commits" step.
             echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
-            echo "Conflicts resolved and committed"
+            echo "Conflicts resolved and committed (push deferred)"
           else
             echo "No conflict resolution changes to commit"
           fi
@@ -2536,6 +2547,22 @@ jobs:
           else
             echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that 'Allow auto-merge' is enabled in repo settings and branch protection is configured."
           fi
+
+      - name: Push all pending commits
+        # Deferred push: autofix commits and/or conflict resolution commits
+        # are pushed together AFTER labeling and auto-merge are configured.
+        # This avoids a concurrency self-cancel race where the synchronize
+        # event from an earlier push would kill subsequent steps.
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true')
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
+          echo "Pushing pending commits to ${TARGET_BRANCH}..."
+          git push origin "HEAD:${TARGET_BRANCH}"
+          echo "Push complete."
 
       - name: Telegram success
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'
