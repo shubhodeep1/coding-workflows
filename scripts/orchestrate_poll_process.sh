@@ -531,6 +531,10 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     fi
     IP_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.state' 2>/dev/null || echo "")"
     IP_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+    if [ "${IP_MERGEABLE}" = "null" ]; then
+      echo "  PR #${IP_PR} mergeability is still being computed; will retry next poll."
+      continue
+    fi
     if [ "${IP_PR_STATE}" != "open" ] || [ "${IP_MERGEABLE}" != "false" ]; then
       continue
     fi
@@ -550,8 +554,14 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     # workflow's Codex conflict resolver can handle it.
     IP_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
     if [ -n "${IP_HEAD_REF}" ] && [ "${IP_HEAD_REF}" != "null" ]; then
-      git fetch origin "${IP_HEAD_REF}:refs/remotes/origin/${IP_HEAD_REF}" 2>/dev/null || true
-      git checkout "origin/${IP_HEAD_REF}" 2>/dev/null || true
+      if ! git fetch origin "${IP_HEAD_REF}:refs/remotes/origin/${IP_HEAD_REF}" 2>/dev/null; then
+        echo "::warning::Could not fetch origin/${IP_HEAD_REF}; skipping re-trigger for PR #${IP_PR}."
+        continue
+      fi
+      if ! git checkout "origin/${IP_HEAD_REF}" 2>/dev/null; then
+        echo "::warning::Could not checkout origin/${IP_HEAD_REF}; skipping re-trigger for PR #${IP_PR}."
+        continue
+      fi
       git config user.name "codex-bot"
       git config user.email "codex@users.noreply.github.com"
       git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
@@ -1484,10 +1494,12 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
             --body "${FULL_FIX_BODY}")"
           echo "  Created fix-up: ${FIX_URL}"
 
-          # Record in state so subsequent cycles/iterations won't recreate
+          # Record in state so subsequent cycles/iterations won't recreate,
+          # and add to the current wave so the poller tracks merge progress.
           FIX_NEW_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$')"
           if [ -n "${FIX_NEW_NUM}" ] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
-            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" '.issue_number_map[$fix_id] = $fix_new_num' \
+            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
+              '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"}]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
           fi
         done
@@ -1552,9 +1564,9 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
         done
       fi
 
-      # Advance to next wave
+      # Advance to next wave only when no new fix-up issues were created.
       NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
-      if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
+      if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ] && [ "${NEW_ISSUES_COUNT}" -eq 0 ]; then
         echo "Advancing to wave ${NEXT_WAVE}..."
         NEXT_WAVE_IDX=$(( NEXT_WAVE - 1 ))
 
@@ -1625,7 +1637,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
           -f body="${WAVE_COMMENT}" >/dev/null
       else
-        # All waves dispatched but judge says in_progress with new issues
+        # Keep current wave active when new fix-up issues were created,
+        # or when all waves are already dispatched.
         jq '.judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
 

@@ -440,7 +440,7 @@ workflow_dispatch (project description)
     → Poller (scheduled): monitors progress, dispatches next waves
     → Judge (LLM, xhigh thinking, full repo checkout): evaluates after each wave
         → complete: close tracking issue
-        → in_progress: create fix-up issues (added to current wave for tracking), advance to next wave
+        → in_progress: create fix-up issues (added to current wave for tracking); advance only after they are merged
         → failed: auto-recovery (revert + re-plan, retry once), then stop
 ```
 
@@ -465,7 +465,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 3. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. If a PR has merge conflicts (e.g. `main` advanced since the PR was created), the poller automatically updates the PR branch via the GitHub API before retrying the merge. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
 4. **In-progress conflict resolution:** When the base branch advances and creates merge conflicts on in-progress PRs (still going through the review/autofix cycle), the poller detects the conflict (`mergeable == false`) and re-triggers the review workflow by pushing an empty commit. The review workflow's built-in Codex conflict resolver then handles the actual merge conflict resolution automatically.
 5. **Polling:** Every 10 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
-6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
+6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (fix-ups may be required in the current wave before progression), or failed.
 7. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
 8. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge makes autonomous architectural and security trade-off decisions — it does not defer to humans. It can: (a) merge the PR as-is if remaining issues are cosmetic or low-risk, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts.
 9. **Implementation-failed recovery:** When the implementation phase produces no file changes despite an approved plan (e.g. workflow edits stripped without `ALLOW_WORKFLOW_EDITS`, or model failure), the issue is labeled `ai:implementation-failed`. The poller automatically closes the failed issue and creates a replacement with additional guidance, so the pipeline retries without manual intervention.
