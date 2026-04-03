@@ -238,14 +238,8 @@ sync_validation_fix_issues_from_comments() {
        .validation_seen_fix_issues = ((.validation_seen_fix_issues // []) + $active_fix_issues | unique)' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   else
-    echo "::warning::Validation fix comment ${fix_comment_id} did not include extractable issue numbers; keeping project in validating state."
-    jq --argjson comment_id "${fix_comment_id}" \
-      '.status = "validating" |
-       .validation_last_fix_comment_id = $comment_id |
-       .validation_active_fix_issues = []' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    set_tracking_phase_label "ai:validating"
-    post_state_comment
+    echo "::warning::Validation fix comment ${fix_comment_id} did not include extractable issue numbers; treating as validation failure."
+    mark_validation_failed "Validation workflow produced a fixable-issues comment with no extractable issue numbers (comment ${fix_comment_id})."
     return 0
   fi
 
