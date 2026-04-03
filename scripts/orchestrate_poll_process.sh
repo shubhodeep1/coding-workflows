@@ -461,6 +461,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
           # Fetch the PR head branch and base branch
           RTM_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
           if [ -n "${RTM_HEAD_REF}" ] && [ "${RTM_HEAD_REF}" != "null" ]; then
+            ORIG_REF="$(git rev-parse --verify HEAD 2>/dev/null || echo "")"
             git fetch origin "${RTM_HEAD_REF}:refs/remotes/origin/${RTM_HEAD_REF}" 2>/dev/null || true
             DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
             git fetch origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" 2>/dev/null || true
@@ -493,7 +494,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
             fi
 
             # Return to detached HEAD / original state
-            git checkout --detach HEAD 2>/dev/null || true
+            git checkout --detach "${ORIG_REF:-HEAD}" 2>/dev/null || true
           else
             echo "::warning::Could not determine head ref for PR #${RTM_PR}."
           fi
@@ -752,6 +753,7 @@ sys.exit(1)
               echo "  API branch update failed for review-blocked PR #${RB_PR}. Pushing empty commit to re-trigger review workflow..."
               RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
               if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
+                ORIG_REF="$(git rev-parse --verify HEAD 2>/dev/null || echo "")"
                 git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || true
                 git checkout "origin/${RB_HEAD_REF}" 2>/dev/null || true
                 git config user.name "codex-bot"
@@ -761,7 +763,7 @@ sys.exit(1)
                   echo "::warning::Could not push to re-trigger review for PR #${RB_PR}."
                   tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts that could not be auto-resolved."
                 }
-                git checkout --detach HEAD 2>/dev/null || true
+                git checkout --detach "${ORIG_REF:-HEAD}" 2>/dev/null || true
               else
                 echo "::warning::Could not determine head ref for review-blocked PR #${RB_PR}."
               fi
@@ -794,6 +796,7 @@ sys.exit(1)
                 echo "  API branch update failed for force-merge PR #${RB_PR}. Re-triggering review for conflict resolution..."
                 RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
                 if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
+                  ORIG_REF="$(git rev-parse --verify HEAD 2>/dev/null || echo "")"
                   git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || true
                   git checkout "origin/${RB_HEAD_REF}" 2>/dev/null || true
                   git config user.name "codex-bot"
@@ -803,7 +806,7 @@ sys.exit(1)
                     echo "::warning::Could not push to re-trigger review for force-merge PR #${RB_PR}."
                     tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) has unresolvable merge conflicts."
                   }
-                  git checkout --detach HEAD 2>/dev/null || true
+                  git checkout --detach "${ORIG_REF:-HEAD}" 2>/dev/null || true
                 else
                   echo "::warning::Could not determine head ref for force-merge PR #${RB_PR}."
                 fi
