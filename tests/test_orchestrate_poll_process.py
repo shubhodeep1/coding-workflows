@@ -67,12 +67,14 @@ def _run_poller(
 	enable_validation: str,
 	max_validate_cycles: str,
 	tracking_labels: list[str] | None = None,
+	tracking_comments: list[str] | None = None,
 	issue_labels: dict[int, list[str]] | None = None,
 	codex_json: dict | None = None,
 	fail_validation_dispatch: bool = False,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
+	tracking_comments = tracking_comments or []
 	issue_labels = issue_labels or {10: ["ai:merged"]}
 	codex_json = codex_json or {
 		"status": "complete",
@@ -95,7 +97,13 @@ def _run_poller(
 		issues: dict[str, dict] = {
 			str(tracking_num): {
 				"labels": list(tracking_labels),
-				"comments": [{"id": 1, "body": _state_comment(state)}],
+				"comments": [
+					{"id": 1, "body": _state_comment(state)},
+					*[
+						{"id": idx + 2, "body": comment_body}
+						for idx, comment_body in enumerate(tracking_comments)
+					],
+				],
 				"body": "Tracking issue body",
 				"closed": False,
 			}
@@ -110,7 +118,7 @@ def _run_poller(
 
 		store = {
 			"issues": issues,
-			"next_comment_id": 2,
+			"next_comment_id": 2 + len(tracking_comments),
 			"validation_dispatches": [],
 			"closed_issues": [],
 			"fail_validation_dispatch": fail_validation_dispatch,
@@ -460,6 +468,41 @@ def test_validation_dispatch_failure_marks_failed():
 	assert "ai:validation-failed" in result["tracking_labels"]
 
 
+
+
+def test_validation_fixing_label_collects_active_fix_issue_ids_from_comment():
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 1
+	comment_body = """## 🧪 Runtime validation found fixable issues
+
+- #501: Fix API validation issue
+- #502: Fix migration edge case
+"""
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-fixing"],
+		tracking_comments=[comment_body],
+	)
+	assert result["latest_state"]["status"] == "validation-fixing"
+	assert result["latest_state"]["validation_active_fix_issues"] == [501, 502]
+
+
+
+def test_invalid_max_validate_cycles_defaults_to_three():
+	state = _base_state(status="validation-fixing")
+	state["validation_cycle"] = 3
+	state["validation_last_dispatch_cycle"] = 3
+	state["validation_active_fix_issues"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="0",
+		issue_labels={10: ["ai:merged"], 501: ["ai:merged"]},
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert "MAX_VALIDATE_CYCLES=3" in result["latest_state"].get("validation_failure_reason", "")
 
 def test_validated_label_marks_complete_and_closes():
 	state = _base_state(status="validating")
