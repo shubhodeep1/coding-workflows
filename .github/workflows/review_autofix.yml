@@ -2193,7 +2193,6 @@ jobs:
             # fires.  Pushing here causes a concurrency self-cancel race
             # that kills all subsequent steps.
             echo "DID_COMMIT=true" >> "$GITHUB_ENV"
-            echo "did_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Post editor summary comment
@@ -2258,8 +2257,9 @@ jobs:
       - name: Detect merge conflicts
         # Run conflict detection regardless of max_iterations_reached or
         # did_commit — merge conflicts are independent of the autofix cycle.
-        # When did_commit is true the autofix push already happened and HEAD
-        # is up to date, so the merge-base check is still valid.  Actual
+        # When did_commit is true the autofix commit already happened (push is
+        # deferred), and HEAD is up to date, so the merge-base check is valid.
+        # Actual
         # resolution is gated separately below.
         if: success() && env.CAN_PUSH == 'true'
         env:
@@ -2553,7 +2553,7 @@ jobs:
         # are pushed together AFTER labeling and auto-merge are configured.
         # This avoids a concurrency self-cancel race where the synchronize
         # event from an earlier push would kill subsequent steps.
-        if: success() && env.CAN_PUSH == 'true' && (steps.commit_changes.outputs.did_commit == 'true' || env.CONFLICT_RESOLVED == 'true')
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |

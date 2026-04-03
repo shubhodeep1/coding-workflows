@@ -449,7 +449,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         else
           echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
         fi
-      elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" != "true" ]; then
+      elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
         echo "  PR #${RTM_PR} is not mergeable (mergeable=${PR_MERGEABLE}). Attempting branch update..."
         if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}/update-branch" \
           -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.sha' 2>/dev/null)" \
@@ -465,6 +465,8 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
             DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
             git fetch origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" 2>/dev/null || true
             git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null || true
+            git config user.name "codex-bot"
+            git config user.email "codex@users.noreply.github.com"
 
             if git merge --no-commit --no-ff "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
               # Clean merge — no conflicts
@@ -740,7 +742,7 @@ sys.exit(1)
             else
               echo "::warning::Could not merge PR #${RB_PR}."
             fi
-          elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" != "true" ]; then
+          elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
             echo "  PR #${RB_PR} is not mergeable. Attempting branch update..."
             if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
               -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' 2>/dev/null)" \
@@ -782,7 +784,7 @@ sys.exit(1)
             if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
               gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
                 || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
-            elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" != "true" ]; then
+            elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
               echo "  PR #${RB_PR} is not mergeable (force-merge path). Attempting branch update..."
               if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
                 -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' 2>/dev/null)" \
@@ -993,7 +995,7 @@ ${RB_FIX_DESC}" || true
   # Handle implementation-failed issues: close and re-issue
   # ---------------------------------------------------------------
   IMPL_FAILED_STATE_CHANGED=false
-  echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "implementation-failed") | .github_issue' | while read -r if_issue; do
+  while read -r if_issue; do
     [ -n "${if_issue}" ] && [ "${if_issue}" != "null" ] || continue
     echo "  Issue #${if_issue} has implementation-failed. Closing and re-issuing..."
 
@@ -1032,7 +1034,8 @@ REISSUE_EOF
 
       # Update state file: replace the old issue number with the new one
       if [ -n "${NEW_ISSUE_NUM}" ]; then
-        jq "(.waves[${WAVE_IDX}].issues[] | select(.github_issue == \"${if_issue}\" or .github_issue == ${if_issue})).github_issue = \"${NEW_ISSUE_NUM}\"" \
+        IF_LOCAL_ID="$(jq -r --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" '.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue) | .id' "${STATE_FILE}" | head -n 1)"
+        jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
 
@@ -1041,7 +1044,7 @@ REISSUE_EOF
     else
       echo "::warning::Could not create replacement issue for #${if_issue}."
     fi
-  done
+  done < <(echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "implementation-failed") | .github_issue')
 
   if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
     post_state_comment
