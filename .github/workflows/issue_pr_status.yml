@@ -6,6 +6,8 @@ name: AI Issue PR Status Sync
     secrets:
       GH_PAT:
         required: true
+      TG_BOT_SECRET:
+        required: false
 
 env:
   FINAL_LABEL: ${{ github.event.pull_request.merged && 'ai:merged' || 'ai:closed' }}
@@ -65,3 +67,47 @@ jobs:
               echo "::warning::Failed to add label '${FINAL_LABEL}' to issue #${issue_number}."
             fi
           done <<< "${ISSUE_NUMBERS}"
+
+          # Export linked issue numbers for TG cleanup step
+          echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+          echo "${ISSUE_NUMBERS}" >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+
+      - name: Cleanup tracked Telegram messages
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "Telegram not configured; skipping TG cleanup."
+            exit 0
+          fi
+
+          # Fetch tg_helpers.sh
+          wf_source="shubhodeep1/coding-workflows"
+          mkdir -p scripts
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=stable" > "scripts/tg_helpers.sh" 2>/dev/null || {
+            echo "::warning::Could not fetch tg_helpers.sh; skipping TG cleanup."
+            exit 0
+          }
+          export GITHUB_REPOSITORY="${REPOSITORY}"
+          source scripts/tg_helpers.sh
+
+          # Cleanup messages tracked on the PR
+          echo "Cleaning up TG messages for PR #${PR_NUMBER}..."
+          tg_cleanup_msgs "${PR_NUMBER}"
+
+          # Cleanup messages tracked on linked issues
+          if [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then
+            while IFS= read -r issue_number; do
+              [ -n "${issue_number}" ] || continue
+              echo "Cleaning up TG messages for issue #${issue_number}..."
+              tg_cleanup_msgs "${issue_number}"
+            done <<< "${LINKED_ISSUE_NUMBERS}"
+          fi

@@ -78,14 +78,20 @@ CREATED_FIX_ISSUES_JSON='[]'
 # ---------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------
+# shellcheck source=tg_helpers.sh
+if [ -f "scripts/tg_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/tg_helpers.sh
+fi
+
 tg_notify()
 {
   local msg="$1"
-  if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
-    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-      -d chat_id="${TG_ADMIN_CHAT_ID}" \
-      -d text="${msg}" \
-      -d parse_mode="Markdown" >/dev/null 2>&1 || echo "::warning::Telegram notification failed"
+  if [ -n "${TRACKING_ISSUE_RAW:-}" ] && [ "${TRACKING_ISSUE_RAW}" != "0" ]; then
+    tg_send_tracked "${TRACKING_ISSUE_RAW}" "${msg}"
+  else
+    # Standalone validation run (no tracking issue): untracked send
+    tg_send_msg "${msg}" >/dev/null
   fi
 }
 

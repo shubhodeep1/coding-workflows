@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+# tg_helpers.sh — Telegram message tracking & cleanup helpers.
+#
+# Provides tracked notification functions that store Telegram message IDs
+# on GitHub issue comments, enabling batch deletion when an issue/PR
+# reaches a terminal state.
+#
+# Required env vars (best-effort; functions degrade gracefully):
+#   TG_BOT_SECRET        — Telegram bot token
+#   TG_ADMIN_CHAT_ID     — Telegram chat ID (fallback: TG_CHAT_ID)
+#   GH_TOKEN             — GitHub PAT for issue comment API
+#   GITHUB_REPOSITORY    — owner/repo
+
+# Guard against double-sourcing
+if [ "${_TG_HELPERS_LOADED:-}" = "true" ]; then
+	return 0 2>/dev/null || true
+fi
+_TG_HELPERS_LOADED="true"
+
+# Resolve chat ID from available env vars
+_tg_chat_id()
+{
+	printf '%s' "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}"
+}
+
+# ---------------------------------------------------------------
+# tg_send_msg — Send a Telegram message, echo the message_id.
+# Usage: msg_id=$(tg_send_msg "Hello world")
+# ---------------------------------------------------------------
+tg_send_msg()
+{
+	local msg="$1"
+	local chat_id
+	chat_id="$(_tg_chat_id)"
+	if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${chat_id}" ]; then
+		return 0
+	fi
+	local resp
+	resp=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+		-d "chat_id=${chat_id}" \
+		-d "disable_web_page_preview=true" \
+		--data-urlencode "text=${msg}" 2>/dev/null) || {
+		echo "::warning::Telegram send failed" >&2
+		return 0
+	}
+	local msg_id
+	msg_id=$(printf '%s' "${resp}" | jq -r '.result.message_id // empty' 2>/dev/null)
+	printf '%s' "${msg_id:-}"
+}
+
+# ---------------------------------------------------------------
+# tg_delete_msg — Delete a single Telegram message by ID.
+# Usage: tg_delete_msg 12345
+# ---------------------------------------------------------------
+tg_delete_msg()
+{
+	local msg_id="$1"
+	local chat_id
+	chat_id="$(_tg_chat_id)"
+	if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${chat_id}" ] || [ -z "${msg_id}" ]; then
+		return 0
+	fi
+	curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/deleteMessage" \
+		-d "chat_id=${chat_id}" \
+		-d "message_id=${msg_id}" >/dev/null 2>&1 || true
+}
+
+# ---------------------------------------------------------------
+# tg_store_msg_id — Store a message ID on a GitHub issue comment.
+# Appends to an existing tracking comment if one exists, or
+# creates a new one.  Comment body pattern:
+#   <!-- tg_cleanup:id1,id2,id3 -->
+# Usage: tg_store_msg_id 42 12345
+# ---------------------------------------------------------------
+tg_store_msg_id()
+{
+	local issue_num="$1" msg_id="$2"
+	if [ -z "${msg_id}" ] || [ -z "${issue_num}" ] || [ "${issue_num}" = "0" ]; then
+		return 0
+	fi
+	if [ -z "${GH_TOKEN:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		return 0
+	fi
+
+	local api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues"
+
+	# Look for an existing tracking comment (scan last 30 comments)
+	local comments_json
+	comments_json=$(curl -s \
+		-H "Authorization: token ${GH_TOKEN}" \
+		-H "Accept: application/vnd.github.v3+json" \
+		"${api_base}/${issue_num}/comments?per_page=30&direction=desc" 2>/dev/null) || {
+		# Fallback: create a new tracking comment
+		curl -s -X POST \
+			-H "Authorization: token ${GH_TOKEN}" \
+			-H "Accept: application/vnd.github.v3+json" \
+			"${api_base}/${issue_num}/comments" \
+			-d "$(jq -n --arg b "<!-- tg_cleanup:${msg_id} -->" '{body: $b}')" >/dev/null 2>&1 || true
+		return 0
+	}
+
+	local tracking_id tracking_body
+	tracking_id=$(printf '%s' "${comments_json}" | jq -r \
+		'[.[] | select(.body | test("<!-- tg_cleanup:"))] | first | .id // empty' 2>/dev/null)
+	tracking_body=$(printf '%s' "${comments_json}" | jq -r \
+		'[.[] | select(.body | test("<!-- tg_cleanup:"))] | first | .body // empty' 2>/dev/null)
+
+	if [ -n "${tracking_id}" ] && [ -n "${tracking_body}" ]; then
+		# Append to existing tracking comment
+		local new_body
+		new_body=$(printf '%s' "${tracking_body}" | \
+			sed "s/<!-- tg_cleanup:\([0-9,]*\) -->/<!-- tg_cleanup:\1,${msg_id} -->/")
+		curl -s -X PATCH \
+			-H "Authorization: token ${GH_TOKEN}" \
+			-H "Accept: application/vnd.github.v3+json" \
+			"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${tracking_id}" \
+			-d "$(jq -n --arg b "${new_body}" '{body: $b}')" >/dev/null 2>&1 || true
+	else
+		# Create new tracking comment
+		curl -s -X POST \
+			-H "Authorization: token ${GH_TOKEN}" \
+			-H "Accept: application/vnd.github.v3+json" \
+			"${api_base}/${issue_num}/comments" \
+			-d "$(jq -n --arg b "<!-- tg_cleanup:${msg_id} -->" '{body: $b}')" >/dev/null 2>&1 || true
+	fi
+}
+
+# ---------------------------------------------------------------
+# tg_send_tracked — Send a Telegram message and track its ID.
+# Drop-in replacement for fire-and-forget tg_notify() calls.
+# Usage: tg_send_tracked 42 "message text"
+# ---------------------------------------------------------------
+tg_send_tracked()
+{
+	local issue_num="$1" msg="$2"
+	local msg_id
+	msg_id=$(tg_send_msg "${msg}")
+	tg_store_msg_id "${issue_num}" "${msg_id}"
+}
+
+# ---------------------------------------------------------------
+# tg_cleanup_msgs — Delete all tracked TG messages for an issue.
+# Reads tracking comments, deletes each TG message, then removes
+# the tracking comments from GitHub.
+# Usage: tg_cleanup_msgs 42
+# ---------------------------------------------------------------
+tg_cleanup_msgs()
+{
+	local issue_num="$1"
+	if [ -z "${issue_num}" ] || [ "${issue_num}" = "0" ]; then
+		return 0
+	fi
+	if [ -z "${GH_TOKEN:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		return 0
+	fi
+
+	local chat_id
+	chat_id="$(_tg_chat_id)"
+
+	local api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues"
+	local page=1
+
+	while true; do
+		local comments_json
+		comments_json=$(curl -s \
+			-H "Authorization: token ${GH_TOKEN}" \
+			-H "Accept: application/vnd.github.v3+json" \
+			"${api_base}/${issue_num}/comments?per_page=100&page=${page}" 2>/dev/null) || break
+
+		local count
+		count=$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null) || break
+		[ "${count:-0}" -gt 0 ] || break
+
+		# Extract tracking comments
+		local tracking_entries
+		tracking_entries=$(printf '%s' "${comments_json}" | jq -r \
+			'.[] | select(.body | test("<!-- tg_cleanup:")) | "\(.id)\t\(.body)"' 2>/dev/null) || true
+
+		if [ -n "${tracking_entries}" ]; then
+			while IFS=$'\t' read -r comment_id comment_body; do
+				[ -n "${comment_id}" ] || continue
+				# Extract comma-separated message IDs
+				local id_list
+				id_list=$(printf '%s' "${comment_body}" | \
+					sed -n 's/.*<!-- tg_cleanup:\([0-9,]*\) -->.*/\1/p')
+				if [ -n "${id_list}" ] && [ -n "${chat_id}" ] && [ -n "${TG_BOT_SECRET:-}" ]; then
+					local old_ifs="${IFS}"
+					IFS=','
+					for tg_id in ${id_list}; do
+						[ -n "${tg_id}" ] || continue
+						tg_delete_msg "${tg_id}"
+					done
+					IFS="${old_ifs}"
+				fi
+				# Remove the tracking comment from GitHub
+				curl -s -X DELETE \
+					-H "Authorization: token ${GH_TOKEN}" \
+					-H "Accept: application/vnd.github.v3+json" \
+					"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+					>/dev/null 2>&1 || true
+			done <<< "${tracking_entries}"
+		fi
+
+		[ "${count}" -lt 100 ] && break
+		page=$((page + 1))
+	done
+}
