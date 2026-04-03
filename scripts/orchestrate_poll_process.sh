@@ -508,6 +508,66 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   done
 
   # ---------------------------------------------------------------
+  # Auto-resolve merge conflicts on in-progress PRs
+  # ---------------------------------------------------------------
+  # When the base branch advances (e.g. another PR merges), existing
+  # PRs may develop merge conflicts.  The review workflow already has
+  # Codex-based conflict resolution, but it only runs on PR events
+  # (opened/synchronize/reopened).  No event fires when the *base*
+  # branch moves, so the review workflow is never re-triggered.
+  #
+  # This block detects in-progress issues whose linked PRs have become
+  # unmergeable and pushes an empty commit to force a synchronize
+  # event, which re-triggers the review workflow (including its merge
+  # conflict resolver).
+  # ---------------------------------------------------------------
+  echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "in_progress") | .github_issue' | while read -r ip_issue; do
+    [ -n "${ip_issue}" ] && [ "${ip_issue}" != "null" ] || continue
+    IP_PR="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${ip_issue}/timeline" \
+      --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+      2>/dev/null || echo "")"
+    if [ -z "${IP_PR}" ] || [ "${IP_PR}" = "null" ]; then
+      continue
+    fi
+    IP_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.state' 2>/dev/null || echo "")"
+    IP_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+    if [ "${IP_PR_STATE}" != "open" ] || [ "${IP_MERGEABLE}" != "false" ]; then
+      continue
+    fi
+    echo "  In-progress issue #${ip_issue} has PR #${IP_PR} with merge conflicts. Attempting to re-trigger review..."
+
+    # Try the GitHub API update-branch first (creates a merge commit
+    # if the merge is clean; fails when there are real conflicts).
+    if gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}/update-branch" \
+      -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.sha' 2>/dev/null)" \
+      2>/dev/null; then
+      echo "  PR #${IP_PR} branch updated via API. Synchronize event will re-trigger review."
+      continue
+    fi
+
+    # API update failed — real conflicts exist.  Push an empty commit
+    # on the PR branch to force a synchronize event so the review
+    # workflow's Codex conflict resolver can handle it.
+    IP_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
+    if [ -n "${IP_HEAD_REF}" ] && [ "${IP_HEAD_REF}" != "null" ]; then
+      git fetch origin "${IP_HEAD_REF}:refs/remotes/origin/${IP_HEAD_REF}" 2>/dev/null || true
+      git checkout "origin/${IP_HEAD_REF}" 2>/dev/null || true
+      git config user.name "codex-bot"
+      git config user.email "codex@users.noreply.github.com"
+      git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
+      if git push origin "HEAD:${IP_HEAD_REF}" 2>/dev/null; then
+        echo "  Pushed empty commit to PR #${IP_PR} to re-trigger review workflow."
+        tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Re-triggered review for auto-resolution."
+      else
+        echo "::warning::Could not push empty commit to re-trigger review for PR #${IP_PR}."
+      fi
+      git checkout --detach HEAD 2>/dev/null || true
+    else
+      echo "::warning::Could not determine head ref for in-progress PR #${IP_PR}."
+    fi
+  done
+
+  # ---------------------------------------------------------------
   # Handle review-blocked issues: invoke judge to decide
   # ---------------------------------------------------------------
   ANY_REVIEW_BLOCKED="$(echo "${WAVE_STATUS}" | jq -r '.any_review_blocked')"
