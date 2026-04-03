@@ -551,7 +551,10 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     IP_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
     if [ -n "${IP_HEAD_REF}" ] && [ "${IP_HEAD_REF}" != "null" ]; then
       git fetch origin "${IP_HEAD_REF}:refs/remotes/origin/${IP_HEAD_REF}" 2>/dev/null || true
-      git checkout "origin/${IP_HEAD_REF}" 2>/dev/null || true
+      if ! git checkout "origin/${IP_HEAD_REF}" 2>/dev/null; then
+        echo "::warning::Could not check out PR head ref ${IP_HEAD_REF} for PR #${IP_PR}."
+        continue
+      fi
       git config user.name "codex-bot"
       git config user.email "codex@users.noreply.github.com"
       git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
@@ -560,6 +563,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Re-triggered review for auto-resolution."
       else
         echo "::warning::Could not push empty commit to re-trigger review for PR #${IP_PR}."
+        tg_notify "⚠️ Failed to push re-trigger commit for PR #${IP_PR} (issue #${ip_issue}); manual intervention may be required."
       fi
       git checkout --detach HEAD 2>/dev/null || true
     else
