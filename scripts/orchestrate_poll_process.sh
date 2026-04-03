@@ -1130,24 +1130,18 @@ PRs to revert: ${REVERT_COUNT}"
         continue
       fi
 
-      VALIDATION_CYCLE="$(jq -r '.validation_cycle // 1' "${STATE_FILE}")"
-      if ! [[ "${VALIDATION_CYCLE}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_CYCLE}" -lt 1 ]; then
-        VALIDATION_CYCLE="1"
-      fi
-
-      if [ "${VALIDATION_CYCLE}" -gt "${MAX_VALIDATE_CYCLES}" ]; then
-        mark_validation_failed "Validation cycle ${VALIDATION_CYCLE} exceeds MAX_VALIDATE_CYCLES=${MAX_VALIDATE_CYCLES}."
-        continue
-      fi
+      VALIDATION_CYCLE="1"
 
       jq --argjson cycle "${VALIDATION_CYCLE}" \
         '.status = "validating" |
          .judge_cycle += 1 |
          .validation_cycle = $cycle |
-         .validation_active_fix_issues = (.validation_active_fix_issues // []) |
-         .validation_seen_fix_issues = (.validation_seen_fix_issues // []) |
-         .validation_last_fix_comment_id = (.validation_last_fix_comment_id // 0) |
-         .validation_last_dispatch_cycle = (.validation_last_dispatch_cycle // 0)' \
+         .validation_active_fix_issues = [] |
+         .validation_seen_fix_issues = [] |
+         .validation_last_fix_comment_id = 0 |
+         .validation_last_dispatch_cycle = 0 |
+         .validation_completed_cycle = null |
+         .validation_failure_reason = null' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
       set_tracking_phase_label "ai:validating"
