@@ -1247,11 +1247,6 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
               fi
               echo "  ${FIX_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new fix-up."
             fi
-            PENDING_DEF="$(jq -r --arg fix_id "${FIX_ID}" '.pending_issue_defs[$fix_id] // empty' "${STATE_FILE}")"
-            if [ -n "${PENDING_DEF}" ]; then
-              echo "  ${FIX_ID}: already in pending wave defs, skipping duplicate fix-up."
-              continue
-            fi
           fi
 
           FULL_FIX_BODY="${FIX_BODY}
@@ -1308,11 +1303,6 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
                 continue
               fi
               echo "  ${NEW_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new addition."
-            fi
-            PENDING_DEF="$(jq -r --arg new_id "${NEW_ID}" '.pending_issue_defs[$new_id] // empty' "${STATE_FILE}")"
-            if [ -n "${PENDING_DEF}" ]; then
-              echo "  ${NEW_ID}: already in pending wave defs, skipping duplicate addition."
-              continue
             fi
           fi
 
