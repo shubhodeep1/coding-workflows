@@ -41,7 +41,9 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ALLOW_WORKFLOW_EDITS` | No | `false` | review_autofix, implement | Allow AI edits to `.github/workflows` files |
 | `ENABLE_AUTO_MERGE` | No | `false` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
-| `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | orchestrate_poll | Maximum orchestrator judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). |
+| `ENABLE_REVIEW_BLOCKED_JUDGE` | No | `true` | review_autofix | When true, non-orchestrator PRs that exhaust autofix iterations invoke a judge (LLM) to decide: merge as-is, push a fix commit, or close and reissue. Orchestrator-managed PRs are skipped (handled by the poller). |
+| `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | No | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge in non-orchestrator PRs (`xhigh`, `high`, `medium`, `low`). |
+| `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | review_autofix, orchestrate_poll | Maximum judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). Used by both the review_autofix judge (counts `[judge-fix]` commits) and the orchestrator poller. |
 | `ENABLE_VALIDATION` | No | `true` | orchestrate_poll | When true, a `complete` judge verdict transitions the tracking issue into runtime validation (`ai:validating`) and completion occurs only after validation passes. |
 | `MAX_VALIDATE_CYCLES` | No | `3` | orchestrate_poll | Maximum runtime validation cycles (initial run + fix/revalidate loops) before forcing `ai:validation-failed`. |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
@@ -63,6 +65,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | review_autofix | Reasoning effort for the editor model (applying fixes) |
+| `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
 | `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | orchestrate | Reasoning effort for project decomposition |
 | `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation |
 | `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
@@ -166,9 +169,17 @@ jobs:
 
 > The reusable workflow handles autofix iteration counting internally. It
 > counts consecutive `[ai-autofix]` commits and stops after
-> `MAX_AUTOFIX_ITERATIONS` (default `3`), labeling the PR `ai:review-blocked`.
-> When review passes with no fixes needed, it labels linked issues
-> `ai:ready-to-merge` and enables auto-merge if configured.
+> `MAX_AUTOFIX_ITERATIONS` (default `3`). When `ENABLE_REVIEW_BLOCKED_JUDGE`
+> is `true` (the default), a judge LLM evaluates the PR and decides to:
+> merge as-is, push a `[judge-fix]` commit (re-triggers review with reset
+> counter), or close the PR and create a replacement issue. The judge
+> respects `MAX_REVIEW_BLOCKED_RETRIES` (default `2`) by counting
+> `[judge-fix]` commits in the branch history. Orchestrator-managed PRs
+> are skipped (handled by the orchestrate_poll workflow instead). If the
+> judge is disabled or fails, the PR is labeled `ai:review-blocked` and
+> requires human intervention. When review passes with no fixes needed,
+> it labels linked issues `ai:ready-to-merge` and enables auto-merge if
+> configured.
 
 > **Warning — do NOT add a top-level `concurrency` block to this wrapper.**
 > The reusable workflow already manages concurrency at the job level. Adding a
@@ -381,7 +392,9 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `ALLOW_WORKFLOW_EDITS` | `false` | Allow AI edits to workflow files |
 | `ENABLE_AUTO_MERGE` | `false` | Auto-merge PRs (squash) when review passes and checks are green |
 | `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before marking `ai:review-blocked` |
-| `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum orchestrator judge retries for review-blocked PRs |
+| `ENABLE_REVIEW_BLOCKED_JUDGE` | `true` | Enable review-blocked judge for non-orchestrator PRs |
+| `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | Reasoning effort for review-blocked judge |
+| `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum judge retries for review-blocked PRs (both review_autofix and orchestrate_poll) |
 | `ENABLE_VALIDATION` | `true` | Enable post-judge runtime validation gate in orchestrator poller |
 | `MAX_VALIDATE_CYCLES` | `3` | Maximum runtime validation cycles before terminal validation failure |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
@@ -450,14 +463,15 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 1. **Decomposition:** The LLM reads your repo, breaks the project into scoped issues with a dependency graph, and creates a tracking issue (labeled `ai:orchestrator-tracking`).
 2. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically. If clarification questions are raised, the `orchestrate_clarify_respond` workflow answers them automatically using an LLM, so the pipeline runs fully unattended.
 3. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. If a PR has merge conflicts (e.g. `main` advanced since the PR was created), the poller automatically updates the PR branch via the GitHub API before retrying the merge. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
-4. **Polling:** Every 10 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
-5. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
-6. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
-7. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge makes autonomous architectural and security trade-off decisions — it does not defer to humans. It can: (a) merge the PR as-is if remaining issues are cosmetic or low-risk, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts.
-8. **Implementation-failed recovery:** When the implementation phase produces no file changes despite an approved plan (e.g. workflow edits stripped without `ALLOW_WORKFLOW_EDITS`, or model failure), the issue is labeled `ai:implementation-failed`. The poller automatically closes the failed issue and creates a replacement with additional guidance, so the pipeline retries without manual intervention.
-9. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted once; if it still fails, the project stops and the operator is notified via Telegram.
-10. **Validation gate:** When the judge says "complete" and `ENABLE_VALIDATION=true`, the poller dispatches `ai-validate.yml`, marks the tracking issue `ai:validating`, and only closes after `ai:validated` is reported. See [Runtime Validation Phase](#runtime-validation-phase) for the full lifecycle and operational guidance.
-11. **Completion:** When validation is disabled, completion remains judge-driven and immediate.
+4. **In-progress conflict resolution:** When the base branch advances and creates merge conflicts on in-progress PRs (still going through the review/autofix cycle), the poller detects the conflict (`mergeable == false`) and re-triggers the review workflow by pushing an empty commit. The review workflow's built-in Codex conflict resolver then handles the actual merge conflict resolution automatically.
+5. **Polling:** Every 10 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
+6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
+7. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
+8. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge makes autonomous architectural and security trade-off decisions — it does not defer to humans. It can: (a) merge the PR as-is if remaining issues are cosmetic or low-risk, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts.
+9. **Implementation-failed recovery:** When the implementation phase produces no file changes despite an approved plan (e.g. workflow edits stripped without `ALLOW_WORKFLOW_EDITS`, or model failure), the issue is labeled `ai:implementation-failed`. The poller automatically closes the failed issue and creates a replacement with additional guidance, so the pipeline retries without manual intervention.
+10. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted once; if it still fails, the project stops and the operator is notified via Telegram.
+11. **Validation gate:** When the judge says "complete" and `ENABLE_VALIDATION=true`, the poller dispatches `ai-validate.yml`, marks the tracking issue `ai:validating`, and only closes after `ai:validated` is reported. See [Runtime Validation Phase](#runtime-validation-phase) for the full lifecycle and operational guidance.
+12. **Completion:** When validation is disabled, completion remains judge-driven and immediate.
 
 ### Enabling auto-merge
 
