@@ -41,7 +41,9 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ALLOW_WORKFLOW_EDITS` | No | `false` | review_autofix, implement | Allow AI edits to `.github/workflows` files |
 | `ENABLE_AUTO_MERGE` | No | `false` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
-| `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | orchestrate_poll | Maximum orchestrator judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). |
+| `ENABLE_REVIEW_BLOCKED_JUDGE` | No | `true` | review_autofix | When true, non-orchestrator PRs that exhaust autofix iterations invoke a judge (LLM) to decide: merge as-is, push a fix commit, or close and reissue. Orchestrator-managed PRs are skipped (handled by the poller). |
+| `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | No | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge in non-orchestrator PRs (`xhigh`, `high`, `medium`, `low`). |
+| `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | review_autofix, orchestrate_poll | Maximum judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). Used by both the review_autofix judge (counts `[judge-fix]` commits) and the orchestrator poller. |
 | `ENABLE_VALIDATION` | No | `true` | orchestrate_poll | When true, a `complete` judge verdict transitions the tracking issue into runtime validation (`ai:validating`) and completion occurs only after validation passes. |
 | `MAX_VALIDATE_CYCLES` | No | `3` | orchestrate_poll | Maximum runtime validation cycles (initial run + fix/revalidate loops) before forcing `ai:validation-failed`. |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
@@ -63,6 +65,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | review_autofix | Reasoning effort for the editor model (applying fixes) |
+| `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
 | `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | orchestrate | Reasoning effort for project decomposition |
 | `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation |
 | `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
@@ -166,9 +169,17 @@ jobs:
 
 > The reusable workflow handles autofix iteration counting internally. It
 > counts consecutive `[ai-autofix]` commits and stops after
-> `MAX_AUTOFIX_ITERATIONS` (default `3`), labeling the PR `ai:review-blocked`.
-> When review passes with no fixes needed, it labels linked issues
-> `ai:ready-to-merge` and enables auto-merge if configured.
+> `MAX_AUTOFIX_ITERATIONS` (default `3`). When `ENABLE_REVIEW_BLOCKED_JUDGE`
+> is `true` (the default), a judge LLM evaluates the PR and decides to:
+> merge as-is, push a `[judge-fix]` commit (re-triggers review with reset
+> counter), or close the PR and create a replacement issue. The judge
+> respects `MAX_REVIEW_BLOCKED_RETRIES` (default `2`) by counting
+> `[judge-fix]` commits in the branch history. Orchestrator-managed PRs
+> are skipped (handled by the orchestrate_poll workflow instead). If the
+> judge is disabled or fails, the PR is labeled `ai:review-blocked` and
+> requires human intervention. When review passes with no fixes needed,
+> it labels linked issues `ai:ready-to-merge` and enables auto-merge if
+> configured.
 
 > **Warning — do NOT add a top-level `concurrency` block to this wrapper.**
 > The reusable workflow already manages concurrency at the job level. Adding a
@@ -381,7 +392,9 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `ALLOW_WORKFLOW_EDITS` | `false` | Allow AI edits to workflow files |
 | `ENABLE_AUTO_MERGE` | `false` | Auto-merge PRs (squash) when review passes and checks are green |
 | `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before marking `ai:review-blocked` |
-| `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum orchestrator judge retries for review-blocked PRs |
+| `ENABLE_REVIEW_BLOCKED_JUDGE` | `true` | Enable review-blocked judge for non-orchestrator PRs |
+| `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | Reasoning effort for review-blocked judge |
+| `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum judge retries for review-blocked PRs (both review_autofix and orchestrate_poll) |
 | `ENABLE_VALIDATION` | `true` | Enable post-judge runtime validation gate in orchestrator poller |
 | `MAX_VALIDATE_CYCLES` | `3` | Maximum runtime validation cycles before terminal validation failure |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
