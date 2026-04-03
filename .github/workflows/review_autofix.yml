@@ -3002,39 +3002,12 @@ jobs:
             --data-urlencode "text=${MSG}"
 
       - name: Telegram review-blocked judge decision
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled == 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}
-        run: |
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
-            echo "Telegram credentials not configured; skipping notification."
-            exit 0
-          fi
-
-          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
-          case "${JUDGE_ACTION}" in
-            merge)
-              MSG="$(printf 'Review-blocked judge merged PR as-is\nPR: %s' "${PR_URL}")" ;;
-            fix)
-              MSG="$(printf 'Review-blocked judge pushed fix commit\nPR: %s' "${PR_URL}")" ;;
-            close_and_reissue)
-              MSG="$(printf 'Review-blocked judge closed PR and created replacement issue\nPR: %s' "${PR_URL}")" ;;
-            *)
-              MSG="$(printf 'Review-blocked judge action: %s\nPR: %s' "${JUDGE_ACTION}" "${PR_URL}")" ;;
-          esac
-          curl -sS -X POST \
-            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${TG_CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}"
-
-      - name: Telegram review-blocked (autofix exhaustion)
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true'
-        env:
-          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
-          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
@@ -3043,7 +3016,20 @@ jobs:
           fi
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
-          MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations)\nNeeds human intervention\nPR: %s' "${MAX_AUTOFIX_ITERATIONS}" "${PR_URL}")"
+          if [ "${JUDGE_HANDLED}" = "true" ]; then
+            case "${JUDGE_ACTION}" in
+              merge)
+                MSG="$(printf 'Review-blocked judge merged PR as-is\nPR: %s' "${PR_URL}")" ;;
+              fix)
+                MSG="$(printf 'Review-blocked judge pushed fix commit\nPR: %s' "${PR_URL}")" ;;
+              close_and_reissue)
+                MSG="$(printf 'Review-blocked judge closed PR and created replacement issue\nPR: %s' "${PR_URL}")" ;;
+              *)
+                MSG="$(printf 'Review-blocked judge action: %s\nPR: %s' "${JUDGE_ACTION}" "${PR_URL}")" ;;
+            esac
+          else
+            MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge did not handle\nNeeds human intervention\nPR: %s' "${MAX_AUTOFIX_ITERATIONS}" "${PR_URL}")"
+          fi
           curl -sS -X POST \
             "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}" \
