@@ -174,7 +174,7 @@ dispatch_validation_if_needed() {
 
 mark_validation_failed() {
   local reason="$1"
-  jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason' \
+  jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason | .validation_active_fix_issues = []' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
   set_tracking_phase_label "ai:validation-failed"
@@ -238,9 +238,9 @@ sync_validation_fix_issues_from_comments() {
        .validation_seen_fix_issues = ((.validation_seen_fix_issues // []) + $active_fix_issues | unique)' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   else
-    jq --argjson comment_id "${fix_comment_id}" \
-      '.status = "validation-fixing" | .validation_last_fix_comment_id = $comment_id' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    echo "::warning::Validation fix comment ${fix_comment_id} did not include extractable issue numbers; treating as validation failure."
+    mark_validation_failed "Validation workflow produced a fixable-issues comment with no extractable issue numbers (comment ${fix_comment_id})."
+    return 0
   fi
 
   set_tracking_phase_label "ai:validation-fixing"
@@ -289,6 +289,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
     sync_validation_fix_issues_from_comments "${COMMENTS}"
     PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+    TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
   fi
 
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
@@ -1303,10 +1304,12 @@ PRs to revert: ${REVERT_COUNT}"
         '.status = "validating" |
          .judge_cycle += 1 |
          .validation_cycle = $cycle |
-         .validation_active_fix_issues = (.validation_active_fix_issues // []) |
+         .validation_active_fix_issues = [] |
          .validation_seen_fix_issues = (.validation_seen_fix_issues // []) |
          .validation_last_fix_comment_id = (.validation_last_fix_comment_id // 0) |
-         .validation_last_dispatch_cycle = (.validation_last_dispatch_cycle // 0)' \
+         .validation_last_dispatch_cycle = (.validation_last_dispatch_cycle // 0) |
+         .validation_failure_reason = null |
+         .validation_completed_cycle = null' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
       set_tracking_phase_label "ai:validating"
