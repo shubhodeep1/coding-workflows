@@ -417,6 +417,22 @@ def test_complete_verdict_enters_validation_mode_when_enable_validation_is_mixed
 
 
 
+def test_complete_verdict_redispatches_validation_when_previous_dispatch_cycle_exists():
+	state = _base_state(status="in_progress")
+	state["validation_cycle"] = 1
+	state["validation_last_dispatch_cycle"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+	)
+	assert result["latest_state"]["status"] == "validating"
+	assert result["latest_state"]["validation_last_dispatch_cycle"] == 1
+	assert len(result["validation_dispatches"]) == 1
+
+
+
 def test_complete_verdict_closes_when_validation_disabled():
 	state = _base_state(status="in_progress")
 	result = _run_poller(
