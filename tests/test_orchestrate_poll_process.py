@@ -416,6 +416,20 @@ def test_complete_verdict_closes_when_validation_disabled():
 	assert result["validation_dispatches"] == []
 
 
+def test_complete_verdict_enters_validation_for_truthy_enable_values():
+	for truthy in ["1", "TRUE", "Yes", "on", "On"]:
+		state = _base_state(status="in_progress")
+		result = _run_poller(
+			state=state,
+			enable_validation=truthy,
+			max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"]},
+		)
+		assert result["latest_state"]["status"] == "validating"
+		assert result["tracking_closed"] is False
+		assert len(result["validation_dispatches"]) == 1
+
+
 
 def test_validation_fixing_redispatches_when_fix_issues_merged():
 	state = _base_state(status="validation-fixing")
