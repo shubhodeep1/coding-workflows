@@ -57,6 +57,21 @@ Rules:
 - Prefer merge (A) over fix (B) when remaining issues are non-critical.
 - Prefer fix (B) over close_and_reissue (C) when the fix is straightforward.
 
+IMPORTANT — Autonomous decision-making:
+- You ARE the decision-maker. There is no human in the loop. Do NOT defer
+  decisions to humans or flag items as "needs human review."
+- When review comments raise architectural questions (e.g., security design,
+  approach alternatives, API design), YOU must evaluate the trade-offs and
+  make the call. Pick the pragmatic option that unblocks the pipeline.
+- If a reviewer comment requests a large-scope redesign that is out of scope
+  for the original issue, prefer merging the PR as-is and note the suggestion
+  as a follow-up concern — do not let scope creep block the pipeline.
+- If a security concern is raised that has no minimal fix, assess the actual
+  risk in context. If the risk is acceptable for the current scope (e.g., a
+  theoretical attack vector that requires same-UID access on a CI runner),
+  merge and document the limitation. Only block if the risk is exploitable
+  in the target runtime environment.
+
 SERENA MCP EFFICIENCY (MANDATORY):
 - Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
   Skip straight to activate_project and then use tools directly.

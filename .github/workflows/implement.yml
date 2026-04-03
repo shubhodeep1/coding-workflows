@@ -14,6 +14,7 @@ name: AI Implement
 env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'high' }}
+  ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'false' }}
 
 jobs:
   implement:
@@ -658,9 +659,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -d .github/workflows ]; then
+          if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
+            echo "ALLOW_WORKFLOW_EDITS is enabled — preserving .github/workflows changes."
+          elif [ -d .github/workflows ]; then
             if [ -n "$(git status --porcelain .github/workflows)" ]; then
-              echo "Discarding Codex edits under .github/workflows."
+              echo "Discarding Codex edits under .github/workflows (ALLOW_WORKFLOW_EDITS is not enabled)."
               git restore --source=HEAD --staged --worktree .github/workflows || true
             fi
             git clean -fd -- .github/workflows
@@ -697,14 +700,28 @@ jobs:
           git commit -m "AI implementation for issue #${ISSUE_NUMBER}"
           echo "did_commit=true" >> "$GITHUB_OUTPUT"
 
-      - name: Comment on no-op implementation
+      - name: Handle no-op implementation
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+
+          # A no-op implementation is almost always a bug — the plan approved
+          # changes but codex produced none (or they were stripped, e.g.
+          # workflow edits without ALLOW_WORKFLOW_EDITS).  Label the issue so
+          # the orchestrator poller can detect and re-issue instead of silently
+          # treating this as success.
+          echo "::warning::Implementation produced no repository changes. Labeling issue #${ISSUE_NUMBER} as ai:implementation-failed."
+
           gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="AI implementation completed with no repository changes required for this issue."
+            -f body="⚠️ AI implementation produced no repository changes despite an approved plan. This is likely a pipeline bug (e.g. workflow edits stripped without \`ALLOW_WORKFLOW_EDITS=true\`, or the model failed to write files). Labeling \`ai:implementation-failed\` for orchestrator re-processing."
+
+          # Remove ai:done (if present) and add failure label
+          gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --remove-label 'ai:done' --add-label 'ai:implementation-failed' 2>/dev/null || \
+          gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:implementation-failed' 2>/dev/null || true
 
       - name: Push branch
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'

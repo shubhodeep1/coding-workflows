@@ -449,6 +449,16 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         else
           echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
         fi
+      elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" != "true" ]; then
+        echo "  PR #${RTM_PR} is not mergeable (mergeable=${PR_MERGEABLE}). Attempting branch update..."
+        if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}/update-branch" \
+          -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.sha' 2>/dev/null)" \
+          2>/dev/null; then
+          echo "  PR #${RTM_PR} branch updated. Will retry merge on next poll cycle."
+        else
+          echo "::warning::Could not update branch for PR #${RTM_PR} (issue #${rtm_issue}). May have real conflicts."
+          tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has merge conflicts that could not be auto-resolved. Manual rebase may be needed."
+        fi
       else
         echo "  PR #${RTM_PR} state=${PR_STATE} mergeable=${PR_MERGEABLE}, skipping."
       fi
@@ -682,7 +692,7 @@ sys.exit(1)
           gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
 
-          # Attempt squash merge
+          # Attempt squash merge (with branch update if needed)
           PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
           PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
           if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
@@ -692,6 +702,16 @@ sys.exit(1)
               echo "  PR #${RB_PR} merged directly."
             else
               echo "::warning::Could not merge PR #${RB_PR}."
+            fi
+          elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" != "true" ]; then
+            echo "  PR #${RB_PR} is not mergeable. Attempting branch update..."
+            if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
+              -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' 2>/dev/null)" \
+              2>/dev/null; then
+              echo "  PR #${RB_PR} branch updated. Will retry merge on next poll cycle."
+            else
+              echo "::warning::Could not update branch for review-blocked PR #${RB_PR}. May have real conflicts."
+              tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts that could not be auto-resolved."
             fi
           else
             echo "  PR #${RB_PR} state=${PR_STATE} mergeable=${PR_MERGEABLE}, cannot merge yet."
@@ -707,9 +727,20 @@ sys.exit(1)
             gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-            if [ "${PR_STATE}" = "open" ]; then
+            PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+            if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
               gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
                 || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+            elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" != "true" ]; then
+              echo "  PR #${RB_PR} is not mergeable (force-merge path). Attempting branch update..."
+              if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
+                -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' 2>/dev/null)" \
+                2>/dev/null; then
+                echo "  PR #${RB_PR} branch updated. Will retry force-merge on next poll cycle."
+              else
+                echo "::warning::Could not update branch for force-merge PR #${RB_PR}."
+                tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) has unresolvable merge conflicts."
+              fi
             fi
             REVIEW_BLOCKED_STATE_CHANGED=true
             tg_notify "✅ Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"
@@ -891,6 +922,64 @@ ${RB_FIX_DESC}" || true
       ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
       echo "Updated wave status after review-blocked handling: complete=${WAVE_COMPLETE}, failed=${ANY_FAILED}"
     fi
+  fi
+
+  # ---------------------------------------------------------------
+  # Handle implementation-failed issues: close and re-issue
+  # ---------------------------------------------------------------
+  IMPL_FAILED_STATE_CHANGED=false
+  echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "implementation-failed") | .github_issue' | while read -r if_issue; do
+    [ -n "${if_issue}" ] && [ "${if_issue}" != "null" ] || continue
+    echo "  Issue #${if_issue} has implementation-failed. Closing and re-issuing..."
+
+    # Read the original issue to preserve its content
+    IF_TITLE="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' 2>/dev/null || echo "")"
+    IF_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' 2>/dev/null || echo "")"
+
+    # Close the failed issue
+    gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+      --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+    gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+      -c "Closing: implementation produced no changes. Re-issuing with additional guidance." 2>/dev/null || true
+
+    # Create replacement issue with extra guidance
+    NEW_BODY="$(cat <<REISSUE_EOF
+${IF_BODY}
+
+---
+
+**⚠️ Re-issued from #${if_issue}** — the previous implementation attempt produced no repository changes.
+
+**Guidance for the implementation model:**
+- You MUST create or modify files as described in the plan. Do NOT just describe changes.
+- If the plan requires creating files under \`.github/workflows/\`, the consumer repo must have \`ALLOW_WORKFLOW_EDITS=true\` set as a repository variable.
+- Verify your changes exist on disk before finishing (e.g. \`ls -la\` the target path).
+- If the task genuinely requires no code changes, explain why in a comment instead of silently producing no output.
+REISSUE_EOF
+)"
+
+    NEW_ISSUE_URL="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
+      --title "${IF_TITLE}" \
+      --body "${NEW_BODY}" 2>/dev/null || echo "")"
+    if [ -n "${NEW_ISSUE_URL}" ]; then
+      NEW_ISSUE_NUM="$(echo "${NEW_ISSUE_URL}" | grep -oE '[0-9]+$')"
+      echo "  Created replacement issue #${NEW_ISSUE_NUM} for failed #${if_issue}."
+
+      # Update state file: replace the old issue number with the new one
+      if [ -n "${NEW_ISSUE_NUM}" ]; then
+        jq "(.waves[${WAVE_IDX}].issues[] | select(.github_issue == \"${if_issue}\" or .github_issue == ${if_issue})).github_issue = \"${NEW_ISSUE_NUM}\"" \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      fi
+
+      tg_notify "🔄 Re-issued implementation-failed issue #${if_issue} as #${NEW_ISSUE_NUM}: ${IF_TITLE}"
+      IMPL_FAILED_STATE_CHANGED=true
+    else
+      echo "::warning::Could not create replacement issue for #${if_issue}."
+    fi
+  done
+
+  if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
+    post_state_comment
   fi
 
   if [ "${WAVE_COMPLETE}" != "true" ]; then
