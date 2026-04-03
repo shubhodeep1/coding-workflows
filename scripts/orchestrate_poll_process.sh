@@ -174,7 +174,7 @@ dispatch_validation_if_needed() {
 
 mark_validation_failed() {
   local reason="$1"
-  jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason' \
+  jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason | .validation_active_fix_issues = []' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
   set_tracking_phase_label "ai:validation-failed"
@@ -238,9 +238,9 @@ sync_validation_fix_issues_from_comments() {
        .validation_seen_fix_issues = ((.validation_seen_fix_issues // []) + $active_fix_issues | unique)' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   else
-    jq --argjson comment_id "${fix_comment_id}" \
-      '.status = "validation-fixing" | .validation_last_fix_comment_id = $comment_id' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    echo "::warning::Validation fix comment ${fix_comment_id} did not include extractable issue numbers; treating as validation failure."
+    mark_validation_failed "Validation workflow produced a fixable-issues comment with no extractable issue numbers (comment ${fix_comment_id})."
+    return 0
   fi
 
   set_tracking_phase_label "ai:validation-fixing"
@@ -289,6 +289,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
     sync_validation_fix_issues_from_comments "${COMMENTS}"
     PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+    TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
   fi
 
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
@@ -448,6 +449,55 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
           echo "  PR #${RTM_PR} merged directly."
         else
           echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
+        fi
+      elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
+        echo "  PR #${RTM_PR} is not mergeable (mergeable=${PR_MERGEABLE}). Attempting branch update..."
+        if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}/update-branch" \
+          -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.sha' 2>/dev/null)" \
+          2>/dev/null; then
+          echo "  PR #${RTM_PR} branch updated via API. The synchronize event will re-trigger review (including conflict resolution)."
+        else
+          echo "  API branch update failed for PR #${RTM_PR}. Attempting local merge + conflict resolution..."
+
+          # Fetch the PR head branch and base branch
+          RTM_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
+          if [ -n "${RTM_HEAD_REF}" ] && [ "${RTM_HEAD_REF}" != "null" ]; then
+            git fetch origin "${RTM_HEAD_REF}:refs/remotes/origin/${RTM_HEAD_REF}" 2>/dev/null || true
+            DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+            git fetch origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" 2>/dev/null || true
+            git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null || true
+            git config user.name "codex-bot"
+            git config user.email "codex@users.noreply.github.com"
+
+            if git merge --no-commit --no-ff "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
+              # Clean merge — no conflicts
+              git commit -m "[orchestrator-merge] update branch with ${DEFAULT_BRANCH}" 2>/dev/null || true
+              git push origin "HEAD:${RTM_HEAD_REF}" 2>/dev/null || true
+              echo "  PR #${RTM_PR} branch updated via local merge (no conflicts)."
+            elif [ -n "$(git ls-files --unmerged 2>/dev/null)" ]; then
+              git merge --abort 2>/dev/null || true
+              echo "  PR #${RTM_PR} has real merge conflicts — cannot auto-resolve from poller."
+              echo "  The review workflow's Codex conflict resolver handles this on synchronize events."
+              tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has real merge conflicts. Attempting to re-trigger review workflow."
+
+              # Force a synchronize event by creating an empty commit on the PR branch
+              git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null || true
+              git config user.name "codex-bot"
+              git config user.email "codex@users.noreply.github.com"
+              git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
+              git push origin "HEAD:${RTM_HEAD_REF}" 2>/dev/null || {
+                echo "::warning::Could not push empty commit to re-trigger review for PR #${RTM_PR}."
+              }
+            else
+              git merge --abort 2>/dev/null || true
+              echo "::warning::Unexpected merge state for PR #${RTM_PR}."
+            fi
+
+            # Return to detached HEAD / original state
+            git checkout --detach HEAD 2>/dev/null || true
+          else
+            echo "::warning::Could not determine head ref for PR #${RTM_PR}."
+          fi
         fi
       else
         echo "  PR #${RTM_PR} state=${PR_STATE} mergeable=${PR_MERGEABLE}, skipping."
@@ -682,7 +732,7 @@ sys.exit(1)
           gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
 
-          # Attempt squash merge
+          # Attempt squash merge (with branch update if needed)
           PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
           PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
           if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
@@ -692,6 +742,30 @@ sys.exit(1)
               echo "  PR #${RB_PR} merged directly."
             else
               echo "::warning::Could not merge PR #${RB_PR}."
+            fi
+          elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
+            echo "  PR #${RB_PR} is not mergeable. Attempting branch update..."
+            if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
+              -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' 2>/dev/null)" \
+              2>/dev/null; then
+              echo "  PR #${RB_PR} branch updated. Synchronize event will re-trigger review + conflict resolution."
+            else
+              echo "  API branch update failed for review-blocked PR #${RB_PR}. Pushing empty commit to re-trigger review workflow..."
+              RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
+              if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
+                git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || true
+                git checkout "origin/${RB_HEAD_REF}" 2>/dev/null || true
+                git config user.name "codex-bot"
+                git config user.email "codex@users.noreply.github.com"
+                git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
+                git push origin "HEAD:${RB_HEAD_REF}" 2>/dev/null || {
+                  echo "::warning::Could not push to re-trigger review for PR #${RB_PR}."
+                  tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts that could not be auto-resolved."
+                }
+                git checkout --detach HEAD 2>/dev/null || true
+              else
+                echo "::warning::Could not determine head ref for review-blocked PR #${RB_PR}."
+              fi
             fi
           else
             echo "  PR #${RB_PR} state=${PR_STATE} mergeable=${PR_MERGEABLE}, cannot merge yet."
@@ -707,9 +781,34 @@ sys.exit(1)
             gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-            if [ "${PR_STATE}" = "open" ]; then
+            PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+            if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
               gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
                 || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+            elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
+              echo "  PR #${RB_PR} is not mergeable (force-merge path). Attempting branch update..."
+              if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
+                -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' 2>/dev/null)" \
+                2>/dev/null; then
+                echo "  PR #${RB_PR} branch updated. Will retry force-merge on next poll cycle."
+              else
+                echo "  API branch update failed for force-merge PR #${RB_PR}. Re-triggering review for conflict resolution..."
+                RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
+                if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
+                  git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || true
+                  git checkout "origin/${RB_HEAD_REF}" 2>/dev/null || true
+                  git config user.name "codex-bot"
+                  git config user.email "codex@users.noreply.github.com"
+                  git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
+                  git push origin "HEAD:${RB_HEAD_REF}" 2>/dev/null || {
+                    echo "::warning::Could not push to re-trigger review for force-merge PR #${RB_PR}."
+                    tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) has unresolvable merge conflicts."
+                  }
+                  git checkout --detach HEAD 2>/dev/null || true
+                else
+                  echo "::warning::Could not determine head ref for force-merge PR #${RB_PR}."
+                fi
+              fi
             fi
             REVIEW_BLOCKED_STATE_CHANGED=true
             tg_notify "✅ Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"
@@ -891,6 +990,65 @@ ${RB_FIX_DESC}" || true
       ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
       echo "Updated wave status after review-blocked handling: complete=${WAVE_COMPLETE}, failed=${ANY_FAILED}"
     fi
+  fi
+
+  # ---------------------------------------------------------------
+  # Handle implementation-failed issues: close and re-issue
+  # ---------------------------------------------------------------
+  IMPL_FAILED_STATE_CHANGED=false
+  while read -r if_issue; do
+    [ -n "${if_issue}" ] && [ "${if_issue}" != "null" ] || continue
+    echo "  Issue #${if_issue} has implementation-failed. Closing and re-issuing..."
+
+    # Read the original issue to preserve its content
+    IF_TITLE="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' 2>/dev/null || echo "")"
+    IF_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' 2>/dev/null || echo "")"
+
+    # Close the failed issue
+    gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+      --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+    gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+      -c "Closing: implementation produced no changes. Re-issuing with additional guidance." 2>/dev/null || true
+
+    # Create replacement issue with extra guidance
+    NEW_BODY="$(cat <<REISSUE_EOF
+${IF_BODY}
+
+---
+
+**⚠️ Re-issued from #${if_issue}** — the previous implementation attempt produced no repository changes.
+
+**Guidance for the implementation model:**
+- You MUST create or modify files as described in the plan. Do NOT just describe changes.
+- If the plan requires creating files under \`.github/workflows/\`, the consumer repo must have \`ALLOW_WORKFLOW_EDITS=true\` set as a repository variable.
+- Verify your changes exist on disk before finishing (e.g. \`ls -la\` the target path).
+- If the task genuinely requires no code changes, explain why in a comment instead of silently producing no output.
+REISSUE_EOF
+)"
+
+    NEW_ISSUE_URL="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
+      --title "${IF_TITLE}" \
+      --body "${NEW_BODY}" 2>/dev/null || echo "")"
+    if [ -n "${NEW_ISSUE_URL}" ]; then
+      NEW_ISSUE_NUM="$(echo "${NEW_ISSUE_URL}" | grep -oE '[0-9]+$')"
+      echo "  Created replacement issue #${NEW_ISSUE_NUM} for failed #${if_issue}."
+
+      # Update state file: replace the old issue number with the new one
+      if [ -n "${NEW_ISSUE_NUM}" ]; then
+        IF_LOCAL_ID="$(jq -r --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" '.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue) | .id' "${STATE_FILE}" | head -n 1)"
+        jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      fi
+
+      tg_notify "🔄 Re-issued implementation-failed issue #${if_issue} as #${NEW_ISSUE_NUM}: ${IF_TITLE}"
+      IMPL_FAILED_STATE_CHANGED=true
+    else
+      echo "::warning::Could not create replacement issue for #${if_issue}."
+    fi
+  done < <(echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "implementation-failed") | .github_issue')
+
+  if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
+    post_state_comment
   fi
 
   if [ "${WAVE_COMPLETE}" != "true" ]; then
@@ -1146,10 +1304,12 @@ PRs to revert: ${REVERT_COUNT}"
         '.status = "validating" |
          .judge_cycle += 1 |
          .validation_cycle = $cycle |
-         .validation_active_fix_issues = (.validation_active_fix_issues // []) |
+         .validation_active_fix_issues = [] |
          .validation_seen_fix_issues = (.validation_seen_fix_issues // []) |
          .validation_last_fix_comment_id = (.validation_last_fix_comment_id // 0) |
-         .validation_last_dispatch_cycle = (.validation_last_dispatch_cycle // 0)' \
+         .validation_last_dispatch_cycle = (.validation_last_dispatch_cycle // 0) |
+         .validation_failure_reason = null |
+         .validation_completed_cycle = null' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
       set_tracking_phase_label "ai:validating"
@@ -1236,6 +1396,19 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
           FIX_BODY="$(echo "${fix_issue}" | jq -r '.body')"
           FIX_ID="$(echo "${fix_issue}" | jq -r '.id')"
 
+          # --- Dedup guard: skip if this local ID already has a GitHub issue ---
+          if [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
+            EXISTING_NUM="$(jq -r --arg fix_id "${FIX_ID}" '.issue_number_map[$fix_id] // empty' "${STATE_FILE}")"
+            if [ -n "${EXISTING_NUM}" ]; then
+              EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
+              if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
+                echo "  ${FIX_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate fix-up."
+                continue
+              fi
+              echo "  ${FIX_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new fix-up."
+            fi
+          fi
+
           FULL_FIX_BODY="${FIX_BODY}
 
 ---
@@ -1250,6 +1423,13 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
             --title "${FIX_TITLE}" \
             --body "${FULL_FIX_BODY}")"
           echo "  Created fix-up: ${FIX_URL}"
+
+          # Record in state so subsequent cycles/iterations won't recreate
+          FIX_NEW_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$')"
+          if [ -n "${FIX_NEW_NUM}" ] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
+            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" '.issue_number_map[$fix_id] = $fix_new_num' \
+              "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          fi
         done
       fi
 
@@ -1273,6 +1453,19 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
           NEW_BODY="$(echo "${new_issue}" | jq -r '.body')"
           NEW_ID="$(echo "${new_issue}" | jq -r '.id')"
 
+          # --- Dedup guard: skip if this local ID already has a GitHub issue ---
+          if [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
+            EXISTING_NUM="$(jq -r --arg new_id "${NEW_ID}" '.issue_number_map[$new_id] // empty' "${STATE_FILE}")"
+            if [ -n "${EXISTING_NUM}" ]; then
+              EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
+              if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
+                echo "  ${NEW_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate addition."
+                continue
+              fi
+              echo "  ${NEW_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new addition."
+            fi
+          fi
+
           FULL_NEW_BODY="${NEW_BODY}
 
 ---
@@ -1287,6 +1480,13 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
             --title "${NEW_TITLE}" \
             --body "${FULL_NEW_BODY}")"
           echo "  Created: ${NEW_URL}"
+
+          # Record in state so subsequent cycles/iterations won't recreate
+          ADD_NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
+          if [ -n "${ADD_NEW_NUM}" ] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
+            jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" '.issue_number_map[$new_id] = $add_new_num' \
+              "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          fi
         done
       fi
 

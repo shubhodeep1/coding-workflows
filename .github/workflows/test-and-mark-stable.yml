@@ -111,7 +111,7 @@ jobs:
     timeout-minutes: 120
     concurrency:
       group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}
-      cancel-in-progress: false
+      cancel-in-progress: true
     outputs:
       test_passed: ${{ steps.verify.outputs.passed }}
     env:
