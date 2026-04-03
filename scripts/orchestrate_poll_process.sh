@@ -454,10 +454,47 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}/update-branch" \
           -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.sha' 2>/dev/null)" \
           2>/dev/null; then
-          echo "  PR #${RTM_PR} branch updated. Will retry merge on next poll cycle."
+          echo "  PR #${RTM_PR} branch updated via API. The synchronize event will re-trigger review (including conflict resolution)."
         else
-          echo "::warning::Could not update branch for PR #${RTM_PR} (issue #${rtm_issue}). May have real conflicts."
-          tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has merge conflicts that could not be auto-resolved. Manual rebase may be needed."
+          echo "  API branch update failed for PR #${RTM_PR}. Attempting local merge + conflict resolution..."
+
+          # Fetch the PR head branch and base branch
+          RTM_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
+          if [ -n "${RTM_HEAD_REF}" ] && [ "${RTM_HEAD_REF}" != "null" ]; then
+            git fetch origin "${RTM_HEAD_REF}:refs/remotes/origin/${RTM_HEAD_REF}" 2>/dev/null || true
+            DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+            git fetch origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" 2>/dev/null || true
+            git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null || true
+
+            if git merge --no-commit --no-ff "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
+              # Clean merge — no conflicts
+              git commit -m "[orchestrator-merge] update branch with ${DEFAULT_BRANCH}" 2>/dev/null || true
+              git push origin "HEAD:${RTM_HEAD_REF}" 2>/dev/null || true
+              echo "  PR #${RTM_PR} branch updated via local merge (no conflicts)."
+            elif [ -n "$(git ls-files --unmerged 2>/dev/null)" ]; then
+              git merge --abort 2>/dev/null || true
+              echo "  PR #${RTM_PR} has real merge conflicts — cannot auto-resolve from poller."
+              echo "  The review workflow's Codex conflict resolver handles this on synchronize events."
+              tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has real merge conflicts. Attempting to re-trigger review workflow."
+
+              # Force a synchronize event by creating an empty commit on the PR branch
+              git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null || true
+              git config user.name "codex-bot"
+              git config user.email "codex@users.noreply.github.com"
+              git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
+              git push origin "HEAD:${RTM_HEAD_REF}" 2>/dev/null || {
+                echo "::warning::Could not push empty commit to re-trigger review for PR #${RTM_PR}."
+              }
+            else
+              git merge --abort 2>/dev/null || true
+              echo "::warning::Unexpected merge state for PR #${RTM_PR}."
+            fi
+
+            # Return to detached HEAD / original state
+            git checkout --detach HEAD 2>/dev/null || true
+          else
+            echo "::warning::Could not determine head ref for PR #${RTM_PR}."
+          fi
         fi
       else
         echo "  PR #${RTM_PR} state=${PR_STATE} mergeable=${PR_MERGEABLE}, skipping."
@@ -708,10 +745,24 @@ sys.exit(1)
             if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
               -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' 2>/dev/null)" \
               2>/dev/null; then
-              echo "  PR #${RB_PR} branch updated. Will retry merge on next poll cycle."
+              echo "  PR #${RB_PR} branch updated. Synchronize event will re-trigger review + conflict resolution."
             else
-              echo "::warning::Could not update branch for review-blocked PR #${RB_PR}. May have real conflicts."
-              tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts that could not be auto-resolved."
+              echo "  API branch update failed for review-blocked PR #${RB_PR}. Pushing empty commit to re-trigger review workflow..."
+              RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
+              if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
+                git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || true
+                git checkout "origin/${RB_HEAD_REF}" 2>/dev/null || true
+                git config user.name "codex-bot"
+                git config user.email "codex@users.noreply.github.com"
+                git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
+                git push origin "HEAD:${RB_HEAD_REF}" 2>/dev/null || {
+                  echo "::warning::Could not push to re-trigger review for PR #${RB_PR}."
+                  tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts that could not be auto-resolved."
+                }
+                git checkout --detach HEAD 2>/dev/null || true
+              else
+                echo "::warning::Could not determine head ref for review-blocked PR #${RB_PR}."
+              fi
             fi
           else
             echo "  PR #${RB_PR} state=${PR_STATE} mergeable=${PR_MERGEABLE}, cannot merge yet."
@@ -738,8 +789,22 @@ sys.exit(1)
                 2>/dev/null; then
                 echo "  PR #${RB_PR} branch updated. Will retry force-merge on next poll cycle."
               else
-                echo "::warning::Could not update branch for force-merge PR #${RB_PR}."
-                tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) has unresolvable merge conflicts."
+                echo "  API branch update failed for force-merge PR #${RB_PR}. Re-triggering review for conflict resolution..."
+                RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
+                if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
+                  git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || true
+                  git checkout "origin/${RB_HEAD_REF}" 2>/dev/null || true
+                  git config user.name "codex-bot"
+                  git config user.email "codex@users.noreply.github.com"
+                  git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
+                  git push origin "HEAD:${RB_HEAD_REF}" 2>/dev/null || {
+                    echo "::warning::Could not push to re-trigger review for force-merge PR #${RB_PR}."
+                    tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) has unresolvable merge conflicts."
+                  }
+                  git checkout --detach HEAD 2>/dev/null || true
+                else
+                  echo "::warning::Could not determine head ref for force-merge PR #${RB_PR}."
+                fi
               fi
             fi
             REVIEW_BLOCKED_STATE_CHANGED=true
