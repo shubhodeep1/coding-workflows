@@ -446,6 +446,7 @@ jobs:
           # 5a: Python unit tests
           echo "── Unit tests ──"
           python3 tests/test_orchestrate_lib.py
+          python3 tests/test_orchestrate_poll_process.py
 
           # 5b: CLI integration — validate a synthetic decomposition
           echo ""
