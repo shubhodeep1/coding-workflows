@@ -144,8 +144,19 @@ has_label() {
 
 dispatch_validation_workflow() {
   local validation_cycle="$1"
-  echo "Dispatching ai-validate.yml for tracking #${TRACKING_NUM} (cycle ${validation_cycle})"
-  gh_retry gh workflow run ai-validate.yml \
+  local workflow_name="ai-validate.yml"
+  local fallback_workflow_name="internal-validate.yml"
+  if [ ! -f ".github/workflows/${workflow_name}" ] && [ -f ".github/workflows/${fallback_workflow_name}" ]; then
+    workflow_name="${fallback_workflow_name}"
+    fallback_workflow_name="ai-validate.yml"
+  fi
+  echo "Dispatching ${workflow_name} for tracking #${TRACKING_NUM} (cycle ${validation_cycle})"
+  if gh_retry gh workflow run "${workflow_name}" \
+    --repo "${GITHUB_REPOSITORY}" \
+    -f tracking_issue="${TRACKING_NUM}" >/dev/null; then
+    return 0
+  fi
+  gh_retry gh workflow run "${fallback_workflow_name}" \
     --repo "${GITHUB_REPOSITORY}" \
     -f tracking_issue="${TRACKING_NUM}" >/dev/null
 }

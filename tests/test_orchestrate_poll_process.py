@@ -195,7 +195,7 @@ if args[0] == 'label' and len(args) >= 3 and args[1] == 'create':
 	sys.exit(0)
 
 if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
-	if args[2] == 'ai-validate.yml':
+	if args[2] in ('ai-validate.yml', 'internal-validate.yml'):
 		if store.get('fail_validation_dispatch'):
 			print('dispatch failed', file=sys.stderr)
 			sys.exit(1)
@@ -203,7 +203,7 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 		for i, arg in enumerate(args):
 			if arg == '-f' and i + 1 < len(args) and args[i + 1].startswith('tracking_issue='):
 				tracking = args[i + 1].split('=', 1)[1]
-		store['validation_dispatches'].append({'workflow': 'ai-validate.yml', 'tracking_issue': tracking})
+		store['validation_dispatches'].append({'workflow': args[2], 'tracking_issue': tracking})
 		save()
 		sys.exit(0)
 	sys.exit(1)
