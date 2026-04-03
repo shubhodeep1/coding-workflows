@@ -440,7 +440,7 @@ workflow_dispatch (project description)
     → Poller (scheduled): monitors progress, dispatches next waves
     → Judge (LLM, xhigh thinking, full repo checkout): evaluates after each wave
         → complete: close tracking issue
-        → in_progress: create fix-up issues, advance to next wave
+        → in_progress: create fix-up issues (added to current wave for tracking), advance to next wave
         → failed: auto-recovery (revert + re-plan, retry once), then stop
 ```
 
