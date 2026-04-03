@@ -1240,8 +1240,12 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
           if [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
             EXISTING_NUM="$(jq -r --arg fix_id "${FIX_ID}" '.issue_number_map[$fix_id] // empty' "${STATE_FILE}")"
             if [ -n "${EXISTING_NUM}" ]; then
-              echo "  ${FIX_ID}: already exists as #${EXISTING_NUM}, skipping duplicate fix-up."
-              continue
+              EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
+              if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
+                echo "  ${FIX_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate fix-up."
+                continue
+              fi
+              echo "  ${FIX_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new fix-up."
             fi
             PENDING_DEF="$(jq -r --arg fix_id "${FIX_ID}" '.pending_issue_defs[$fix_id] // empty' "${STATE_FILE}")"
             if [ -n "${PENDING_DEF}" ]; then
@@ -1298,8 +1302,12 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
           if [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
             EXISTING_NUM="$(jq -r --arg new_id "${NEW_ID}" '.issue_number_map[$new_id] // empty' "${STATE_FILE}")"
             if [ -n "${EXISTING_NUM}" ]; then
-              echo "  ${NEW_ID}: already exists as #${EXISTING_NUM}, skipping duplicate addition."
-              continue
+              EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
+              if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
+                echo "  ${NEW_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate addition."
+                continue
+              fi
+              echo "  ${NEW_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new addition."
             fi
             PENDING_DEF="$(jq -r --arg new_id "${NEW_ID}" '.pending_issue_defs[$new_id] // empty' "${STATE_FILE}")"
             if [ -n "${PENDING_DEF}" ]; then
