@@ -46,7 +46,7 @@ jobs:
           set -euo pipefail
           python3 tests/test_orchestrate_lib.py
 
-      - name: Orchestrate poll process tests
+      - name: Orchestrate poll process unit tests
         run: |
           set -euo pipefail
           python3 tests/test_orchestrate_poll_process.py
