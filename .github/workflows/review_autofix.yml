@@ -727,6 +727,9 @@ jobs:
       - name: Run reviewer models
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
         id: reviewers
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -1200,6 +1203,14 @@ jobs:
             export CODEX_HOME="${reviewer_codex_home}"
 
             while [ "${attempt}" -le 3 ]; do
+              # Early exit if PR was closed/merged (detected by watchdog or another reviewer)
+              if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+                echo "Reviewer ${model} skipped — PR #${PR_NUMBER} was closed/merged." | tee -a "${log_file}"
+                echo "pr_closed" > "${status_file}"
+                rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+                return 0
+              fi
+
               tmp_output="$(mktemp)"
               tmp_stderr="$(mktemp)"
               # Use heartbeat file per reviewer to track activity.
@@ -1216,6 +1227,7 @@ jobs:
 
               # Background watchdog for this reviewer attempt
               (
+                wd_iter=0
                 while true; do
                   sleep 10
                   now="$(date +%s)"
@@ -1238,6 +1250,22 @@ jobs:
                     if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
                     rm -f "${hb_file}"
                     exit 143
+                  fi
+
+                  # PR state check — abort if PR was merged/closed (~every 90s)
+                  wd_iter=$((wd_iter + 1))
+                  if [ $((wd_iter % 9)) -eq 0 ]; then
+                    pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+                    if [ "${pr_state}" != "open" ]; then
+                      echo "Reviewer ${model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
+                      touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
+                      echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+                      local cpid
+                      cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+                      if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+                      rm -f "${hb_file}"
+                      exit 144
+                    fi
                   fi
                 done
               ) &
@@ -1337,6 +1365,12 @@ jobs:
           done
 
           if [ "${reviewers_successful}" -eq 0 ]; then
+            # If PR was closed/merged, exit cleanly instead of failing
+            if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+              echo "PR #${PR_NUMBER} was closed/merged during review — exiting cleanly."
+              echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+              exit 0
+            fi
             echo "Reviewer failure diagnostics:"
             for log_file in "${reviewer_log_files[@]}"; do
               if [ -f "${log_file}" ]; then
@@ -1350,7 +1384,7 @@ jobs:
           echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
 
       - name: Filter reviewer issues by consensus
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
 
@@ -1390,7 +1424,7 @@ jobs:
           } > "${REVIEWER_CONSENSUS_FILE}"
 
       - name: Install project dependencies (best-effort)
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
           # Install project dependencies so the editor can validate fixes
@@ -1422,14 +1456,17 @@ jobs:
           fi
 
       - name: Switch reasoning effort for editor
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
           sed -i "s/model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
           echo "Updated reasoning effort from ${REVIEWER_REASONING_EFFORT} to ${EDITOR_REASONING_EFFORT} for editor phase"
 
       - name: Apply fixes with editor model
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -1803,6 +1840,13 @@ jobs:
 
           attempt=1
           while [ "${attempt}" -le 3 ]; do
+            # Early exit if PR was closed/merged (detected by reviewer or editor watchdog)
+            if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+              echo "PR #${PR_NUMBER} was closed/merged — skipping editor."
+              echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+              exit 0
+            fi
+
             now_epoch="$(date +%s)"
             remaining=$(( JOB_DEADLINE - now_epoch ))
             if [ "${remaining}" -lt "${EDITOR_MIN_ATTEMPT_SECS}" ]; then
@@ -1829,6 +1873,7 @@ jobs:
 
             # ── Background watchdog: heartbeat + network-activity aware ──
             (
+              wd_iter=0
               while true; do
                 sleep 15
                 wd_now="$(date +%s)"
@@ -1865,6 +1910,20 @@ jobs:
                     if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
                     rm -f "${hb_file}"
                     exit 142
+                  fi
+                fi
+
+                # PR state check — abort if PR was merged/closed (~every 2 min)
+                wd_iter=$((wd_iter + 1))
+                if [ $((wd_iter % 8)) -eq 0 ]; then
+                  pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+                  if [ "${pr_state}" != "open" ]; then
+                    echo "Editor aborted — PR #${PR_NUMBER} is ${pr_state} (attempt ${attempt})." >&2
+                    touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
+                    cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+                    if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+                    rm -f "${hb_file}"
+                    exit 144
                   fi
                 fi
               done
@@ -1979,6 +2038,13 @@ jobs:
             sleep 2
           done
 
+          # If PR was closed/merged during editor execution, exit cleanly
+          if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+            echo "PR #${PR_NUMBER} was closed/merged — skipping editor fallback."
+            echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
           cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
           Changes made:
           - none (editor failed before producing a validated summary)
@@ -2044,7 +2110,7 @@ jobs:
             }
 
       - name: Commit changes
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         id: commit_changes
         run: |
           set -euo pipefail
@@ -2221,7 +2287,7 @@ jobs:
           fi
 
       - name: Post editor summary comment
-        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -2286,7 +2352,7 @@ jobs:
         # deferred), and HEAD is up to date, so the merge-base check is valid.
         # Actual
         # resolution is gated separately below.
-        if: success() && env.CAN_PUSH == 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -2340,7 +2406,7 @@ jobs:
         # resolution is not an autofix iteration and should not be blocked by
         # the iteration cap.  Also runs when did_commit is true since the push
         # is deferred — both autofix and conflict resolution are pushed together.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
 
@@ -2439,7 +2505,7 @@ jobs:
           fi
 
       - name: Telegram conflict resolution message
-        if: success() && env.CONFLICT_RESOLVED == 'true'
+        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -2450,7 +2516,7 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "Merge conflicts resolved automatically\nPR: ${PR_URL}"
 
       - name: Mark linked issues ready to merge
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -2490,7 +2556,7 @@ jobs:
 
       - name: Review-blocked judge decision
         id: rb_judge
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -2922,7 +2988,7 @@ jobs:
           esac
 
       - name: Mark linked issues review-blocked (autofix exhaustion)
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -2962,7 +3028,7 @@ jobs:
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (autofix exhaustion)
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
@@ -2988,7 +3054,7 @@ jobs:
           fi
 
       - name: Enable auto-merge on PR
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'false' }}
@@ -3012,7 +3078,7 @@ jobs:
         # are pushed together AFTER labeling and auto-merge are configured.
         # This avoids a concurrency self-cancel race where the synchronize
         # event from an earlier push would kill subsequent steps.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true')
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -3024,7 +3090,7 @@ jobs:
           echo "Push complete."
 
       - name: Telegram success
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -3035,7 +3101,7 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "PR processed: ${PR_URL}"
 
       - name: Telegram review-blocked judge decision
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true'
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -3064,7 +3130,7 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "${MSG}"
 
       - name: Mark linked issues review-blocked (workflow failure)
-        if: failure()
+        if: failure() && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3098,7 +3164,7 @@ jobs:
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (workflow failure)
-        if: failure()
+        if: failure() && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -3119,7 +3185,7 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
 
       - name: Telegram failure
-        if: failure() || cancelled()
+        if: (failure() || cancelled()) && env.PR_CLOSED != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
