@@ -210,7 +210,10 @@ jobs:
             COMMENT_COUNT=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
               --jq 'length' 2>/dev/null || echo "0")
 
-            CUR_STATE="labels=${LABELS};comments=${COMMENT_COUNT}"
+            CLARIFY_RUN_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=5&created=>${{ steps.create-issue.outputs.created_after }}" \
+              --jq '[.workflow_runs[] | select(.name | test("Clarif"; "i"))] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
+
+            CUR_STATE="labels=${LABELS};comments=${COMMENT_COUNT};clarify_run=${CLARIFY_RUN_STATUS}"
 
             # Reset inactivity timer on any state change
             if [ "$CUR_STATE" != "$PREV_STATE" ]; then
@@ -251,7 +254,7 @@ jobs:
             fi
 
             REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
-            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — labels: ${LABELS:-none}"
+            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — clarify_run: ${CLARIFY_RUN_STATUS}, labels: ${LABELS:-none}"
             sleep "$POLL_INTERVAL"
           done
 
