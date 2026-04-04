@@ -375,6 +375,7 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		elif "ai:closed" in labels:
 			status = "closed"
 			any_failed = True
+			all_merged = False
 		elif "ai:implementation-failed" in labels:
 			status = "implementation-failed"
 			any_failed = True
