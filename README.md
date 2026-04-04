@@ -306,7 +306,7 @@ on:
         type: string
         default: "docker-compose.yml"
       validation_timeout:
-        description: Validation timeout in minutes
+        description: Validation idle timeout in minutes (no output = killed)
         required: false
         type: string
         default: "15"
@@ -556,7 +556,7 @@ This phase starts only after the orchestrator judge returns `complete`.
 - The wrapper must call reusable [`/.github/workflows/validate.yml`](.github/workflows/validate.yml) with these inputs:
 - `tracking_issue` (tracking issue number)
 - `compose_file` (compose fallback path, default `docker-compose.yml`)
-- `validation_timeout` (minutes, default `15`)
+- `validation_timeout` (idle timeout in minutes — process is killed only after this long with no output, default `15`)
 - If the wrapper is missing or dispatch permissions are insufficient, the poller marks the tracking issue `ai:validation-failed`.
 
 ### Runtime Constraints

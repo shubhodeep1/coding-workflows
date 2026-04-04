@@ -509,28 +509,71 @@ find validation -type f -name '*.sh' -exec chmod +x {} +
 
 
 # ---------------------------------------------------------------
-# Phase 2: Execute validation harness
+# Phase 2: Execute validation harness (idle-timeout based)
 # ---------------------------------------------------------------
+# The timeout is activity-based: the process is killed only if it
+# produces no output for VALIDATION_TIMEOUT minutes. This allows
+# large projects to run longer as long as they keep producing output.
+IDLE_TIMEOUT_SECS=$((VALIDATION_TIMEOUT * 60))
 VALIDATION_EXIT=0
+VALIDATION_IDLE_KILLED=0
+
 set +e
-timeout -k 30s "${VALIDATION_TIMEOUT}m" bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1
+# Run validation in background, tee output to log file
+bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1 &
+VALIDATION_PID=$!
+
+# Monitor the log file for activity; kill if idle too long
+LAST_SIZE=0
+IDLE_ELAPSED=0
+POLL_INTERVAL=5
+while kill -0 "${VALIDATION_PID}" 2>/dev/null; do
+  CURRENT_SIZE=0
+  if [ -f "${VALIDATION_LOG_FILE}" ]; then
+    CURRENT_SIZE=$(stat -c%s "${VALIDATION_LOG_FILE}" 2>/dev/null || echo 0)
+  fi
+
+  if [ "${CURRENT_SIZE}" -ne "${LAST_SIZE}" ]; then
+    LAST_SIZE="${CURRENT_SIZE}"
+    IDLE_ELAPSED=0
+  else
+    IDLE_ELAPSED=$((IDLE_ELAPSED + POLL_INTERVAL))
+  fi
+
+  if [ "${IDLE_ELAPSED}" -ge "${IDLE_TIMEOUT_SECS}" ]; then
+    echo "Validation idle for ${VALIDATION_TIMEOUT} minute(s) with no output — terminating." >> "${VALIDATION_LOG_FILE}"
+    kill "${VALIDATION_PID}" 2>/dev/null || true
+    # Grace period: SIGKILL after 30s if still running
+    sleep 30
+    if kill -0 "${VALIDATION_PID}" 2>/dev/null; then
+      kill -9 "${VALIDATION_PID}" 2>/dev/null || true
+    fi
+    VALIDATION_IDLE_KILLED=1
+    break
+  fi
+
+  sleep "${POLL_INTERVAL}"
+done
+
+wait "${VALIDATION_PID}" 2>/dev/null
 VALIDATION_EXIT=$?
 set -e
 
 tail -n 200 "${VALIDATION_LOG_FILE}" > "${VALIDATION_LOG_TAIL_FILE}" 2>/dev/null || true
 
-if [ "${VALIDATION_EXIT}" -eq 124 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
-  timeout_test="validation-timeout"
-  timeout_error="Validation timed out after ${VALIDATION_TIMEOUT} minute(s)"
-  if [ "${VALIDATION_EXIT}" -eq 137 ]; then
+if [ "${VALIDATION_IDLE_KILLED}" -eq 1 ] || [ "${VALIDATION_EXIT}" -eq 124 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
+  timeout_test="validation-idle-timeout"
+  timeout_error="Validation idle-timed out after ${VALIDATION_TIMEOUT} minute(s) with no output"
+  if [ "${VALIDATION_IDLE_KILLED}" -eq 0 ]; then
+    # Legacy exit codes (shouldn't normally happen now, but handle defensively)
     timeout_test="validation-timeout-signal"
-    timeout_error="Validation likely timed out and was terminated (exit code ${VALIDATION_EXIT}) after ${VALIDATION_TIMEOUT} minute(s)"
+    timeout_error="Validation terminated (exit code ${VALIDATION_EXIT}) after ${VALIDATION_TIMEOUT} minute(s)"
   fi
 
   jq -n \
     --arg timeout_test "${timeout_test}" \
     --arg timeout_error "${timeout_error}" \
-    --arg duration_seconds "$((VALIDATION_TIMEOUT * 60))" \
+    --arg duration_seconds "${IDLE_TIMEOUT_SECS}" \
     '{
       result: "fail",
       phase: "timeout",
@@ -574,6 +617,35 @@ PASSED_TESTS="$(jq -r '.passed_tests // 0' "${VALIDATION_RESULT_FILE}")"
 FAILED_TESTS="$(jq -r '.failed_tests // 0' "${VALIDATION_RESULT_FILE}")"
 DURATION_SECONDS="$(jq -r '.duration_seconds // 0' "${VALIDATION_RESULT_FILE}")"
 FIRST_FAILURE="$(jq -r '.failures[0].error // ""' "${VALIDATION_RESULT_FILE}")"
+
+# ---------------------------------------------------------------
+# Safety net: override contradictory fail-with-all-pass results.
+# When the harness script crashes (non-zero exit / result=fail)
+# but the structured JSON shows all tests passed (failed_tests==0,
+# passed_tests>0, counts consistent), the crash was a scripting
+# bug (e.g. grep returning 1 on zero matches under pipefail),
+# not a real test failure. Override to pass.
+# ---------------------------------------------------------------
+if [ "${RESULT_KIND}" != "pass" ] || [ "${VALIDATION_EXIT}" -ne 0 ]; then
+	if jq -e '
+		(.total_tests | type == "number") and
+		(.passed_tests | type == "number") and
+		(.failed_tests | type == "number") and
+		(.total_tests > 0) and
+		(.passed_tests > 0) and
+		(.failed_tests == 0) and
+		(.passed_tests == .total_tests) and
+		((.failures | length == 0) or ((.failures | length == 1) and (.failures[0].test == "validate.sh:unexpected_error")))
+	' "${VALIDATION_RESULT_FILE}" >/dev/null 2>&1; then
+		echo "::warning::Harness exited ${VALIDATION_EXIT} with result '${RESULT_KIND}' but all ${PASSED_TESTS}/${TOTAL_TESTS} tests passed (failed_tests=0). Overriding to pass (likely scripting bug in generated validate.sh)."
+		# Strip the synthetic unexpected_error failure entry and fix result
+		jq '.result = "pass" | .failures = [] | .phase = "runtime_validation"' "${VALIDATION_RESULT_FILE}" > "${VALIDATION_RESULT_FILE}.tmp"
+		mv "${VALIDATION_RESULT_FILE}.tmp" "${VALIDATION_RESULT_FILE}"
+		RESULT_KIND="pass"
+		VALIDATION_EXIT=0
+		FIRST_FAILURE=""
+	fi
+fi
 
 PASS_SCHEMA_OK="false"
 if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ]; then

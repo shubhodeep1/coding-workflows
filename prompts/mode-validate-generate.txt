@@ -42,6 +42,15 @@ Mandatory rules:
 - The final JSON result must include: `result` (`pass` or `fail`), `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures` (array of objects with `test`, `error`, and `log_tail`), and `duration_seconds`
 - Keep each `log_tail` concise (for example, the last 30 lines)
 
+CRITICAL — grep-safe TAP counting under `set -e` / `pipefail`:
+- `grep` exits with code 1 when zero lines match. Under `set -e` or `pipefail`, this kills the script even when zero matches is the expected (all-pass) outcome.
+- When counting TAP `ok` / `not ok` lines, always use patterns that return exit code 0 on zero matches. Preferred approaches:
+  - `grep -c 'pattern' "$file" || true`
+  - `{ grep 'pattern' "$file" || true; } | wc -l`
+  - `awk '/pattern/ { count++ } END { print count+0 }' "$file"`
+- NEVER use bare `grep ... | wc -l` in a pipeline under `pipefail` — `grep` returning 1 (no match) will propagate through the pipe and trigger ERR/exit.
+- Test the all-pass case (zero `not ok` lines) mentally before finalizing the script.
+
 Mandatory validation coverage (all required):
 1. Build verification
 2. Startup and health checks
