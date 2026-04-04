@@ -31,19 +31,23 @@ name: Test & Mark Stable Release
         default: false
       phase_timeout:
         description: >
-          Max minutes to wait for each workflow phase (clarify, plan, implement).
-          Increase for repos with large codebases or slow LLM providers.
+          Max minutes of *inactivity* before a phase is considered stuck.
+          The timer resets whenever progress is detected (label changes,
+          new comments, workflow run status updates). This is NOT a
+          wall-clock limit — a phase that keeps making progress can run
+          longer than this value.
         required: false
         type: number
-        default: 60
+        default: 15
       review_timeout:
         description: >
-          Max minutes to wait for the review & autofix phase specifically.
-          Review runs longer than other phases (multiple reviewer models +
-          editor). Falls back to phase_timeout when not set.
+          Max minutes of *inactivity* before the review & autofix phase
+          is considered stuck. Review naturally runs longer (multiple
+          reviewer models + editor), so this has a higher default.
+          The timer resets on any detected progress.
         required: false
         type: number
-        default: 90
+        default: 20
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -118,7 +122,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
       PHASE_TIMEOUT: ${{ inputs.phase_timeout || 15 }}
-      REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 90 }}
+      REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 20 }}
       POLL_INTERVAL: 10
 
     steps:
@@ -191,17 +195,36 @@ jobs:
         run: |
           set -euo pipefail
           echo "Waiting for clarify to finish on issue #${ISSUE_NUMBER}..."
-          TIMEOUT_SECS=$((PHASE_TIMEOUT * 60))
-          ELAPSED=0
+          echo "Inactivity timeout: ${PHASE_TIMEOUT} minutes"
+          INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))
+          LAST_ACTIVITY=$(date +%s)
+          PREV_STATE=""
 
-          while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
+          while true; do
+            NOW=$(date +%s)
+            IDLE=$((NOW - LAST_ACTIVITY))
+
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+
+            COMMENT_COUNT=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+              --jq 'length' 2>/dev/null || echo "0")
+
+            CUR_STATE="labels=${LABELS};comments=${COMMENT_COUNT}"
+
+            # Reset inactivity timer on any state change
+            if [ "$CUR_STATE" != "$PREV_STATE" ]; then
+              if [ -n "$PREV_STATE" ]; then
+                echo "  ↻ Activity detected (state changed) — resetting inactivity timer"
+              fi
+              LAST_ACTIVITY=$NOW
+              IDLE=0
+              PREV_STATE="$CUR_STATE"
+            fi
 
             # Clarify succeeded if we see planning or awaiting-approval
             if echo "$LABELS" | grep -qE 'ai:planning|ai:awaiting-approval'; then
               echo "✓ Clarify phase completed — issue moved to planning"
-              # Capture the clarify workflow run ID
               CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
                 --jq '[.workflow_runs[] | select(.name | test("Clarif"; "i"))] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
               echo "run_id=${CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
@@ -220,14 +243,17 @@ jobs:
               fi
             fi
 
-            echo "  ... waiting (${ELAPSED}s / ${TIMEOUT_SECS}s) — labels: ${LABELS:-none}"
-            sleep "$POLL_INTERVAL"
-            ELAPSED=$((ELAPSED + POLL_INTERVAL))
-          done
+            # Inactivity timeout
+            if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
+              echo "::error::Clarify phase stalled — no activity for ${PHASE_TIMEOUT} minutes"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
 
-          echo "::error::Timeout waiting for clarify phase to complete"
-          echo "status=timeout" >> "$GITHUB_OUTPUT"
-          exit 1
+            REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
+            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — labels: ${LABELS:-none}"
+            sleep "$POLL_INTERVAL"
+          done
 
       # ── Phase 2: Wait for Plan to complete ──────────────────────
       - name: "Phase 2: Wait for plan to complete"
@@ -237,12 +263,36 @@ jobs:
         run: |
           set -euo pipefail
           echo "Waiting for plan to finish on issue #${ISSUE_NUMBER}..."
-          TIMEOUT_SECS=$((PHASE_TIMEOUT * 60))
-          ELAPSED=0
+          echo "Inactivity timeout: ${PHASE_TIMEOUT} minutes"
+          INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))
+          LAST_ACTIVITY=$(date +%s)
+          PREV_STATE=""
 
-          while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
+          while true; do
+            NOW=$(date +%s)
+            IDLE=$((NOW - LAST_ACTIVITY))
+
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+
+            COMMENT_COUNT=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+              --jq 'length' 2>/dev/null || echo "0")
+
+            # Also check the plan workflow run status as an activity signal
+            PLAN_RUN_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=5&created=>${{ steps.create-issue.outputs.created_after }}" \
+              --jq '[.workflow_runs[] | select(.name | test("Plan"; "i"))] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
+
+            CUR_STATE="labels=${LABELS};comments=${COMMENT_COUNT};plan_run=${PLAN_RUN_STATUS}"
+
+            # Reset inactivity timer on any state change
+            if [ "$CUR_STATE" != "$PREV_STATE" ]; then
+              if [ -n "$PREV_STATE" ]; then
+                echo "  ↻ Activity detected (state changed) — resetting inactivity timer"
+              fi
+              LAST_ACTIVITY=$NOW
+              IDLE=0
+              PREV_STATE="$CUR_STATE"
+            fi
 
             if echo "$LABELS" | grep -q 'ai:awaiting-approval'; then
               echo "✓ Plan phase completed — awaiting approval"
@@ -263,14 +313,32 @@ jobs:
               exit 0
             fi
 
-            echo "  ... waiting (${ELAPSED}s / ${TIMEOUT_SECS}s) — labels: ${LABELS:-none}"
-            sleep "$POLL_INTERVAL"
-            ELAPSED=$((ELAPSED + POLL_INTERVAL))
-          done
+            # Detect plan workflow failure (completed but no expected label)
+            if [ "$PLAN_RUN_STATUS" = "completed" ]; then
+              # Plan finished but didn't produce awaiting-approval or implementing
+              # Give one more cycle in case labels are delayed
+              sleep "$POLL_INTERVAL"
+              LABELS_RECHECK=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+                --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+              if echo "$LABELS_RECHECK" | grep -qE 'ai:awaiting-approval|ai:implementing'; then
+                continue
+              fi
+              echo "::error::Plan workflow completed but issue lacks expected labels (current: ${LABELS_RECHECK:-none})"
+              echo "status=plan_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
 
-          echo "::error::Timeout waiting for plan phase to complete"
-          echo "status=timeout" >> "$GITHUB_OUTPUT"
-          exit 1
+            # Inactivity timeout
+            if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
+              echo "::error::Plan phase stalled — no activity for ${PHASE_TIMEOUT} minutes"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
+            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — plan_run: ${PLAN_RUN_STATUS}, labels: ${LABELS:-none}"
+            sleep "$POLL_INTERVAL"
+          done
 
       # ── Phase 3: Approve and wait for implementation ────────────
       - name: "Phase 3a: Approve the plan"
@@ -294,10 +362,15 @@ jobs:
         run: |
           set -euo pipefail
           echo "Waiting for implementation PR on issue #${ISSUE_NUMBER}..."
-          TIMEOUT_SECS=$((PHASE_TIMEOUT * 60))
-          ELAPSED=0
+          echo "Inactivity timeout: ${PHASE_TIMEOUT} minutes"
+          INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))
+          LAST_ACTIVITY=$(date +%s)
+          PREV_STATE=""
 
-          while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
+          while true; do
+            NOW=$(date +%s)
+            IDLE=$((NOW - LAST_ACTIVITY))
+
             # Search for PRs that reference this issue
             # The implement workflow creates branch ai/issue-<N>
             PR_NUMBER=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
@@ -313,18 +386,50 @@ jobs:
               exit 0
             fi
 
-            # Also check labels for failure
+            # Track labels and implement workflow run status for activity detection
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
 
-            echo "  ... waiting (${ELAPSED}s / ${TIMEOUT_SECS}s) — labels: ${LABELS:-none}"
-            sleep "$POLL_INTERVAL"
-            ELAPSED=$((ELAPSED + POLL_INTERVAL))
-          done
+            IMPL_RUN_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=5&created=>${{ steps.create-issue.outputs.created_after }}" \
+              --jq '[.workflow_runs[] | select(.name | test("Implement"; "i"))] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
 
-          echo "::error::Timeout waiting for implementation PR"
-          echo "status=timeout" >> "$GITHUB_OUTPUT"
-          exit 1
+            CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS}"
+
+            # Reset inactivity timer on any state change
+            if [ "$CUR_STATE" != "$PREV_STATE" ]; then
+              if [ -n "$PREV_STATE" ]; then
+                echo "  ↻ Activity detected (state changed) — resetting inactivity timer"
+              fi
+              LAST_ACTIVITY=$NOW
+              IDLE=0
+              PREV_STATE="$CUR_STATE"
+            fi
+
+            # Detect implement workflow failure
+            if [ "$IMPL_RUN_STATUS" = "completed" ]; then
+              # Implement finished but no PR appeared — give one more cycle
+              sleep "$POLL_INTERVAL"
+              PR_RECHECK=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
+                --jq '.[0].number // empty' 2>/dev/null || echo "")
+              if [ -n "$PR_RECHECK" ]; then
+                continue
+              fi
+              echo "::error::Implement workflow completed but no PR was created"
+              echo "status=implement_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            # Inactivity timeout
+            if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
+              echo "::error::Implement phase stalled — no activity for ${PHASE_TIMEOUT} minutes"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
+            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — impl_run: ${IMPL_RUN_STATUS}, labels: ${LABELS:-none}"
+            sleep "$POLL_INTERVAL"
+          done
 
       # ── Phase 4: Wait for review/edit to complete ───────────────
       - name: "Phase 4: Wait for review & autofix to complete"
@@ -334,20 +439,30 @@ jobs:
         run: |
           set -euo pipefail
           echo "Waiting for review workflow on PR #${PR_NUMBER}..."
-          TIMEOUT_SECS=$((REVIEW_TIMEOUT * 60))
+          echo "Inactivity timeout: ${REVIEW_TIMEOUT} minutes"
+          INACTIVITY_LIMIT=$((REVIEW_TIMEOUT * 60))
+          LAST_ACTIVITY=$(date +%s)
+          PREV_STATE=""
           ELAPSED=0
-          echo "Review timeout: ${REVIEW_TIMEOUT} minutes (${TIMEOUT_SECS}s)"
 
           # Give the review workflow a moment to start
           sleep 5
 
-          while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
+          while true; do
+            NOW=$(date +%s)
+            IDLE=$((NOW - LAST_ACTIVITY))
+
             # Find the review workflow run for this PR's head branch
             PR_BRANCH="ai/issue-${{ steps.create-issue.outputs.issue_number }}"
 
             # Look for workflow runs on this branch
             REVIEW_RUN=$(gh api "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
               --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix"; "i"))] | sort_by(.created_at) | last' 2>/dev/null || echo "")
+
+            RUN_STATUS="none"
+            RUN_CONCLUSION="null"
+            RUN_ID="unknown"
+            FAILED_STEPS="0"
 
             if [ -n "$REVIEW_RUN" ] && [ "$REVIEW_RUN" != "null" ]; then
               RUN_STATUS=$(echo "$REVIEW_RUN" | jq -r '.status // "unknown"')
@@ -368,7 +483,6 @@ jobs:
                   echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
                   exit 0
                 elif [ "$RUN_CONCLUSION" = "cancelled" ]; then
-                  # Review may be cancelled if a newer run superseded it
                   echo "Review run was cancelled — checking for newer run..."
                 fi
               fi
@@ -376,8 +490,6 @@ jobs:
               # While the run is still in_progress, probe job steps to detect
               # early failure. The review workflow uses if:always() cleanup steps
               # that keep the run in_progress long after the main work has died.
-              # Without this check the loop waits the full PHASE_TIMEOUT for
-              # cleanup/notification steps that don't affect the review result.
               if [ "$RUN_STATUS" = "in_progress" ] && [ "$RUN_ID" != "unknown" ]; then
                 FAILED_STEPS=$(gh api "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
                   --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "0")
@@ -389,12 +501,7 @@ jobs:
                   exit 0
                 fi
 
-                # If the run has been in_progress for a while, check live logs
-                # to see if >50% of reviewers have already succeeded. The review
-                # workflow prints "Reviewer <model> succeeded" for each one.
-                # A slow/stalling reviewer can block the workflow for 45+ min
-                # while the rest finish in minutes. For the smoke test, majority
-                # reviewer success is sufficient proof the review phase works.
+                # Check live logs for reviewer progress (majority-pass shortcut)
                 if [ "$ELAPSED" -ge 600 ]; then
                   JOB_ID=$(gh api "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
                     --jq '.jobs[0].id // empty' 2>/dev/null || echo "")
@@ -402,13 +509,11 @@ jobs:
                     LOG_CONTENT=$(gh api "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" 2>/dev/null || echo "")
                     SUCCEEDED=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* succeeded" || true)
                     FAILED_R=$(echo "$LOG_CONTENT" | grep -c "Reviewer .* failed after" || true)
-                    # Sanitize: grep -c may produce empty output on binary/corrupt logs
                     SUCCEEDED="${SUCCEEDED:-0}"; SUCCEEDED="${SUCCEEDED##*$'\n'}"
                     FAILED_R="${FAILED_R:-0}"; FAILED_R="${FAILED_R##*$'\n'}"
                     [[ "$SUCCEEDED" =~ ^[0-9]+$ ]] || SUCCEEDED=0
                     [[ "$FAILED_R" =~ ^[0-9]+$ ]] || FAILED_R=0
                     TOTAL_DONE=$((SUCCEEDED + FAILED_R))
-                    # Check: succeeded > 50% of finished reviewers, and at least 3 succeeded
                     if [ "$SUCCEEDED" -ge 3 ] && [ $((SUCCEEDED * 2)) -gt "$TOTAL_DONE" ]; then
                       echo "  ✓ Review run still in_progress but ${SUCCEEDED}/${TOTAL_DONE} reviewers succeeded (>50%) — treating as pass"
                       echo "status=success" >> "$GITHUB_OUTPUT"
@@ -422,14 +527,30 @@ jobs:
               fi
             fi
 
-            echo "  ... waiting (${ELAPSED}s / ${TIMEOUT_SECS}s)"
+            # Activity detection: track run status, conclusion, failed steps count
+            CUR_STATE="run=${RUN_STATUS};conclusion=${RUN_CONCLUSION};failed_steps=${FAILED_STEPS}"
+
+            if [ "$CUR_STATE" != "$PREV_STATE" ]; then
+              if [ -n "$PREV_STATE" ]; then
+                echo "  ↻ Activity detected (state changed) — resetting inactivity timer"
+              fi
+              LAST_ACTIVITY=$NOW
+              IDLE=0
+              PREV_STATE="$CUR_STATE"
+            fi
+
+            # Inactivity timeout
+            if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
+              echo "::error::Review phase stalled — no activity for ${REVIEW_TIMEOUT} minutes"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
+            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m)"
             sleep "$POLL_INTERVAL"
             ELAPSED=$((ELAPSED + POLL_INTERVAL))
           done
-
-          echo "::error::Timeout waiting for review workflow to complete"
-          echo "status=timeout" >> "$GITHUB_OUTPUT"
-          exit 1
 
       # ── Phase 5: Orchestrator script integration test ──────────
       - name: Checkout repository for integration tests
@@ -642,16 +763,41 @@ jobs:
           # 6e: Wait for the poller to handle the review-blocked issue
           # The poller should: invoke judge → merge/fix/close_and_reissue
           # We verify by checking if the label changed from ai:review-blocked
-          TIMEOUT_SECS=$((PHASE_TIMEOUT * 60))
-          ELAPSED=0
+          INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))
+          LAST_ACTIVITY=$(date +%s)
+          PREV_STATE=""
 
-          while [ $ELAPSED -lt $TIMEOUT_SECS ]; do
+          while true; do
+            NOW=$(date +%s)
+            IDLE=$((NOW - LAST_ACTIVITY))
+
             if ! LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null); then
               echo "::warning::Could not read labels for issue #${ISSUE_NUMBER}; retrying..."
               sleep "$POLL_INTERVAL"
-              ELAPSED=$((ELAPSED + POLL_INTERVAL))
               continue
+            fi
+
+            # Also check poller workflow run status for activity detection
+            POLLER_RUN=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=5&event=workflow_dispatch" \
+              --jq "[.workflow_runs[] | select(.name | test(\"Orchestrate.*Poll|Poll\"; \"i\"))] | sort_by(.created_at) | last" 2>/dev/null || echo "")
+            POLLER_STATUS="unknown"
+            POLLER_CONCLUSION="null"
+            if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
+              POLLER_STATUS=$(echo "${POLLER_RUN}" | jq -r '.status // "unknown"')
+              POLLER_CONCLUSION=$(echo "${POLLER_RUN}" | jq -r '.conclusion // "null"')
+            fi
+
+            CUR_STATE="labels=${LABELS};poller=${POLLER_STATUS};conclusion=${POLLER_CONCLUSION}"
+
+            # Reset inactivity timer on any state change
+            if [ "$CUR_STATE" != "$PREV_STATE" ]; then
+              if [ -n "$PREV_STATE" ]; then
+                echo "  ↻ Activity detected (state changed) — resetting inactivity timer"
+              fi
+              LAST_ACTIVITY=$NOW
+              IDLE=0
+              PREV_STATE="$CUR_STATE"
             fi
 
             # Success: label changed from ai:review-blocked to something else
@@ -659,7 +805,6 @@ jobs:
               echo "✓ Review-blocked simulation passed — poller handled the issue"
               echo "  Current labels: ${LABELS}"
 
-              # Check what action the poller took
               if echo "$LABELS" | grep -q 'ai:ready-to-merge'; then
                 echo "  Action: merge (judge decided to merge as-is)"
               elif echo "$LABELS" | grep -q 'ai:closed'; then
@@ -670,38 +815,33 @@ jobs:
 
               echo "status=success" >> "$GITHUB_OUTPUT"
 
-              # Cleanup tracking issue
               gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
                 -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
               exit 0
             fi
 
-            # Also check if the poller workflow run completed (may have failed)
-            POLLER_RUN=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=5&event=workflow_dispatch" \
-              --jq "[.workflow_runs[] | select(.name | test(\"Orchestrate.*Poll|Poll\"; \"i\"))] | sort_by(.created_at) | last" 2>/dev/null || echo "")
-            if [ -n "${POLLER_RUN}" ] && [ "${POLLER_RUN}" != "null" ]; then
-              POLLER_STATUS=$(echo "${POLLER_RUN}" | jq -r '.status // "unknown"')
-              POLLER_CONCLUSION=$(echo "${POLLER_RUN}" | jq -r '.conclusion // "null"')
-              if [ "${POLLER_STATUS}" = "completed" ] && [ "${POLLER_CONCLUSION}" = "failure" ]; then
-                echo "::warning::Poller workflow failed — review-blocked handling may not have been reached"
-                echo "status=poller_failed" >> "$GITHUB_OUTPUT"
-                # Cleanup
-                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
-                  -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
-                exit 0
-              fi
+            # Check if the poller workflow failed
+            if [ "${POLLER_STATUS}" = "completed" ] && [ "${POLLER_CONCLUSION}" = "failure" ]; then
+              echo "::warning::Poller workflow failed — review-blocked handling may not have been reached"
+              echo "status=poller_failed" >> "$GITHUB_OUTPUT"
+              gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+              exit 0
             fi
 
-            echo "  ... waiting (${ELAPSED}s / ${TIMEOUT_SECS}s) — labels: ${LABELS:-none}"
-            sleep "$POLL_INTERVAL"
-            ELAPSED=$((ELAPSED + POLL_INTERVAL))
-          done
+            # Inactivity timeout
+            if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
+              echo "::warning::Review-blocked sim stalled — no activity for ${PHASE_TIMEOUT} minutes"
+              echo "status=timeout" >> "$GITHUB_OUTPUT"
+              gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
+                -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+              exit 0
+            fi
 
-          echo "::warning::Timeout waiting for poller to handle review-blocked issue"
-          echo "status=timeout" >> "$GITHUB_OUTPUT"
-          # Cleanup tracking issue on timeout
-          gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
-            -X PATCH -f state=closed -f state_reason=not_planned 2>/dev/null || true
+            REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
+            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — labels: ${LABELS:-none}"
+            sleep "$POLL_INTERVAL"
+          done
 
       # ── Deep verification: inspect every step in every workflow run ─
       - name: "Deep verify: inspect all workflow run steps"
