@@ -1243,11 +1243,22 @@ ${PR_DIFF}
     echo "=== ORCHESTRATOR STATE ==="
     echo
     echo "Judge cycle: $((JUDGE_CYCLE + 1))"
-    echo "Waves completed: ${CURRENT_WAVE} of ${TOTAL_WAVES}"
+    echo "Current wave just completed: ${CURRENT_WAVE} of ${TOTAL_WAVES}"
+    echo "Project complete (all waves dispatched and merged): ${PROJECT_COMPLETE}"
     echo "Recovery previously attempted: ${RECOVERY_ATTEMPTED}"
+    PENDING_DEFS_COUNT="$(jq '.pending_issue_defs | length' "${STATE_FILE}")"
+    echo "Pending issue definitions (not yet created): ${PENDING_DEFS_COUNT}"
+    if [ "${PENDING_DEFS_COUNT}" -gt 0 ]; then
+      echo
+      echo "=== REMAINING WAVES (issues not yet created) ==="
+      jq -r '.pending_issue_defs | to_entries[] | "- \(.key): \(.value.title)"' "${STATE_FILE}"
+    fi
     if [ "${ANY_FAILED}" = "true" ]; then
       echo "WARNING: Some issues in this wave were closed without merge."
     fi
+    echo
+    echo "IMPORTANT: If current wave < total waves, the project is NOT complete."
+    echo "Return in_progress to advance to the next wave."
   } > "${JUDGE_PROMPT_FILE}"
 
   # Run judge via Codex
@@ -1344,6 +1355,16 @@ PRs to revert: ${REVERT_COUNT}"
 
   gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
     -f body="${JUDGE_COMMENT}" >/dev/null
+
+  # ---------------------------------------------------------------
+  # Hard guard: judge cannot declare "complete" while waves remain
+  # ---------------------------------------------------------------
+  if [ "${JUDGE_STATUS}" = "complete" ] && [ "${PROJECT_COMPLETE}" != "true" ]; then
+    echo "::warning::Judge returned 'complete' but project_complete=${PROJECT_COMPLETE} (wave ${CURRENT_WAVE}/${TOTAL_WAVES}). Overriding to 'in_progress'."
+    JUDGE_STATUS="in_progress"
+    gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+      -f body="⚠️ Judge verdict overridden: \`complete\` → \`in_progress\` because wave ${CURRENT_WAVE}/${TOTAL_WAVES} is not the final wave. Advancing to next wave." >/dev/null
+  fi
 
   # ---------------------------------------------------------------
   # Handle judge verdict
