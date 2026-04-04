@@ -1246,12 +1246,12 @@ ${PR_DIFF}
     echo "Current wave just completed: ${CURRENT_WAVE} of ${TOTAL_WAVES}"
     echo "Project complete (all waves dispatched and merged): ${PROJECT_COMPLETE}"
     echo "Recovery previously attempted: ${RECOVERY_ATTEMPTED}"
-    PENDING_DEFS_COUNT="$(jq '.pending_issue_defs | length' "${STATE_FILE}")"
+    PENDING_DEFS_COUNT="$(jq -r '(.pending_issue_defs // {}) | if type == "object" then length else 0 end' "${STATE_FILE}")"
     echo "Pending issue definitions (not yet created): ${PENDING_DEFS_COUNT}"
     if [ "${PENDING_DEFS_COUNT}" -gt 0 ]; then
       echo
       echo "=== REMAINING WAVES (issues not yet created) ==="
-      jq -r '.pending_issue_defs | to_entries[] | "- \(.key): \(.value.title)"' "${STATE_FILE}"
+      jq -r '(.pending_issue_defs // {}) | if type == "object" then to_entries[] | "- \(.key): \(.value.title)" else empty end' "${STATE_FILE}"
     fi
     if [ "${ANY_FAILED}" = "true" ]; then
       echo "WARNING: Some issues in this wave were closed without merge."
