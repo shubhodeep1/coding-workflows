@@ -92,8 +92,12 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           for f in setup_serena.sh tg_helpers.sh; do
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}" 2>/dev/null; then
+              echo "::warning::${f} not found on stable; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+            fi
             chmod +x "scripts/${f}"
           done
           # Model catalog: try stable first, fall back to local copy from checkout.
@@ -108,8 +112,12 @@ jobs:
           PROMPT_SOURCE="prompts/mode-clarify-respond.txt"
           mkdir -p prompts
           if [ ! -f "${PROMPT_SOURCE}" ]; then
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=stable" > "${PROMPT_SOURCE}"
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=stable" > "${PROMPT_SOURCE}" 2>/dev/null; then
+              echo "::warning::${PROMPT_SOURCE} not found on stable; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=main" > "${PROMPT_SOURCE}"
+            fi
           fi
 
       - name: Create runtime workspace
