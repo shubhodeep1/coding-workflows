@@ -855,7 +855,7 @@ def _parse_keyword_response(raw: str) -> list[str] | None:
         return None
     result = []
     for item in parsed:
-        if isinstance(item, str) and item.strip():
+        if isinstance(item, str) and item.strip() and len(item.strip()) <= 100:
             result.append(item.strip().lower())
     return result if result else None
 
@@ -910,7 +910,7 @@ def _extract_keywords_llm(
         except (urllib.error.URLError, urllib.error.HTTPError, OSError, json.JSONDecodeError, KeyError, IndexError) as exc:
             _log.warning(
                 "LLM keyword extraction failed on attempt %d/%d: %s",
-                attempt, _KEYWORD_MAX_RETRIES, exc,
+                attempt, _KEYWORD_MAX_RETRIES, type(exc).__name__,
             )
     return None
 
@@ -942,7 +942,10 @@ def _keyword_overlap_ratio(keywords: set[str], text: str) -> float:
     if not keywords or not text:
         return 0.0
     text_lower = text.lower()
-    matched = sum(1 for kw in keywords if kw in text_lower)
+    matched = sum(
+        1 for kw in keywords
+        if re.search(rf"(?<![a-z0-9_]){re.escape(kw)}(?![a-z0-9_])", text_lower)
+    )
     return matched / len(keywords)
 
 
@@ -1006,12 +1009,15 @@ def _resolve_token_budget(profile: dict[str, Any], role: str) -> int:
     """Resolve token budget: env var override > profile value > default."""
     env_key = f"AI_MEMORY_TOKEN_BUDGET_{role.upper()}"
     env_val = os.getenv(env_key)
+    profile_budget = int(profile.get("token_budget", 900))
     if env_val is not None:
         try:
-            return int(env_val)
+            override = int(env_val)
+            if override > 0:
+                return override
         except (ValueError, TypeError):
             pass
-    return int(profile.get("token_budget", 900))
+    return profile_budget if profile_budget > 0 else 900
 
 
 def retrieve_memory_context(
