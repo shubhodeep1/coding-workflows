@@ -519,8 +519,8 @@ VALIDATION_EXIT=0
 VALIDATION_IDLE_KILLED=0
 
 set +e
-# Run validation in background, tee output to log file
-bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1 &
+# Run validation in background in its own process group
+setsid bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1 &
 VALIDATION_PID=$!
 
 # Monitor the log file for activity; kill if idle too long
@@ -542,11 +542,11 @@ while kill -0 "${VALIDATION_PID}" 2>/dev/null; do
 
   if [ "${IDLE_ELAPSED}" -ge "${IDLE_TIMEOUT_SECS}" ]; then
     echo "Validation idle for ${VALIDATION_TIMEOUT} minute(s) with no output — terminating." >> "${VALIDATION_LOG_FILE}"
-    kill "${VALIDATION_PID}" 2>/dev/null || true
+    kill -- -"${VALIDATION_PID}" 2>/dev/null || true
     # Grace period: SIGKILL after 30s if still running
     sleep 30
-    if kill -0 "${VALIDATION_PID}" 2>/dev/null; then
-      kill -9 "${VALIDATION_PID}" 2>/dev/null || true
+    if kill -0 -- -"${VALIDATION_PID}" 2>/dev/null; then
+      kill -9 -- -"${VALIDATION_PID}" 2>/dev/null || true
     fi
     VALIDATION_IDLE_KILLED=1
     break
