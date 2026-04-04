@@ -11,17 +11,22 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import logging
 import math
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import urllib.request
+import urllib.error
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+_log = logging.getLogger(__name__)
 
 MEMORY_RECORD_SCHEMA_VERSION = "memory_record.v1"
 RUN_LEDGER_SCHEMA_VERSION = "run_ledger_entry.v1"
@@ -792,6 +797,155 @@ def promote_candidates(
     }
 
 
+_KEYWORD_STOP_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "it", "as", "be", "was", "are",
+    "been", "being", "have", "has", "had", "do", "does", "did", "will",
+    "would", "could", "should", "may", "might", "shall", "can", "need",
+    "this", "that", "these", "those", "i", "we", "you", "he", "she",
+    "they", "me", "us", "him", "her", "them", "my", "our", "your",
+    "his", "its", "their", "what", "which", "who", "whom", "how",
+    "when", "where", "why", "if", "then", "else", "so", "not", "no",
+    "all", "each", "every", "any", "some", "such", "than", "too",
+    "very", "just", "also", "into", "over", "after", "before", "between",
+    "under", "about", "up", "out", "off", "more", "most", "other",
+    "new", "old", "one", "two", "only", "own", "same", "like",
+    "here", "there", "now", "still", "well", "get", "got", "make",
+    "made", "take", "use", "used", "using", "add", "added", "see",
+    "set", "let", "try", "want", "please", "think", "know",
+})
+
+_KEYWORD_EXTRACT_PROMPT = """\
+Extract 10-15 semantic keywords or short concept phrases from the following \
+GitHub issue. Return ONLY a JSON array of lowercase strings, nothing else. \
+Focus on domain concepts, technical terms, component names, and action verbs \
+that capture what the issue is about.
+
+Example output: ["payment processing", "retry logic", "redis caching", "rate limit", "webhook"]
+
+Title: {title}
+
+Body:
+{body}"""
+
+_KEYWORD_MODEL_DEFAULT = "openai/gpt-5-mini"
+_KEYWORD_MAX_RETRIES = 3
+
+
+def _extract_keywords_plain(title: str, body: str) -> set[str]:
+    """Extract keywords from issue title and body using simple tokenisation."""
+    text = f"{title} {body}".lower()
+    tokens = re.findall(r"[a-z][a-z0-9_]+", text)
+    return {t for t in tokens if t not in _KEYWORD_STOP_WORDS and len(t) > 2}
+
+
+def _parse_keyword_response(raw: str) -> list[str] | None:
+    """Parse LLM response expecting a JSON array of strings. Returns None on failure."""
+    raw = raw.strip()
+    # Handle markdown code fences
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        raw = "\n".join(lines).strip()
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, list):
+        return None
+    result = []
+    for item in parsed:
+        if isinstance(item, str) and item.strip():
+            result.append(item.strip().lower())
+    return result if result else None
+
+
+def _extract_keywords_llm(
+    title: str,
+    body: str,
+    *,
+    api_key: str,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> list[str] | None:
+    """Call an LLM to extract semantic keywords. Returns None on failure."""
+    resolved_model = model or os.getenv("AI_MEMORY_KEYWORD_MODEL", _KEYWORD_MODEL_DEFAULT)
+    resolved_base_url = (base_url or os.getenv("AI_MEMORY_KEYWORD_BASE_URL", "https://openrouter.ai/api/v1")).rstrip("/")
+
+    # Truncate body to avoid excessive prompt size
+    truncated_body = body[:4000] if body else ""
+    prompt = _KEYWORD_EXTRACT_PROMPT.format(title=title, body=truncated_body)
+
+    payload = json.dumps({
+        "model": resolved_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "max_tokens": 300,
+    }).encode("utf-8")
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    for attempt in range(1, _KEYWORD_MAX_RETRIES + 1):
+        try:
+            req = urllib.request.Request(
+                f"{resolved_base_url}/chat/completions",
+                data=payload,
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp_data = json.loads(resp.read().decode("utf-8"))
+            content = resp_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            keywords = _parse_keyword_response(content)
+            if keywords is not None:
+                _log.debug("LLM keyword extraction succeeded on attempt %d: %s", attempt, keywords)
+                return keywords
+            _log.warning(
+                "LLM keyword extraction returned unparseable response on attempt %d/%d: %s",
+                attempt, _KEYWORD_MAX_RETRIES, content[:200],
+            )
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, json.JSONDecodeError, KeyError, IndexError) as exc:
+            _log.warning(
+                "LLM keyword extraction failed on attempt %d/%d: %s",
+                attempt, _KEYWORD_MAX_RETRIES, exc,
+            )
+    return None
+
+
+def _extract_keywords(
+    title: str | None,
+    body: str | None,
+    *,
+    api_key: str | None = None,
+) -> set[str]:
+    """Extract keywords using LLM when available, falling back to plain tokenisation."""
+    safe_title = title or ""
+    safe_body = body or ""
+    if not safe_title and not safe_body:
+        return set()
+
+    if api_key:
+        llm_keywords = _extract_keywords_llm(safe_title, safe_body, api_key=api_key)
+        if llm_keywords is not None:
+            # Combine LLM concepts with plain tokens for broader coverage
+            plain = _extract_keywords_plain(safe_title, safe_body)
+            return plain | {kw.lower() for kw in llm_keywords}
+
+    return _extract_keywords_plain(safe_title, safe_body)
+
+
+def _keyword_overlap_ratio(keywords: set[str], text: str) -> float:
+    """Calculate the fraction of keywords that appear in the given text."""
+    if not keywords or not text:
+        return 0.0
+    text_lower = text.lower()
+    matched = sum(1 for kw in keywords if kw in text_lower)
+    return matched / len(keywords)
+
+
 def _estimate_tokens(text: str) -> int:
     if not text:
         return 0
@@ -810,7 +964,13 @@ def _load_retrieval_profiles(profiles_path: Path) -> dict[str, Any]:
     return payload
 
 
-def _record_score(record: dict[str, Any], profile: dict[str, Any], issue_number: int | None, pr_number: int | None) -> tuple[float, str, str]:
+def _record_score(
+    record: dict[str, Any],
+    profile: dict[str, Any],
+    issue_number: int | None,
+    pr_number: int | None,
+    keywords: set[str] | None = None,
+) -> tuple[float, str, str]:
     category_weights = profile.get("category_weights") or {}
     score = float(category_weights.get(record.get("category"), 0.0))
     score += float(record.get("confidence", 0.0)) * float(profile.get("confidence_weight", 10.0))
@@ -831,9 +991,27 @@ def _record_score(record: dict[str, Any], profile: dict[str, Any], issue_number:
     if record.get("status") == "active":
         score += float(profile.get("active_status_boost", 4.0))
 
+    if keywords:
+        summary = record.get("summary") or ""
+        details = record.get("details") or ""
+        overlap = _keyword_overlap_ratio(keywords, f"{summary} {details}")
+        score += overlap * float(profile.get("keyword_match_boost", 10.0))
+
     created_at = str((record.get("timestamps") or {}).get("created_at") or "")
     record_id = str(record.get("record_id") or "")
     return score, created_at, record_id
+
+
+def _resolve_token_budget(profile: dict[str, Any], role: str) -> int:
+    """Resolve token budget: env var override > profile value > default."""
+    env_key = f"AI_MEMORY_TOKEN_BUDGET_{role.upper()}"
+    env_val = os.getenv(env_key)
+    if env_val is not None:
+        try:
+            return int(env_val)
+        except (ValueError, TypeError):
+            pass
+    return int(profile.get("token_budget", 900))
 
 
 def retrieve_memory_context(
@@ -843,6 +1021,9 @@ def retrieve_memory_context(
     role: str,
     issue_number: int | None,
     pr_number: int | None,
+    issue_title: str | None = None,
+    issue_body: str | None = None,
+    api_key: str | None = None,
 ) -> RetrievalResult:
     ensure_memory_layout(memory_root)
     profiles = _load_retrieval_profiles(profiles_path)
@@ -853,8 +1034,10 @@ def retrieve_memory_context(
         raise MemoryValidationError(f"Unknown retrieval role: {role}")
 
     profile = roles[resolved_role]
-    token_budget = int(profile.get("token_budget", 900))
-    max_records = int(profile.get("max_records", 12))
+    token_budget = _resolve_token_budget(profile, resolved_role)
+
+    # Extract keywords for content-aware scoring
+    keywords = _extract_keywords(issue_title, issue_body, api_key=api_key)
 
     records: list[dict[str, Any]] = []
     for record in _load_canonical_records(memory_root):
@@ -873,7 +1056,9 @@ def retrieve_memory_context(
             validate_memory_record(record, memory_root)
         except MemoryValidationError:
             continue
-        score, created_at, record_id = _record_score(record, profile, issue_number, pr_number)
+        score, created_at, record_id = _record_score(
+            record, profile, issue_number, pr_number, keywords=keywords or None,
+        )
         if not record_id or record_id in seen_record_ids:
             continue
         seen_record_ids.add(record_id)
@@ -884,8 +1069,6 @@ def retrieve_memory_context(
     selected: list[dict[str, Any]] = []
     used_tokens = 0
     for _score, _created_at, _record_id, record in scored:
-        if len(selected) >= max_records:
-            break
         line = (
             f"[{record['category']}|{record['status']}|conf={record['confidence']:.2f}|"
             f"id={record['record_id']}] {record['summary']}"

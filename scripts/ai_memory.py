@@ -130,12 +130,23 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         if not profiles_path.exists():
             raise MemoryValidationError(f"Retrieval profiles not found: {profiles_path}")
 
+        issue_body = None
+        if getattr(args, "issue_body_file", None):
+            body_path = Path(args.issue_body_file)
+            if body_path.exists():
+                issue_body = body_path.read_text(encoding="utf-8")
+
+        api_key = os.getenv("OPENROUTER_API_KEY")
+
         result = retrieve_memory_context(
             memory_root,
             profiles_path,
             role=_require_nonempty(args.role, "role"),
             issue_number=_safe_int(args.issue_number),
             pr_number=_safe_int(args.pr_number),
+            issue_title=getattr(args, "issue_title", None),
+            issue_body=issue_body,
+            api_key=api_key,
         )
 
         if args.output_file:
@@ -597,6 +608,8 @@ def build_parser() -> argparse.ArgumentParser:
     retrieve.add_argument("--pr-number", default=None)
     retrieve.add_argument("--output-file", default=None)
     retrieve.add_argument("--retrieval-profiles", default=None)
+    retrieve.add_argument("--issue-title", default=None)
+    retrieve.add_argument("--issue-body-file", default=None)
     retrieve.set_defaults(func=cmd_retrieve)
 
     event = subparsers.add_parser("record-run-event", help="Append run ledger event")
