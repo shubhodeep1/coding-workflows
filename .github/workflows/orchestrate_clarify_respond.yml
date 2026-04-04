@@ -89,7 +89,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          wf_source="shubhodeep1/coding-workflows"
+          wf_source="${{ github.repository_owner }}/coding-workflows"
           mkdir -p scripts
           for f in setup_serena.sh tg_helpers.sh; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \

@@ -111,9 +111,14 @@ jobs:
           # Fetch judge prompt for review-blocked judge feature
           mkdir -p prompts
           if [ ! -f prompts/mode-judge-review-blocked.txt ]; then
-            gh api -H 'Accept: application/vnd.github.raw+json' \
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=stable" \
-              > prompts/mode-judge-review-blocked.txt 2>/dev/null || true
+              > prompts/mode-judge-review-blocked.txt 2>/dev/null; then
+              echo "::warning::mode-judge-review-blocked.txt not found on stable; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=main" \
+                > prompts/mode-judge-review-blocked.txt 2>/dev/null || true
+            fi
           fi
 
       - name: Validate PR number input
