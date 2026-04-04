@@ -190,6 +190,7 @@ jobs:
           ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
+          MAX_JUDGE_CYCLES: ${{ vars.MAX_JUDGE_CYCLES || '25' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: bash scripts/orchestrate_poll_process.sh

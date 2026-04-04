@@ -47,6 +47,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ENABLE_VALIDATION` | No | `true` | orchestrate_poll | When true, a `complete` judge verdict transitions the tracking issue into runtime validation (`ai:validating`) and completion occurs only after validation passes. |
 | `MAX_VALIDATE_CYCLES` | No | `3` | orchestrate_poll | Maximum runtime validation cycles (initial run + fix/revalidate loops) before forcing `ai:validation-failed`. |
 | `VALIDATE_WORKFLOW_NAME` | No | `ai-validate.yml` | orchestrate_poll | Workflow filename to dispatch for runtime validation. Override to `internal-validate.yml` for repos using the internal naming convention. Falls back to `internal-validate.yml` automatically if the primary name fails. |
+| `MAX_JUDGE_CYCLES` | No | `25` | orchestrate_poll | Maximum judge evaluation cycles per project before forcing failure. Prevents infinite fix-up loops when the judge repeatedly returns `in_progress`. |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Version/branch of the Serena MCP server |
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Languages for Serena symbol analysis |
