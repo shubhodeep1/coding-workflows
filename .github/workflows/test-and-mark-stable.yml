@@ -565,7 +565,7 @@ jobs:
           gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/labels" \
             -f "labels[]=ai:review-blocked" >/dev/null 2>&1 || true
           # Remove other ai: phase labels to simulate a clean review-blocked state
-          for label in ai:done ai:ready-to-merge ai:implementing; do
+          for label in ai:done ai:ready-to-merge ai:implementing ai:merged; do
             gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/labels/${label}" \
               -X DELETE 2>/dev/null || true
           done

@@ -366,7 +366,11 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		gh_num = str(issue.get("github_issue", ""))
 		labels = issue_labels.get(gh_num, [])
 
-		if "ai:merged" in labels:
+		if "ai:review-blocked" in labels:
+			status = "review-blocked"
+			any_review_blocked = True
+			all_merged = False
+		elif "ai:merged" in labels:
 			status = "merged"
 		elif "ai:closed" in labels:
 			status = "closed"
@@ -374,10 +378,6 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		elif "ai:implementation-failed" in labels:
 			status = "implementation-failed"
 			any_failed = True
-			all_merged = False
-		elif "ai:review-blocked" in labels:
-			status = "review-blocked"
-			any_review_blocked = True
 			all_merged = False
 		elif "ai:ready-to-merge" in labels:
 			status = "ready-to-merge"
