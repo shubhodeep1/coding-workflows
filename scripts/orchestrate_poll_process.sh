@@ -154,10 +154,23 @@ has_label() {
 
 dispatch_validation_workflow() {
   local validation_cycle="$1"
-  echo "Dispatching ai-validate.yml for tracking #${TRACKING_NUM} (cycle ${validation_cycle})"
-  gh_retry gh workflow run ai-validate.yml \
+  local wf_name="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
+  echo "Dispatching ${wf_name} for tracking #${TRACKING_NUM} (cycle ${validation_cycle})"
+  if gh_retry gh workflow run "${wf_name}" \
     --repo "${GITHUB_REPOSITORY}" \
-    -f tracking_issue="${TRACKING_NUM}" >/dev/null
+    -f tracking_issue="${TRACKING_NUM}" >/dev/null 2>&1; then
+    return 0
+  fi
+  # Fallback: try internal-validate.yml (coding-workflows repo convention)
+  if [ "${wf_name}" != "internal-validate.yml" ]; then
+    echo "Primary dispatch failed; trying internal-validate.yml fallback"
+    if gh_retry gh workflow run "internal-validate.yml" \
+      --repo "${GITHUB_REPOSITORY}" \
+      -f tracking_issue="${TRACKING_NUM}" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
 }
 
 dispatch_validation_if_needed() {
@@ -174,7 +187,7 @@ dispatch_validation_if_needed() {
     jq --argjson cycle "${validation_cycle}" '.validation_last_dispatch_cycle = $cycle' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
-    post_tracking_comment "## 🧪 Runtime validation dispatched\n\n- Cycle: ${validation_cycle}\n- Workflow: \`ai-validate.yml\`"
+    post_tracking_comment "## 🧪 Runtime validation dispatched\n\n- Cycle: ${validation_cycle}\n- Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`"
     tg_notify "🧪 Validation dispatched for project #${TRACKING_NUM} (cycle ${validation_cycle})."
     return 0
   fi
@@ -328,7 +341,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       fi
 
       if ! dispatch_validation_if_needed "${VALIDATION_CYCLE}"; then
-        mark_validation_failed "Unable to dispatch ai-validate.yml for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
       fi
       continue
     fi
@@ -384,7 +397,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     set_tracking_phase_label "ai:validating"
 
     if ! dispatch_validation_if_needed "${NEXT_VALIDATION_CYCLE}"; then
-      mark_validation_failed "Unable to dispatch ai-validate.yml for cycle ${NEXT_VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+      mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${NEXT_VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
     fi
     continue
   fi
@@ -1409,7 +1422,7 @@ PRs to revert: ${REVERT_COUNT}"
       set_tracking_phase_label "ai:validating"
 
       if ! dispatch_validation_if_needed "${VALIDATION_CYCLE}"; then
-        mark_validation_failed "Unable to dispatch ai-validate.yml for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
       fi
       ;;
 
