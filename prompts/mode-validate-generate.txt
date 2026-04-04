@@ -44,10 +44,11 @@ Mandatory rules:
 
 CRITICAL — grep-safe TAP counting under `set -e` / `pipefail`:
 - `grep` exits with code 1 when zero lines match. Under `set -e` or `pipefail`, this kills the script even when zero matches is the expected (all-pass) outcome.
-- When counting TAP `ok` / `not ok` lines, always use patterns that return exit code 0 on zero matches. Preferred approaches:
-  - `grep -c 'pattern' "$file" || true`
-  - `{ grep 'pattern' "$file" || true; } | wc -l`
+- When counting TAP `ok` / `not ok` lines, use patterns that treat grep exit 1 (no matches) as success but preserve real errors (exit 2). Preferred approaches:
   - `awk '/pattern/ { count++ } END { print count+0 }' "$file"`
+  - `grep -c 'pattern' "$file" || [ $? -eq 1 ]`
+  - `{ grep 'pattern' "$file" || [ $? -eq 1 ]; } | wc -l`
+- Do NOT use `grep ... || true` for TAP counting; it masks real errors (missing file, permission denied, invalid regex).
 - NEVER use bare `grep ... | wc -l` in a pipeline under `pipefail` — `grep` returning 1 (no match) will propagate through the pipe and trigger ERR/exit.
 - Test the all-pass case (zero `not ok` lines) mentally before finalizing the script.
 
