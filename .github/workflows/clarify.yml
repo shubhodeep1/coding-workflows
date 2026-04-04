@@ -75,8 +75,12 @@ jobs:
           # silent MCP failures ("mcp startup: no servers").
           mkdir -p scripts
           for f in setup_serena.sh git_ref_health_check.sh tg_helpers.sh; do
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}" 2>/dev/null; then
+              echo "::warning::${f} not found on stable; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+            fi
             chmod +x "scripts/${f}"
           done
           # Always use the canonical instruction files from coding-workflows
@@ -84,8 +88,12 @@ jobs:
           # caller repo ships its own scripts/ directory)
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
+              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}" 2>/dev/null; then
+                echo "::warning::${f} not found on stable; falling back to main"
+                gh api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+              fi
             fi
           done
 

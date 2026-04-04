@@ -76,8 +76,12 @@ jobs:
           # scripts cause silent MCP failures.
           mkdir -p scripts
           for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh; do
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}" 2>/dev/null; then
+              echo "::warning::${f} not found on stable; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+            fi
             chmod +x "scripts/${f}"
           done
           # Model catalog: try stable first, fall back to local copy from checkout.
@@ -96,8 +100,12 @@ jobs:
           # caller repo ships its own scripts/ directory)
           for f in unattended_llm_system_instructions.md codex_system_instructions.md; do
             if [ ! -f "${f}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
+              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}" 2>/dev/null; then
+                echo "::warning::${f} not found on stable; falling back to main"
+                gh api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+              fi
             fi
           done
           # Fetch judge prompt for review-blocked judge feature
@@ -2297,8 +2305,12 @@ jobs:
           if [ ! -f scripts/git_ref_health_check.sh ]; then
             wf_source="${{ github.repository_owner }}/coding-workflows"
             mkdir -p scripts
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=stable" > scripts/git_ref_health_check.sh
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=stable" > scripts/git_ref_health_check.sh 2>/dev/null; then
+              echo "::warning::git_ref_health_check.sh not found on stable; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=main" > scripts/git_ref_health_check.sh
+            fi
             chmod +x scripts/git_ref_health_check.sh
           fi
           bash scripts/git_ref_health_check.sh repair

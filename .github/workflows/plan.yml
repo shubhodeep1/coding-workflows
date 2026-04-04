@@ -19,7 +19,8 @@ jobs:
       (
         (
           github.event.comment.user.type == 'User' &&
-          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+          startsWith(github.event.comment.body, '/answer')
         ) ||
         (
           github.event.comment.user.type == 'Bot' &&
@@ -99,8 +100,12 @@ jobs:
           # Only fetch scripts actually used by the plan workflow.
           # git_ref_health_check.sh is only needed by implement/edit workflows.
           for f in setup_serena.sh tg_helpers.sh; do
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}" 2>/dev/null; then
+              echo "::warning::${f} not found on stable; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+            fi
             chmod +x "scripts/${f}"
           done
           # Always use the canonical instruction files from coding-workflows
@@ -108,8 +113,12 @@ jobs:
           # caller repo ships its own scripts/ directory)
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
+              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}" 2>/dev/null; then
+                echo "::warning::${f} not found on stable; falling back to main"
+                gh api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+              fi
             fi
           done
 

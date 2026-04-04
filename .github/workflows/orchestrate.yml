@@ -125,18 +125,30 @@ jobs:
           wf_source="${{ github.repository_owner }}/coding-workflows"
           mkdir -p scripts
           for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py tg_helpers.sh; do
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}" 2>/dev/null; then
+              echo "::warning::${f} not found on stable; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+            fi
             chmod +x "scripts/${f}"
           done
           # Fetch prompt template
           mkdir -p prompts
-          gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/prompts/mode-orchestrate.txt?ref=stable" > "prompts/mode-orchestrate.txt"
+          if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/prompts/mode-orchestrate.txt?ref=stable" > "prompts/mode-orchestrate.txt" 2>/dev/null; then
+            echo "::warning::mode-orchestrate.txt not found on stable; falling back to main"
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/mode-orchestrate.txt?ref=main" > "prompts/mode-orchestrate.txt"
+          fi
           # Fetch schema for reference in prompt
           mkdir -p .github/ai
-          gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=stable" > ".github/ai/orchestrate_schema.v1.json"
+          if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=stable" > ".github/ai/orchestrate_schema.v1.json" 2>/dev/null; then
+            echo "::warning::orchestrate_schema.v1.json not found on stable; falling back to main"
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=main" > ".github/ai/orchestrate_schema.v1.json"
+          fi
           # Fetch canonical instruction files
           # Model catalog: try stable first, fall back to local copy from checkout.
           if gh api -H 'Accept: application/vnd.github.raw+json' \
@@ -148,8 +160,12 @@ jobs:
           fi
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
+              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}" 2>/dev/null; then
+                echo "::warning::${f} not found on stable; falling back to main"
+                gh api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+              fi
             fi
           done
 

@@ -107,16 +107,28 @@ jobs:
           wf_source="${{ github.repository_owner }}/coding-workflows"
           mkdir -p scripts prompts .github/ai
           for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_poll_process.sh tg_helpers.sh; do
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}" 2>/dev/null; then
+              echo "::warning::${f} not found on stable; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+            fi
             chmod +x "scripts/${f}"
           done
           for pf in mode-judge.txt mode-judge-review-blocked.txt; do
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/${pf}?ref=stable" > "prompts/${pf}"
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/${pf}?ref=stable" > "prompts/${pf}" 2>/dev/null; then
+              echo "::warning::${pf} not found on stable; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/${pf}?ref=main" > "prompts/${pf}"
+            fi
           done
-          gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=stable" > ".github/ai/orchestrate_schema.v1.json"
+          if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=stable" > ".github/ai/orchestrate_schema.v1.json" 2>/dev/null; then
+            echo "::warning::orchestrate_schema.v1.json not found on stable; falling back to main"
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=main" > ".github/ai/orchestrate_schema.v1.json"
+          fi
           # Model catalog: try stable first, fall back to local copy from checkout.
           if gh api -H 'Accept: application/vnd.github.raw+json' \
             "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=stable" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
@@ -127,8 +139,12 @@ jobs:
           fi
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}"
+              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}" 2>/dev/null; then
+                echo "::warning::${f} not found on stable; falling back to main"
+                gh api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+              fi
             fi
           done
 
