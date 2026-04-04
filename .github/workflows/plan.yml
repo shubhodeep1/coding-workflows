@@ -98,7 +98,7 @@ jobs:
           mkdir -p scripts
           # Only fetch scripts actually used by the plan workflow.
           # git_ref_health_check.sh is only needed by implement/edit workflows.
-          for f in setup_serena.sh; do
+          for f in setup_serena.sh tg_helpers.sh; do
             gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
             chmod +x "scripts/${f}"
@@ -633,24 +633,12 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/tg_helpers.sh
 
-          CHAT_ID="${TG_CHAT_ID:-}"
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
-            echo "Warning: Telegram clarification notification skipped (missing TG_BOT_SECRET or chat_id)"
-            exit 0
-          fi
-
-          MSG="Plan needs clarification for issue ${ISSUE_URL}"
-          RESPONSE="$(curl -sS -X POST \
-            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}")"
-          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
-            echo "::warning::Telegram clarification notification failed: ${RESPONSE}"
-          fi
+          tg_send_tracked "${ISSUE_NUMBER}" "Plan needs clarification for issue ${ISSUE_URL}"
 
       - name: Post implementation plan
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
@@ -716,24 +704,12 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/tg_helpers.sh
 
-          CHAT_ID="${TG_CHAT_ID:-}"
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
-            echo "Warning: Telegram plan notification skipped (missing TG_BOT_SECRET or chat_id)"
-            exit 0
-          fi
-
-          MSG="Implementation plan generated for issue ${ISSUE_URL}"
-          RESPONSE="$(curl -sS -X POST \
-            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}")"
-          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
-            echo "::warning::Telegram plan notification failed: ${RESPONSE}"
-          fi
+          tg_send_tracked "${ISSUE_NUMBER}" "Implementation plan generated for issue ${ISSUE_URL}"
 
       - name: Capture planning failure context
         if: failure() || cancelled()
@@ -765,14 +741,10 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-
-          CHAT_ID="${TG_CHAT_ID:-}"
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
-            echo "Warning: Telegram failure notification skipped (missing TG_BOT_SECRET or chat_id)"
-            exit 0
-          fi
+          source scripts/tg_helpers.sh
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."
@@ -793,14 +765,7 @@ jobs:
           MSG+="Hint: ${FAILED_STEP_HINT}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          RESPONSE="$(curl -sS -X POST \
-            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}")"
-          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
-            echo "::warning::Telegram failure notification failed: ${RESPONSE}"
-          fi
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
 
       - name: Exit safely
         if: failure() || cancelled()

@@ -124,7 +124,7 @@ jobs:
           set -euo pipefail
           wf_source="${{ github.repository_owner }}/coding-workflows"
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py; do
+          for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py tg_helpers.sh; do
             gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
             chmod +x "scripts/${f}"
@@ -575,13 +575,12 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
         run: |
           set -euo pipefail
-          if [ -z "${TG_BOT_SECRET}" ] || [ -z "${TG_ADMIN_CHAT_ID}" ]; then
-            echo "Telegram not configured, skipping."
-            exit 0
-          fi
+          source scripts/tg_helpers.sh
+
           STATUS="${{ job.status }}"
           ISSUE_COUNT="0"
           if [ -f "${DECOMPOSITION_FILE}" ]; then
@@ -592,7 +591,4 @@ jobs:
           else
             MSG="❌ Orchestrator: Failed (${STATUS}). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           fi
-          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d chat_id="${TG_ADMIN_CHAT_ID}" \
-            -d text="${MSG}" \
-            -d parse_mode="Markdown" >/dev/null 2>&1 || echo "::warning::Telegram notification failed"
+          tg_send_tracked "${TRACKING_ISSUE_NUMBER:-0}" "${MSG}"

@@ -1140,6 +1140,7 @@ jobs:
     timeout-minutes: 2
     steps:
       - name: Send Telegram notification
+        id: tg_send
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1180,9 +1181,29 @@ jobs:
           fi
           MSG+=$'\n'"Run: ${RUN_URL}"
 
+          # Send and capture message_id for self-cleanup (no issue context)
           set +e
-          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+          RESP="$(curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${CHAT_ID}" \
             -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}" >/dev/null 2>&1
+            --data-urlencode "text=${MSG}" 2>/dev/null)"
           set -e
+          MSG_ID="$(printf '%s' "${RESP}" | jq -r '.result.message_id // empty' 2>/dev/null)"
+          if [ -n "${MSG_ID}" ]; then
+            echo "tg_msg_id=${MSG_ID}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cleanup Telegram notification
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          TG_MSG_ID: ${{ steps.tg_send.outputs.tg_msg_id }}
+        run: |
+          set -euo pipefail
+          # Brief pause so the notification is visible before deletion
+          sleep 5
+          if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_CHAT_ID:-}" ] && [ -n "${TG_MSG_ID:-}" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/deleteMessage" \
+              -d "chat_id=${TG_CHAT_ID}" \
+              -d "message_id=${TG_MSG_ID}" >/dev/null 2>&1 || true
+          fi

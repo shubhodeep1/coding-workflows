@@ -118,24 +118,19 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-
-          CHAT_ID="${TG_CHAT_ID:-}"
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
-            echo "Warning: Telegram duplicate PR notification skipped (missing TG_BOT_SECRET or chat_id)"
-            exit 0
+          # tg_helpers.sh not yet fetched at this step; inline-fetch it
+          wf_source="${{ github.repository_owner }}/coding-workflows"
+          mkdir -p scripts
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=stable" > "scripts/tg_helpers.sh" 2>/dev/null || true
+          if [ -f scripts/tg_helpers.sh ]; then
+            source scripts/tg_helpers.sh
           fi
 
-          MSG="Skipping implementation for issue ${ISSUE_URL} because a PR already exists."
-          RESPONSE="$(curl -sS -X POST \
-            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}")"
-          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
-            echo "::warning::Telegram duplicate PR notification failed: ${RESPONSE}"
-          fi
+          tg_send_tracked "${ISSUE_NUMBER}" "Skipping implementation for issue ${ISSUE_URL} because a PR already exists."
 
       - name: Exit when existing PR is found
         if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true'
@@ -178,7 +173,7 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py; do
+          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py tg_helpers.sh; do
             gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
             chmod +x "scripts/${f}"
@@ -919,14 +914,10 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-
-          CHAT_ID="${TG_CHAT_ID:-}"
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
-            echo "Warning: Telegram failure notification skipped (missing TG_BOT_SECRET or chat_id)"
-            exit 0
-          fi
+          source scripts/tg_helpers.sh
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
@@ -936,14 +927,7 @@ jobs:
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          RESPONSE="$(curl -sS -X POST \
-            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}")"
-          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
-            echo "::warning::Telegram failure notification failed: ${RESPONSE}"
-          fi
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
 
       - name: Exit safely
         if: failure() || cancelled()

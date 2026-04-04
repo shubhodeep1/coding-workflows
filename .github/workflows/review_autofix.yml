@@ -75,7 +75,7 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py; do
+          for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh; do
             gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
             chmod +x "scripts/${f}"
@@ -2431,14 +2431,11 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          source scripts/tg_helpers.sh
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
-          MSG="Merge conflicts resolved automatically\nPR: ${PR_URL}"
-          curl -sS -X POST \
-            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${TG_CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}"
+          tg_send_tracked "${PR_NUMBER}" "Merge conflicts resolved automatically\nPR: ${PR_URL}"
 
       - name: Mark linked issues ready to merge
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true'
@@ -3019,28 +3016,23 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          source scripts/tg_helpers.sh
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
-          MSG="PR processed: ${PR_URL}"
-          curl -sS -X POST \
-            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${TG_CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}"
+          tg_send_tracked "${PR_NUMBER}" "PR processed: ${PR_URL}"
 
       - name: Telegram review-blocked judge decision
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
-            echo "Telegram credentials not configured; skipping notification."
-            exit 0
-          fi
+          source scripts/tg_helpers.sh
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           if [ "${JUDGE_HANDLED}" = "true" ]; then
@@ -3057,11 +3049,7 @@ jobs:
           else
             MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge did not handle\nNeeds human intervention\nPR: %s' "${MAX_AUTOFIX_ITERATIONS}" "${PR_URL}")"
           fi
-          curl -sS -X POST \
-            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${TG_CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}"
 
       - name: Mark linked issues review-blocked (workflow failure)
         if: failure()
@@ -3123,11 +3111,9 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
-            echo "Telegram credentials not configured; skipping notification."
-            exit 0
-          fi
+          source scripts/tg_helpers.sh
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -3136,11 +3122,7 @@ jobs:
           else
             MSG="$(printf 'PR autofix failed\nPR: %s\nRun: %s' "${PR_URL}" "${RUN_URL}")"
           fi
-          curl -sS -X POST \
-            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${TG_CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}"
 
       - name: Cleanup temporary artifacts
         if: always()

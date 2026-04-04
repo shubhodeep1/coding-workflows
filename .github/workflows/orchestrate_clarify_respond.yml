@@ -91,7 +91,7 @@ jobs:
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
-          for f in setup_serena.sh; do
+          for f in setup_serena.sh tg_helpers.sh; do
             gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}"
             chmod +x "scripts/${f}"
@@ -314,14 +314,10 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-
-          CHAT_ID="${TG_CHAT_ID:-}"
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
-            echo "Warning: Telegram failure notification skipped (missing TG_BOT_SECRET or chat_id)"
-            exit 0
-          fi
+          source scripts/tg_helpers.sh
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MSG="Orchestrator clarify-respond failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE:-}"
@@ -329,20 +325,4 @@ jobs:
           MSG+="${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          set +e
-          HTTP_OUTPUT="$(curl -sS -w '\n%{http_code}' -X POST \
-            "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}")"
-          CURL_EXIT="${?}"
-          set -e
-          RESPONSE="$(printf '%s' "${HTTP_OUTPUT}" | sed '$d')"
-          HTTP_CODE="$(printf '%s' "${HTTP_OUTPUT}" | tail -n1)"
-          if [ "${CURL_EXIT}" -ne 0 ] || [ -z "${RESPONSE}" ]; then
-            echo "::warning::Telegram failure notification failed: curl exit=${CURL_EXIT} http_code=${HTTP_CODE} response=${RESPONSE}"
-            exit 0
-          fi
-          if ! printf '%s' "${RESPONSE}" | jq -e '.ok == true' >/dev/null 2>&1; then
-            echo "::warning::Telegram failure notification failed: http_code=${HTTP_CODE} response=${RESPONSE}"
-          fi
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"

@@ -13,15 +13,23 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------
-# Helper: send Telegram notification
+# Helper: Telegram (tracked via tg_helpers.sh)
 # ---------------------------------------------------------------
+# shellcheck source=tg_helpers.sh
+if [ -f "scripts/tg_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/tg_helpers.sh
+fi
+
+# tg_notify wraps tg_send_tracked using the current TRACKING_NUM.
+# TRACKING_NUM is set inside the main per-issue loop below.
 tg_notify() {
   local msg="$1"
-  if [ -n "${TG_BOT_SECRET}" ] && [ -n "${TG_ADMIN_CHAT_ID}" ]; then
-    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-      -d chat_id="${TG_ADMIN_CHAT_ID}" \
-      -d text="${msg}" \
-      -d parse_mode="Markdown" >/dev/null 2>&1 || echo "::warning::Telegram notification failed"
+  if [ -n "${TRACKING_NUM:-}" ]; then
+    tg_send_tracked "${TRACKING_NUM}" "${msg}"
+  else
+    # Fallback: untracked send (no issue context yet)
+    tg_send_msg "${msg}" >/dev/null
   fi
 }
 
@@ -182,6 +190,7 @@ mark_validation_failed() {
   set_tracking_phase_label "ai:validation-failed"
   post_tracking_comment "## ❌ Runtime validation failed\n\n${reason}"
   tg_notify "❌ Project #${TRACKING_NUM} validation failed: ${reason}"
+  tg_cleanup_msgs "${TRACKING_NUM}"
 }
 
 mark_validation_complete() {
@@ -193,6 +202,7 @@ mark_validation_complete() {
   gh_retry gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
     --comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle})." || true
   tg_notify "✅ Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
+  tg_cleanup_msgs "${TRACKING_NUM}"
 }
 
 extract_fix_issues_from_comment() {
@@ -1349,6 +1359,7 @@ PRs to revert: ${REVERT_COUNT}"
           --comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s)." || true
 
         tg_notify "✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved."
+        tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
 
@@ -1401,6 +1412,7 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
 **Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null
 
         tg_notify "❌ Project #${TRACKING_NUM} FAILED after recovery attempt. Manual intervention needed."
+        tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
 

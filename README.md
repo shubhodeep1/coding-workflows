@@ -29,7 +29,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 |---|---|---|---|
 | `GH_PAT` | **Yes** | All workflows | GitHub Personal Access Token with `repo` scope |
 | `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | [OpenRouter](https://openrouter.ai) API key for LLM access |
-| `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Telegram bot token for notifications |
+| `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Telegram bot token for notifications and message cleanup |
 
 #### Variables
 
@@ -380,7 +380,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 |---|---|---|
 | `GH_PAT` | All workflows | GitHub PAT with repo access |
 | `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | OpenRouter API key for LLM access |
-| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Telegram bot token (optional) |
+| `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Telegram bot token (optional; also used for message cleanup) |
 
 ## Required Variables
 
@@ -500,6 +500,22 @@ Your `GH_PAT` must have permission to enable auto-merge (repo scope with admin o
 ### Labels
 
 The orchestrator uses `ai:orchestrator-tracking` for tracking issues. Child issues use the standard `ai:*` phase labels. The `ai:orchestrator-tracking` label is defined in the [label contract](/.github/ai/label_contract.v1.json).
+
+### Telegram Message Cleanup
+
+Telegram notifications are automatically cleaned up (deleted) when an issue or PR reaches a terminal state. This prevents the notification chat from accumulating stale messages.
+
+**How it works:**
+1. Each workflow phase (clarify, plan, implement, review, orchestrate, validate) sends notifications via `scripts/tg_helpers.sh`, which captures the Telegram message ID and stores it in a hidden GitHub issue comment (`<!-- tg_cleanup:id1,id2,... -->`).
+2. When a PR is closed or merged, `issue_pr_status.yml` reads all tracked message IDs from the PR and its linked issues, deletes them from Telegram via the `deleteMessage` API, and removes the tracking comments.
+3. For orchestrated projects, cleanup also runs when the tracking issue reaches a terminal state (complete or failed) via the poller.
+
+**Requirements:**
+- `TG_BOT_SECRET` must be set (same secret used for sending).
+- The bot must have permission to delete messages in the target chat (this is automatic for messages the bot itself sent, within 48 hours).
+- No additional configuration is needed — cleanup is enabled automatically when `TG_BOT_SECRET` and `TG_ADMIN_CHAT_ID` are set.
+
+**Note:** Messages older than 48 hours cannot be deleted by the Telegram Bot API. For long-running orchestrated projects, intermediate messages sent more than 48 hours before completion will remain in the chat.
 
 ## Runtime Validation Phase
 
