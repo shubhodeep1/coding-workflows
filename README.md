@@ -403,6 +403,9 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
 | `AI_MEMORY_ENABLED` | `true` | Enable/disable memory operations |
+| `AI_MEMORY_KEYWORD_MODEL` | `openai/gpt-5-mini` | Model for semantic keyword extraction during retrieval |
+| `AI_MEMORY_KEYWORD_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL for keyword model |
+| `AI_MEMORY_TOKEN_BUDGET_<ROLE>` | _(from profile)_ | Per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`) |
 | `THINKING_LEVEL_CLARIFY` | `medium` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
 | `THINKING_LEVEL_PLAN` | `xhigh` | Reasoning effort for planning |
 | `THINKING_LEVEL_IMPLEMENT` | `xhigh` | Reasoning effort for implementation |

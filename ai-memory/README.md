@@ -38,7 +38,7 @@ Fail policy:
 - Retrieval/candidate failures are fail-open at workflow level (logged in run ledger).
 - Promotion/finalization failures are fail-closed.
 
-## Deterministic retrieval
+## Retrieval
 
 `retrieve` scores records by:
 
@@ -46,8 +46,15 @@ Fail policy:
 - confidence
 - issue/PR scope boosts
 - active-status boost
+- keyword overlap (issue title/body matched against record summary/details)
 
-Selection is deterministic and bounded by fixed per-role token budgets and `max_records`.
+When `OPENROUTER_API_KEY` is available, retrieval uses an LLM (`AI_MEMORY_KEYWORD_MODEL`,
+default `openai/gpt-5-mini`) to extract semantic keywords from the issue before scoring.
+If the LLM call fails or returns an unparseable response after 3 retries, it falls back
+to plain tokenisation-based keyword extraction.
+
+Selection is bounded by per-role token budgets (overridable via
+`AI_MEMORY_TOKEN_BUDGET_<ROLE>` env vars, e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION`).
 
 ## Retention and compaction
 
@@ -76,3 +83,6 @@ Processed command CLI:
 - `AI_MEMORY_ROOT` (default `ai-memory`)
 - `AI_MEMORY_RETRIEVAL_PROFILES` (default `ai-memory/config/retrieval_profiles.v1.json`)
 - `AI_MEMORY_PUSH_RETRIES` (default `5`)
+- `AI_MEMORY_KEYWORD_MODEL` (default `openai/gpt-5-mini`) — model for semantic keyword extraction
+- `AI_MEMORY_KEYWORD_BASE_URL` (default `https://openrouter.ai/api/v1`) — API base URL for keyword model
+- `AI_MEMORY_TOKEN_BUDGET_<ROLE>` — per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`)

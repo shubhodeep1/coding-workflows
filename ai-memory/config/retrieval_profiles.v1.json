@@ -4,13 +4,13 @@
   "roles": {
     "clarify": {
       "token_budget": 900,
-      "max_records": 8,
       "confidence_weight": 11,
       "same_issue_boost": 24,
       "scope_issue_boost": 9,
       "same_pr_boost": 4,
       "scope_pr_boost": 2,
       "active_status_boost": 2,
+      "keyword_match_boost": 10,
       "category_weights": {
         "constraints": 16,
         "incidents": 14,
@@ -22,13 +22,13 @@
     },
     "planning": {
       "token_budget": 1200,
-      "max_records": 10,
       "confidence_weight": 10,
       "same_issue_boost": 22,
       "scope_issue_boost": 9,
       "same_pr_boost": 5,
       "scope_pr_boost": 3,
       "active_status_boost": 3,
+      "keyword_match_boost": 12,
       "category_weights": {
         "constraints": 15,
         "decisions": 15,
@@ -40,13 +40,13 @@
     },
     "implementation": {
       "token_budget": 1600,
-      "max_records": 12,
       "confidence_weight": 9,
       "same_issue_boost": 20,
       "scope_issue_boost": 8,
       "same_pr_boost": 12,
       "scope_pr_boost": 8,
       "active_status_boost": 4,
+      "keyword_match_boost": 12,
       "category_weights": {
         "constraints": 17,
         "decisions": 16,
@@ -58,13 +58,13 @@
     },
     "reviewer": {
       "token_budget": 1400,
-      "max_records": 11,
       "confidence_weight": 9,
       "same_issue_boost": 16,
       "scope_issue_boost": 8,
       "same_pr_boost": 14,
       "scope_pr_boost": 10,
       "active_status_boost": 3,
+      "keyword_match_boost": 11,
       "category_weights": {
         "incidents": 17,
         "constraints": 16,
@@ -76,13 +76,13 @@
     },
     "autofix": {
       "token_budget": 1400,
-      "max_records": 11,
       "confidence_weight": 8,
       "same_issue_boost": 15,
       "scope_issue_boost": 8,
       "same_pr_boost": 15,
       "scope_pr_boost": 11,
       "active_status_boost": 4,
+      "keyword_match_boost": 11,
       "category_weights": {
         "incidents": 16,
         "patterns": 15,
