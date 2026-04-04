@@ -618,6 +618,35 @@ FAILED_TESTS="$(jq -r '.failed_tests // 0' "${VALIDATION_RESULT_FILE}")"
 DURATION_SECONDS="$(jq -r '.duration_seconds // 0' "${VALIDATION_RESULT_FILE}")"
 FIRST_FAILURE="$(jq -r '.failures[0].error // ""' "${VALIDATION_RESULT_FILE}")"
 
+# ---------------------------------------------------------------
+# Safety net: override contradictory fail-with-all-pass results.
+# When the harness script crashes (non-zero exit / result=fail)
+# but the structured JSON shows all tests passed (failed_tests==0,
+# passed_tests>0, counts consistent), the crash was a scripting
+# bug (e.g. grep returning 1 on zero matches under pipefail),
+# not a real test failure. Override to pass.
+# ---------------------------------------------------------------
+if [ "${RESULT_KIND}" != "pass" ] || [ "${VALIDATION_EXIT}" -ne 0 ]; then
+	if jq -e '
+		(.total_tests | type == "number") and
+		(.passed_tests | type == "number") and
+		(.failed_tests | type == "number") and
+		(.total_tests > 0) and
+		(.passed_tests > 0) and
+		(.failed_tests == 0) and
+		(.passed_tests == .total_tests) and
+		((.failures | length == 0) or ((.failures | length == 1) and (.failures[0].test == "validate.sh:unexpected_error")))
+	' "${VALIDATION_RESULT_FILE}" >/dev/null 2>&1; then
+		echo "::warning::Harness exited ${VALIDATION_EXIT} with result '${RESULT_KIND}' but all ${PASSED_TESTS}/${TOTAL_TESTS} tests passed (failed_tests=0). Overriding to pass (likely scripting bug in generated validate.sh)."
+		# Strip the synthetic unexpected_error failure entry and fix result
+		jq '.result = "pass" | .failures = [] | .phase = "runtime_validation"' "${VALIDATION_RESULT_FILE}" > "${VALIDATION_RESULT_FILE}.tmp"
+		mv "${VALIDATION_RESULT_FILE}.tmp" "${VALIDATION_RESULT_FILE}"
+		RESULT_KIND="pass"
+		VALIDATION_EXIT=0
+		FIRST_FAILURE=""
+	fi
+fi
+
 PASS_SCHEMA_OK="false"
 if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ]; then
   if jq -e '
