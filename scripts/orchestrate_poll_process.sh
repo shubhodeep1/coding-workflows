@@ -439,7 +439,8 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
   CURRENT_WAVE="$(jq -r '.current_wave' "${STATE_FILE}")"
   TOTAL_WAVES="$(jq -r '.total_waves' "${STATE_FILE}")"
-  JUDGE_CYCLE="$(jq -r '.judge_cycle' "${STATE_FILE}")"
+  JUDGE_CYCLE="$(jq -r '.judge_cycle // 0' "${STATE_FILE}")"
+  if ! [[ "${JUDGE_CYCLE}" =~ ^[0-9]+$ ]]; then JUDGE_CYCLE=0; fi
   RECOVERY_ATTEMPTED="$(jq -r '.recovery_attempted' "${STATE_FILE}")"
 
   echo "Current wave: ${CURRENT_WAVE}/${TOTAL_WAVES}, Judge cycle: ${JUDGE_CYCLE}, Recovery attempted: ${RECOVERY_ATTEMPTED}"
