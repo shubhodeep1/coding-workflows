@@ -13,7 +13,7 @@ on:
         type: string
         default: "docker-compose.yml"
       validation_timeout:
-        description: Validation timeout in minutes
+        description: Validation idle timeout in minutes (killed after this long with no output)
         required: false
         type: string
         default: "15"

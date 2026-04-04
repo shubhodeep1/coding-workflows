@@ -509,28 +509,71 @@ find validation -type f -name '*.sh' -exec chmod +x {} +
 
 
 # ---------------------------------------------------------------
-# Phase 2: Execute validation harness
+# Phase 2: Execute validation harness (idle-timeout based)
 # ---------------------------------------------------------------
+# The timeout is activity-based: the process is killed only if it
+# produces no output for VALIDATION_TIMEOUT minutes. This allows
+# large projects to run longer as long as they keep producing output.
+IDLE_TIMEOUT_SECS=$((VALIDATION_TIMEOUT * 60))
 VALIDATION_EXIT=0
+VALIDATION_IDLE_KILLED=0
+
 set +e
-timeout -k 30s "${VALIDATION_TIMEOUT}m" bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1
+# Run validation in background, tee output to log file
+bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1 &
+VALIDATION_PID=$!
+
+# Monitor the log file for activity; kill if idle too long
+LAST_SIZE=0
+IDLE_ELAPSED=0
+POLL_INTERVAL=5
+while kill -0 "${VALIDATION_PID}" 2>/dev/null; do
+  CURRENT_SIZE=0
+  if [ -f "${VALIDATION_LOG_FILE}" ]; then
+    CURRENT_SIZE=$(stat -c%s "${VALIDATION_LOG_FILE}" 2>/dev/null || echo 0)
+  fi
+
+  if [ "${CURRENT_SIZE}" -ne "${LAST_SIZE}" ]; then
+    LAST_SIZE="${CURRENT_SIZE}"
+    IDLE_ELAPSED=0
+  else
+    IDLE_ELAPSED=$((IDLE_ELAPSED + POLL_INTERVAL))
+  fi
+
+  if [ "${IDLE_ELAPSED}" -ge "${IDLE_TIMEOUT_SECS}" ]; then
+    echo "Validation idle for ${VALIDATION_TIMEOUT} minute(s) with no output — terminating." >> "${VALIDATION_LOG_FILE}"
+    kill "${VALIDATION_PID}" 2>/dev/null || true
+    # Grace period: SIGKILL after 30s if still running
+    sleep 30
+    if kill -0 "${VALIDATION_PID}" 2>/dev/null; then
+      kill -9 "${VALIDATION_PID}" 2>/dev/null || true
+    fi
+    VALIDATION_IDLE_KILLED=1
+    break
+  fi
+
+  sleep "${POLL_INTERVAL}"
+done
+
+wait "${VALIDATION_PID}" 2>/dev/null
 VALIDATION_EXIT=$?
 set -e
 
 tail -n 200 "${VALIDATION_LOG_FILE}" > "${VALIDATION_LOG_TAIL_FILE}" 2>/dev/null || true
 
-if [ "${VALIDATION_EXIT}" -eq 124 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
-  timeout_test="validation-timeout"
-  timeout_error="Validation timed out after ${VALIDATION_TIMEOUT} minute(s)"
-  if [ "${VALIDATION_EXIT}" -eq 137 ]; then
+if [ "${VALIDATION_IDLE_KILLED}" -eq 1 ] || [ "${VALIDATION_EXIT}" -eq 124 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
+  timeout_test="validation-idle-timeout"
+  timeout_error="Validation idle-timed out after ${VALIDATION_TIMEOUT} minute(s) with no output"
+  if [ "${VALIDATION_IDLE_KILLED}" -eq 0 ]; then
+    # Legacy exit codes (shouldn't normally happen now, but handle defensively)
     timeout_test="validation-timeout-signal"
-    timeout_error="Validation likely timed out and was terminated (exit code ${VALIDATION_EXIT}) after ${VALIDATION_TIMEOUT} minute(s)"
+    timeout_error="Validation terminated (exit code ${VALIDATION_EXIT}) after ${VALIDATION_TIMEOUT} minute(s)"
   fi
 
   jq -n \
     --arg timeout_test "${timeout_test}" \
     --arg timeout_error "${timeout_error}" \
-    --arg duration_seconds "$((VALIDATION_TIMEOUT * 60))" \
+    --arg duration_seconds "${IDLE_TIMEOUT_SECS}" \
     '{
       result: "fail",
       phase: "timeout",

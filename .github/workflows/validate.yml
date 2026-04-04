@@ -15,7 +15,7 @@ name: AI Validate (Reusable)
         type: string
         default: "docker-compose.yml"
       validation_timeout:
-        description: "Validation timeout in minutes"
+        description: "Validation idle timeout in minutes (killed after this long with no output)"
         required: false
         type: string
         default: "15"
@@ -242,7 +242,7 @@ jobs:
             echo "| Reasoning effort | \`${MODEL_REASONING_EFFORT}\` |"
             printf '| Tracking issue | `%s` |\n' "${SUMMARY_TRACKING_ISSUE}"
             printf '| Compose fallback | `%s` |\n' "${SUMMARY_COMPOSE_FILE}"
-            printf '| Timeout (minutes) | `%s` |\n' "${SUMMARY_TIMEOUT}"
+            printf '| Idle timeout (minutes) | `%s` |\n' "${SUMMARY_TIMEOUT}"
             printf '| Status | `%s` |\n' "${SUMMARY_STATUS}"
             printf '| Summary | %s |\n' "${summary_text_escaped}"
             if [ -n "${SUMMARY_FAILURE_TEXT}" ]; then
