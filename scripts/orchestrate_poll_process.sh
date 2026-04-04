@@ -154,27 +154,50 @@ has_label() {
 
 dispatch_validation_workflow() {
   local validation_cycle="$1"
-  echo "Dispatching ai-validate.yml for tracking #${TRACKING_NUM} (cycle ${validation_cycle})"
-  gh_retry gh workflow run ai-validate.yml \
+  local wf_name="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
+  echo "Dispatching ${wf_name} for tracking #${TRACKING_NUM} (cycle ${validation_cycle})"
+  if gh_retry gh workflow run "${wf_name}" \
     --repo "${GITHUB_REPOSITORY}" \
-    -f tracking_issue="${TRACKING_NUM}" >/dev/null
+    -f tracking_issue="${TRACKING_NUM}" >/dev/null 2>&1; then
+    return 0
+  fi
+  # Fallback: try internal-validate.yml (coding-workflows repo convention)
+  if [ "${wf_name}" != "internal-validate.yml" ]; then
+    echo "Primary dispatch failed; trying internal-validate.yml fallback"
+    if gh_retry gh workflow run "internal-validate.yml" \
+      --repo "${GITHUB_REPOSITORY}" \
+      -f tracking_issue="${TRACKING_NUM}" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
 }
 
 dispatch_validation_if_needed() {
   local validation_cycle="$1"
   local last_dispatch_cycle
+  local last_dispatch_ts
+  local now_epoch
+  local stale_threshold_secs=3600  # 1 hour: if no label appears after dispatch, allow redispatch
 
   last_dispatch_cycle="$(jq -r '.validation_last_dispatch_cycle // 0' "${STATE_FILE}")"
   if [ "${last_dispatch_cycle}" = "${validation_cycle}" ]; then
-    echo "Validation workflow already dispatched for cycle ${validation_cycle}."
-    return 0
+    # Check for staleness: if dispatched but no label change for >1h, allow redispatch
+    last_dispatch_ts="$(jq -r '.validation_last_dispatch_ts // 0' "${STATE_FILE}")"
+    now_epoch="$(date +%s)"
+    if [ "${last_dispatch_ts}" -gt 0 ] 2>/dev/null && [ $(( now_epoch - last_dispatch_ts )) -lt "${stale_threshold_secs}" ]; then
+      echo "Validation workflow already dispatched for cycle ${validation_cycle} ($(( now_epoch - last_dispatch_ts ))s ago, threshold ${stale_threshold_secs}s)."
+      return 0
+    fi
+    echo "Validation workflow for cycle ${validation_cycle} appears stale (dispatched >$(( stale_threshold_secs / 60 ))m ago with no label). Redispatching..."
   fi
 
   if dispatch_validation_workflow "${validation_cycle}"; then
-    jq --argjson cycle "${validation_cycle}" '.validation_last_dispatch_cycle = $cycle' \
+    jq --argjson cycle "${validation_cycle}" --argjson ts "$(date +%s)" \
+      '.validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
-    post_tracking_comment "## 🧪 Runtime validation dispatched\n\n- Cycle: ${validation_cycle}\n- Workflow: \`ai-validate.yml\`"
+    post_tracking_comment "## 🧪 Runtime validation dispatched\n\n- Cycle: ${validation_cycle}\n- Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`"
     tg_notify "🧪 Validation dispatched for project #${TRACKING_NUM} (cycle ${validation_cycle})."
     return 0
   fi
@@ -260,6 +283,26 @@ sync_validation_fix_issues_from_comments() {
 }
 
 # ---------------------------------------------------------------
+# Normalize truthy env vars (case-insensitive 1/true/yes/on)
+# ---------------------------------------------------------------
+_is_truthy() {
+  case "$(echo "$1" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+if _is_truthy "${ENABLE_VALIDATION:-true}"; then
+  ENABLE_VALIDATION="true"
+else
+  ENABLE_VALIDATION="false"
+fi
+
+# Sanitize MAX_VALIDATE_CYCLES
+if ! [[ "${MAX_VALIDATE_CYCLES:-3}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES:-3}" -lt 1 ]; then
+  MAX_VALIDATE_CYCLES="3"
+fi
+
+# ---------------------------------------------------------------
 # Process each tracking issue
 # ---------------------------------------------------------------
 TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
@@ -328,7 +371,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       fi
 
       if ! dispatch_validation_if_needed "${VALIDATION_CYCLE}"; then
-        mark_validation_failed "Unable to dispatch ai-validate.yml for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
       fi
       continue
     fi
@@ -384,7 +427,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     set_tracking_phase_label "ai:validating"
 
     if ! dispatch_validation_if_needed "${NEXT_VALIDATION_CYCLE}"; then
-      mark_validation_failed "Unable to dispatch ai-validate.yml for cycle ${NEXT_VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+      mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${NEXT_VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
     fi
     continue
   fi
@@ -1136,6 +1179,27 @@ REISSUE_EOF
   echo "Wave ${CURRENT_WAVE} complete!"
 
   # ---------------------------------------------------------------
+  # Guard: cap judge cycles to prevent infinite loops
+  # ---------------------------------------------------------------
+  MAX_JUDGE="${MAX_JUDGE_CYCLES:-25}"
+  if ! [[ "${MAX_JUDGE}" =~ ^[0-9]+$ ]] || [ "${MAX_JUDGE}" -lt 1 ]; then
+    MAX_JUDGE="25"
+  fi
+  if [ "$((JUDGE_CYCLE + 1))" -gt "${MAX_JUDGE}" ]; then
+    echo "::error::Judge cycle limit reached ($((JUDGE_CYCLE + 1)) > ${MAX_JUDGE}). Marking project as failed."
+    jq '.status = "failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+      -f body="## Project Failed — Judge cycle limit exceeded
+
+Judge has run ${JUDGE_CYCLE} cycle(s) without reaching completion. MAX_JUDGE_CYCLES=${MAX_JUDGE}.
+Manual intervention required." >/dev/null
+    tg_notify "❌ Project #${TRACKING_NUM} FAILED: judge cycle limit (${MAX_JUDGE}) exceeded."
+    tg_cleanup_msgs "${TRACKING_NUM}"
+    continue
+  fi
+
+  # ---------------------------------------------------------------
   # Run judge (full repo checkout + Codex call)
   # ---------------------------------------------------------------
   echo "Running judge evaluation (cycle $((JUDGE_CYCLE + 1)))..."
@@ -1409,7 +1473,7 @@ PRs to revert: ${REVERT_COUNT}"
       set_tracking_phase_label "ai:validating"
 
       if ! dispatch_validation_if_needed "${VALIDATION_CYCLE}"; then
-        mark_validation_failed "Unable to dispatch ai-validate.yml for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
       fi
       ;;
 
