@@ -2583,7 +2583,7 @@ jobs:
           JUDGE_FIX_COUNT: ${{ steps.retrigger_guard.outputs.judge_fix_count }}
           JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE || 'xhigh' }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
-          ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'false' }}
+          ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
 
@@ -3075,7 +3075,7 @@ jobs:
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'false' }}
+          ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
 
