@@ -86,7 +86,7 @@ tg_store_msg_id()
 
 	# Look for an existing tracking comment (scan last 30 comments)
 	local comments_json
-	comments_json=$(curl -s \
+	comments_json=$(curl -s -f \
 		-H "Authorization: token ${GH_TOKEN}" \
 		-H "Accept: application/vnd.github.v3+json" \
 		"${api_base}/${issue_num}/comments?per_page=30&direction=desc" 2>/dev/null) || {
@@ -157,7 +157,7 @@ tg_store_phase_msg_id()
 	local marker="<!-- tg_phase:${phase}:"
 
 	local comments_json
-	comments_json=$(curl -s \
+	comments_json=$(curl -s -f \
 		-H "Authorization: token ${GH_TOKEN}" \
 		-H "Accept: application/vnd.github.v3+json" \
 		"${api_base}/${issue_num}/comments?per_page=30&direction=desc" 2>/dev/null) || {
@@ -229,7 +229,7 @@ tg_cleanup_phase_msgs()
 
 	while true; do
 		local comments_json
-		comments_json=$(curl -s \
+		comments_json=$(curl -s -f \
 			-H "Authorization: token ${GH_TOKEN}" \
 			-H "Accept: application/vnd.github.v3+json" \
 			"${api_base}/${issue_num}/comments?per_page=100&page=${page}" 2>/dev/null) || break
@@ -241,7 +241,9 @@ tg_cleanup_phase_msgs()
 		local tracking_entries
 		tracking_entries=$(printf '%s' "${comments_json}" | jq -r \
 			--arg m "${marker}" \
-			'.[] | select(.body | contains($m)) | "\(.id)\t\(.body)"' 2>/dev/null) || true
+			'.[] | select(.body | contains($m)) | "\(.id)\t\(.body | gsub("\\n"; " "))"' 2>/dev/null) || true
+
+		local deleted_any=0
 
 		if [ -n "${tracking_entries}" ]; then
 			while IFS=$'\t' read -r comment_id comment_body; do
@@ -258,12 +260,19 @@ tg_cleanup_phase_msgs()
 					done
 					IFS="${old_ifs}"
 				fi
-				curl -s -X DELETE \
+				if curl -s -X DELETE \
 					-H "Authorization: token ${GH_TOKEN}" \
 					-H "Accept: application/vnd.github.v3+json" \
 					"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
-					>/dev/null 2>&1 || true
+					>/dev/null 2>&1; then
+					deleted_any=1
+				fi
 			done <<< "${tracking_entries}"
+		fi
+
+		if [ "${deleted_any}" = "1" ]; then
+			page=1
+			continue
 		fi
 
 		[ "${count}" -lt 100 ] && break
@@ -295,7 +304,7 @@ tg_cleanup_msgs()
 
 	while true; do
 		local comments_json
-		comments_json=$(curl -s \
+		comments_json=$(curl -s -f \
 			-H "Authorization: token ${GH_TOKEN}" \
 			-H "Accept: application/vnd.github.v3+json" \
 			"${api_base}/${issue_num}/comments?per_page=100&page=${page}" 2>/dev/null) || break
@@ -307,7 +316,7 @@ tg_cleanup_msgs()
 		# Extract tracking comments (both general and phase-specific)
 		local tracking_entries
 		tracking_entries=$(printf '%s' "${comments_json}" | jq -r \
-			'.[] | select(.body | test("<!-- tg_(cleanup|phase):")) | "\(.id)\t\(.body)"' 2>/dev/null) || true
+			'.[] | select(.body | test("<!-- tg_(cleanup|phase):")) | "\(.id)\t\(.body | gsub("\\n"; " "))"' 2>/dev/null) || true
 
 		if [ -n "${tracking_entries}" ]; then
 			while IFS=$'\t' read -r comment_id comment_body; do
