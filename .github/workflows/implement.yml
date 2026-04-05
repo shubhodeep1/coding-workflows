@@ -442,6 +442,8 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
+          EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
+          EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '3300' }}
         run: |
           set -euo pipefail
 
@@ -531,9 +533,38 @@ jobs:
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
 
+          # ── Adaptive progress-aware watchdog for the implement editor ──
+          # The Codex process is run in the background with stderr-based
+          # heartbeat tracking.  A watchdog monitors idle time (no stderr
+          # output) and wall-clock time per attempt.  Before killing an idle
+          # process the watchdog probes /proc/<pid>/fd for active network
+          # sockets — if connections exist the process is likely waiting on
+          # an API response and the idle window is extended.
+          # ────────────────────────────────────────────────────────────────
+
+          IMPLEMENT_IDLE_TIMEOUT="${EDITOR_IDLE_TIMEOUT:-1200}"   # 20 min default
+          IMPLEMENT_MAX_WALL="${EDITOR_MAX_WALL:-3300}"            # 55 min default
+          JOB_TIMEOUT_SECS=$((180 * 60))
+          JOB_DEADLINE=$(( $(date +%s) + JOB_TIMEOUT_SECS ))
+
           max_attempts=5
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
+
+            # Budget check: skip attempt if not enough time remains
+            now_epoch="$(date +%s)"
+            remaining=$(( JOB_DEADLINE - now_epoch ))
+            if [ "${remaining}" -lt 300 ]; then
+              echo "::warning::Skipping attempt ${attempt}: only ${remaining}s remain before job deadline (need 300s minimum)."
+              break
+            fi
+            # Cap wall time to remaining budget minus 2-min cleanup buffer
+            attempt_wall="${IMPLEMENT_MAX_WALL}"
+            budget_cap=$(( remaining - 120 ))
+            if [ "${budget_cap}" -lt "${attempt_wall}" ]; then
+              attempt_wall="${budget_cap}"
+              echo "Implement attempt ${attempt}: capping wall time to ${attempt_wall}s (budget-limited, ${remaining}s remain)."
+            fi
 
             # On retries after a no-op (Codex succeeded but made no file
             # changes), prepend a nudge so the model knows it must actually
@@ -553,7 +584,74 @@ jobs:
               } > "${PROMPT_FILE_TO_USE}"
             fi
 
-            if cat "${PROMPT_FILE_TO_USE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+            # ── Heartbeat file for progress tracking ──
+            hb_file="$(mktemp /tmp/heartbeat_implement.XXXXXX)"
+            printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
+            impl_start="$(date +%s)"
+            codex_pid_file="$(mktemp /tmp/codex_pid_implement.XXXXXX)"
+
+            # ── Background watchdog ──
+            (
+              while true; do
+                sleep 15
+                wd_now="$(date +%s)"
+                last="$(cat "${hb_file}" 2>/dev/null || echo "${wd_now}")"
+                if ! [[ "${last}" =~ ^[0-9]+$ ]]; then last="${wd_now}"; fi
+                idle_secs=$(( wd_now - last ))
+                wall_secs=$(( wd_now - impl_start ))
+
+                # Hard wall-time limit (budget-aware)
+                if [ "${wall_secs}" -ge "${attempt_wall}" ]; then
+                  echo "Codex killed — wall time ${attempt_wall}s exceeded (attempt ${attempt})." >&2
+                  cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+                  if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+                  rm -f "${hb_file}"
+                  exit 143
+                fi
+
+                # Idle check with network-activity probe
+                if [ "${idle_secs}" -ge "${IMPLEMENT_IDLE_TIMEOUT}" ]; then
+                  cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+                  net_active=false
+                  if [ -n "${cpid}" ] && [ -d "/proc/${cpid}/fd" ]; then
+                    sock_count="$(find "/proc/${cpid}/fd" -lname 'socket:*' 2>/dev/null | head -20 | wc -l || echo 0)"
+                    if [ "${sock_count}" -gt 0 ]; then
+                      net_active=true
+                    fi
+                  fi
+                  if [ "${net_active}" = true ]; then
+                    echo "Codex idle for ${idle_secs}s but has ${sock_count} active socket(s) — extending idle window (attempt ${attempt})." >&2
+                    printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
+                  else
+                    echo "Codex killed — no output for ${idle_secs}s and no active network connections (idle limit: ${IMPLEMENT_IDLE_TIMEOUT}s, attempt ${attempt})." >&2
+                    if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+                    rm -f "${hb_file}"
+                    exit 142
+                  fi
+                fi
+              done
+            ) &
+            wd_pid=$!
+
+            # Run codex in background with stderr-based heartbeat tracking
+            (
+              exec codex exec --model "${MODEL_EDITOR}" --full-auto < "${PROMPT_FILE_TO_USE}"
+            ) > "${CODEX_OUTPUT_FILE}" 2> >(
+              while IFS= read -r line || [ -n "$line" ]; do
+                printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
+                printf '%s\n' "$line"
+              done | tee -a "${RUNTIME_DIR}/codex_log.txt" >&2
+            ) &
+            codex_bg_pid=$!
+            echo "${codex_bg_pid}" > "${codex_pid_file}"
+            cmd_rc=0
+            wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
+
+            # Clean up watchdog
+            kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
+            rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
+
+            if [ "${cmd_rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 # Codex returned output — check if it actually changed files.
                 if [ -n "$(git status --porcelain)" ]; then
@@ -565,8 +663,7 @@ jobs:
                 echo "::warning::Codex returned empty output on attempt ${attempt}."
               fi
             else
-              rc=$?
-              echo "::warning::Codex exited with code $rc on attempt ${attempt}."
+              echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$((10 * (2 ** (attempt - 1))))
