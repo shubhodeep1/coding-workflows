@@ -339,7 +339,7 @@ build_active_issue_set() {
     [.[] |
      # Parse the start timestamp (ISO 8601 → epoch)
      (.run_started_at // .created_at // "1970-01-01T00:00:00Z") as $ts |
-     ($ts | sub("\\.[0-9]+"; "") | sub("Z$"; "+00:00") | fromdate) as $start_epoch |
+     ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $start_epoch |
      select(($now - $start_epoch) < $threshold)
     ]
   ' 2>/dev/null || echo '[]')"
@@ -364,12 +364,12 @@ build_active_issue_set() {
     ] | unique | .[]
   ' 2>/dev/null || true)"
 
-  # Also scan AI-prefixed branches for digits (broader catch)
+  # Fallback extraction for AI-prefixed branches (single issue number only)
   local branch_nums
   branch_nums="$(echo "${fresh_runs}" | jq -r '
     [.[] | .head_branch // "" |
-     select(test("(^|/)ai[/-]")) |
-     scan("[0-9]+") | select(. != "")
+     select(test("(^|/)(?:ai/(?:issue-)?|ai-(?:implement-)?)[0-9]+(?:$|[^0-9])")) |
+     capture("(^|/)(?:ai/(?:issue-)?|ai-(?:implement-)?)(?<num>[0-9]+)(?:$|[^0-9])") | .num
     ] | unique | .[]
   ' 2>/dev/null || true)"
 
@@ -403,7 +403,7 @@ cancel_zombie_runs_for_issue() {
   zombie_run_ids="$(echo "${runs_json}" | jq -r --argjson now "${now_epoch}" --argjson threshold "${stall_secs}" --arg issue "${issue_num}" '
     [.[] |
      (.run_started_at // .created_at // "1970-01-01T00:00:00Z") as $ts |
-     ($ts | sub("\\.[0-9]+"; "") | sub("Z$"; "+00:00") | fromdate) as $start_epoch |
+     ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $start_epoch |
      select(($now - $start_epoch) >= $threshold) |
      select(.head_branch // "" | test("(^|/)(?:ai/(?:issue-)?|ai-(?:implement-)?)" + $issue + "(?:[^0-9]|$)")) |
      .id
@@ -466,12 +466,12 @@ recover_stalled_issue() {
 
   case "${action}" in
     retrigger_pipeline)
-      # No AI labels — the pipeline never started. Post a comment to trigger
-      # the issue_comment.created event which fires the clarify workflow.
+      # No AI labels — the pipeline never started. Post /reclarify to trigger
+      # the clarify workflow for this issue.
       echo "  Re-triggering pipeline for issue #${issue_num}..."
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
-/answer
+/reclarify
 
 _Orchestrator stall recovery: this issue never entered the AI pipeline.
 Re-triggering the clarification phase. If the issue description is
@@ -1671,9 +1671,19 @@ REISSUE_EOF
     fi
   done < <(echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "implementation-failed") | .github_issue')
 
-  if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
-    post_state_comment
-  fi
+if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
+  post_state_comment
+
+  # Add labels for any replacement issues created in this cycle.
+  REISSUED_NUMS="$(jq -r '.waves['"${WAVE_IDX}"'].issues[].github_issue' "${STATE_FILE}" 2>/dev/null | sort -u)"
+  for rnum in ${REISSUED_NUMS}; do
+    if [ -z "${rnum}" ] || [ "${rnum}" = "null" ]; then continue; fi
+    if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then continue; fi
+    LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+    [ -z "${LABELS}" ] && LABELS='[]'
+    LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}')"
+  done
+fi
 
   if [ "${WAVE_COMPLETE}" != "true" ]; then
     echo "Wave ${CURRENT_WAVE} not yet complete."
