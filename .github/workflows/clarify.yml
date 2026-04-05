@@ -584,7 +584,15 @@ jobs:
           MSG="Clarification required for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
           MSG+=$'\n'
           MSG+="${ISSUE_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+
+          # Orchestrator-managed issues: use general tracking (cleaned up at project end).
+          # Non-orchestrator issues: use phase tracking (cleaned up when plan starts).
+          ISSUE_BODY_CHECK="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
+          if printf '%s' "${ISSUE_BODY_CHECK}" | grep -qF 'Managed by: AI Orchestrator'; then
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+          else
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}"
+          fi
 
       - name: Comment on issue failure
         if: failure() || cancelled()

@@ -506,14 +506,23 @@ Your `GH_PAT` must have permission to enable auto-merge (repo scope with admin o
 
 The orchestrator uses `ai:orchestrator-tracking` for tracking issues. Child issues use the standard `ai:*` phase labels. The `ai:orchestrator-tracking` label is defined in the [label contract](/.github/ai/label_contract.v1.json).
 
-### Telegram Message Cleanup
+### Telegram Notifications & Cleanup
 
-Telegram notifications are automatically cleaned up (deleted) when an issue or PR reaches a terminal state. This prevents the notification chat from accumulating stale messages.
+Telegram notifications fall into three categories based on their lifecycle:
 
-**How it works:**
-1. Each workflow phase (clarify, plan, implement, review, orchestrate, validate) sends notifications via `scripts/tg_helpers.sh`, which captures the Telegram message ID and stores it in a hidden GitHub issue comment (`<!-- tg_cleanup:id1,id2,... -->`).
-2. When a PR is closed or merged, `issue_pr_status.yml` reads all tracked message IDs from the PR and its linked issues, deletes them from Telegram via the `deleteMessage` API, and removes the tracking comments.
-3. For orchestrated projects, cleanup also runs when the tracking issue reaches a terminal state (complete or failed) via the poller.
+**Persistent alerts (never deleted):**
+- **Release results** — success/failure from `test-and-mark-stable.yml`
+- **PR merged** — sent by `issue_pr_status.yml` for non-orchestrator issues
+- **Orchestrator project completion** — sent by the poller after all tracked messages are cleaned up
+
+**Phase-tracked alerts (deleted when the phase completes):**
+For non-orchestrator issues, human-intervention alerts are cleaned up automatically when the next phase begins:
+- **Clarification required** — sent by `clarify.yml`, deleted when `plan.yml` runs (stored as `<!-- tg_phase:clarify:id -->`)
+- **Plan awaiting approval** — sent by `plan.yml` (when `AUTO_IMPLEMENT_ON_CLEAR_PLAN` is not true), deleted when `implement.yml` runs (stored as `<!-- tg_phase:plan:id -->`)
+
+**General tracked alerts (deleted at terminal state):**
+- Orchestrator-managed issue alerts use general tracking (`<!-- tg_cleanup:id1,id2,... -->`), cleaned up when the tracking issue reaches a terminal state (complete or failed) via the poller.
+- Any remaining tracked messages (general or phase) are cleaned up when a PR is closed/merged by `issue_pr_status.yml`.
 
 **Requirements:**
 - `TG_BOT_SECRET` must be set (same secret used for sending).

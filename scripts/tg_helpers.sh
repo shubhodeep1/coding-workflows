@@ -139,6 +139,139 @@ tg_send_tracked()
 }
 
 # ---------------------------------------------------------------
+# tg_store_phase_msg_id — Store a message ID with a phase tag.
+# Comment body pattern: <!-- tg_phase:PHASE:id1,id2 -->
+# Usage: tg_store_phase_msg_id 42 clarify 12345
+# ---------------------------------------------------------------
+tg_store_phase_msg_id()
+{
+	local issue_num="$1" phase="$2" msg_id="$3"
+	if [ -z "${msg_id}" ] || [ -z "${issue_num}" ] || [ "${issue_num}" = "0" ] || [ -z "${phase}" ]; then
+		return 0
+	fi
+	if [ -z "${GH_TOKEN:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		return 0
+	fi
+
+	local api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues"
+	local marker="<!-- tg_phase:${phase}:"
+
+	local comments_json
+	comments_json=$(curl -s \
+		-H "Authorization: token ${GH_TOKEN}" \
+		-H "Accept: application/vnd.github.v3+json" \
+		"${api_base}/${issue_num}/comments?per_page=30&direction=desc" 2>/dev/null) || {
+		curl -s -X POST \
+			-H "Authorization: token ${GH_TOKEN}" \
+			-H "Accept: application/vnd.github.v3+json" \
+			"${api_base}/${issue_num}/comments" \
+			-d "$(jq -n --arg b "<!-- tg_phase:${phase}:${msg_id} -->" '{body: $b}')" >/dev/null 2>&1 || true
+		return 0
+	}
+
+	local tracking_id tracking_body
+	tracking_id=$(printf '%s' "${comments_json}" | jq -r \
+		--arg m "${marker}" \
+		'[.[] | select(.body | contains($m))] | first | .id // empty' 2>/dev/null)
+	tracking_body=$(printf '%s' "${comments_json}" | jq -r \
+		--arg m "${marker}" \
+		'[.[] | select(.body | contains($m))] | first | .body // empty' 2>/dev/null)
+
+	if [ -n "${tracking_id}" ] && [ -n "${tracking_body}" ]; then
+		local new_body
+		new_body=$(printf '%s' "${tracking_body}" | \
+			sed "s/<!-- tg_phase:${phase}:\([0-9,]*\) -->/<!-- tg_phase:${phase}:\1,${msg_id} -->/")
+		curl -s -X PATCH \
+			-H "Authorization: token ${GH_TOKEN}" \
+			-H "Accept: application/vnd.github.v3+json" \
+			"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${tracking_id}" \
+			-d "$(jq -n --arg b "${new_body}" '{body: $b}')" >/dev/null 2>&1 || true
+	else
+		curl -s -X POST \
+			-H "Authorization: token ${GH_TOKEN}" \
+			-H "Accept: application/vnd.github.v3+json" \
+			"${api_base}/${issue_num}/comments" \
+			-d "$(jq -n --arg b "<!-- tg_phase:${phase}:${msg_id} -->" '{body: $b}')" >/dev/null 2>&1 || true
+	fi
+}
+
+# ---------------------------------------------------------------
+# tg_send_phase_tracked — Send a TG message and track with phase.
+# Usage: tg_send_phase_tracked 42 clarify "message text"
+# ---------------------------------------------------------------
+tg_send_phase_tracked()
+{
+	local issue_num="$1" phase="$2" msg="$3"
+	local msg_id
+	msg_id=$(tg_send_msg "${msg}")
+	tg_store_phase_msg_id "${issue_num}" "${phase}" "${msg_id}"
+}
+
+# ---------------------------------------------------------------
+# tg_cleanup_phase_msgs — Delete TG messages for a specific phase.
+# Usage: tg_cleanup_phase_msgs 42 clarify
+# ---------------------------------------------------------------
+tg_cleanup_phase_msgs()
+{
+	local issue_num="$1" phase="$2"
+	if [ -z "${issue_num}" ] || [ "${issue_num}" = "0" ] || [ -z "${phase}" ]; then
+		return 0
+	fi
+	if [ -z "${GH_TOKEN:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		return 0
+	fi
+
+	local chat_id
+	chat_id="$(_tg_chat_id)"
+	local api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues"
+	local marker="<!-- tg_phase:${phase}:"
+	local page=1
+
+	while true; do
+		local comments_json
+		comments_json=$(curl -s \
+			-H "Authorization: token ${GH_TOKEN}" \
+			-H "Accept: application/vnd.github.v3+json" \
+			"${api_base}/${issue_num}/comments?per_page=100&page=${page}" 2>/dev/null) || break
+
+		local count
+		count=$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null) || break
+		[ "${count:-0}" -gt 0 ] || break
+
+		local tracking_entries
+		tracking_entries=$(printf '%s' "${comments_json}" | jq -r \
+			--arg m "${marker}" \
+			'.[] | select(.body | contains($m)) | "\(.id)\t\(.body)"' 2>/dev/null) || true
+
+		if [ -n "${tracking_entries}" ]; then
+			while IFS=$'\t' read -r comment_id comment_body; do
+				[ -n "${comment_id}" ] || continue
+				local id_list
+				id_list=$(printf '%s' "${comment_body}" | \
+					sed -n "s/.*<!-- tg_phase:${phase}:\([0-9,]*\) -->.*/\1/p")
+				if [ -n "${id_list}" ] && [ -n "${chat_id}" ] && [ -n "${TG_BOT_SECRET:-}" ]; then
+					local old_ifs="${IFS}"
+					IFS=','
+					for tg_id in ${id_list}; do
+						[ -n "${tg_id}" ] || continue
+						tg_delete_msg "${tg_id}"
+					done
+					IFS="${old_ifs}"
+				fi
+				curl -s -X DELETE \
+					-H "Authorization: token ${GH_TOKEN}" \
+					-H "Accept: application/vnd.github.v3+json" \
+					"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+					>/dev/null 2>&1 || true
+			done <<< "${tracking_entries}"
+		fi
+
+		[ "${count}" -lt 100 ] && break
+		page=$((page + 1))
+	done
+}
+
+# ---------------------------------------------------------------
 # tg_cleanup_msgs — Delete all tracked TG messages for an issue.
 # Reads tracking comments, deletes each TG message, then removes
 # the tracking comments from GitHub.
@@ -171,18 +304,18 @@ tg_cleanup_msgs()
 		count=$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null) || break
 		[ "${count:-0}" -gt 0 ] || break
 
-		# Extract tracking comments
+		# Extract tracking comments (both general and phase-specific)
 		local tracking_entries
 		tracking_entries=$(printf '%s' "${comments_json}" | jq -r \
-			'.[] | select(.body | test("<!-- tg_cleanup:")) | "\(.id)\t\(.body)"' 2>/dev/null) || true
+			'.[] | select(.body | test("<!-- tg_(cleanup|phase):")) | "\(.id)\t\(.body)"' 2>/dev/null) || true
 
 		if [ -n "${tracking_entries}" ]; then
 			while IFS=$'\t' read -r comment_id comment_body; do
 				[ -n "${comment_id}" ] || continue
-				# Extract comma-separated message IDs
+				# Extract comma-separated message IDs (general or phase tags)
 				local id_list
 				id_list=$(printf '%s' "${comment_body}" | \
-					sed -n 's/.*<!-- tg_cleanup:\([0-9,]*\) -->.*/\1/p')
+					sed -n 's/.*<!-- tg_\(cleanup\|phase:[a-z_]*\):\([0-9,]*\) -->.*/\2/p')
 				if [ -n "${id_list}" ] && [ -n "${chat_id}" ] && [ -n "${TG_BOT_SECRET:-}" ]; then
 					local old_ifs="${IFS}"
 					IFS=','

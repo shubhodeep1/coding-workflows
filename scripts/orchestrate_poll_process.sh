@@ -224,8 +224,8 @@ mark_validation_complete() {
   set_tracking_phase_label "ai:validated"
   gh_retry gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
     --comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle})." || true
-  tg_notify "✅ Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
   tg_cleanup_msgs "${TRACKING_NUM}"
+  tg_send_msg "✅ Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})." >/dev/null
 }
 
 extract_fix_issues_from_comment() {
@@ -1443,8 +1443,8 @@ PRs to revert: ${REVERT_COUNT}"
         gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
           --comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s)." || true
 
-        tg_notify "✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved."
         tg_cleanup_msgs "${TRACKING_NUM}"
+        tg_send_msg "✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved." >/dev/null
         continue
       fi
 
