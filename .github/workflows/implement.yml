@@ -361,18 +361,6 @@ jobs:
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${IMPLEMENTATION_CONTEXT_FILE}"
 
-      - name: Setup Serena MCP server
-        if: env.SKIP_IMPLEMENT != 'true'
-        env:
-          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
-          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
-          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
-          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          set -euo pipefail
-          bash scripts/setup_serena.sh --mode editing --context codex
-
       - name: Create Codex config
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -398,7 +386,20 @@ jobs:
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
-          # MCP config at ~/.codex/mcp.json is auto-discovered by codex
+          # MCP server configuration is managed in ~/.codex/config.toml;
+          # setup_serena.sh appends the relevant [mcp_servers.*] entries.
+
+      - name: Setup Serena MCP server
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
+          SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
+          SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          bash scripts/setup_serena.sh --mode editing --context codex
 
       - name: Pre-assemble static context (cacheable across runs)
         if: env.SKIP_IMPLEMENT != 'true'

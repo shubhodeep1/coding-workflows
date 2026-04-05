@@ -619,9 +619,11 @@ fi
 CODEX_CONFIG="${HOME}/.codex/config.toml"
 if [ -f "${CODEX_CONFIG}" ] && grep -q '\[mcp_servers\.serena\]' "${CODEX_CONFIG}"; then
 	# Bump startup_timeout to give LSPs time to index after activation
-	sed -i 's/startup_timeout_sec = 30/startup_timeout_sec = 60/' "${CODEX_CONFIG}"
+	# Scope both replacements to the [mcp_servers.serena] section to avoid
+	# accidentally modifying settings for other MCP servers.
+	sed -i '/^\[mcp_servers\.serena\]/,/^\[/ s/startup_timeout_sec = 30/startup_timeout_sec = 60/' "${CODEX_CONFIG}"
 	# Switch to required=false so Serena failures degrade gracefully
-	sed -i 's/required = true/required = false/' "${CODEX_CONFIG}"
+	sed -i '/^\[mcp_servers\.serena\]/,/^\[/ s/required = true/required = false/' "${CODEX_CONFIG}"
 	echo "Serena MCP config hardened: startup_timeout=60s, required=false (graceful fallback on failure)."
 fi
 

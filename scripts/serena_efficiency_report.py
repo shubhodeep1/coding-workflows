@@ -62,6 +62,8 @@ def scan_file(path: str) -> tuple[Counter, int]:
     """Scan a single file and return (serena_tool_counts, file_op_count)."""
     serena_counts: Counter = Counter()
     file_ops = 0
+    if os.path.basename(path) in PROMPT_FILE_NAMES:
+        return serena_counts, file_ops
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -77,6 +79,18 @@ def scan_file(path: str) -> tuple[Counter, int]:
     return serena_counts, file_ops
 
 
+
+# Files that contain prompt/instruction text — NOT actual tool call evidence.
+# Scanning these inflates Serena counts with mentions from system instructions.
+PROMPT_FILE_NAMES = frozenset((
+    "codex_prompt.txt",
+    "codex_prompt_retry.txt",
+    "implementation_context.txt",
+    "issue_summary_prompt.txt",
+    "pre_assembled_static.txt",
+))
+
+
 def scan_directory(dirpath: str) -> tuple[Counter, int]:
     """Recursively scan a directory for log/output/err files."""
     serena_total: Counter = Counter()
@@ -87,6 +101,10 @@ def scan_directory(dirpath: str) -> tuple[Counter, int]:
         for fname in files:
             # Only scan text-like files
             if fname.endswith((".log", ".err", ".txt", ".json", ".stderr")):
+                # Skip prompt/instruction files — they mention Serena tools
+                # in guidance text, not as actual tool invocations.
+                if fname in PROMPT_FILE_NAMES:
+                    continue
                 counts, ops = scan_file(os.path.join(root, fname))
                 serena_total += counts
                 file_ops_total += ops
