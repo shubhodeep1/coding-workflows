@@ -62,6 +62,8 @@ def scan_file(path: str) -> tuple[Counter, int]:
     """Scan a single file and return (serena_tool_counts, file_op_count)."""
     serena_counts: Counter = Counter()
     file_ops = 0
+    if os.path.basename(path) in PROMPT_FILE_NAMES:
+        return serena_counts, file_ops
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
