@@ -135,9 +135,14 @@ jobs:
 
           # Fetch tg_helpers.sh
           wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
           mkdir -p scripts
           gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=stable" > "scripts/tg_helpers.sh" 2>/dev/null || {
+            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=${script_ref}" > "scripts/tg_helpers.sh" 2>/dev/null || {
             echo "::warning::Could not fetch tg_helpers.sh; skipping TG cleanup."
             exit 0
           }

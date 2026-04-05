@@ -123,9 +123,14 @@ jobs:
           set -euo pipefail
           # tg_helpers.sh not yet fetched at this step; inline-fetch it
           wf_source="${{ github.repository_owner }}/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
           mkdir -p scripts
           gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=stable" > "scripts/tg_helpers.sh" 2>/dev/null || true
+            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=${script_ref}" > "scripts/tg_helpers.sh" 2>/dev/null || true
           if [ -f scripts/tg_helpers.sh ]; then
             source scripts/tg_helpers.sh
           fi
@@ -156,6 +161,14 @@ jobs:
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
           wf_source="${{ github.repository_owner }}/coding-workflows"
+          # When running within coding-workflows itself, use the current
+          # commit to avoid version skew with the stable tag (stable is
+          # only updated after e2e tests pass — causes bootstrap failures).
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
 
           # Track files fetched by the workflow so cleanup only removes what
           # we created — never files that already belong to the caller repo.
@@ -175,8 +188,8 @@ jobs:
           mkdir -p scripts
           for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py tg_helpers.sh; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}" 2>/dev/null; then
-              echo "::warning::${f} not found on stable; falling back to main"
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+              echo "::warning::${f} not found on ${script_ref}; falling back to main"
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
             fi
@@ -191,8 +204,8 @@ jobs:
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}" 2>/dev/null; then
-                echo "::warning::${f} not found on stable; falling back to main"
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}" > "${f}" 2>/dev/null; then
+                echo "::warning::${f} not found on ${script_ref}; falling back to main"
                 gh api -H 'Accept: application/vnd.github.raw+json' \
                   "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
               fi
@@ -207,7 +220,7 @@ jobs:
           # (if any) during prompt assembly — the caller's copy is never
           # overwritten or deleted.
           gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/agents.md?ref=stable" > "${RUNTIME_DIR}/agents_canonical.md" 2>/dev/null || true
+            "repos/${wf_source}/contents/agents.md?ref=${script_ref}" > "${RUNTIME_DIR}/agents_canonical.md" 2>/dev/null || true
 
       - name: Fetch issue metadata
         if: env.SKIP_IMPLEMENT != 'true'
@@ -749,10 +762,15 @@ jobs:
           # Re-fetch git_ref_health_check.sh — the commit step deletes fetched
           # artifacts to keep them out of caller repos.
           wf_source="${{ github.repository_owner }}/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
           mkdir -p scripts
           if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=stable" > scripts/git_ref_health_check.sh 2>/dev/null; then
-            echo "::warning::git_ref_health_check.sh not found on stable; falling back to main"
+            "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=${script_ref}" > scripts/git_ref_health_check.sh 2>/dev/null; then
+            echo "::warning::git_ref_health_check.sh not found on ${script_ref}; falling back to main"
             gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=main" > scripts/git_ref_health_check.sh
           fi
