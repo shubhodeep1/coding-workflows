@@ -678,6 +678,20 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       fi
       echo "  Linked PR: #${RB_PR}"
 
+      # Guard: skip if PR is no longer open (already merged or closed)
+      RB_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
+      if [ "${RB_PR_STATE}" != "open" ]; then
+        echo "  PR #${RB_PR} is no longer open (state: ${RB_PR_STATE}). Cleaning up labels and skipping."
+        gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:review-blocked' 2>/dev/null || true
+        if [ "${RB_PR_STATE}" = "closed" ]; then
+          gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+            --remove-label 'ai:in-progress' --add-label 'ai:closed' 2>/dev/null || true
+        fi
+        REVIEW_BLOCKED_STATE_CHANGED=true
+        continue
+      fi
+
       # Collect full PR context for the judge
       PR_DIFF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
         -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
@@ -929,6 +943,14 @@ sys.exit(1)
             tg_notify "✅ Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"
           else
             echo "  Judge is applying fixes to PR #${RB_PR}..."
+            # Re-check PR state before expensive fix+push (race condition safety net)
+            RB_PR_STATE_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
+            if [ "${RB_PR_STATE_NOW}" != "open" ]; then
+              echo "::warning::PR #${RB_PR} is no longer open (state: ${RB_PR_STATE_NOW}). Skipping fix application."
+              gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                --remove-label 'ai:review-blocked' 2>/dev/null || true
+              REVIEW_BLOCKED_STATE_CHANGED=true
+            else
             # The judge (codex) already modified files in the working directory.
             # We need to checkout the PR branch, apply the changes, and push.
             HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
@@ -1002,6 +1024,7 @@ ${RB_FIX_DESC}" || true
             jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
             REVIEW_BLOCKED_STATE_CHANGED=true
+          fi
           fi
           ;;
 
