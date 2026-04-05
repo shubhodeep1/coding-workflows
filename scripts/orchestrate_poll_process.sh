@@ -678,18 +678,20 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       fi
       echo "  Linked PR: #${RB_PR}"
 
-      # Guard: skip if PR is no longer open (already merged or closed)
+      # Guard: check PR state before invoking the judge
       RB_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-      if [ "${RB_PR_STATE}" != "open" ]; then
-        echo "  PR #${RB_PR} is no longer open (state: ${RB_PR_STATE}). Cleaning up labels and skipping."
+      RB_PR_MERGED="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null || echo "false")"
+      if [ "${RB_PR_STATE}" != "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
+        # PR is closed (not merged) — skip entirely
+        echo "  PR #${RB_PR} is closed (not merged). Cleaning up labels and skipping."
         gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
-          --remove-label 'ai:review-blocked' 2>/dev/null || true
-        if [ "${RB_PR_STATE}" = "closed" ]; then
-          gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
-            --remove-label 'ai:in-progress' --add-label 'ai:closed' 2>/dev/null || true
-        fi
+          --remove-label 'ai:review-blocked' --remove-label 'ai:in-progress' \
+          --add-label 'ai:closed' 2>/dev/null || true
         REVIEW_BLOCKED_STATE_CHANGED=true
         continue
+      elif [ "${RB_PR_MERGED}" = "true" ]; then
+        # PR was merged — judge should still run; fixes will go into a follow-up PR
+        echo "  PR #${RB_PR} is already merged. Judge fixes will target a follow-up PR against ${DEFAULT_BRANCH:-main}."
       fi
 
       # Collect full PR context for the judge
@@ -945,27 +947,56 @@ sys.exit(1)
             echo "  Judge is applying fixes to PR #${RB_PR}..."
             # Re-check PR state before expensive fix+push (race condition safety net)
             RB_PR_STATE_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-            if [ "${RB_PR_STATE_NOW}" != "open" ]; then
-              echo "::warning::PR #${RB_PR} is no longer open (state: ${RB_PR_STATE_NOW}). Skipping fix application."
+            RB_PR_MERGED_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null || echo "false")"
+            if [ "${RB_PR_STATE_NOW}" != "open" ] && [ "${RB_PR_MERGED_NOW}" != "true" ]; then
+              # PR was closed without merge — skip
+              echo "::warning::PR #${RB_PR} is closed (not merged). Skipping fix application."
               gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                 --remove-label 'ai:review-blocked' 2>/dev/null || true
               REVIEW_BLOCKED_STATE_CHANGED=true
             else
-            # The judge (codex) already modified files in the working directory.
-            # We need to checkout the PR branch, apply the changes, and push.
+            # Determine target: push to PR branch (open) or create follow-up PR (merged)
+            RB_TARGET_MERGED="false"
+            if [ "${RB_PR_MERGED}" = "true" ] || [ "${RB_PR_MERGED_NOW}" = "true" ]; then
+              RB_TARGET_MERGED="true"
+            fi
+
             HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
-            if [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
+            BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
+            : "${BASE_REF:=${DEFAULT_BRANCH:-main}}"
+
+            if [ "${RB_TARGET_MERGED}" = "true" ]; then
+              # PR already merged — work on a follow-up branch from the base branch
+              FOLLOWUP_BRANCH="fix/${rb_issue}-followup-$(date +%s)"
+              echo "  PR already merged. Creating follow-up branch ${FOLLOWUP_BRANCH} from ${BASE_REF}."
+              git fetch --no-tags origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" 2>/dev/null || true
+              git checkout -B "${FOLLOWUP_BRANCH}" "refs/remotes/origin/${BASE_REF}" 2>/dev/null || true
+            elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
+              # PR is open — push to existing PR branch
               git fetch --no-tags origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null || true
               git checkout -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}" 2>/dev/null || true
+            else
+              echo "::warning::Cannot determine PR head branch for #${RB_PR}."
+              git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
+              REVIEW_BLOCKED_STATE_CHANGED=true
+              # Skip to retry counter via nested-fi + fi
+            fi
 
-              # Re-run the judge in editing mode on the actual PR branch
+            if [ "${RB_TARGET_MERGED}" = "true" ] || { [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; }; then
+              # Re-run the judge in editing mode on the target branch
               RB_FIX_PROMPT_FILE="${RUNTIME_DIR}/rb_fix_prompt_${rb_issue}.txt"
               RB_FIX_OUTPUT_FILE="${RUNTIME_DIR}/rb_fix_output_${rb_issue}.txt"
               {
                 cat "${RB_JUDGE_PROMPT_FILE}"
                 echo
                 echo "=== APPLY FIXES NOW ==="
-                echo "You are now on the PR branch (${HEAD_REF})."
+                if [ "${RB_TARGET_MERGED}" = "true" ]; then
+                  echo "You are on a follow-up branch based on ${BASE_REF}."
+                  echo "The original PR #${RB_PR} was already merged."
+                  echo "Apply only the fixes identified during review — do not re-apply the original PR's changes."
+                else
+                  echo "You are now on the PR branch (${HEAD_REF})."
+                fi
                 echo "Apply the fixes you identified directly to the repository files."
                 echo "Focus only on the issues that blocked the review."
                 echo "Do not create new files unless absolutely required."
@@ -992,32 +1023,71 @@ Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 ${RB_FIX_DESC}" || true
 
                 git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}"
-                if git push origin "HEAD:${HEAD_REF}" 2>/dev/null; then
-                  echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
-                  # Remove review-blocked label — the push triggers synchronize
-                  # which re-runs review_autofix with a reset autofix counter.
-                  gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
-                    --remove-label 'ai:review-blocked' 2>/dev/null || true
-                  tg_notify "🔧 Orchestrator judge pushed fix for review-blocked PR #${RB_PR} (issue #${rb_issue}, retry $((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES})"
+
+                if [ "${RB_TARGET_MERGED}" = "true" ]; then
+                  # Push follow-up branch and create a new PR
+                  if git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
+                    echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
+                    FOLLOWUP_PR_URL="$(gh pr create \
+                      --repo "${GITHUB_REPOSITORY}" \
+                      --base "${BASE_REF}" \
+                      --head "${FOLLOWUP_BRANCH}" \
+                      --title "[orchestrator-fix] follow-up fixes for #${rb_issue}" \
+                      --body "Follow-up fixes for issues identified during review of PR #${RB_PR} (already merged).
+
+**Original issue:** #${rb_issue}
+**Original PR:** #${RB_PR}
+
+${RB_FIX_DESC}
+
+---
+*Created automatically by the orchestrator judge.*" 2>/dev/null || echo "")"
+                    if [ -n "${FOLLOWUP_PR_URL}" ]; then
+                      echo "  Created follow-up PR: ${FOLLOWUP_PR_URL}"
+                      gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                        --remove-label 'ai:review-blocked' 2>/dev/null || true
+                      tg_notify "🔧 Orchestrator judge created follow-up PR for merged PR #${RB_PR} (issue #${rb_issue}): ${FOLLOWUP_PR_URL}"
+                    else
+                      echo "::warning::Failed to create follow-up PR for merged PR #${RB_PR}."
+                    fi
+                  else
+                    echo "::warning::Failed to push follow-up branch ${FOLLOWUP_BRANCH}."
+                  fi
                 else
-                  echo "::warning::Failed to push orchestrator fix for PR #${RB_PR}."
+                  # Push to existing open PR branch
+                  if git push origin "HEAD:${HEAD_REF}" 2>/dev/null; then
+                    echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
+                    # Remove review-blocked label — the push triggers synchronize
+                    # which re-runs review_autofix with a reset autofix counter.
+                    gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                      --remove-label 'ai:review-blocked' 2>/dev/null || true
+                    tg_notify "🔧 Orchestrator judge pushed fix for review-blocked PR #${RB_PR} (issue #${rb_issue}, retry $((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES})"
+                  else
+                    echo "::warning::Failed to push orchestrator fix for PR #${RB_PR}."
+                  fi
                 fi
               else
-                echo "  Judge produced no file changes. Treating as merge decision."
-                gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
-                  --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
-                PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-                if [ "${PR_STATE}" = "open" ]; then
-                  gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
-                    || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+                echo "  Judge produced no file changes."
+                if [ "${RB_TARGET_MERGED}" = "true" ]; then
+                  echo "  No follow-up needed — merged PR has no outstanding fixes."
+                  gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                    --remove-label 'ai:review-blocked' 2>/dev/null || true
+                  tg_notify "✅ Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"
+                else
+                  echo "  Treating as merge decision."
+                  gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                    --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
+                  PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
+                  if [ "${PR_STATE}" = "open" ]; then
+                    gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
+                      || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+                  fi
+                  tg_notify "✅ Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"
                 fi
-                tg_notify "✅ Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"
               fi
 
               # Switch back to default branch for remaining processing
               git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
-            else
-              echo "::warning::Cannot determine PR head branch for #${RB_PR}."
             fi
 
             # Increment retry counter
