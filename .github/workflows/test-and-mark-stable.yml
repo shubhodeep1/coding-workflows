@@ -389,7 +389,7 @@ jobs:
             if [ -n "$PR_NUMBER" ]; then
               echo "✓ Implementation PR #${PR_NUMBER} created"
               IMPL_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Implement"; "i"))] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
+                --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
               echo "run_id=${IMPL_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
@@ -400,13 +400,16 @@ jobs:
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
 
-            # Count all implement runs and how many are still in progress
+            # Count all implement runs and how many are still in progress.
+            # Exclude conclusion=="skipped" runs — those are triggered by
+            # non-/approved comments (clarify, /answer, plan) where the
+            # reusable workflow's job-level `if` evaluated to false.
             IMPL_RUN_TOTAL=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-              --jq '[.workflow_runs[] | select(.name | test("Implement"; "i"))] | length' 2>/dev/null || echo "0")
+              --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | length' 2>/dev/null || echo "0")
             IMPL_RUN_IN_PROGRESS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-              --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.status != "completed")] | length' 2>/dev/null || echo "0")
+              --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped") | select(.status != "completed")] | length' 2>/dev/null || echo "0")
             IMPL_RUN_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-              --jq '[.workflow_runs[] | select(.name | test("Implement"; "i"))] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
+              --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
 
             CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS}"
 
