@@ -2284,6 +2284,7 @@ jobs:
             # fires.  Pushing here causes a concurrency self-cancel race
             # that kills all subsequent steps.
             echo "DID_COMMIT=true" >> "$GITHUB_ENV"
+            echo "did_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Post editor summary comment
