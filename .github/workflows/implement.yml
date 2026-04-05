@@ -385,7 +385,8 @@ jobs:
           } > ~/.codex/config.toml
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
-          # MCP config at ~/.codex/mcp.json is auto-discovered by codex
+          # MCP server configuration is managed in ~/.codex/config.toml;
+          # setup_serena.sh appends the relevant [mcp_servers.*] entries.
 
       - name: Setup Serena MCP server
         if: env.SKIP_IMPLEMENT != 'true'
