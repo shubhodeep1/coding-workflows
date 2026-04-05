@@ -71,29 +71,37 @@ jobs:
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
           wf_source="${{ github.repository_owner }}/coding-workflows"
+          # When running within coding-workflows itself, use the current
+          # commit to avoid version skew with the stable tag (stable is
+          # only updated after e2e tests pass — causes bootstrap failures).
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
           # ALWAYS fetch canonical scripts from coding-workflows, even if the
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
           for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}" 2>/dev/null; then
-              echo "::warning::${f} not found on stable; falling back to main"
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+              echo "::warning::${f} not found on ${script_ref}; falling back to main"
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
             fi
             chmod +x "scripts/${f}"
           done
-          # Model catalog: try stable first, fall back to local copy from checkout.
+          # Model catalog: try script_ref first, fall back to local copy from checkout.
           # Write to a temp file first so the redirect doesn't clobber the
           # local copy when the gh api call fails (the file doesn't exist on
           # the stable tag yet).
           if gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=stable" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
+            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
             mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
           else
             rm -f "scripts/codex_model_catalog.json.tmp"
-            echo "Model catalog not on stable tag yet; using local copy."
+            echo "Model catalog not on ${script_ref} yet; using local copy."
           fi
           # Always use the canonical instruction files from coding-workflows
           # (must be outside the if-block so they're fetched even when the
@@ -101,8 +109,8 @@ jobs:
           for f in unattended_llm_system_instructions.md codex_system_instructions.md; do
             if [ ! -f "${f}" ]; then
               if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}" 2>/dev/null; then
-                echo "::warning::${f} not found on stable; falling back to main"
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}" > "${f}" 2>/dev/null; then
+                echo "::warning::${f} not found on ${script_ref}; falling back to main"
                 gh api -H 'Accept: application/vnd.github.raw+json' \
                   "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
               fi
@@ -112,7 +120,7 @@ jobs:
           mkdir -p prompts
           if [ ! -f prompts/mode-judge-review-blocked.txt ]; then
             gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=stable" \
+              "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=${script_ref}" \
               > prompts/mode-judge-review-blocked.txt 2>/dev/null || true
           fi
 
@@ -2371,10 +2379,15 @@ jobs:
           # Re-fetch it so the merge-conflict check can use it.
           if [ ! -f scripts/git_ref_health_check.sh ]; then
             wf_source="${{ github.repository_owner }}/coding-workflows"
+            if [ "${{ github.repository }}" = "${wf_source}" ]; then
+              script_ref="${{ github.sha }}"
+            else
+              script_ref="stable"
+            fi
             mkdir -p scripts
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=stable" > scripts/git_ref_health_check.sh 2>/dev/null; then
-              echo "::warning::git_ref_health_check.sh not found on stable; falling back to main"
+              "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=${script_ref}" > scripts/git_ref_health_check.sh 2>/dev/null; then
+              echo "::warning::git_ref_health_check.sh not found on ${script_ref}; falling back to main"
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=main" > scripts/git_ref_health_check.sh
             fi

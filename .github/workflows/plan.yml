@@ -93,6 +93,14 @@ jobs:
           # NOTE: github.workflow_ref resolves to the *caller* workflow, not
           # this reusable workflow, so we cannot derive the source repo from it.
           wf_source="${{ github.repository_owner }}/coding-workflows"
+          # When running within coding-workflows itself, use the current
+          # commit to avoid version skew with the stable tag (stable is
+          # only updated after e2e tests pass — causes bootstrap failures).
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
           # ALWAYS fetch canonical scripts from coding-workflows, even if the
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
@@ -101,8 +109,8 @@ jobs:
           # git_ref_health_check.sh is only needed by implement/edit workflows.
           for f in setup_serena.sh tg_helpers.sh; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=stable" > "scripts/${f}" 2>/dev/null; then
-              echo "::warning::${f} not found on stable; falling back to main"
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+              echo "::warning::${f} not found on ${script_ref}; falling back to main"
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
             fi
@@ -114,8 +122,8 @@ jobs:
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=stable" > "${f}" 2>/dev/null; then
-                echo "::warning::${f} not found on stable; falling back to main"
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}" > "${f}" 2>/dev/null; then
+                echo "::warning::${f} not found on ${script_ref}; falling back to main"
                 gh api -H 'Accept: application/vnd.github.raw+json' \
                   "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
               fi
