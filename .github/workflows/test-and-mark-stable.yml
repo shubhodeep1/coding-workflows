@@ -226,8 +226,8 @@ jobs:
             # Clarify succeeded if we see planning or awaiting-approval
             if echo "$LABELS" | grep -qE 'ai:planning|ai:awaiting-approval'; then
               echo "✓ Clarify phase completed — issue moved to planning"
-              CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Clarif"; "i"))] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
+              CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
+                --jq '[.workflow_runs[] | select(.name | test("Clarif"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
               echo "run_id=${CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
@@ -280,8 +280,8 @@ jobs:
               --jq 'length' 2>/dev/null || echo "0")
 
             # Also check the plan workflow run status as an activity signal
-            PLAN_RUN_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=5&created=>${{ steps.create-issue.outputs.created_after }}" \
-              --jq '[.workflow_runs[] | select(.name | test("Plan"; "i"))] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
+            PLAN_RUN_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
+              --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
 
             CUR_STATE="labels=${LABELS};comments=${COMMENT_COUNT};plan_run=${PLAN_RUN_STATUS}"
 
@@ -297,8 +297,8 @@ jobs:
 
             if echo "$LABELS" | grep -q 'ai:awaiting-approval'; then
               echo "✓ Plan phase completed — awaiting approval"
-              PLAN_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i"))] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
+              PLAN_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
+                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
               echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
@@ -307,8 +307,8 @@ jobs:
             # Check for auto-approved (if AUTO_IMPLEMENT_ON_CLEAR_PLAN is on)
             if echo "$LABELS" | grep -q 'ai:implementing'; then
               echo "✓ Plan phase completed with auto-approval — already implementing"
-              PLAN_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i"))] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
+              PLAN_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
+                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
               echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=auto_approved" >> "$GITHUB_OUTPUT"
               exit 0
@@ -328,7 +328,7 @@ jobs:
               # The "completed" run may be a spurious trigger (e.g. non-/answer
               # comment that caused the job to be skipped) while the real Plan
               # run is still working.
-              OTHER_ACTIVE_PLAN_RUNS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
+              OTHER_ACTIVE_PLAN_RUNS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
                 --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo "0")
               if [ "$OTHER_ACTIVE_PLAN_RUNS" -gt 0 ]; then
                 echo "  ⏳ Found ${OTHER_ACTIVE_PLAN_RUNS} other active Plan run(s) — waiting for the real run to finish"
@@ -389,7 +389,7 @@ jobs:
 
             if [ -n "$PR_NUMBER" ]; then
               echo "✓ Implementation PR #${PR_NUMBER} created"
-              IMPL_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
+              IMPL_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
                 --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
               echo "run_id=${IMPL_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
@@ -405,16 +405,16 @@ jobs:
             # Exclude conclusion=="skipped" runs — those are triggered by
             # non-/approved comments (clarify, /answer, plan) where the
             # reusable workflow's job-level `if` evaluated to false.
-            IMPL_RUN_TOTAL=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
+            IMPL_RUN_TOTAL=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
               --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | length' 2>/dev/null || echo "0")
-            IMPL_RUN_IN_PROGRESS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
+            IMPL_RUN_IN_PROGRESS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
               --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped") | select(.status != "completed")] | length' 2>/dev/null || echo "0")
-            IMPL_RUN_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
+            IMPL_RUN_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
               --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
 
             # ── Adaptive signals: step name + commit count ──
             IMPL_STEP_NAME=""
-            IMPL_RUN_ID_LATEST=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
+            IMPL_RUN_ID_LATEST=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
               --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
             if [ -n "$IMPL_RUN_ID_LATEST" ]; then
               IMPL_STEP_NAME=$(gh api "repos/${TEST_REPO}/actions/runs/${IMPL_RUN_ID_LATEST}/jobs?per_page=10" \
@@ -941,8 +941,17 @@ jobs:
             echo ""
             echo "  ┌─ ${phase_name} (run #${run_id})"
 
-            # Fetch all jobs and their steps
-            JOBS_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null || echo '{"jobs":[]}')
+            # Fetch all jobs and their steps (retry up to 3 times on transient failures)
+            JOBS_JSON='{"jobs":[]}'
+            for _attempt in 1 2 3; do
+              JOBS_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null) && break
+              echo "  │  ⚠ API attempt ${_attempt}/3 failed — retrying in 2s..."
+              sleep 2
+            done
+            # Final fallback if all retries failed
+            if ! echo "$JOBS_JSON" | jq -e '.jobs' >/dev/null 2>&1; then
+              JOBS_JSON='{"jobs":[]}'
+            fi
 
             # Check if all jobs in this run were skipped (spurious re-trigger where
             # the reusable workflow's job-level if: condition was false). This commonly
