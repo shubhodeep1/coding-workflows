@@ -2638,8 +2638,7 @@ jobs:
           fi
 
           if [ -z "${FIRST_ISSUE}" ]; then
-            echo "No linked issues found — skipping judge."
-            exit 0
+            echo "No linked issues found — judge will use PR title/body as requirement context."
           fi
 
           # -----------------------------------------------------------
@@ -2686,9 +2685,16 @@ jobs:
               echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."
             fi
             echo
-            echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
-            echo
-            echo "${FIRST_ISSUE_BODY}"
+            if [ -n "${FIRST_ISSUE}" ]; then
+              echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
+              echo
+              echo "${FIRST_ISSUE_BODY}"
+            else
+              echo "=== PR DESCRIPTION (no linked issue) ==="
+              echo
+              echo "Title: $(jq -r '.title // ""' "${PR_META_FILE}")"
+              echo "Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")"
+            fi
             echo
             echo "=== PR #${PR_NUMBER} METADATA ==="
             echo
@@ -2983,7 +2989,7 @@ jobs:
 
           ---
           **Review-blocked reissue metadata**
-          - Replaces: #${FIRST_ISSUE} (PR #${PR_NUMBER} closed — approach rework)
+          - Replaces: ${FIRST_ISSUE:+#${FIRST_ISSUE} }(PR #${PR_NUMBER} closed — approach rework)
           - Type: review-blocked-reissue"
 
                 NEW_URL="$(gh issue create \
