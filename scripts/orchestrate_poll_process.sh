@@ -302,6 +302,91 @@ sync_validation_fix_issues_from_comments() {
 }
 
 # ---------------------------------------------------------------
+# Stall recovery: workflow run status checks
+# ---------------------------------------------------------------
+
+# Build a set of issue numbers that have active (in_progress or queued)
+# workflow runs.  Called once per poll cycle before the stall recovery
+# loop to avoid re-triggering workflows that are genuinely still running.
+#
+# Outputs a newline-separated list of issue numbers.
+build_active_issue_set() {
+  local active_issues=""
+
+  # Fetch in_progress + queued runs (recent, max 50)
+  local runs_json
+  runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
+    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+  local queued_json
+  queued_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
+    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+
+  # Merge both lists
+  local all_runs
+  all_runs="$(echo "${runs_json}" "${queued_json}" | jq -s 'add // []')"
+
+  # Extract issue numbers from event payloads.
+  # issue_comment and issues events carry .issue.number directly.
+  # pull_request events carry .pull_request.number — we resolve to issue below.
+  local issue_nums
+  issue_nums="$(echo "${all_runs}" | jq -r '
+    [.[] | select(.event == "issues" or .event == "issue_comment") |
+     (.pull_requests // []) as $prs |
+     # The event payload is not in workflow_runs, but we can correlate via
+     # run display_title which often contains the issue number.  A more
+     # reliable approach: the run name of our AI workflows includes the
+     # issue title; however the simplest heuristic is to look at the
+     # triggering_actor and the run path.
+     #
+     # Best-effort: the run has .head_branch which for implement is
+     # "ai/<issue-num>-..." or similar.  Extract numbers from head_branch.
+     .head_branch // "" |
+     capture("(?:^|/)(?:ai[/-])?(?<num>[0-9]+)") | .num
+    ] | unique | .[]
+  ' 2>/dev/null || true)"
+
+  # Also try to extract issue numbers from workflow run names
+  # (our workflows are titled "AI Clarify", "AI Plan", "AI Implement" etc.
+  # and the run name often includes the issue title).
+  local branch_nums
+  branch_nums="$(echo "${all_runs}" | jq -r '
+    [.[] | .head_branch // "" |
+     scan("[0-9]+") | select(. != "")
+    ] | unique | .[]
+  ' 2>/dev/null || true)"
+
+  # Combine and deduplicate
+  active_issues="$(printf '%s\n%s\n' "${issue_nums}" "${branch_nums}" | sort -u | grep -E '^[0-9]+$' || true)"
+  echo "${active_issues}"
+}
+
+# Check if a specific issue has an active workflow run.
+# Uses the pre-built active issue set (ACTIVE_WORKFLOW_ISSUES).
+issue_has_active_workflow() {
+  local issue_num="$1"
+  echo "${ACTIVE_WORKFLOW_ISSUES}" | grep -qxF "${issue_num}"
+}
+
+# Find and close the PR linked to an issue (if any).
+close_linked_pr() {
+  local issue_num="$1"
+  local close_reason="${2:-Closed by orchestrator stall recovery.}"
+  local pr_num
+  pr_num="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+    --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+    2>/dev/null || echo "")"
+  if [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
+    local pr_state
+    pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' 2>/dev/null || echo "")"
+    if [ "${pr_state}" = "open" ]; then
+      echo "  Closing linked PR #${pr_num} for issue #${issue_num}..."
+      gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
+        --comment "${close_reason}" 2>/dev/null || true
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------
 # Stall recovery: phase-specific healing actions
 # ---------------------------------------------------------------
 
@@ -314,6 +399,12 @@ recover_stalled_issue() {
   local stall_minutes="$6"
 
   echo "  [stall-recovery] Issue #${issue_num} stuck in '${phase}' for ${stall_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
+
+  # ---- Guard: skip recovery if a workflow is actively processing this issue ----
+  if [ "${action}" != "skip" ] && issue_has_active_workflow "${issue_num}"; then
+    echo "  [stall-recovery] Issue #${issue_num} has an active workflow run — skipping recovery (workflow is slow, not stalled)."
+    return 1  # Signal: no action taken (caller should not increment counter)
+  fi
 
   case "${action}" in
     retrigger_pipeline)
@@ -440,14 +531,23 @@ STALL_EOF
       ;;
 
     close_and_reissue)
-      # Nuclear option: close the issue and create a fresh replacement with
-      # extra guidance. The new issue enters the pipeline from scratch.
+      # Nuclear option: close the linked PR (if any) and the issue, then
+      # create a fresh replacement. The new issue enters the pipeline from
+      # scratch with a clean slate.
       echo "  Closing and re-issuing stalled issue #${issue_num}..."
+
+      # Close any linked PR first so the replacement issue starts clean
+      close_linked_pr "${issue_num}" \
+        "Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
+
       local orig_title orig_body
       orig_title="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' 2>/dev/null || echo "")"
       orig_body="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body' 2>/dev/null || echo "")"
 
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --remove-label 'ai:done' --remove-label 'ai:implementing' \
+        --remove-label 'ai:planning' --remove-label 'ai:clarification' \
+        --remove-label 'ai:awaiting-approval' \
         --add-label 'ai:closed' 2>/dev/null || true
       gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         -c "Closing: orchestrator stall recovery. Issue was stuck in '${phase}' for ${stall_minutes} minutes after $((recovery_count + 1)) recovery attempt(s). Re-issuing with additional guidance." 2>/dev/null || true
@@ -495,6 +595,11 @@ REISSUE_EOF
       # Max recoveries exhausted — skip the issue so the wave can advance.
       # The judge will see it as closed/failed at wave completion.
       echo "  Skipping issue #${issue_num} after ${recovery_count} recovery attempts."
+
+      # Close any linked PR before skipping
+      close_linked_pr "${issue_num}" \
+        "Closed by orchestrator: stall recovery exhausted (${recovery_count} attempts). The judge will evaluate this gap."
+
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --add-label 'ai:closed' 2>/dev/null || true
       gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -1523,7 +1628,15 @@ REISSUE_EOF
     STALL_COUNT="$(echo "${STALLS_JSON}" | jq -r '.count')"
 
     if [ "${STALL_COUNT}" -gt 0 ]; then
-      echo "Detected ${STALL_COUNT} stalled issue(s). Attempting recovery..."
+      echo "Detected ${STALL_COUNT} stalled issue(s). Checking for active workflow runs..."
+
+      # Build the set of issues with active workflows (one API call batch,
+      # reused across all stalled issues to avoid per-issue API calls).
+      ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set)"
+      if [ -n "${ACTIVE_WORKFLOW_ISSUES}" ]; then
+        echo "Issues with active workflow runs: $(echo "${ACTIVE_WORKFLOW_ISSUES}" | tr '\n' ' ')"
+      fi
+
       STALL_STATE_CHANGED=false
 
       while IFS= read -r stall_entry; do
@@ -1535,12 +1648,12 @@ REISSUE_EOF
         STALL_RECOVERY_COUNT="$(echo "${stall_entry}" | jq -r '.stall_recovery_count')"
         STALL_DURATION="$(echo "${stall_entry}" | jq -r '.stall_duration_minutes')"
 
-        recover_stalled_issue \
+        if recover_stalled_issue \
           "${STALL_ISSUE}" "${STALL_PHASE}" "${STALL_ACTION}" \
-          "${STALL_RECOVERY_COUNT}" "${STALL_LOCAL_ID}" "${STALL_DURATION}"
+          "${STALL_RECOVERY_COUNT}" "${STALL_LOCAL_ID}" "${STALL_DURATION}"; then
 
-        # Increment recovery counter in state (and reset status_since_ts)
-        python3 -c "
+          # Increment recovery counter in state (and reset status_since_ts)
+          python3 -c "
 import json, time, sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import increment_stall_recovery
@@ -1553,7 +1666,10 @@ increment_stall_recovery(state, '${STALL_LOCAL_ID}')
 with open('${STATE_FILE}', 'w') as f:
     json.dump(state, f, indent=2)
 " || true
-        STALL_STATE_CHANGED=true
+          STALL_STATE_CHANGED=true
+        else
+          echo "  [stall-recovery] No action taken for #${STALL_ISSUE} (active workflow or guard)."
+        fi
       done < <(echo "${STALLS_JSON}" | jq -c '.stalls[]')
 
       if [ "${STALL_STATE_CHANGED}" = "true" ]; then
