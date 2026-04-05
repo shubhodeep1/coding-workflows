@@ -2374,25 +2374,29 @@ jobs:
           git reset --hard HEAD
           git clean -fd
 
-          # The script may have been removed during artifact cleanup in the
-          # commit step (caller repos delete fetched scripts before committing).
-          # Re-fetch it so the merge-conflict check can use it.
-          if [ ! -f scripts/git_ref_health_check.sh ]; then
-            wf_source="${{ github.repository_owner }}/coding-workflows"
-            if [ "${{ github.repository }}" = "${wf_source}" ]; then
-              script_ref="${{ github.sha }}"
-            else
-              script_ref="stable"
-            fi
-            mkdir -p scripts
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=${script_ref}" > scripts/git_ref_health_check.sh 2>/dev/null; then
-              echo "::warning::git_ref_health_check.sh not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=main" > scripts/git_ref_health_check.sh
-            fi
-            chmod +x scripts/git_ref_health_check.sh
+          # The scripts may have been removed during artifact cleanup in the
+          # commit step (caller repos delete fetched scripts before committing)
+          # or wiped by git clean -fd above.
+          # Re-fetch any missing scripts so later steps (merge-conflict check,
+          # Telegram notifications) can use them.
+          wf_source="${{ github.repository_owner }}/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
           fi
+          for f in git_ref_health_check.sh tg_helpers.sh; do
+            if [ ! -f "scripts/${f}" ]; then
+              mkdir -p scripts
+              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+                echo "::warning::${f} not found on ${script_ref}; falling back to main"
+                gh api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+              fi
+              chmod +x "scripts/${f}"
+            fi
+          done
           bash scripts/git_ref_health_check.sh repair
           git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
 
