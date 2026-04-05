@@ -349,24 +349,26 @@ build_active_issue_set() {
   local total_count
   total_count="$(echo "${all_runs}" | jq 'length')"
   if [ "${total_count}" -gt "${fresh_count}" ]; then
-    echo "  Active runs: ${total_count} total, ${fresh_count} fresh ($(( total_count - fresh_count )) zombie runs excluded as >$(( stall_secs / 60 ))m old)."
+    echo "  Active runs: ${total_count} total, ${fresh_count} fresh ($(( total_count - fresh_count )) zombie runs excluded as >$(( stall_secs / 60 ))m old)." >&2
   fi
 
   # Extract issue numbers from fresh runs via head_branch patterns.
-  # Implement branches follow patterns like "ai/42-feature-name" or
-  # "ai-implement-42" — extract the leading number.
+  # Implement branches typically follow patterns like "ai/issue-42",
+  # "ai/42-feature-name", or "ai-implement-42".
   local issue_nums
   issue_nums="$(echo "${fresh_runs}" | jq -r '
     [.[] |
      .head_branch // "" |
-     capture("(?:^|/)(?:ai[/-])?(?<num>[0-9]+)") | .num
+     select(test("(?:^|/)(?:ai/(?:issue-)?|ai-(?:implement-)?)[0-9]+(?:$|[^0-9])")) |
+     capture("(?:^|/)(?:ai/(?:issue-)?|ai-(?:implement-)?)(?<num>[0-9]+)(?:$|[^0-9])") | .num
     ] | unique | .[]
   ' 2>/dev/null || true)"
 
-  # Also scan for bare numbers in branch names (broader catch)
+  # Also scan AI-prefixed branches for digits (broader catch)
   local branch_nums
   branch_nums="$(echo "${fresh_runs}" | jq -r '
     [.[] | .head_branch // "" |
+     select(test("(^|/)ai[/-]")) |
      scan("[0-9]+") | select(. != "")
     ] | unique | .[]
   ' 2>/dev/null || true)"
@@ -403,7 +405,7 @@ cancel_zombie_runs_for_issue() {
      (.run_started_at // .created_at // "1970-01-01T00:00:00Z") as $ts |
      ($ts | sub("\\.[0-9]+"; "") | sub("Z$"; "+00:00") | fromdate) as $start_epoch |
      select(($now - $start_epoch) >= $threshold) |
-     select(.head_branch // "" | test("(^|/)(?:ai[/-])?" + $issue + "(?:[^0-9]|$)")) |
+     select(.head_branch // "" | test("(^|/)(?:ai/(?:issue-)?|ai-(?:implement-)?)" + $issue + "(?:[^0-9]|$)")) |
      .id
     ] | .[]
   ' 2>/dev/null || true)"
