@@ -2977,7 +2977,7 @@ jobs:
 
               # Create replacement issue
               NEW_ISSUE_TITLE="$(echo "${JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
-              NEW_ISSUE_BODY="$(echo "${JUDGE_JSON}" | jq -r '.new_issue.body // empty')"
+              NEW_ISSUE_BODY="$(echo "${JUDGE_JSON}" | jq -r '.new_issue.body // empty' | sed 's/\\n/\n/g')"
               if [ -n "${NEW_ISSUE_TITLE}" ] && [ -n "${NEW_ISSUE_BODY}" ]; then
                 FULL_NEW_BODY="${NEW_ISSUE_BODY}
 

@@ -781,7 +781,7 @@ case "${DIAG_STATUS}" in
     for idx in $(seq 0 $((FIX_COUNT - 1))); do
       FIX_ID="$(jq -r ".fix_issues[${idx}].id // \"validation-fix-$((idx + 1))\"" "${DIAGNOSE_RESULT_FILE}")"
       FIX_TITLE="$(jq -r ".fix_issues[${idx}].title // \"Validation fix-up $((idx + 1))\"" "${DIAGNOSE_RESULT_FILE}")"
-      FIX_BODY_BASE="$(jq -r ".fix_issues[${idx}].body // \"No body provided\"" "${DIAGNOSE_RESULT_FILE}")"
+      FIX_BODY_BASE="$(jq -r ".fix_issues[${idx}].body // \"No body provided\"" "${DIAGNOSE_RESULT_FILE}" | sed 's/\\n/\n/g')"
       FIX_PRIORITY="$(jq -r ".fix_issues[${idx}].priority // 5" "${DIAGNOSE_RESULT_FILE}")"
 
       FIX_BODY_FULL="${FIX_BODY_BASE}

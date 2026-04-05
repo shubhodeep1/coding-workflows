@@ -1112,7 +1112,7 @@ ${RB_FIX_DESC}
 
           # Create replacement issue
           NEW_ISSUE_TITLE="$(echo "${RB_JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
-          NEW_ISSUE_BODY="$(echo "${RB_JUDGE_JSON}" | jq -r '.new_issue.body // empty')"
+          NEW_ISSUE_BODY="$(echo "${RB_JUDGE_JSON}" | jq -r '.new_issue.body // empty' | sed 's/\\n/\n/g')"
           if [ -n "${NEW_ISSUE_TITLE}" ] && [ -n "${NEW_ISSUE_BODY}" ]; then
             FULL_NEW_BODY="${NEW_ISSUE_BODY}
 
@@ -1645,7 +1645,7 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
         echo "Creating ${NEW_ISSUES_COUNT} fix-up issue(s)..."
         echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r fix_issue; do
           FIX_TITLE="$(echo "${fix_issue}" | jq -r '.title')"
-          FIX_BODY="$(echo "${fix_issue}" | jq -r '.body')"
+          FIX_BODY="$(echo "${fix_issue}" | jq -r '.body' | sed 's/\\n/\n/g')"
           FIX_ID="$(echo "${fix_issue}" | jq -r '.id')"
 
           # --- Dedup guard: skip if this local ID already has a GitHub issue ---
@@ -1702,7 +1702,7 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
         echo "Creating ${NEW_ISSUES_COUNT} new issue(s) from judge..."
         echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r new_issue; do
           NEW_TITLE="$(echo "${new_issue}" | jq -r '.title')"
-          NEW_BODY="$(echo "${new_issue}" | jq -r '.body')"
+          NEW_BODY="$(echo "${new_issue}" | jq -r '.body' | sed 's/\\n/\n/g')"
           NEW_ID="$(echo "${new_issue}" | jq -r '.id')"
 
           # --- Dedup guard: skip if this local ID already has a GitHub issue ---
@@ -1773,7 +1773,7 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
           fi
 
           DEF_TITLE="$(echo "${ISSUE_DEF}" | jq -r '.title')"
-          DEF_BODY="$(echo "${ISSUE_DEF}" | jq -r '.body')"
+          DEF_BODY="$(echo "${ISSUE_DEF}" | jq -r '.body' | sed 's/\\n/\n/g')"
           DEF_PRIORITY="$(echo "${ISSUE_DEF}" | jq -r '.priority')"
 
           FULL_BODY="${DEF_BODY}
