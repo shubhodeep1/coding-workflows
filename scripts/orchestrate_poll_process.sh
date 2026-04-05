@@ -305,13 +305,19 @@ sync_validation_fix_issues_from_comments() {
 # Stall recovery: workflow run status checks
 # ---------------------------------------------------------------
 
-# Build a set of issue numbers that have active (in_progress or queued)
-# workflow runs.  Called once per poll cycle before the stall recovery
-# loop to avoid re-triggering workflows that are genuinely still running.
+# Build a set of issue numbers that have *genuinely active* (in_progress or
+# queued) workflow runs — i.e., runs that started recently enough that they
+# could still be making progress.
+#
+# Runs that have been in_progress for longer than STALL_THRESHOLD_MINUTES
+# are treated as zombie/hung runs and excluded. This prevents a stuck
+# Actions runner from blocking stall recovery indefinitely.
 #
 # Outputs a newline-separated list of issue numbers.
 build_active_issue_set() {
-  local active_issues=""
+  local now_epoch
+  now_epoch="$(date +%s)"
+  local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
   # Fetch in_progress + queued runs (recent, max 50)
   local runs_json
@@ -325,46 +331,89 @@ build_active_issue_set() {
   local all_runs
   all_runs="$(echo "${runs_json}" "${queued_json}" | jq -s 'add // []' 2>/dev/null || echo '[]')"
 
-  # Extract issue numbers from event payloads.
-  # issue_comment and issues events carry .issue.number directly.
-  # pull_request events carry .pull_request.number — we resolve to issue below.
+  # Filter out zombie runs: any run that has been active for longer than
+  # the stall threshold is considered hung and should not block recovery.
+  # Uses run_started_at (actual execution start) with created_at as fallback.
+  local fresh_runs
+  fresh_runs="$(echo "${all_runs}" | jq --argjson now "${now_epoch}" --argjson threshold "${stall_secs}" '
+    [.[] |
+     # Parse the start timestamp (ISO 8601 → epoch)
+     (.run_started_at // .created_at // "1970-01-01T00:00:00Z") as $ts |
+     ($ts | sub("\\.[0-9]+"; "") | sub("Z$"; "+00:00") | fromdate) as $start_epoch |
+     select(($now - $start_epoch) < $threshold)
+    ]
+  ' 2>/dev/null || echo '[]')"
+
+  local fresh_count
+  fresh_count="$(echo "${fresh_runs}" | jq 'length')"
+  local total_count
+  total_count="$(echo "${all_runs}" | jq 'length')"
+  if [ "${total_count}" -gt "${fresh_count}" ]; then
+    echo "  Active runs: ${total_count} total, ${fresh_count} fresh ($(( total_count - fresh_count )) zombie runs excluded as >$(( stall_secs / 60 ))m old)."
+  fi
+
+  # Extract issue numbers from fresh runs via head_branch patterns.
+  # Implement branches follow patterns like "ai/42-feature-name" or
+  # "ai-implement-42" — extract the leading number.
   local issue_nums
-  issue_nums="$(echo "${all_runs}" | jq -r '
-    [.[] | select(.event == "issues" or .event == "issue_comment") |
-     (.pull_requests // []) as $prs |
-     # The event payload is not in workflow_runs, but we can correlate via
-     # run display_title which often contains the issue number.  A more
-     # reliable approach: the run name of our AI workflows includes the
-     # issue title; however the simplest heuristic is to look at the
-     # triggering_actor and the run path.
-     #
-     # Best-effort: the run has .head_branch which for implement is
-     # "ai/<issue-num>-..." or similar.  Extract numbers from head_branch.
+  issue_nums="$(echo "${fresh_runs}" | jq -r '
+    [.[] |
      .head_branch // "" |
      capture("(?:^|/)(?:ai[/-])?(?<num>[0-9]+)") | .num
     ] | unique | .[]
   ' 2>/dev/null || true)"
 
-  # Also try to extract issue numbers from workflow run names
-  # (our workflows are titled "AI Clarify", "AI Plan", "AI Implement" etc.
-  # and the run name often includes the issue title).
+  # Also scan for bare numbers in branch names (broader catch)
   local branch_nums
-  branch_nums="$(echo "${all_runs}" | jq -r '
+  branch_nums="$(echo "${fresh_runs}" | jq -r '
     [.[] | .head_branch // "" |
      scan("[0-9]+") | select(. != "")
     ] | unique | .[]
   ' 2>/dev/null || true)"
 
   # Combine and deduplicate
-  active_issues="$(printf '%s\n%s\n' "${issue_nums}" "${branch_nums}" | sort -u | grep -E '^[0-9]+$' || true)"
-  echo "${active_issues}"
+  printf '%s\n%s\n' "${issue_nums}" "${branch_nums}" | sort -u | grep -E '^[0-9]+$' || true
 }
 
-# Check if a specific issue has an active workflow run.
+# Check if a specific issue has an active (fresh) workflow run.
 # Uses the pre-built active issue set (ACTIVE_WORKFLOW_ISSUES).
 issue_has_active_workflow() {
   local issue_num="$1"
   echo "${ACTIVE_WORKFLOW_ISSUES}" | grep -qxF "${issue_num}"
+}
+
+# Cancel zombie workflow runs for a specific issue.
+# A zombie is a run that has been in_progress for longer than the stall
+# threshold. Cancelling prevents resource waste and avoids conflicts with
+# the recovery action (e.g., two implement runs on the same branch).
+cancel_zombie_runs_for_issue() {
+  local issue_num="$1"
+  local now_epoch
+  now_epoch="$(date +%s)"
+  local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
+
+  # Re-fetch in_progress runs and find zombies matching this issue
+  local runs_json
+  runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
+    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+
+  local zombie_run_ids
+  zombie_run_ids="$(echo "${runs_json}" | jq -r --argjson now "${now_epoch}" --argjson threshold "${stall_secs}" --arg issue "${issue_num}" '
+    [.[] |
+     (.run_started_at // .created_at // "1970-01-01T00:00:00Z") as $ts |
+     ($ts | sub("\\.[0-9]+"; "") | sub("Z$"; "+00:00") | fromdate) as $start_epoch |
+     select(($now - $start_epoch) >= $threshold) |
+     select(.head_branch // "" | test("(^|/)(?:ai[/-])?" + $issue + "(?:[^0-9]|$)")) |
+     .id
+    ] | .[]
+  ' 2>/dev/null || true)"
+
+  if [ -n "${zombie_run_ids}" ]; then
+    for run_id in ${zombie_run_ids}; do
+      echo "  Cancelling zombie workflow run ${run_id} for issue #${issue_num}..."
+      gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" -X POST 2>/dev/null || true
+    done
+  fi
 }
 
 # Find and close the PR linked to an issue (if any).
@@ -400,10 +449,17 @@ recover_stalled_issue() {
 
   echo "  [stall-recovery] Issue #${issue_num} stuck in '${phase}' for ${stall_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
 
-  # ---- Guard: skip recovery if a workflow is actively processing this issue ----
+  # ---- Guard: skip recovery if a *fresh* workflow is actively processing this issue ----
   if [ "${action}" != "skip" ] && issue_has_active_workflow "${issue_num}"; then
-    echo "  [stall-recovery] Issue #${issue_num} has an active workflow run — skipping recovery (workflow is slow, not stalled)."
+    echo "  [stall-recovery] Issue #${issue_num} has a recent active workflow run — skipping recovery (workflow is slow, not stalled)."
     return 1  # Signal: no action taken (caller should not increment counter)
+  fi
+
+  # Cancel any zombie runs for this issue before retrying — prevents
+  # conflicts (e.g., two implement runs on the same branch) and frees
+  # runner capacity.
+  if [ "${action}" != "skip" ] && [ "${action}" != "attempt_merge" ]; then
+    cancel_zombie_runs_for_issue "${issue_num}"
   fi
 
   case "${action}" in
