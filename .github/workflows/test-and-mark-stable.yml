@@ -763,13 +763,28 @@ jobs:
           *This issue is managed by the AI orchestrator. Do not edit manually.*
           \`ai:orchestrator-tracking\`"
 
-          TRACKING_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
-            -f title="[E2E Smoke Test] Review-Blocked Simulation (run ${GITHUB_RUN_ID})" \
-            -f body="${TRACKING_BODY}" \
-            --jq '.number')
+          # Ensure the label exists before creating the issue (idempotent).
+          gh label create "ai:orchestrator-tracking" \
+            --repo "${TEST_REPO}" \
+            --color "a2eeef" \
+            --description "Orchestrator project tracking issue" \
+            2>/dev/null || true
 
-          gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}/labels" \
-            -f "labels[]=ai:orchestrator-tracking" >/dev/null 2>&1 || true
+          # Create the issue WITH the label atomically so the issues:opened
+          # event payload already contains ai:orchestrator-tracking.  This
+          # prevents the clarify workflow from running on the tracking issue
+          # (its guard checks labels at event time).
+          TRACKING_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+            --method POST \
+            --input - \
+            --jq '.number' <<ISSUEJSON
+          {
+            "title": "[E2E Smoke Test] Review-Blocked Simulation (run ${GITHUB_RUN_ID})",
+            "body": $(printf '%s' "${TRACKING_BODY}" | jq -Rs .),
+            "labels": ["ai:orchestrator-tracking"]
+          }
+          ISSUEJSON
+          )
 
           echo "Created tracking issue #${TRACKING_NUMBER}"
           echo "tracking_number=${TRACKING_NUMBER}" >> "$GITHUB_OUTPUT"
