@@ -73,6 +73,51 @@ jobs:
           echo "${ISSUE_NUMBERS}" >> "$GITHUB_ENV"
           echo "EOF" >> "$GITHUB_ENV"
 
+      - name: Send PR merged Telegram alert
+        if: github.event.pull_request.merged == true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "Telegram not configured; skipping PR merged alert."
+            exit 0
+          fi
+
+          # Only alert for non-orchestrator issues (orchestrator projects
+          # get their own completion alerts from the poller).
+          IS_ORCHESTRATED="false"
+          if [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then
+            while IFS= read -r issue_number; do
+              [ -n "${issue_number}" ] || continue
+              BODY="$(gh api "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null || echo "")"
+              if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+                IS_ORCHESTRATED="true"
+                break
+              fi
+            done <<< "${LINKED_ISSUE_NUMBERS}"
+          fi
+
+          if [ "${IS_ORCHESTRATED}" = "true" ]; then
+            echo "Orchestrator-managed issue — skipping PR merged alert (poller handles completion)."
+            exit 0
+          fi
+
+          # Untracked send — PR merged alerts are never deleted
+          MSG="PR #${PR_NUMBER} merged: ${PR_TITLE}"
+          MSG+=$'\n'
+          MSG+="${PR_URL}"
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
+
       - name: Cleanup tracked Telegram messages
         if: always()
         env:

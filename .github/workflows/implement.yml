@@ -273,6 +273,17 @@ jobs:
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:implementing' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
 
+      - name: Cleanup plan-phase Telegram messages
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source scripts/tg_helpers.sh
+          tg_cleanup_phase_msgs "${ISSUE_NUMBER}" "plan"
+
       - name: Extract implementation plan
         if: env.SKIP_IMPLEMENT != 'true'
         run: |

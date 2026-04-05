@@ -247,6 +247,17 @@ jobs:
             exit 0
           fi
 
+      - name: Cleanup clarify-phase Telegram messages
+        if: env.SKIP_PLAN != 'true'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source scripts/tg_helpers.sh
+          tg_cleanup_phase_msgs "${ISSUE_NUMBER}" "clarify"
+
       - name: Extract clarification answers and questions
         if: env.SKIP_PLAN != 'true'
         env:
@@ -647,7 +658,13 @@ jobs:
           set -euo pipefail
           source scripts/tg_helpers.sh
 
-          tg_send_tracked "${ISSUE_NUMBER}" "Plan needs clarification for issue ${ISSUE_URL}"
+          # Orchestrator-managed issues: general tracking (cleaned up at project end).
+          # Non-orchestrator issues: phase tracking (cleaned up when plan is approved).
+          if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+            tg_send_tracked "${ISSUE_NUMBER}" "Plan needs clarification for issue ${ISSUE_URL}"
+          else
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "Plan needs clarification for issue ${ISSUE_URL}"
+          fi
 
       - name: Post implementation plan
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
@@ -718,7 +735,13 @@ jobs:
           set -euo pipefail
           source scripts/tg_helpers.sh
 
-          tg_send_tracked "${ISSUE_NUMBER}" "Implementation plan generated for issue ${ISSUE_URL}"
+          # Orchestrator-managed issues: general tracking (cleaned up at project end).
+          # Non-orchestrator issues: phase tracking (cleaned up when implementation starts).
+          if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+            tg_send_tracked "${ISSUE_NUMBER}" "Implementation plan generated for issue ${ISSUE_URL}"
+          else
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "Plan awaiting approval for issue ${ISSUE_URL}"
+          fi
 
       - name: Capture planning failure context
         if: failure() || cancelled()
