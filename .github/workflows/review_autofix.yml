@@ -2296,7 +2296,7 @@ jobs:
           fi
 
       - name: Post editor summary comment
-        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
