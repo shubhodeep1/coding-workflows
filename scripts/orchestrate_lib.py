@@ -211,6 +211,7 @@ def build_tracking_state(
 		"current_wave": 1,
 		"judge_cycle": 0,
 		"recovery_count": 0,
+		"recovery_attempted": False,
 		"review_blocked_retries": {},
 		"status": "in_progress",
 		"waves": wave_list,
@@ -289,11 +290,11 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:clarification",
 ]
 
-TERMINAL_PHASES: set[str] = {"ai:merged", "ai:closed"}
+TERMINAL_PHASES: set[str] = {"ai:merged", "ai:closed", "ai:validated", "ai:validation-failed"}
 
 # Phases already handled by dedicated logic in the poller — stall detector
 # should not double-act on these.
-DEDICATED_HANDLER_PHASES: set[str] = {"ai:review-blocked", "ai:implementation-failed"}
+DEDICATED_HANDLER_PHASES: set[str] = {"ai:review-blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
 
 # Escalating recovery actions per detected phase.
 # The poller indexes into this list using the per-issue stall_recovery_count.

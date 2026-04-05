@@ -323,7 +323,7 @@ build_active_issue_set() {
 
   # Merge both lists
   local all_runs
-  all_runs="$(echo "${runs_json}" "${queued_json}" | jq -s 'add // []')"
+  all_runs="$(echo "${runs_json}" "${queued_json}" | jq -s 'add // []' 2>/dev/null || echo '[]')"
 
   # Extract issue numbers from event payloads.
   # issue_comment and issues events carry .issue.number directly.
@@ -493,18 +493,21 @@ STALL_EOF
         local head_ref
         head_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' 2>/dev/null || echo "")"
         if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
-          git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null || true
-          git checkout "origin/${head_ref}" 2>/dev/null || true
-          git config user.name "codex-bot"
-          git config user.email "codex@users.noreply.github.com"
-          git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
-          if git push origin "HEAD:${head_ref}" 2>/dev/null; then
-            echo "  Pushed empty commit to PR #${pr_num} to re-trigger review."
-            tg_notify "🔄 Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+          if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && \
+             git checkout "origin/${head_ref}" 2>/dev/null; then
+            git config user.name "codex-bot"
+            git config user.email "codex@users.noreply.github.com"
+            git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
+            if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+              echo "  Pushed empty commit to PR #${pr_num} to re-trigger review."
+              tg_notify "🔄 Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+            else
+              echo "::warning::Could not push to re-trigger review for PR #${pr_num}."
+            fi
+            git checkout --detach HEAD 2>/dev/null || true
           else
-            echo "::warning::Could not push to re-trigger review for PR #${pr_num}."
+            echo "::warning::Could not fetch/check out head ref ${head_ref} for PR #${pr_num}; skipping review re-trigger."
           fi
-          git checkout --detach HEAD 2>/dev/null || true
         else
           echo "::warning::Could not determine head ref for PR #${pr_num}."
         fi
@@ -817,9 +820,15 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   # ---------------------------------------------------------------
   # Update issue phase timestamps for stall tracking
   # ---------------------------------------------------------------
+  STATE_HASH_BEFORE="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
   python3 scripts/orchestrate_lib.py update-timestamps \
     --state-file "${STATE_FILE}" \
     --labels-json "${LABELS_JSON}" || true
+  STATE_HASH_AFTER="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
+  TIMESTAMP_STATE_CHANGED="false"
+  if [ "${STATE_HASH_BEFORE}" != "${STATE_HASH_AFTER}" ]; then
+    TIMESTAMP_STATE_CHANGED="true"
+  fi
 
   # ---------------------------------------------------------------
   # Check wave status
@@ -1627,6 +1636,8 @@ REISSUE_EOF
 
     STALL_COUNT="$(echo "${STALLS_JSON}" | jq -r '.count')"
 
+    STALL_STATE_CHANGED=false
+
     if [ "${STALL_COUNT}" -gt 0 ]; then
       echo "Detected ${STALL_COUNT} stalled issue(s). Checking for active workflow runs..."
 
@@ -1636,8 +1647,6 @@ REISSUE_EOF
       if [ -n "${ACTIVE_WORKFLOW_ISSUES}" ]; then
         echo "Issues with active workflow runs: $(echo "${ACTIVE_WORKFLOW_ISSUES}" | tr '\n' ' ')"
       fi
-
-      STALL_STATE_CHANGED=false
 
       while IFS= read -r stall_entry; do
         [ -n "${stall_entry}" ] || continue
@@ -1672,11 +1681,12 @@ with open('${STATE_FILE}', 'w') as f:
         fi
       done < <(echo "${STALLS_JSON}" | jq -c '.stalls[]')
 
-      if [ "${STALL_STATE_CHANGED}" = "true" ]; then
-        post_state_comment
-      fi
     else
       echo "No stalled issues detected (threshold: ${STALL_THRESHOLD_MINUTES}m)."
+    fi
+
+    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ]; then
+      post_state_comment
     fi
 
     continue
@@ -1815,7 +1825,7 @@ ${PR_DIFF}
     echo "Judge cycle: $((JUDGE_CYCLE + 1))"
     echo "Current wave just completed: ${CURRENT_WAVE} of ${TOTAL_WAVES}"
     echo "Project complete (all waves dispatched and merged): ${PROJECT_COMPLETE}"
-    echo "Recovery previously attempted: ${RECOVERY_ATTEMPTED}"
+    echo "Recovery count: ${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}"
     PENDING_DEFS_COUNT="$(jq '.pending_issue_defs | length' "${STATE_FILE}")"
     echo "Pending issue definitions (not yet created): ${PENDING_DEFS_COUNT}"
     if [ "${PENDING_DEFS_COUNT}" -gt 0 ]; then
@@ -2099,7 +2109,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
       fi
 
       # Update state — increment recovery_count (replaces old recovery_attempted boolean)
-      jq '.judge_cycle += 1 | .recovery_count = ((.recovery_count // 0) + 1) | .status = "in_progress"' \
+      jq '.judge_cycle += 1 | .recovery_count = ((.recovery_count // (if .recovery_attempted == true then 1 else 0 end)) + 1) | .status = "in_progress"' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
       post_state_comment
