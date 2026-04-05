@@ -549,6 +549,7 @@ jobs:
           JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 
           max_attempts=5
+          implement_succeeded=false
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
 
@@ -557,7 +558,11 @@ jobs:
             remaining=$(( JOB_DEADLINE - now_epoch ))
             if [ "${remaining}" -lt 300 ]; then
               echo "::warning::Skipping attempt ${attempt}: only ${remaining}s remain before job deadline (need 300s minimum)."
-              break
+              if [ "${implement_succeeded}" = true ]; then
+                break
+              fi
+              echo "::error::Insufficient remaining budget and no successful implement attempt completed."
+              exit 1
             fi
             # Cap wall time to remaining budget minus 2-min cleanup buffer
             attempt_wall="${IMPLEMENT_MAX_WALL}"
@@ -657,6 +662,7 @@ jobs:
                 # Codex returned output — check if it actually changed files.
                 if [ -n "$(git status --porcelain)" ]; then
                   echo "Codex implement succeeded with file changes on attempt ${attempt}."
+                  implement_succeeded=true
                   break
                 fi
                 echo "::warning::Codex returned output but produced no file changes on attempt ${attempt}."
