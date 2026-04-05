@@ -44,10 +44,11 @@ name: Test & Mark Stable Release
           Max minutes of *inactivity* before the review & autofix phase
           is considered stuck. Review naturally runs longer (multiple
           reviewer models + editor), so this has a higher default.
-          The timer resets on any detected progress.
+          The timer resets on any detected progress (step transitions,
+          new commits, review comments, log output growth).
         required: false
         type: number
-        default: 20
+        default: 30
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -411,7 +412,20 @@ jobs:
             IMPL_RUN_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
               --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
 
-            CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS}"
+            # ── Adaptive signals: step name + commit count ──
+            IMPL_STEP_NAME=""
+            IMPL_RUN_ID_LATEST=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=10&created=>${{ steps.create-issue.outputs.created_after }}" \
+              --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
+            if [ -n "$IMPL_RUN_ID_LATEST" ]; then
+              IMPL_STEP_NAME=$(gh api "repos/${TEST_REPO}/actions/runs/${IMPL_RUN_ID_LATEST}/jobs?per_page=10" \
+                --jq '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
+            fi
+
+            IMPL_BRANCH="ai/issue-${ISSUE_NUMBER}"
+            COMMIT_COUNT=$(gh api "repos/${TEST_REPO}/commits?sha=${IMPL_BRANCH}&per_page=1" \
+              --jq '.[0].sha // ""' 2>/dev/null || echo "")
+
+            CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS};step=${IMPL_STEP_NAME};head=${COMMIT_COUNT}"
 
             # Reset inactivity timer on any state change
             if [ "$CUR_STATE" != "$PREV_STATE" ]; then
@@ -545,8 +559,39 @@ jobs:
               fi
             fi
 
-            # Activity detection: track run status, conclusion, failed steps count
-            CUR_STATE="run=${RUN_STATUS};conclusion=${RUN_CONCLUSION};failed_steps=${FAILED_STEPS}"
+            # ── Adaptive activity signals ──────────────────────────
+            # Beyond run status/conclusion, probe deeper indicators
+            # that the review workflow is genuinely making progress.
+
+            # 1) Current step name — changes as the workflow advances
+            CURRENT_STEP=""
+            if [ "$RUN_ID" != "unknown" ]; then
+              CURRENT_STEP=$(gh api "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
+                --jq '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
+            fi
+
+            # 2) Commit count on PR branch — editor pushes trigger changes
+            PR_HEAD_SHA=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+              --jq '.head.sha // ""' 2>/dev/null || echo "")
+
+            # 3) Review comment count on the PR
+            REVIEW_COMMENT_COUNT=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}/comments" \
+              --jq 'length' 2>/dev/null || echo "0")
+
+            # 4) Job log byte size — grows while reviewers/editor produce output
+            LOG_SIZE="0"
+            if [ "$RUN_ID" != "unknown" ]; then
+              JOB_ID_FOR_SIZE=$(gh api "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
+                --jq '.jobs[0].id // empty' 2>/dev/null || echo "")
+              if [ -n "$JOB_ID_FOR_SIZE" ]; then
+                LOG_SIZE=$(gh api "repos/${TEST_REPO}/actions/jobs/${JOB_ID_FOR_SIZE}/logs" \
+                  2>/dev/null | wc -c || echo "0")
+                LOG_SIZE="${LOG_SIZE##*$'\n'}"
+                [[ "$LOG_SIZE" =~ ^[0-9]+$ ]] || LOG_SIZE="0"
+              fi
+            fi
+
+            CUR_STATE="run=${RUN_STATUS};conclusion=${RUN_CONCLUSION};failed_steps=${FAILED_STEPS};step=${CURRENT_STEP};head=${PR_HEAD_SHA};reviews=${REVIEW_COMMENT_COUNT};log_sz=${LOG_SIZE}"
 
             if [ "$CUR_STATE" != "$PREV_STATE" ]; then
               if [ -n "$PREV_STATE" ]; then
@@ -565,7 +610,7 @@ jobs:
             fi
 
             REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
-            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m)"
+            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — step: ${CURRENT_STEP:-?}, head: ${PR_HEAD_SHA:0:7}, reviews: ${REVIEW_COMMENT_COUNT}, log: ${LOG_SIZE}b"
             sleep "$POLL_INTERVAL"
             ELAPSED=$((ELAPSED + POLL_INTERVAL))
           done
