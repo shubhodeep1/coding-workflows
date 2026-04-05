@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -168,16 +169,24 @@ def build_tracking_state(
 	Returns:
 		Tracking state dict suitable for JSON serialisation.
 	"""
+	now_ts = int(time.time())
+
 	wave_list = []
 	for wave_idx, wave in enumerate(waves):
 		wave_issues = []
 		for issue in wave:
 			gh_num = issue_number_map.get(issue["id"])
-			wave_issues.append({
+			entry: dict[str, Any] = {
 				"id": issue["id"],
 				"github_issue": gh_num,
 				"status": "pending" if gh_num is not None else "not_created",
-			})
+			}
+			# Seed stall-tracking fields for issues that already exist
+			if gh_num is not None:
+				entry["last_seen_phase"] = ""
+				entry["status_since_ts"] = now_ts
+				entry["stall_recovery_count"] = 0
+			wave_issues.append(entry)
 		wave_list.append({
 			"wave": wave_idx + 1,
 			"issues": wave_issues,
@@ -201,7 +210,7 @@ def build_tracking_state(
 		"total_waves": len(waves),
 		"current_wave": 1,
 		"judge_cycle": 0,
-		"recovery_attempted": False,
+		"recovery_count": 0,
 		"review_blocked_retries": {},
 		"status": "in_progress",
 		"waves": wave_list,
@@ -256,6 +265,230 @@ def format_wave_status_comment(state: dict[str, Any], wave_idx: int) -> str:
 		lines.append(f"- [{marker}] #{gh_num} — `{issue['id']}` — {status}")
 	lines.append("")
 	return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Stall detection and self-healing
+# ---------------------------------------------------------------------------
+
+# Label priority order — first match wins when determining the current phase.
+PHASE_LABELS_PRIORITY: list[str] = [
+	"ai:merged",
+	"ai:closed",
+	"ai:ready-to-merge",
+	"ai:review-blocked",
+	"ai:implementation-failed",
+	"ai:validated",
+	"ai:validation-failed",
+	"ai:validation-fixing",
+	"ai:validating",
+	"ai:done",
+	"ai:implementing",
+	"ai:awaiting-approval",
+	"ai:planning",
+	"ai:clarification",
+]
+
+TERMINAL_PHASES: set[str] = {"ai:merged", "ai:closed"}
+
+# Phases already handled by dedicated logic in the poller — stall detector
+# should not double-act on these.
+DEDICATED_HANDLER_PHASES: set[str] = {"ai:review-blocked", "ai:implementation-failed"}
+
+# Escalating recovery actions per detected phase.
+# The poller indexes into this list using the per-issue stall_recovery_count.
+# If recovery_count exceeds the list length, the last entry is repeated.
+# After MAX_STALL_RECOVERIES_PER_ISSUE total attempts the poller skips the
+# issue (adds ai:closed) so the wave can advance and the judge handles it.
+STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
+	"no_labels": [
+		"retrigger_pipeline",
+		"retrigger_pipeline",
+		"close_and_reissue",
+	],
+	"ai:clarification": [
+		"auto_respond_clarify",
+		"auto_respond_clarify",
+		"close_and_reissue",
+	],
+	"ai:planning": [
+		"retrigger_plan",
+		"retrigger_plan",
+		"close_and_reissue",
+	],
+	"ai:awaiting-approval": [
+		"auto_approve",
+		"auto_approve",
+		"auto_approve",
+	],
+	"ai:implementing": [
+		"retrigger_implement",
+		"retrigger_implement",
+		"close_and_reissue",
+	],
+	"ai:done": [
+		"retrigger_review",
+		"retrigger_review",
+		"close_and_reissue",
+	],
+	"ai:ready-to-merge": [
+		"attempt_merge",
+		"attempt_merge",
+		"attempt_merge",
+	],
+}
+
+
+def determine_phase(labels: list[str]) -> str:
+	"""Determine the current pipeline phase from issue labels.
+
+	Returns the highest-priority matching label or ``"no_labels"`` when no
+	AI pipeline label is present.
+	"""
+	for phase in PHASE_LABELS_PRIORITY:
+		if phase in labels:
+			return phase
+	return "no_labels"
+
+
+def detect_stalls(
+	state: dict[str, Any],
+	issue_labels: dict[str, list[str]],
+	threshold_minutes: int,
+	now_ts: int,
+	max_recoveries: int = 5,
+) -> list[dict[str, Any]]:
+	"""Detect stalled issues in the current wave.
+
+	An issue is stalled when its phase has not changed for longer than
+	*threshold_minutes* and the phase is non-terminal and not already
+	handled by a dedicated poller handler (review-blocked, impl-failed).
+
+	Returns a list of dicts, each containing:
+		id, github_issue, phase, recovery_action,
+		stall_duration_minutes, stall_recovery_count
+	"""
+	current_wave_idx = state.get("current_wave", 1) - 1
+	waves = state.get("waves", [])
+	if current_wave_idx >= len(waves):
+		return []
+
+	wave = waves[current_wave_idx]
+	stalled: list[dict[str, Any]] = []
+	threshold_secs = threshold_minutes * 60
+
+	for issue in wave["issues"]:
+		gh_num = issue.get("github_issue")
+		if not gh_num:
+			continue
+
+		cur_status = issue.get("status", "pending")
+		if cur_status in ("merged", "closed", "skipped", "not_created"):
+			continue
+
+		labels = issue_labels.get(str(gh_num), [])
+		phase = determine_phase(labels)
+
+		if phase in TERMINAL_PHASES:
+			continue
+		if phase in DEDICATED_HANDLER_PHASES:
+			continue
+
+		status_since = issue.get("status_since_ts", 0)
+		if status_since <= 0:
+			# First observation — will be initialised this cycle
+			continue
+
+		elapsed = now_ts - status_since
+		if elapsed < threshold_secs:
+			continue
+
+		recovery_count = issue.get("stall_recovery_count", 0)
+
+		# Determine recovery action
+		if recovery_count >= max_recoveries:
+			action = "skip"
+		else:
+			actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
+			action_idx = min(recovery_count, len(actions) - 1)
+			action = actions[action_idx]
+
+		stalled.append({
+			"id": issue["id"],
+			"github_issue": gh_num,
+			"phase": phase,
+			"recovery_action": action,
+			"stall_duration_minutes": int(elapsed / 60),
+			"stall_recovery_count": recovery_count,
+		})
+
+	return stalled
+
+
+def update_issue_timestamps(
+	state: dict[str, Any],
+	issue_labels: dict[str, list[str]],
+	now_ts: int,
+) -> dict[str, Any]:
+	"""Update status-tracking timestamps for every issue in the current wave.
+
+	When an issue's detected phase differs from its ``last_seen_phase`` the
+	``status_since_ts`` is reset to *now_ts* and the per-issue
+	``stall_recovery_count`` is zeroed (phase advanced, so the issue is no
+	longer stalled).
+
+	Mutates *state* in-place and returns it for convenience.
+	"""
+	current_wave_idx = state.get("current_wave", 1) - 1
+	waves = state.get("waves", [])
+	if current_wave_idx >= len(waves):
+		return state
+
+	wave = waves[current_wave_idx]
+	for issue in wave["issues"]:
+		gh_num = issue.get("github_issue")
+		if not gh_num:
+			continue
+
+		labels = issue_labels.get(str(gh_num), [])
+		phase = determine_phase(labels)
+
+		last_phase = issue.get("last_seen_phase", "")
+		if phase != last_phase:
+			issue["last_seen_phase"] = phase
+			issue["status_since_ts"] = now_ts
+			if last_phase:
+				# Phase genuinely advanced — reset stall counter
+				issue["stall_recovery_count"] = 0
+		elif "status_since_ts" not in issue:
+			# First observation — seed the timestamp
+			issue["status_since_ts"] = now_ts
+
+	return state
+
+
+def increment_stall_recovery(
+	state: dict[str, Any],
+	issue_id: str,
+) -> dict[str, Any]:
+	"""Increment the stall recovery counter for *issue_id* in the current wave.
+
+	Also resets ``status_since_ts`` to now so the threshold restarts.
+	Mutates *state* in-place.
+	"""
+	current_wave_idx = state.get("current_wave", 1) - 1
+	waves = state.get("waves", [])
+	if current_wave_idx >= len(waves):
+		return state
+
+	now_ts = int(time.time())
+	for issue in waves[current_wave_idx]["issues"]:
+		if issue.get("id") == issue_id:
+			issue["stall_recovery_count"] = issue.get("stall_recovery_count", 0) + 1
+			issue["status_since_ts"] = now_ts
+			break
+
+	return state
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +638,40 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_check_stalls(args: argparse.Namespace) -> int:
+	"""Detect stalled issues and return recommended recovery actions."""
+	path = Path(args.state_file).resolve()
+	with path.open("r", encoding="utf-8") as f:
+		state = json.load(f)
+
+	issue_labels: dict[str, list[str]] = json.loads(args.labels_json)
+	now_ts = int(args.now_ts) if args.now_ts else int(time.time())
+	threshold = int(args.threshold_minutes)
+	max_recoveries = int(args.max_recoveries)
+
+	stalls = detect_stalls(state, issue_labels, threshold, now_ts, max_recoveries)
+	_print_json({"ok": True, "stalls": stalls, "count": len(stalls)})
+	return 0
+
+
+def cmd_update_timestamps(args: argparse.Namespace) -> int:
+	"""Update issue phase timestamps in the state file (mutates file)."""
+	path = Path(args.state_file).resolve()
+	with path.open("r", encoding="utf-8") as f:
+		state = json.load(f)
+
+	issue_labels: dict[str, list[str]] = json.loads(args.labels_json)
+	now_ts = int(args.now_ts) if args.now_ts else int(time.time())
+
+	state = update_issue_timestamps(state, issue_labels, now_ts)
+
+	with path.open("w", encoding="utf-8") as f:
+		json.dump(state, f, indent=2)
+
+	_print_json({"ok": True})
+	return 0
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -433,6 +700,20 @@ def build_parser() -> argparse.ArgumentParser:
 	p_check.add_argument("--state-file", required=True)
 	p_check.add_argument("--labels-json", required=True, help='JSON: {"issue_num": ["label1", ...]}')
 	p_check.set_defaults(func=cmd_check_wave_status)
+
+	p_stalls = subparsers.add_parser("check-stalls", help="Detect stalled issues in current wave")
+	p_stalls.add_argument("--state-file", required=True)
+	p_stalls.add_argument("--labels-json", required=True, help='JSON: {"issue_num": ["label1", ...]}')
+	p_stalls.add_argument("--threshold-minutes", required=True, help="Stall threshold in minutes")
+	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
+	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
+	p_stalls.set_defaults(func=cmd_check_stalls)
+
+	p_ts = subparsers.add_parser("update-timestamps", help="Update issue phase timestamps in state")
+	p_ts.add_argument("--state-file", required=True)
+	p_ts.add_argument("--labels-json", required=True, help='JSON: {"issue_num": ["label1", ...]}')
+	p_ts.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
+	p_ts.set_defaults(func=cmd_update_timestamps)
 
 	return parser
 

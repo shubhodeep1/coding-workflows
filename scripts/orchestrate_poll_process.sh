@@ -77,6 +77,25 @@ if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -l
   MAX_VALIDATE_CYCLES="3"
 fi
 
+# Stall detection settings
+STALL_THRESHOLD_MINUTES="${STALL_THRESHOLD_MINUTES:-120}"
+if ! [[ "${STALL_THRESHOLD_MINUTES}" =~ ^[0-9]+$ ]] || [ "${STALL_THRESHOLD_MINUTES}" -lt 1 ]; then
+  echo "::warning::STALL_THRESHOLD_MINUTES must be a positive integer; defaulting to 120"
+  STALL_THRESHOLD_MINUTES="120"
+fi
+
+MAX_STALL_RECOVERIES_PER_ISSUE="${MAX_STALL_RECOVERIES_PER_ISSUE:-5}"
+if ! [[ "${MAX_STALL_RECOVERIES_PER_ISSUE}" =~ ^[0-9]+$ ]] || [ "${MAX_STALL_RECOVERIES_PER_ISSUE}" -lt 1 ]; then
+  echo "::warning::MAX_STALL_RECOVERIES_PER_ISSUE must be a positive integer; defaulting to 5"
+  MAX_STALL_RECOVERIES_PER_ISSUE="5"
+fi
+
+MAX_RECOVERY_ATTEMPTS="${MAX_RECOVERY_ATTEMPTS:-3}"
+if ! [[ "${MAX_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_RECOVERY_ATTEMPTS}" -lt 1 ]; then
+  echo "::warning::MAX_RECOVERY_ATTEMPTS must be a positive integer; defaulting to 3"
+  MAX_RECOVERY_ATTEMPTS="3"
+fi
+
 post_tracking_comment() {
   local comment_body="$1"
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
@@ -283,6 +302,223 @@ sync_validation_fix_issues_from_comments() {
 }
 
 # ---------------------------------------------------------------
+# Stall recovery: phase-specific healing actions
+# ---------------------------------------------------------------
+
+recover_stalled_issue() {
+  local issue_num="$1"
+  local phase="$2"
+  local action="$3"
+  local recovery_count="$4"
+  local local_id="$5"
+  local stall_minutes="$6"
+
+  echo "  [stall-recovery] Issue #${issue_num} stuck in '${phase}' for ${stall_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
+
+  case "${action}" in
+    retrigger_pipeline)
+      # No AI labels — the pipeline never started. Post a comment to trigger
+      # the issue_comment.created event which fires the clarify workflow.
+      echo "  Re-triggering pipeline for issue #${issue_num}..."
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+        -f body="$(cat <<'STALL_EOF'
+/answer
+
+_Orchestrator stall recovery: this issue never entered the AI pipeline.
+Re-triggering the clarification phase. If the issue description is
+sufficient, proceed directly to planning and implementation._
+STALL_EOF
+)" >/dev/null 2>&1 || true
+      tg_notify "🔄 Stall recovery: re-triggered pipeline for issue #${issue_num} (stuck ${stall_minutes}m with no labels, attempt $((recovery_count + 1)))."
+      ;;
+
+    auto_respond_clarify)
+      # Stuck in ai:clarification — auto-respond to move to planning.
+      echo "  Auto-responding to clarification for issue #${issue_num}..."
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+        -f body="$(cat <<'STALL_EOF'
+/answer
+
+_Orchestrator stall recovery: this issue has been in clarification for
+too long. The issue description is deemed sufficient — proceed with
+planning and implementation._
+STALL_EOF
+)" >/dev/null 2>&1 || true
+      tg_notify "🔄 Stall recovery: auto-responded to clarification on issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      ;;
+
+    retrigger_plan)
+      # Stuck in ai:planning — re-trigger plan generation.
+      echo "  Re-triggering plan for issue #${issue_num}..."
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+        -f body="$(cat <<'STALL_EOF'
+/answer
+
+_Orchestrator stall recovery: planning phase stalled. Re-triggering
+plan generation._
+STALL_EOF
+)" >/dev/null 2>&1 || true
+      tg_notify "🔄 Stall recovery: re-triggered planning for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      ;;
+
+    auto_approve)
+      # Stuck in ai:awaiting-approval — auto-approve for orchestrator issues.
+      echo "  Auto-approving plan for issue #${issue_num}..."
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+        -f body="$(cat <<'STALL_EOF'
+/approved
+
+_Orchestrator stall recovery: auto-approving plan. This is an
+orchestrator-managed issue that does not require human approval._
+STALL_EOF
+)" >/dev/null 2>&1 || true
+      tg_notify "🔄 Stall recovery: auto-approved plan for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      ;;
+
+    retrigger_implement)
+      # Stuck in ai:implementing — re-trigger implementation.
+      echo "  Re-triggering implementation for issue #${issue_num}..."
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+        -f body="$(cat <<'STALL_EOF'
+/approved
+
+_Orchestrator stall recovery: implementation phase appears stalled.
+Re-triggering implementation. If a previous attempt crashed or timed
+out, start fresh from the approved plan._
+STALL_EOF
+)" >/dev/null 2>&1 || true
+      tg_notify "🔄 Stall recovery: re-triggered implementation for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      ;;
+
+    retrigger_review)
+      # Stuck at ai:done — PR exists but review never started or stalled.
+      # Find linked PR and push empty commit to trigger synchronize event.
+      echo "  Re-triggering review for issue #${issue_num}..."
+      local pr_num
+      pr_num="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+        --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+        2>/dev/null || echo "")"
+      if [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
+        local head_ref
+        head_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' 2>/dev/null || echo "")"
+        if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
+          git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null || true
+          git checkout "origin/${head_ref}" 2>/dev/null || true
+          git config user.name "codex-bot"
+          git config user.email "codex@users.noreply.github.com"
+          git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
+          if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+            echo "  Pushed empty commit to PR #${pr_num} to re-trigger review."
+            tg_notify "🔄 Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+          else
+            echo "::warning::Could not push to re-trigger review for PR #${pr_num}."
+          fi
+          git checkout --detach HEAD 2>/dev/null || true
+        else
+          echo "::warning::Could not determine head ref for PR #${pr_num}."
+        fi
+      else
+        echo "  No linked PR found for issue #${issue_num}. Treating as implementation incomplete."
+        # Re-trigger implementation since no PR was produced
+        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+          -f body="$(cat <<'STALL_EOF'
+/approved
+
+_Orchestrator stall recovery: issue is marked done but no PR was found.
+Re-triggering implementation._
+STALL_EOF
+)" >/dev/null 2>&1 || true
+        tg_notify "🔄 Stall recovery: re-triggered implement for issue #${issue_num} (ai:done but no PR, stuck ${stall_minutes}m)."
+      fi
+      ;;
+
+    attempt_merge)
+      # Stuck at ai:ready-to-merge — retry the merge. The main merge logic
+      # already handles this each poll cycle, so just log for diagnostics.
+      echo "  Issue #${issue_num} stuck at ready-to-merge. Main merge loop will retry."
+      tg_notify "🔄 Stall recovery: issue #${issue_num} stuck at ready-to-merge for ${stall_minutes}m (attempt $((recovery_count + 1))). Merge loop will retry."
+      ;;
+
+    close_and_reissue)
+      # Nuclear option: close the issue and create a fresh replacement with
+      # extra guidance. The new issue enters the pipeline from scratch.
+      echo "  Closing and re-issuing stalled issue #${issue_num}..."
+      local orig_title orig_body
+      orig_title="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' 2>/dev/null || echo "")"
+      orig_body="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body' 2>/dev/null || echo "")"
+
+      gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --add-label 'ai:closed' 2>/dev/null || true
+      gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        -c "Closing: orchestrator stall recovery. Issue was stuck in '${phase}' for ${stall_minutes} minutes after $((recovery_count + 1)) recovery attempt(s). Re-issuing with additional guidance." 2>/dev/null || true
+
+      local new_body
+      new_body="$(cat <<REISSUE_EOF
+${orig_body}
+
+---
+
+**⚠️ Re-issued from #${issue_num}** — the previous issue stalled in the \`${phase}\` phase for ${stall_minutes} minutes despite $((recovery_count + 1)) recovery attempt(s).
+
+**Guidance for AI agents:**
+- This issue has been re-created by the orchestrator stall recovery system.
+- Previous attempt stalled at phase: \`${phase}\`
+- Proceed through the full pipeline (clarify → plan → implement → review).
+- If the task encounters the same blocker, explain the specific failure in a comment.
+REISSUE_EOF
+)"
+
+      local new_url new_num
+      new_url="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
+        --title "${orig_title}" \
+        --body "${new_body}" 2>/dev/null || echo "")"
+      if [ -n "${new_url}" ]; then
+        new_num="$(echo "${new_url}" | grep -oE '[0-9]+$')"
+        echo "  Created replacement issue #${new_num} for stalled #${issue_num}."
+
+        # Update state: remap the local_id to the new issue number
+        if [ -n "${new_num}" ] && [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
+          jq --arg lid "${local_id}" --argjson new_num "${new_num}" --argjson wave_idx "${WAVE_IDX}" \
+            '.issue_number_map[$lid] = $new_num |
+             (.waves[$wave_idx].issues[] | select(.id == $lid)) |=
+               (.github_issue = $new_num | .status = "pending" | .last_seen_phase = "" | .status_since_ts = (now | floor) | .stall_recovery_count = 0)' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        fi
+
+        tg_notify "🔄 Stall recovery: closed stalled issue #${issue_num} and re-issued as #${new_num} (phase: ${phase}, stuck ${stall_minutes}m)."
+      else
+        echo "::warning::Could not create replacement issue for stalled #${issue_num}."
+      fi
+      ;;
+
+    skip)
+      # Max recoveries exhausted — skip the issue so the wave can advance.
+      # The judge will see it as closed/failed at wave completion.
+      echo "  Skipping issue #${issue_num} after ${recovery_count} recovery attempts."
+      gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --add-label 'ai:closed' 2>/dev/null || true
+      gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        -c "Closing: orchestrator stall recovery exhausted (${recovery_count} attempts over $((stall_minutes)) minutes in '${phase}' phase). The judge will evaluate this gap at wave completion." 2>/dev/null || true
+
+      post_tracking_comment "## ⏭️ Issue #${issue_num} skipped (stall recovery exhausted)
+
+- **Phase:** \`${phase}\`
+- **Stalled for:** ${stall_minutes} minutes
+- **Recovery attempts:** ${recovery_count}
+- **Local ID:** \`${local_id}\`
+
+The judge will evaluate this gap when the wave completes and decide whether to reissue, accept, or adjust the project."
+
+      tg_notify "⏭️ Issue #${issue_num} skipped after ${recovery_count} stall recovery attempts (${stall_minutes}m in '${phase}'). Judge will handle at wave completion."
+      ;;
+
+    *)
+      echo "::warning::Unknown stall recovery action: ${action} for issue #${issue_num}"
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------
 # Normalize truthy env vars (case-insensitive 1/true/yes/on)
 # ---------------------------------------------------------------
 _is_truthy() {
@@ -440,9 +676,10 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   CURRENT_WAVE="$(jq -r '.current_wave' "${STATE_FILE}")"
   TOTAL_WAVES="$(jq -r '.total_waves' "${STATE_FILE}")"
   JUDGE_CYCLE="$(jq -r '.judge_cycle' "${STATE_FILE}")"
-  RECOVERY_ATTEMPTED="$(jq -r '.recovery_attempted' "${STATE_FILE}")"
+  # Backward compat: read recovery_count (new) or migrate from recovery_attempted (old)
+  RECOVERY_COUNT="$(jq -r '.recovery_count // (if .recovery_attempted == true then 1 else 0 end)' "${STATE_FILE}")"
 
-  echo "Current wave: ${CURRENT_WAVE}/${TOTAL_WAVES}, Judge cycle: ${JUDGE_CYCLE}, Recovery attempted: ${RECOVERY_ATTEMPTED}"
+  echo "Current wave: ${CURRENT_WAVE}/${TOTAL_WAVES}, Judge cycle: ${JUDGE_CYCLE}, Recovery count: ${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}"
 
   # ---------------------------------------------------------------
   # Collect label states for all child issues in the current wave
@@ -471,6 +708,13 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     LABELS_JSON+="\"${inum}\":${LABELS}"
   done
   LABELS_JSON+="}"
+
+  # ---------------------------------------------------------------
+  # Update issue phase timestamps for stall tracking
+  # ---------------------------------------------------------------
+  python3 scripts/orchestrate_lib.py update-timestamps \
+    --state-file "${STATE_FILE}" \
+    --labels-json "${LABELS_JSON}" || true
 
   # ---------------------------------------------------------------
   # Check wave status
@@ -1260,12 +1504,65 @@ REISSUE_EOF
   fi
 
   if [ "${WAVE_COMPLETE}" != "true" ]; then
-    echo "Wave ${CURRENT_WAVE} not yet complete. Waiting."
+    echo "Wave ${CURRENT_WAVE} not yet complete."
 
     # Update individual issue statuses in state
     echo "${WAVE_STATUS}" | jq -r '.issues[] | "\(.id) \(.status)"' | while read -r local_id status; do
       echo "  ${local_id}: ${status}"
     done
+
+    # ---------------------------------------------------------------
+    # Stall detection and self-healing
+    # ---------------------------------------------------------------
+    STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
+      --state-file "${STATE_FILE}" \
+      --labels-json "${LABELS_JSON}" \
+      --threshold-minutes "${STALL_THRESHOLD_MINUTES}" \
+      --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
+
+    STALL_COUNT="$(echo "${STALLS_JSON}" | jq -r '.count')"
+
+    if [ "${STALL_COUNT}" -gt 0 ]; then
+      echo "Detected ${STALL_COUNT} stalled issue(s). Attempting recovery..."
+      STALL_STATE_CHANGED=false
+
+      while IFS= read -r stall_entry; do
+        [ -n "${stall_entry}" ] || continue
+        STALL_ISSUE="$(echo "${stall_entry}" | jq -r '.github_issue')"
+        STALL_PHASE="$(echo "${stall_entry}" | jq -r '.phase')"
+        STALL_ACTION="$(echo "${stall_entry}" | jq -r '.recovery_action')"
+        STALL_LOCAL_ID="$(echo "${stall_entry}" | jq -r '.id')"
+        STALL_RECOVERY_COUNT="$(echo "${stall_entry}" | jq -r '.stall_recovery_count')"
+        STALL_DURATION="$(echo "${stall_entry}" | jq -r '.stall_duration_minutes')"
+
+        recover_stalled_issue \
+          "${STALL_ISSUE}" "${STALL_PHASE}" "${STALL_ACTION}" \
+          "${STALL_RECOVERY_COUNT}" "${STALL_LOCAL_ID}" "${STALL_DURATION}"
+
+        # Increment recovery counter in state (and reset status_since_ts)
+        python3 -c "
+import json, time, sys
+sys.path.insert(0, 'scripts')
+from orchestrate_lib import increment_stall_recovery
+
+with open('${STATE_FILE}') as f:
+    state = json.load(f)
+
+increment_stall_recovery(state, '${STALL_LOCAL_ID}')
+
+with open('${STATE_FILE}', 'w') as f:
+    json.dump(state, f, indent=2)
+" || true
+        STALL_STATE_CHANGED=true
+      done < <(echo "${STALLS_JSON}" | jq -c '.stalls[]')
+
+      if [ "${STALL_STATE_CHANGED}" = "true" ]; then
+        post_state_comment
+      fi
+    else
+      echo "No stalled issues detected (threshold: ${STALL_THRESHOLD_MINUTES}m)."
+    fi
+
     continue
   fi
 
@@ -1574,10 +1871,10 @@ PRs to revert: ${REVERT_COUNT}"
       echo "Judge declared failure."
 
       # ---------------------------------------------------------------
-      # Auto-recovery: attempt once
+      # Auto-recovery: configurable attempts (replaces single-shot boolean)
       # ---------------------------------------------------------------
-      if [ "${RECOVERY_ATTEMPTED}" = "true" ]; then
-        echo "Recovery already attempted. Stopping."
+      if [ "${RECOVERY_COUNT}" -ge "${MAX_RECOVERY_ATTEMPTS}" ]; then
+        echo "Recovery attempts exhausted (${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}). Stopping."
         jq '.status = "failed" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
         post_state_comment
@@ -1585,16 +1882,16 @@ PRs to revert: ${REVERT_COUNT}"
         gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
           -f body="## Project Failed
 
-Recovery was attempted but the judge still reports failure. Manual intervention required.
+Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) but the judge still reports failure. Manual intervention required.
 
 **Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null
 
-        tg_notify "❌ Project #${TRACKING_NUM} FAILED after recovery attempt. Manual intervention needed."
+        tg_notify "❌ Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Manual intervention needed."
         tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
 
-      echo "Attempting auto-recovery..."
+      echo "Attempting auto-recovery ($((RECOVERY_COUNT + 1))/${MAX_RECOVERY_ATTEMPTS})..."
 
       # Revert problematic PRs if judge requested
       if [ "${REVERT_COUNT}" -gt 0 ]; then
@@ -1685,13 +1982,13 @@ Recovery was attempted but the judge still reports failure. Manual intervention 
         done
       fi
 
-      # Update state
-      jq '.judge_cycle += 1 | .recovery_attempted = true | .status = "in_progress"' \
+      # Update state — increment recovery_count (replaces old recovery_attempted boolean)
+      jq '.judge_cycle += 1 | .recovery_count = ((.recovery_count // 0) + 1) | .status = "in_progress"' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
       post_state_comment
 
-      tg_notify "🔄 Orchestrator auto-recovery started for #${TRACKING_NUM}: ${NEW_ISSUES_COUNT} fix-up issues, ${REVERT_COUNT} reverts."
+      tg_notify "🔄 Orchestrator auto-recovery ($((RECOVERY_COUNT + 1))/${MAX_RECOVERY_ATTEMPTS}) started for #${TRACKING_NUM}: ${NEW_ISSUES_COUNT} fix-up issues, ${REVERT_COUNT} reverts."
       ;;
 
     in_progress)
