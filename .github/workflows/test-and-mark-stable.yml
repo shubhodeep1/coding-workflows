@@ -1336,4 +1336,3 @@ jobs:
             -d "chat_id=${CHAT_ID}" \
             -d "disable_web_page_preview=true" \
             --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
-
