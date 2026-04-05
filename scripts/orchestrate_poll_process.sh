@@ -1719,8 +1719,12 @@ REISSUE_EOF
           "${STALL_ISSUE}" "${STALL_PHASE}" "${STALL_ACTION}" \
           "${STALL_RECOVERY_COUNT}" "${STALL_LOCAL_ID}" "${STALL_DURATION}"; then
 
+          STALL_STATE_CHANGED=true
+
           # Increment recovery counter in state (and reset status_since_ts)
-          python3 -c "
+          # for recovery actions that keep the same issue in place.
+          if [ "${STALL_ACTION}" != "close_and_reissue" ] && [ "${STALL_ACTION}" != "skip" ]; then
+            python3 -c "
 import json, time, sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import increment_stall_recovery
@@ -1733,7 +1737,7 @@ increment_stall_recovery(state, '${STALL_LOCAL_ID}')
 with open('${STATE_FILE}', 'w') as f:
     json.dump(state, f, indent=2)
 " || true
-          STALL_STATE_CHANGED=true
+          fi
         else
           echo "  [stall-recovery] No action taken for #${STALL_ISSUE} (active workflow or guard)."
         fi
