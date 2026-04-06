@@ -292,6 +292,14 @@ jobs:
     secrets: inherit
 ```
 
+> **Standalone PR conflict sweep** — After processing orchestrator-managed
+> tracking issues, the poller scans all open PRs on `ai/issue-*` branches for
+> merge conflicts. When a conflict is detected it attempts a GitHub API branch
+> update; if that fails (real conflicts), it pushes an empty commit to force a
+> `synchronize` event so the review workflow's Codex conflict resolver can run.
+> This ensures standalone (non-orchestrator) AI PRs are not permanently blocked
+> by merge conflicts.
+
 **`.github/workflows/ai-validate.yml`** — Runs runtime validation (generate harness -> execute -> structured artifacts)
 ```yaml
 name: AI Validate
