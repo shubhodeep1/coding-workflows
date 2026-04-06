@@ -2542,9 +2542,13 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 	git config user.name "codex-bot"
 	git config user.email "codex@users.noreply.github.com"
-	git commit --allow-empty \
+	if ! git commit --allow-empty \
 		-m "[orchestrator] re-trigger review for conflict resolution (standalone PR #${S_PR})" \
-		2>/dev/null || true
+		2>/dev/null; then
+		echo "::warning::Could not create empty commit for standalone PR #${S_PR}; skipping push."
+		git checkout --detach HEAD 2>/dev/null || true
+		continue
+	fi
 	if git push origin "HEAD:${S_HEAD}" 2>/dev/null; then
 		echo "  Pushed empty commit to PR #${S_PR} to re-trigger review workflow."
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
