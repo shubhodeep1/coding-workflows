@@ -1014,11 +1014,6 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   # ---------------------------------------------------------------
   ISSUE_NUMS="$(jq -r ".waves[${WAVE_IDX}].issues[].github_issue" "${STATE_FILE}" 2>/dev/null || echo "")"
 
-  if [ -z "${ISSUE_NUMS}" ]; then
-    echo "::warning::No issues in wave ${CURRENT_WAVE}, skipping."
-    continue
-  fi
-
   # ---------------------------------------------------------------
   # Orphan sweep: find review-blocked issues that belong to this
   # project but are not tracked in the current wave.  Without this,
@@ -1065,6 +1060,11 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
       ISSUE_NUMS="${ISSUE_NUMS} ${orphan_num}"
     done
+  fi
+
+  if [ -z "${ISSUE_NUMS}" ]; then
+    echo "::warning::No issues in wave ${CURRENT_WAVE}, skipping."
+    continue
   fi
 
   LABELS_JSON="{"
