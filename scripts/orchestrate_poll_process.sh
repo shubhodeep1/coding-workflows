@@ -1019,6 +1019,54 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     continue
   fi
 
+  # ---------------------------------------------------------------
+  # Orphan sweep: find review-blocked issues that belong to this
+  # project but are not tracked in the current wave.  Without this,
+  # the in-workflow judge skips orchestrator-managed issues (exit 0)
+  # expecting the poller to handle them, but the poller only scans
+  # issues listed in the state file's current wave — orphans get
+  # stuck with ai:review-blocked forever.
+  # ---------------------------------------------------------------
+  ORPHAN_RB_JSON="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+    --label "ai:review-blocked" --state open \
+    --json number,body --limit 50 2>/dev/null || echo "[]")"
+
+  if [ -n "${ORPHAN_RB_JSON}" ] && [ "${ORPHAN_RB_JSON}" != "[]" ]; then
+    ORPHAN_COUNT="$(echo "${ORPHAN_RB_JSON}" | jq 'length')"
+    for oidx in $(seq 0 $(( ORPHAN_COUNT - 1 ))); do
+      orphan_num="$(echo "${ORPHAN_RB_JSON}" | jq -r ".[${oidx}].number")"
+      orphan_body="$(echo "${ORPHAN_RB_JSON}" | jq -r ".[${oidx}].body")"
+
+      # Skip if already tracked in the current wave
+      already_tracked="false"
+      for inum in ${ISSUE_NUMS}; do
+        if [ "${inum}" = "${orphan_num}" ]; then
+          already_tracked="true"
+          break
+        fi
+      done
+      [ "${already_tracked}" = "false" ] || continue
+
+      # Skip if not part of this project (body must reference our tracking issue)
+      if ! echo "${orphan_body}" | grep -q "Tracking issue: #${TRACKING_NUM}"; then
+        continue
+      fi
+
+      # Skip if not orchestrator-managed
+      if ! echo "${orphan_body}" | grep -q "Managed by: AI Orchestrator"; then
+        continue
+      fi
+
+      echo "  [orphan-sweep] Injecting orphan review-blocked issue #${orphan_num} into wave ${CURRENT_WAVE}."
+
+      # Inject into the state file's current wave
+      jq "(.waves[${WAVE_IDX}].issues) += [{\"id\": \"orphan-rb-${orphan_num}\", \"github_issue\": ${orphan_num}, \"status\": \"in_progress\"}]" \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+      ISSUE_NUMS="${ISSUE_NUMS} ${orphan_num}"
+    done
+  fi
+
   LABELS_JSON="{"
   first=true
   for inum in ${ISSUE_NUMS}; do
