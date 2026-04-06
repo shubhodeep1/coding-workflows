@@ -767,16 +767,17 @@ ${orig_body}
 REISSUE_EOF
 )"
 
-      local new_url new_num
+      local new_url new_url_clean new_num
       new_url="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" 2>/dev/null || echo "")"
       if [ -n "${new_url}" ]; then
-        new_num="$(echo "${new_url}" | grep -oE '[0-9]+$')"
+        new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+        new_num="$(basename "${new_url_clean%%[?#]*}")"
         echo "  Created replacement issue #${new_num} for stalled #${issue_num}."
 
         # Update state: remap the local_id to the new issue number
-        if [ -n "${new_num}" ] && [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
+        if [[ "${new_num}" =~ ^[0-9]+$ ]] && [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
           jq --arg lid "${local_id}" --argjson new_num "${new_num}" --argjson wave_idx "${WAVE_IDX}" \
             '.issue_number_map[$lid] = $new_num |
              (.waves[$wave_idx].issues[] | select(.id == $lid)) |=
@@ -1134,10 +1135,14 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
           # Fetch the PR head branch and base branch
           RTM_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
           if [ -n "${RTM_HEAD_REF}" ] && [ "${RTM_HEAD_REF}" != "null" ]; then
-            git fetch origin "${RTM_HEAD_REF}:refs/remotes/origin/${RTM_HEAD_REF}" 2>/dev/null || true
             DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
-            git fetch origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" 2>/dev/null || true
-            git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null || true
+            if ! git fetch origin "${RTM_HEAD_REF}:refs/remotes/origin/${RTM_HEAD_REF}" 2>/dev/null || \
+               ! git fetch origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" 2>/dev/null || \
+               ! git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null; then
+              echo "::warning::Could not fetch or checkout refs for PR #${RTM_PR}; skipping local conflict handling."
+              git checkout --detach HEAD 2>/dev/null || true
+              continue
+            fi
             git config user.name "codex-bot"
             git config user.email "codex@users.noreply.github.com"
 
@@ -1153,13 +1158,16 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
               tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has real merge conflicts. Attempting to re-trigger review workflow."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")"
 
               # Force a synchronize event by creating an empty commit on the PR branch
-              git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null || true
-              git config user.name "codex-bot"
-              git config user.email "codex@users.noreply.github.com"
-              git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
-              git push origin "HEAD:${RTM_HEAD_REF}" 2>/dev/null || {
-                echo "::warning::Could not push empty commit to re-trigger review for PR #${RTM_PR}."
-              }
+              if git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null; then
+                git config user.name "codex-bot"
+                git config user.email "codex@users.noreply.github.com"
+                git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
+                git push origin "HEAD:${RTM_HEAD_REF}" 2>/dev/null || {
+                  echo "::warning::Could not push empty commit to re-trigger review for PR #${RTM_PR}."
+                }
+              else
+                echo "::warning::Could not check out ${RTM_HEAD_REF} to re-trigger review for PR #${RTM_PR}."
+              fi
             else
               git merge --abort 2>/dev/null || true
               echo "::warning::Unexpected merge state for PR #${RTM_PR}."
@@ -1223,8 +1231,11 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     # workflow's Codex conflict resolver can handle it.
     IP_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
     if [ -n "${IP_HEAD_REF}" ] && [ "${IP_HEAD_REF}" != "null" ]; then
-      git fetch origin "${IP_HEAD_REF}:refs/remotes/origin/${IP_HEAD_REF}" 2>/dev/null || true
-      git checkout "origin/${IP_HEAD_REF}" 2>/dev/null || true
+      if ! git fetch origin "${IP_HEAD_REF}:refs/remotes/origin/${IP_HEAD_REF}" 2>/dev/null || ! git checkout "origin/${IP_HEAD_REF}" 2>/dev/null; then
+        echo "::warning::Could not fetch or checkout head ref ${IP_HEAD_REF} for PR #${IP_PR}; skipping review re-trigger."
+        git checkout --detach HEAD 2>/dev/null || true
+        continue
+      fi
       git config user.name "codex-bot"
       git config user.email "codex@users.noreply.github.com"
       git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
@@ -1507,8 +1518,11 @@ sys.exit(1)
               echo "  API branch update failed for review-blocked PR #${RB_PR}. Pushing empty commit to re-trigger review workflow..."
               RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
               if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
-                git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || true
-                git checkout "origin/${RB_HEAD_REF}" 2>/dev/null || true
+                if ! git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || ! git checkout "origin/${RB_HEAD_REF}" 2>/dev/null; then
+                  echo "::warning::Could not fetch or checkout head ref ${RB_HEAD_REF} for PR #${RB_PR}; skipping review re-trigger."
+                  git checkout --detach HEAD 2>/dev/null || true
+                  continue
+                fi
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
                 git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
@@ -1557,8 +1571,11 @@ sys.exit(1)
                 echo "  API branch update failed for force-merge PR #${RB_PR}. Re-triggering review for conflict resolution..."
                 RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
                 if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
-                  git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || true
-                  git checkout "origin/${RB_HEAD_REF}" 2>/dev/null || true
+                  if ! git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || ! git checkout "origin/${RB_HEAD_REF}" 2>/dev/null; then
+                    echo "::warning::Could not fetch or checkout head ref ${RB_HEAD_REF} for force-merge PR #${RB_PR}; skipping review re-trigger."
+                    git checkout --detach HEAD 2>/dev/null || true
+                    continue
+                  fi
                   git config user.name "codex-bot"
                   git config user.email "codex@users.noreply.github.com"
                   git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
@@ -1768,12 +1785,13 @@ ${RB_FIX_DESC}
               --repo "${GITHUB_REPOSITORY}" \
               --title "${NEW_ISSUE_TITLE}" \
               --body "${FULL_NEW_BODY}")"
-            NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
+            NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+            NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
             echo "  Created replacement issue #${NEW_NUM}: ${NEW_ISSUE_TITLE}"
 
             # Get local_id for the blocked issue and remap it
             LOCAL_ID="$(echo "${WAVE_STATUS}" | jq -r ".issues[] | select(.github_issue == \"${rb_issue}\") | .id")"
-            if [ -n "${LOCAL_ID}" ] && [ "${LOCAL_ID}" != "null" ]; then
+            if [[ "${NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${LOCAL_ID}" ] && [ "${LOCAL_ID}" != "null" ]; then
               jq ".issue_number_map[\"${LOCAL_ID}\"] = ${NEW_NUM}" \
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
               # Update the wave entry
@@ -1911,13 +1929,14 @@ REISSUE_EOF
       --title "${IF_TITLE}" \
       --body "${NEW_BODY}" 2>/dev/null || echo "")"
     if [ -n "${NEW_ISSUE_URL}" ]; then
-      NEW_ISSUE_NUM="$(echo "${NEW_ISSUE_URL}" | grep -oE '[0-9]+$')"
+      NEW_ISSUE_URL_CLEAN="$(printf '%s\n' "${NEW_ISSUE_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+      NEW_ISSUE_NUM="$(basename "${NEW_ISSUE_URL_CLEAN%%[?#]*}")"
       echo "  Created replacement issue #${NEW_ISSUE_NUM} for failed #${if_issue}."
 
       # Update state file: replace the old issue number with the new one
       # (impl_noop_count is preserved on the issue entry since we only
       # change github_issue, not the issue object itself)
-      if [ -n "${NEW_ISSUE_NUM}" ]; then
+      if [[ "${NEW_ISSUE_NUM}" =~ ^[0-9]+$ ]]; then
         jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
@@ -2439,7 +2458,8 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 
           # Record in state so subsequent cycles/iterations won't recreate,
           # and add to the current wave so the poller tracks merge progress.
-          FIX_NEW_NUM="$(basename "${FIX_URL%%[?#]*}")"
+          FIX_URL_CLEAN="$(printf '%s\n' "${FIX_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+          FIX_NEW_NUM="$(basename "${FIX_URL_CLEAN%%[?#]*}")"
           if [[ "${FIX_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
             jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
               '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"}]' \
@@ -2503,7 +2523,8 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 
           # Record in state so subsequent cycles/iterations won't recreate,
           # and add to the current wave so the poller tracks merge progress.
-          ADD_NEW_NUM="$(basename "${NEW_URL%%[?#]*}")"
+          NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+          ADD_NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
           if [[ "${ADD_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
             jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
               '.issue_number_map[$new_id] = $add_new_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $add_new_num, "status": "pending"}]' \
@@ -2578,7 +2599,12 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
             --title "${DEF_TITLE}" \
             --body "${FULL_BODY}")"
 
-          NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
+          NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+          NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
+          if ! [[ "${NEW_NUM}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Could not parse numeric issue number for pending issue ${local_id}; skipping state update."
+            continue
+          fi
           echo "  Created #${NEW_NUM}: ${DEF_TITLE} (${local_id})"
           CREATED_NUMS="${CREATED_NUMS} ${NEW_NUM}"
 
