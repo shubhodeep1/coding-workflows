@@ -1872,13 +1872,14 @@ REISSUE_EOF
       --title "${IF_TITLE}" \
       --body "${NEW_BODY}" 2>/dev/null || echo "")"
     if [ -n "${NEW_ISSUE_URL}" ]; then
-      NEW_ISSUE_NUM="$(echo "${NEW_ISSUE_URL}" | grep -oE '[0-9]+$')"
+      NEW_ISSUE_URL_CLEAN="$(printf '%s\n' "${NEW_ISSUE_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+      NEW_ISSUE_NUM="$(basename "${NEW_ISSUE_URL_CLEAN%%[?#]*}")"
       echo "  Created replacement issue #${NEW_ISSUE_NUM} for failed #${if_issue}."
 
       # Update state file: replace the old issue number with the new one
       # (impl_noop_count is preserved on the issue entry since we only
       # change github_issue, not the issue object itself)
-      if [ -n "${NEW_ISSUE_NUM}" ]; then
+      if [[ "${NEW_ISSUE_NUM}" =~ ^[0-9]+$ ]]; then
         jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
