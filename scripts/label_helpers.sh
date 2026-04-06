@@ -55,9 +55,14 @@ declare -A _AI_LABEL_DESCS=(
 # $2  — repo slug   (optional; defaults to GITHUB_REPOSITORY)
 ensure_label_exists() {
 	local label_name="${1:?ensure_label_exists: label_name required}"
-	local repo="${2:-${GITHUB_REPOSITORY}}"
-	local color="${_AI_LABEL_COLORS[${label_name}]:-1d76db}"
-	local description="${_AI_LABEL_DESCS[${label_name}]:-AI workflow label}"
+	local repo="${2:-${GITHUB_REPOSITORY:-}}"
+	local color="${_AI_LABEL_COLORS["${label_name}"]:-1d76db}"
+	local description="${_AI_LABEL_DESCS["${label_name}"]:-AI workflow label}"
+
+	if [ -z "${repo}" ]; then
+		echo "ensure_label_exists: repo required (pass as \$2 or set GITHUB_REPOSITORY)" >&2
+		return 1
+	fi
 
 	gh label create "${label_name}" \
 		--repo "${repo}" \

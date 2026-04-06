@@ -2160,7 +2160,7 @@ jobs:
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh
             rm -rf .serena
           fi
 
@@ -2518,7 +2518,7 @@ jobs:
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh
             rm -rf .serena
           fi
 
@@ -2942,7 +2942,7 @@ jobs:
                   if [[ "${REPOSITORY}" != *"/coding-workflows" ]]; then
                     rm -f ./pre_assembled_static.txt
                     rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-                    rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
+                    rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh
                     rm -rf .serena
                     rm -rf prompts
                   fi
