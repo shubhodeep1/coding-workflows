@@ -2495,24 +2495,30 @@ echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
 
 CONFLICT_SWEEP_FIXED=0
 
-for sidx in $(seq 0 $(( STANDALONE_COUNT - 1 ))); do
+for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
 	S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+	if [ -z "${S_PR}" ] || [ -z "${S_HEAD}" ] || [ "${S_PR}" = "null" ] || [ "${S_HEAD}" = "null" ]; then
+		continue
+	fi
 
 	# Only process AI-generated branches (ai/issue-*)
 	if [[ "${S_HEAD}" != ai/issue-* ]]; then
 		continue
 	fi
 
-	# Check mergeable status via REST API
-	S_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" \
-		--jq '.mergeable' 2>/dev/null || echo "")"
-
-	if [ "${S_MERGEABLE}" != "false" ]; then
+	# Check mergeable state via REST API (dirty == merge conflicts)
+	S_MERGEABLE_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" \
+		--jq '.mergeable_state // ""' 2>/dev/null || echo "")"
+	if [ -z "${S_MERGEABLE_STATE}" ] || [ "${S_MERGEABLE_STATE}" = "unknown" ]; then
 		continue
 	fi
 
-	echo "  PR #${S_PR} (${S_HEAD}) has merge conflicts. Attempting to re-trigger review..."
+	if [ "${S_MERGEABLE_STATE}" != "dirty" ]; then
+		continue
+	fi
+
+	echo "  PR #${S_PR} (${S_HEAD}) is in conflicted mergeable state. Attempting to re-trigger review..."
 
 	# Stage 1: Try the GitHub API update-branch endpoint (clean merge)
 	S_HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" \
@@ -2526,8 +2532,14 @@ for sidx in $(seq 0 $(( STANDALONE_COUNT - 1 ))); do
 
 	# Stage 2: Push empty commit to force a synchronize event so the
 	# review workflow's Codex conflict resolver can run.
-	git fetch origin "${S_HEAD}:refs/remotes/origin/${S_HEAD}" 2>/dev/null || true
-	git checkout "origin/${S_HEAD}" 2>/dev/null || true
+	if ! git fetch origin "${S_HEAD}:refs/remotes/origin/${S_HEAD}" 2>/dev/null; then
+		echo "::warning::Could not fetch standalone PR #${S_PR} head ${S_HEAD}; skipping re-trigger."
+		continue
+	fi
+	if ! git checkout --detach "refs/remotes/origin/${S_HEAD}" 2>/dev/null; then
+		echo "::warning::Could not check out standalone PR #${S_PR} head ${S_HEAD}; skipping re-trigger."
+		continue
+	fi
 	git config user.name "codex-bot"
 	git config user.email "codex@users.noreply.github.com"
 	git commit --allow-empty \
