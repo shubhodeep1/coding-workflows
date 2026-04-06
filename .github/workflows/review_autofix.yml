@@ -2370,6 +2370,15 @@ jobs:
           echo "MERGE_CONFLICT=false" >> "$GITHUB_ENV"
           echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
 
+          # git merge requires a clean working tree.  Save untracked dirs
+          # (like .serena/, scripts/, prompts/) so they survive into the
+          # conflict-resolver step instead of being destroyed by git clean.
+          UNTRACKED_BACKUP="$(mktemp -d)"
+          for d in .serena scripts prompts; do
+            if [ -d "${d}" ]; then
+              cp -a "${d}" "${UNTRACKED_BACKUP}/${d}"
+            fi
+          done
           git reset --hard HEAD
           git clean -fd
 
@@ -2409,6 +2418,7 @@ jobs:
             if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
               git merge --abort
             fi
+            rm -rf "${UNTRACKED_BACKUP}"
             exit 0
           else
             echo "Merge conflict detected"
@@ -2416,7 +2426,15 @@ jobs:
             if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
               git merge --abort
             fi
+            # Restore untracked dirs so the conflict resolver's codex exec
+            # has its full environment (.serena/, scripts/, prompts/).
+            for d in .serena scripts prompts; do
+              if [ -d "${UNTRACKED_BACKUP}/${d}" ]; then
+                cp -a "${UNTRACKED_BACKUP}/${d}" .
+              fi
+            done
           fi
+          rm -rf "${UNTRACKED_BACKUP}"
 
       - name: Resolve merge conflicts with Codex
         # Run conflict resolution even when max_iterations_reached — conflict
