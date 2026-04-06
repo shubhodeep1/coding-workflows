@@ -1646,7 +1646,7 @@ ${RB_FIX_DESC}
 
             # Get local_id for the blocked issue and remap it
             LOCAL_ID="$(echo "${WAVE_STATUS}" | jq -r ".issues[] | select(.github_issue == \"${rb_issue}\") | .id")"
-            if [ -n "${LOCAL_ID}" ] && [ "${LOCAL_ID}" != "null" ]; then
+            if [[ "${NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${LOCAL_ID}" ] && [ "${LOCAL_ID}" != "null" ]; then
               jq ".issue_number_map[\"${LOCAL_ID}\"] = ${NEW_NUM}" \
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
               # Update the wave entry
@@ -2529,8 +2529,10 @@ for sidx in $(seq 0 $(( STANDALONE_COUNT - 1 ))); do
 
 	# Stage 2: Push empty commit to force a synchronize event so the
 	# review workflow's Codex conflict resolver can run.
-	git fetch origin "${S_HEAD}:refs/remotes/origin/${S_HEAD}" 2>/dev/null || true
-	git checkout "origin/${S_HEAD}" 2>/dev/null || true
+	if ! git fetch origin "${S_HEAD}:refs/remotes/origin/${S_HEAD}" 2>/dev/null || ! git checkout "origin/${S_HEAD}" 2>/dev/null; then
+		echo "  Could not fetch or checkout branch ${S_HEAD}, skipping."
+		continue
+	fi
 	git config user.name "codex-bot"
 	git config user.email "codex@users.noreply.github.com"
 	git commit --allow-empty \
