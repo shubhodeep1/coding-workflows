@@ -1027,8 +1027,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/label_helpers.sh
-          ensure_label_exists "ai:done" "${{ github.repository }}"
+          gh label create "ai:done" --repo "${{ github.repository }}" \
+            --color "0e8a16" --description "Implementation PR created" \
+            2>/dev/null || true
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:done' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
 
