@@ -200,7 +200,7 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py tg_helpers.sh; do
+          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -291,12 +291,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/label_helpers.sh
           ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
           if ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is not in ai:awaiting-approval phase. Exiting safely."
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
           fi
+          ensure_label_exists "ai:implementing" "${{ github.repository }}"
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:implementing' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
 
@@ -864,6 +866,8 @@ jobs:
             -f body="⚠️ AI implementation produced no repository changes despite an approved plan. This is likely a pipeline bug (e.g. workflow edits stripped without \`ALLOW_WORKFLOW_EDITS=true\`, or the model failed to write files). Labeling \`ai:implementation-failed\` for orchestrator re-processing."
 
           # Remove ai:done (if present) and add failure label
+          source scripts/label_helpers.sh
+          ensure_label_exists "ai:implementation-failed" "${{ github.repository }}"
           gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --remove-label 'ai:done' --add-label 'ai:implementation-failed' 2>/dev/null || \
           gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
@@ -1037,6 +1041,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          gh label create "ai:done" --repo "${{ github.repository }}" \
+            --color "0e8a16" --description "Implementation PR created" \
+            2>/dev/null || true
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:done' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
 
@@ -1046,6 +1053,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
+            --color "fbca04" --description "Awaiting human approval to implement" \
+            2>/dev/null || true
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
 
@@ -1057,6 +1067,9 @@ jobs:
           set -euo pipefail
           ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
+            gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
+              --color "fbca04" --description "Awaiting human approval to implement" \
+              2>/dev/null || true
             gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
             gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
           fi
@@ -1077,11 +1090,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          # tg_helpers.sh may have been removed by the commit-step cleanup
-          # (it's a fetched artifact). Guard against its absence.
-          if [ -f scripts/tg_helpers.sh ]; then
-            source scripts/tg_helpers.sh
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "tg_helpers.sh not available; skipping Telegram notification."
+            exit 0
           fi
+          source scripts/tg_helpers.sh
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then

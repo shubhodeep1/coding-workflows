@@ -634,6 +634,7 @@ STALL_EOF
       orig_title="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' 2>/dev/null || echo "")"
       orig_body="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body' 2>/dev/null || echo "")"
 
+      ensure_label_exists "ai:closed"
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --remove-label 'ai:done' --remove-label 'ai:implementing' \
         --remove-label 'ai:planning' --remove-label 'ai:clarification' \
@@ -690,6 +691,7 @@ REISSUE_EOF
       close_linked_pr "${issue_num}" \
         "Closed by orchestrator: stall recovery exhausted (${recovery_count} attempts). The judge will evaluate this gap."
 
+      ensure_label_exists "ai:closed"
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --add-label 'ai:closed' 2>/dev/null || true
       gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -1190,6 +1192,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       if [ "${RB_PR_STATE}" != "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
         # PR is closed (not merged) — skip entirely
         echo "  PR #${RB_PR} is closed (not merged). Cleaning up labels and skipping."
+        ensure_label_exists "ai:closed"
         gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
           --remove-label 'ai:review-blocked' --remove-label 'ai:in-progress' \
           --add-label 'ai:closed' 2>/dev/null || true
@@ -1366,6 +1369,7 @@ sys.exit(1)
         merge)
           echo "  Judge says merge PR #${RB_PR} as-is."
           # Remove review-blocked, set ready-to-merge
+          ensure_label_exists "ai:ready-to-merge"
           gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
 
@@ -1415,6 +1419,7 @@ sys.exit(1)
         fix)
           if [ "${IS_FINAL}" = "true" ]; then
             echo "  Judge returned 'fix' but retries exhausted — treating as merge."
+            ensure_label_exists "ai:ready-to-merge"
             gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
@@ -1581,6 +1586,7 @@ ${RB_FIX_DESC}
                   tg_notify "✅ Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                 else
                   echo "  Treating as merge decision."
+                  ensure_label_exists "ai:ready-to-merge"
                   gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
                   PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
@@ -1612,6 +1618,7 @@ ${RB_FIX_DESC}
             2>/dev/null || true
 
           # Label issue as closed
+          ensure_label_exists "ai:closed"
           gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:review-blocked' --remove-label 'ai:done' \
             --add-label 'ai:closed' 2>/dev/null || true
@@ -1719,6 +1726,7 @@ ${RB_FIX_DESC}
     IF_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' 2>/dev/null || echo "")"
 
     # Close the failed issue
+    ensure_label_exists "ai:closed"
     gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
       --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
     gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
