@@ -1038,8 +1038,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/label_helpers.sh
-          ensure_label_exists "ai:awaiting-approval" "${{ github.repository }}"
+          gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
+            --color "fbca04" --description "Awaiting human approval to implement" \
+            2>/dev/null || true
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
 
