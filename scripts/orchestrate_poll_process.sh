@@ -1694,11 +1694,17 @@ ${RB_FIX_DESC}
                   gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
                   PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-			  if [ "${PR_STATE}" = "open" ] && _pr_checks_completed "${RB_PR}"; then
-			    gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
-			      || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash || true
-			  fi
-                  tg_notify "✅ Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+                  PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+                  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
+                    if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
+                      || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+                      tg_notify "✅ Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+                    else
+                      echo "::warning::Could not merge PR #${RB_PR} in no-fix merge path."
+                    fi
+                  elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
+                    echo "  PR #${RB_PR} is not mergeable in no-fix merge path. Skipping merge notification."
+                  fi
                 fi
               fi
 
