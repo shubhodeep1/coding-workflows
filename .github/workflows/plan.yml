@@ -669,12 +669,19 @@ jobs:
           set -euo pipefail
           source scripts/tg_helpers.sh
 
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="Plan needs clarification for issue #${ISSUE_NUMBER}"
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+
           # Orchestrator-managed issues: general tracking (cleaned up at project end).
           # Non-orchestrator issues: phase tracking (cleaned up when plan is approved).
           if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
-            tg_send_tracked "${ISSUE_NUMBER}" "Plan needs clarification for issue ${ISSUE_URL}"
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
           else
-            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "Plan needs clarification for issue ${ISSUE_URL}"
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}"
           fi
 
       - name: Post implementation plan
@@ -748,12 +755,24 @@ jobs:
           set -euo pipefail
           source scripts/tg_helpers.sh
 
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
           # Orchestrator-managed issues: general tracking (cleaned up at project end).
           # Non-orchestrator issues: phase tracking (cleaned up when implementation starts).
           if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
-            tg_send_tracked "${ISSUE_NUMBER}" "Implementation plan generated for issue ${ISSUE_URL}"
+            MSG="Implementation plan generated for issue #${ISSUE_NUMBER}"
           else
-            tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "Plan awaiting approval for issue ${ISSUE_URL}"
+            MSG="Plan awaiting approval for issue #${ISSUE_NUMBER}"
+          fi
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+
+          if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+          else
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "${MSG}"
           fi
 
       - name: Capture planning failure context
@@ -813,15 +832,11 @@ jobs:
             MSG="AI planning workflow failed."
           fi
           MSG+=$'\n'
-          MSG+="Workflow: AI Plan"
-          MSG+=$'\n'
-          MSG+="Issue: #${ISSUE_NUMBER}"
-          MSG+=$'\n'
-          MSG+="Issue URL: ${ISSUE_URL}"
-          MSG+=$'\n'
           MSG+="Context: ${PLAN_FAILURE_CONTEXT}"
           MSG+=$'\n'
           MSG+="Hint: ${FAILED_STEP_HINT}"
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"

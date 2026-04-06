@@ -593,9 +593,12 @@ jobs:
           set -euo pipefail
           source scripts/tg_helpers.sh
 
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MSG="Clarification required for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
           MSG+=$'\n'
-          MSG+="${ISSUE_URL}"
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
 
           # Orchestrator-managed issues: use general tracking (cleaned up at project end).
           # Non-orchestrator issues: use phase tracking (cleaned up when plan starts).
@@ -638,7 +641,7 @@ jobs:
             MSG="AI clarification failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
           fi
           MSG+=$'\n'
-          MSG+="${ISSUE_URL}"
+          MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"

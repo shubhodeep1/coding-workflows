@@ -21,10 +21,34 @@ if [ -f "scripts/tg_helpers.sh" ]; then
   source scripts/tg_helpers.sh
 fi
 
+# _gh_url constructs a full GitHub URL for the current repository.
+_gh_url() {
+  if [ -z "${GITHUB_REPOSITORY:-}" ]; then
+    printf ''
+    return
+  fi
+  printf '%s/%s/%s' "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY}" "$1"
+}
+
 # tg_notify wraps tg_send_tracked using the current TRACKING_NUM.
 # TRACKING_NUM is set inside the main per-issue loop below.
+# Automatically appends tracking issue link and Actions run link.
 tg_notify() {
   local msg="$1"
+  local tracking_url run_url
+  
+  if [ -n "${TRACKING_NUM:-}" ] && [ "${TRACKING_NUM}" != "0" ]; then
+    tracking_url="$(_gh_url "issues/${TRACKING_NUM}")"
+    if [ -n "${tracking_url}" ]; then
+      msg+=$'\n'"Tracking: ${tracking_url}"
+    fi
+  fi
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    run_url="$(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+    if [ -n "${run_url}" ]; then
+      msg+=$'\n'"Run: ${run_url}"
+    fi
+  fi
   if [ -n "${TRACKING_NUM:-}" ]; then
     tg_send_tracked "${TRACKING_NUM}" "${msg}"
   else
@@ -244,7 +268,12 @@ mark_validation_complete() {
   gh_retry gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
     --comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle})." || true
   tg_cleanup_msgs "${TRACKING_NUM}"
-  tg_send_msg "✅ Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})." >/dev/null
+  MSG="✅ Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
+  MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+  fi
+  tg_send_msg "${MSG}" >/dev/null
 }
 
 extract_fix_issues_from_comment() {
@@ -478,7 +507,7 @@ Re-triggering the clarification phase. If the issue description is
 sufficient, proceed directly to planning and implementation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: re-triggered pipeline for issue #${issue_num} (stuck ${stall_minutes}m with no labels, attempt $((recovery_count + 1)))."
+      tg_notify "🔄 Stall recovery: re-triggered pipeline for issue #${issue_num} (stuck ${stall_minutes}m with no labels, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     auto_respond_clarify)
@@ -493,7 +522,7 @@ too long. The issue description is deemed sufficient — proceed with
 planning and implementation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: auto-responded to clarification on issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      tg_notify "🔄 Stall recovery: auto-responded to clarification on issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     retrigger_plan)
@@ -507,7 +536,7 @@ _Orchestrator stall recovery: planning phase stalled. Re-triggering
 plan generation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: re-triggered planning for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      tg_notify "🔄 Stall recovery: re-triggered planning for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     auto_approve)
@@ -521,7 +550,7 @@ _Orchestrator stall recovery: auto-approving plan. This is an
 orchestrator-managed issue that does not require human approval._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: auto-approved plan for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      tg_notify "🔄 Stall recovery: auto-approved plan for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     retrigger_implement)
@@ -536,7 +565,7 @@ Re-triggering implementation. If a previous attempt crashed or timed
 out, start fresh from the approved plan._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: re-triggered implementation for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      tg_notify "🔄 Stall recovery: re-triggered implementation for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     retrigger_review)
@@ -558,7 +587,7 @@ STALL_EOF
             git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
             if git push origin "HEAD:${head_ref}" 2>/dev/null; then
               echo "  Pushed empty commit to PR #${pr_num} to re-trigger review."
-              tg_notify "🔄 Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+              tg_notify "🔄 Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
             else
               echo "::warning::Could not push to re-trigger review for PR #${pr_num}."
             fi
@@ -580,7 +609,7 @@ _Orchestrator stall recovery: issue is marked done but no PR was found.
 Re-triggering implementation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-        tg_notify "🔄 Stall recovery: re-triggered implement for issue #${issue_num} (ai:done but no PR, stuck ${stall_minutes}m)."
+        tg_notify "🔄 Stall recovery: re-triggered implement for issue #${issue_num} (ai:done but no PR, stuck ${stall_minutes}m)."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       fi
       ;;
 
@@ -588,7 +617,7 @@ STALL_EOF
       # Stuck at ai:ready-to-merge — retry the merge. The main merge logic
       # already handles this each poll cycle, so just log for diagnostics.
       echo "  Issue #${issue_num} stuck at ready-to-merge. Main merge loop will retry."
-      tg_notify "🔄 Stall recovery: issue #${issue_num} stuck at ready-to-merge for ${stall_minutes}m (attempt $((recovery_count + 1))). Merge loop will retry."
+      tg_notify "🔄 Stall recovery: issue #${issue_num} stuck at ready-to-merge for ${stall_minutes}m (attempt $((recovery_count + 1))). Merge loop will retry."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     close_and_reissue)
@@ -647,7 +676,7 @@ REISSUE_EOF
             "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         fi
 
-        tg_notify "🔄 Stall recovery: closed stalled issue #${issue_num} and re-issued as #${new_num} (phase: ${phase}, stuck ${stall_minutes}m)."
+        tg_notify "🔄 Stall recovery: closed stalled issue #${issue_num} and re-issued as #${new_num} (phase: ${phase}, stuck ${stall_minutes}m)."$'\n'"Old issue: $(_gh_url "issues/${issue_num}")"$'\n'"New issue: $(_gh_url "issues/${new_num}")"
       else
         echo "::warning::Could not create replacement issue for stalled #${issue_num}."
       fi
@@ -677,7 +706,7 @@ REISSUE_EOF
 
 The judge will evaluate this gap when the wave completes and decide whether to reissue, accept, or adjust the project."
 
-      tg_notify "⏭️ Issue #${issue_num} skipped after ${recovery_count} stall recovery attempts (${stall_minutes}m in '${phase}'). Judge will handle at wave completion."
+      tg_notify "⏭️ Issue #${issue_num} skipped after ${recovery_count} stall recovery attempts (${stall_minutes}m in '${phase}'). Judge will handle at wave completion."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     *)
@@ -850,9 +879,69 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   echo "Current wave: ${CURRENT_WAVE}/${TOTAL_WAVES}, Judge cycle: ${JUDGE_CYCLE}, Recovery count: ${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}"
 
   # ---------------------------------------------------------------
+  # Backward scan: check prior waves for non-terminal issues
+  # ---------------------------------------------------------------
+  # Safety net: if a fix-up issue was added to a prior wave (or a
+  # status update was missed), detect it here and update state /
+  # attempt auto-merge so the issue doesn't stay orphaned forever.
+  WAVE_IDX=$(( CURRENT_WAVE - 1 ))
+
+  PRIOR_WAVE_REMEDIATED="false"
+  if [ "${WAVE_IDX}" -gt 0 ]; then
+    for prior_idx in $(seq 0 $(( WAVE_IDX - 1 ))); do
+      PRIOR_NON_TERMINAL="$(jq -r --argjson wi "${prior_idx}" \
+        '.waves[$wi].issues[] | select(.status != "merged" and .status != "closed" and .status != "skipped") | .github_issue' \
+        "${STATE_FILE}" 2>/dev/null || echo "")"
+      for pw_inum in ${PRIOR_NON_TERMINAL}; do
+        [ -n "${pw_inum}" ] && [ "${pw_inum}" != "null" ] || continue
+        echo "  [backward-scan] Prior wave $((prior_idx + 1)) issue #${pw_inum} is non-terminal. Checking labels..."
+        PW_LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+        [ -n "${PW_LABELS}" ] || PW_LABELS='[]'
+        PW_LOCAL_ID="$(jq -r --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
+          '.waves[$wi].issues[] | select((.github_issue | tostring) == $inum) | .id' "${STATE_FILE}" | head -n 1)"
+
+        if echo "${PW_LABELS}" | jq -e 'index("ai:merged")' >/dev/null 2>&1; then
+          echo "  [backward-scan] #${pw_inum} is now ai:merged. Updating state."
+          jq --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
+            '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum)).status = "merged"' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          PRIOR_WAVE_REMEDIATED="true"
+        elif echo "${PW_LABELS}" | jq -e 'index("ai:closed")' >/dev/null 2>&1; then
+          echo "  [backward-scan] #${pw_inum} is now ai:closed. Updating state."
+          jq --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
+            '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum)).status = "closed"' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          PRIOR_WAVE_REMEDIATED="true"
+        elif echo "${PW_LABELS}" | jq -e 'index("ai:ready-to-merge")' >/dev/null 2>&1; then
+          echo "  [backward-scan] #${pw_inum} is ai:ready-to-merge. Attempting auto-merge..."
+          PW_PR="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/timeline" \
+            --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+            2>/dev/null || echo "")"
+          if [ -n "${PW_PR}" ] && [ "${PW_PR}" != "null" ]; then
+            PW_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.state' 2>/dev/null || echo "")"
+            PW_PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+            if [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ]; then
+              gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
+                || gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+            elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
+              gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}/update-branch" \
+                -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.head.sha' 2>/dev/null)" \
+                2>/dev/null || true
+            fi
+          fi
+        else
+          echo "  [backward-scan] #${pw_inum} (${PW_LOCAL_ID}) in prior wave $((prior_idx + 1)) still non-terminal. Will be caught by next poll cycle."
+        fi
+      done
+    done
+    if [ "${PRIOR_WAVE_REMEDIATED}" = "true" ]; then
+      post_state_comment
+    fi
+  fi
+
+  # ---------------------------------------------------------------
   # Collect label states for all child issues in the current wave
   # ---------------------------------------------------------------
-  WAVE_IDX=$(( CURRENT_WAVE - 1 ))
   ISSUE_NUMS="$(jq -r ".waves[${WAVE_IDX}].issues[].github_issue" "${STATE_FILE}" 2>/dev/null || echo "")"
 
   if [ -z "${ISSUE_NUMS}" ]; then
@@ -951,7 +1040,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
               git merge --abort 2>/dev/null || true
               echo "  PR #${RTM_PR} has real merge conflicts — cannot auto-resolve from poller."
               echo "  The review workflow's Codex conflict resolver handles this on synchronize events."
-              tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has real merge conflicts. Attempting to re-trigger review workflow."
+              tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has real merge conflicts. Attempting to re-trigger review workflow."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")"
 
               # Force a synchronize event by creating an empty commit on the PR branch
               git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null || true
@@ -1015,6 +1104,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.sha' 2>/dev/null)" \
       2>/dev/null; then
       echo "  PR #${IP_PR} branch updated via API. Synchronize event will re-trigger review."
+      tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) had merge conflicts. Branch updated via API to re-trigger review."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
       continue
     fi
 
@@ -1030,7 +1120,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
       if git push origin "HEAD:${IP_HEAD_REF}" 2>/dev/null; then
         echo "  Pushed empty commit to PR #${IP_PR} to re-trigger review workflow."
-        tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Re-triggered review for auto-resolution."
+        tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Re-triggered review for auto-resolution."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
       else
         echo "::warning::Could not push empty commit to re-trigger review for PR #${IP_PR}."
       fi
@@ -1208,7 +1298,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
         echo "::warning::Review-blocked judge failed for issue #${rb_issue}"
-        tg_notify "⚠️ Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle."
+        tg_notify "⚠️ Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
         continue
       fi
 
@@ -1311,7 +1401,7 @@ sys.exit(1)
                 git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
                 git push origin "HEAD:${RB_HEAD_REF}" 2>/dev/null || {
                   echo "::warning::Could not push to re-trigger review for PR #${RB_PR}."
-                  tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts that could not be auto-resolved."
+                  tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts that could not be auto-resolved."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                 }
                 git checkout --detach HEAD 2>/dev/null || true
               else
@@ -1323,7 +1413,7 @@ sys.exit(1)
           fi
 
           REVIEW_BLOCKED_STATE_CHANGED=true
-          tg_notify "✅ Orchestrator judge merged review-blocked PR #${RB_PR} (issue #${rb_issue}): ${RB_JUSTIFICATION}"
+          tg_notify "✅ Orchestrator judge merged review-blocked PR #${RB_PR} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
           ;;
 
         fix)
@@ -1354,7 +1444,7 @@ sys.exit(1)
                   git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
                   git push origin "HEAD:${RB_HEAD_REF}" 2>/dev/null || {
                     echo "::warning::Could not push to re-trigger review for force-merge PR #${RB_PR}."
-                    tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) has unresolvable merge conflicts."
+                    tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) has unresolvable merge conflicts."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                   }
                   git checkout --detach HEAD 2>/dev/null || true
                 else
@@ -1363,7 +1453,7 @@ sys.exit(1)
               fi
             fi
             REVIEW_BLOCKED_STATE_CHANGED=true
-            tg_notify "✅ Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"
+            tg_notify "✅ Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
           else
             echo "  Judge is applying fixes to PR #${RB_PR}..."
             # Re-check PR state before expensive fix+push (race condition safety net)
@@ -1467,7 +1557,7 @@ ${RB_FIX_DESC}
                       echo "  Created follow-up PR: ${FOLLOWUP_PR_URL}"
                       gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                         --remove-label 'ai:review-blocked' 2>/dev/null || true
-                      tg_notify "🔧 Orchestrator judge created follow-up PR for merged PR #${RB_PR} (issue #${rb_issue}): ${FOLLOWUP_PR_URL}"
+                      tg_notify "🔧 Orchestrator judge created follow-up PR for merged PR #${RB_PR} (issue #${rb_issue}): ${FOLLOWUP_PR_URL}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                     else
                       echo "::warning::Failed to create follow-up PR for merged PR #${RB_PR}."
                     fi
@@ -1482,7 +1572,7 @@ ${RB_FIX_DESC}
                     # which re-runs review_autofix with a reset autofix counter.
                     gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                       --remove-label 'ai:review-blocked' 2>/dev/null || true
-                    tg_notify "🔧 Orchestrator judge pushed fix for review-blocked PR #${RB_PR} (issue #${rb_issue}, retry $((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES})"
+                    tg_notify "🔧 Orchestrator judge pushed fix for review-blocked PR #${RB_PR} (issue #${rb_issue}, retry $((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                   else
                     echo "::warning::Failed to push orchestrator fix for PR #${RB_PR}."
                   fi
@@ -1493,7 +1583,7 @@ ${RB_FIX_DESC}
                   echo "  No follow-up needed — merged PR has no outstanding fixes."
                   gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' 2>/dev/null || true
-                  tg_notify "✅ Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"
+                  tg_notify "✅ Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                 else
                   echo "  Treating as merge decision."
                   ensure_label_exists "ai:ready-to-merge"
@@ -1504,7 +1594,7 @@ ${RB_FIX_DESC}
                     gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
                       || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash || true
                   fi
-                  tg_notify "✅ Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"
+                  tg_notify "✅ Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                 fi
               fi
 
@@ -1563,10 +1653,10 @@ ${RB_FIX_DESC}
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
             fi
 
-            tg_notify "🔄 Orchestrator closed PR #${RB_PR} and reissued as #${NEW_NUM} (issue #${rb_issue}): ${RB_JUSTIFICATION}"
+            tg_notify "🔄 Orchestrator closed PR #${RB_PR} and reissued as #${NEW_NUM} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"New issue: $(_gh_url "issues/${NEW_NUM}")"$'\n'"Old issue: $(_gh_url "issues/${rb_issue}")"
           else
             echo "::warning::Judge chose close_and_reissue but provided no new issue details."
-            tg_notify "⚠️ Orchestrator closed PR #${RB_PR} (issue #${rb_issue}) but could not create replacement issue."
+            tg_notify "⚠️ Orchestrator closed PR #${RB_PR} (issue #${rb_issue}) but could not create replacement issue."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
           fi
 
           REVIEW_BLOCKED_STATE_CHANGED=true
@@ -1672,7 +1762,7 @@ REISSUE_EOF
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
 
-      tg_notify "🔄 Re-issued implementation-failed issue #${if_issue} as #${NEW_ISSUE_NUM}: ${IF_TITLE}"
+      tg_notify "🔄 Re-issued implementation-failed issue #${if_issue} as #${NEW_ISSUE_NUM}: ${IF_TITLE}"$'\n'"Old issue: $(_gh_url "issues/${if_issue}")"$'\n'"New issue: $(_gh_url "issues/${NEW_ISSUE_NUM}")"
       IMPL_FAILED_STATE_CHANGED=true
     else
       echo "::warning::Could not create replacement issue for #${if_issue}."
@@ -2040,7 +2130,12 @@ PRs to revert: ${REVERT_COUNT}"
           --comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s)." || true
 
         tg_cleanup_msgs "${TRACKING_NUM}"
-        tg_send_msg "✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved." >/dev/null
+        MSG="✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved."
+        MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+        if [ -n "${GITHUB_RUN_ID:-}" ]; then
+          MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+        fi
+        tg_send_msg "${MSG}" >/dev/null
         continue
       fi
 
@@ -2157,6 +2252,9 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
             if [ -n "${EXISTING_NUM}" ]; then
               EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
               if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
+                jq --arg fix_id "${FIX_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
+                  '.issue_number_map[$fix_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $existing_num, "status": "pending"}]' \
+                  "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
                 echo "  ${FIX_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate fix-up."
                 continue
               fi
@@ -2179,10 +2277,12 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
             --body "${FULL_FIX_BODY}")"
           echo "  Created fix-up: ${FIX_URL}"
 
-          # Record in state so subsequent cycles/iterations won't recreate
-          FIX_NEW_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$')"
-          if [ -n "${FIX_NEW_NUM}" ] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
-            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" '.issue_number_map[$fix_id] = $fix_new_num' \
+          # Record in state so subsequent cycles/iterations won't recreate,
+          # and add to the current wave so the poller tracks merge progress.
+          FIX_NEW_NUM="$(basename "${FIX_URL%%[?#]*}")"
+          if [[ "${FIX_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
+            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
+              '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"}]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
           fi
         done
@@ -2201,6 +2301,8 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
       echo "Project in progress."
 
       # Create new issues if judge found gaps
+      WAVE_ISSUE_COUNT_BEFORE="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
+      WAVE_ISSUE_TRACKING_BEFORE="$(jq -c --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | map({id, github_issue, status}) | sort_by(.id)' "${STATE_FILE}")"
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
         echo "Creating ${NEW_ISSUES_COUNT} new issue(s) from judge..."
         echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r new_issue; do
@@ -2214,6 +2316,9 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
             if [ -n "${EXISTING_NUM}" ]; then
               EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
               if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
+                jq --arg new_id "${NEW_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
+                  '.issue_number_map[$new_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $existing_num, "status": "pending"}]' \
+                  "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
                 echo "  ${NEW_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate addition."
                 continue
               fi
@@ -2238,14 +2343,34 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 
           # Record in state so subsequent cycles/iterations won't recreate,
           # and add to the current wave so the poller tracks merge progress.
-          ADD_NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
-          if [ -n "${ADD_NEW_NUM}" ] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
+          ADD_NEW_NUM="$(basename "${NEW_URL%%[?#]*}")"
+          if [[ "${ADD_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
             jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-              '.issue_number_map[$new_id] = $add_new_num | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $add_new_num, "status": "pending"}]' \
+              '.issue_number_map[$new_id] = $add_new_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $add_new_num, "status": "pending"}]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
           fi
         done
       fi
+
+      # ---------------------------------------------------------------
+      # Guard: do not advance if fix-up/new issues were added to the
+      # current wave during this judge cycle. Those issues are still
+      # pending and the poller only monitors current_wave, so advancing
+      # would orphan them.
+      # ---------------------------------------------------------------
+      WAVE_ISSUE_COUNT_AFTER="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
+      WAVE_ISSUE_TRACKING_AFTER="$(jq -c --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | map({id, github_issue, status}) | sort_by(.id)' "${STATE_FILE}")"
+      if [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ] || [ "${WAVE_ISSUE_TRACKING_AFTER}" != "${WAVE_ISSUE_TRACKING_BEFORE}" ]; then
+        if [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ]; then
+          ADDED_COUNT=$(( WAVE_ISSUE_COUNT_AFTER - WAVE_ISSUE_COUNT_BEFORE ))
+          echo "Current wave gained ${ADDED_COUNT} new issue(s) from judge. Staying on wave ${CURRENT_WAVE} until they complete."
+        else
+          echo "Current wave issue tracking changed from judge output. Staying on wave ${CURRENT_WAVE} until updated issues complete."
+        fi
+        jq '.judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment
+        # Skip wave advancement — next poll cycle will re-check this wave
+      else
 
       # Advance to next wave
       NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
@@ -2326,6 +2451,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 
       # Post updated state
       post_state_comment
+
+      fi  # end: PENDING_IN_WAVE guard
       ;;
 
     *)
