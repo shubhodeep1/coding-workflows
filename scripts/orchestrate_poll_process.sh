@@ -68,11 +68,11 @@ gh_retry() {
       return 0
     fi
     local wait_secs=$(( 2 ** (attempt - 1) ))
-    echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s..."
+    echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s..." >&2
     sleep "${wait_secs}"
     attempt=$(( attempt + 1 ))
   done
-  echo "::error::gh command failed after ${max_attempts} attempts: $*"
+  echo "::error::gh command failed after ${max_attempts} attempts: $*" >&2
   return 1
 }
 
@@ -1052,6 +1052,75 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   # Collect label states for all child issues in the current wave
   # ---------------------------------------------------------------
   ISSUE_NUMS="$(jq -r ".waves[${WAVE_IDX}].issues[].github_issue" "${STATE_FILE}" 2>/dev/null || echo "")"
+
+  # ---------------------------------------------------------------
+  # Orphan sweep: find review-blocked issues that belong to this
+  # project but are not tracked in the current wave.  Without this,
+  # the in-workflow judge skips orchestrator-managed issues (exit 0)
+  # expecting the poller to handle them, but the poller only scans
+  # issues listed in the state file's current wave — orphans get
+  # stuck with ai:review-blocked forever.
+  # ---------------------------------------------------------------
+  ORPHAN_RB_JSON="[]"
+  if ! ORPHAN_RB_JSON="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" \
+    --label "ai:review-blocked" --state open \
+    --json number,body --limit 50)"; then
+    echo "::warning::Failed to list ai:review-blocked issues during orphan sweep; skipping orphan injection for this pass."
+    ORPHAN_RB_JSON="[]"
+  fi
+
+  if [ -n "${ORPHAN_RB_JSON}" ] && [ "${ORPHAN_RB_JSON}" != "[]" ]; then
+    ORPHAN_COUNT="$(printf '%s' "${ORPHAN_RB_JSON}" | jq -r 'if type=="array" then length else 0 end' 2>/dev/null || echo 0)"
+    if ! [[ "${ORPHAN_COUNT}" =~ ^[0-9]+$ ]]; then
+      echo "::warning::Orphan sweep received invalid issue array length '${ORPHAN_COUNT}'; skipping orphan injection for this pass." >&2
+      ORPHAN_COUNT=0
+    fi
+
+    if [ "${ORPHAN_COUNT}" -gt 0 ]; then
+      for oidx in $(seq 0 $(( ORPHAN_COUNT - 1 ))); do
+        orphan_num="$(echo "${ORPHAN_RB_JSON}" | jq -r ".[${oidx}].number")"
+        orphan_body="$(echo "${ORPHAN_RB_JSON}" | jq -r ".[${oidx}].body")"
+
+        case "${orphan_num}" in
+          ''|null|*[!0-9]*)
+            echo "  [orphan-sweep] Skipping orphan entry at index ${oidx}: invalid issue number '${orphan_num}'." >&2
+            continue
+            ;;
+        esac
+
+        # Skip if already tracked in the current wave
+        already_tracked="false"
+        for inum in ${ISSUE_NUMS}; do
+          if [ "${inum}" = "${orphan_num}" ]; then
+            already_tracked="true"
+            break
+          fi
+        done
+        [ "${already_tracked}" = "false" ] || continue
+
+        # Skip if not part of this project (body must reference our tracking issue)
+        if ! printf '%s\n' "${orphan_body}" | grep -qE "^- Tracking issue: #${TRACKING_NUM}[[:space:]]*$"; then
+          continue
+        fi
+
+        # Skip if not orchestrator-managed
+        if ! printf '%s' "${orphan_body}" | grep -qF "Managed by: AI Orchestrator"; then
+          continue
+        fi
+
+        echo "  [orphan-sweep] Injecting orphan review-blocked issue #${orphan_num} into wave ${CURRENT_WAVE}."
+
+        # Inject into the state file's current wave
+        if jq "(.waves[${WAVE_IDX}].issues) += [{\"id\": \"orphan-rb-${orphan_num}\", \"github_issue\": ${orphan_num}, \"status\": \"in_progress\"}]" \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+          ISSUE_NUMS="${ISSUE_NUMS} ${orphan_num}"
+        else
+          echo "::warning::Orphan sweep failed to update state file for issue #${orphan_num}; skipping orphan injection for this pass." >&2
+          rm -f "${STATE_FILE}.tmp"
+        fi
+      done
+    fi
+  fi
 
   if [ -z "${ISSUE_NUMS}" ]; then
     echo "::warning::No issues in wave ${CURRENT_WAVE}, skipping."
