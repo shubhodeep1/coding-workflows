@@ -473,37 +473,40 @@ close_linked_pr() {
 # Read the impl_noop_count for a local_id from the state file.
 get_impl_noop_count() {
   local lid="$1"
-  python3 -c "
-import json, sys
+  IMPL_NOOP_LID="${lid}" python3 -c "
+import json, os, sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import get_impl_noop_count
 
-with open('${STATE_FILE}') as f:
+with open(os.environ['STATE_FILE']) as f:
     state = json.load(f)
 
-print(get_impl_noop_count(state, '${lid}'))
+print(get_impl_noop_count(state, os.environ['IMPL_NOOP_LID']))
 " 2>/dev/null || echo "0"
 }
 
 # Increment the impl_noop_count for a local_id in the state file.
 bump_impl_noop_count() {
   local lid="$1"
-  python3 -c "
-import json, sys
+  IMPL_NOOP_LID="${lid}" python3 -c "
+import json, os, sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import increment_impl_noop_count
 
-with open('${STATE_FILE}') as f:
+with open(os.environ['STATE_FILE']) as f:
     state = json.load(f)
 
-increment_impl_noop_count(state, '${lid}')
+increment_impl_noop_count(state, os.environ['IMPL_NOOP_LID'])
 
-with open('${STATE_FILE}', 'w') as f:
+with open(os.environ['STATE_FILE'], 'w') as f:
     json.dump(state, f, indent=2)
 " || true
 }
 
 MAX_IMPL_NOOP_REISSUES="${MAX_IMPL_NOOP_REISSUES:-2}"
+if ! [[ "${MAX_IMPL_NOOP_REISSUES}" =~ ^[1-9][0-9]*$ ]]; then
+  MAX_IMPL_NOOP_REISSUES=2
+fi
 
 # ---------------------------------------------------------------
 # Stall recovery: phase-specific healing actions
@@ -1917,13 +1920,6 @@ increment_stall_recovery(state, '${STALL_LOCAL_ID}')
 with open('${STATE_FILE}', 'w') as f:
     json.dump(state, f, indent=2)
 " || true
-          fi
-
-          # Also bump the impl noop counter for actions that re-trigger
-          # implementation — so the noop cap applies across both the
-          # implementation-failed handler and stall recovery paths.
-          if [ "${STALL_ACTION}" = "auto_approve" ] || [ "${STALL_ACTION}" = "retrigger_implement" ]; then
-            bump_impl_noop_count "${STALL_LOCAL_ID}"
           fi
         else
           echo "  [stall-recovery] No action taken for #${STALL_ISSUE} (active workflow or guard)."
