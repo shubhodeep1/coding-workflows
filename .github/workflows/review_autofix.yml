@@ -2571,7 +2571,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          source scripts/label_helpers.sh
+          # Do not source scripts/label_helpers.sh here: commit cleanup may
+          # have removed fetched helper artifacts in caller repos.
+          gh label create "ai:ready-to-merge" --repo "${REPOSITORY}" \
+            --color "0e8a16" --description "PR review complete and ready to merge" \
+            2>/dev/null || true
 
           ISSUE_NUMBERS="$(gh api graphql \
             -f owner="${REPOSITORY%/*}" \
@@ -2592,7 +2596,6 @@ jobs:
             echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
           fi
 
-          ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:ready-to-merge on issue #${issue_number}"
@@ -2619,7 +2622,8 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
-          source scripts/label_helpers.sh
+          # Do not source scripts/label_helpers.sh here: merge-conflict and
+          # commit-cleanup paths may have removed fetched helper artifacts.
 
           echo "judge_handled=false" >> "$GITHUB_OUTPUT"
 
@@ -2632,6 +2636,13 @@ jobs:
             echo "Branch not writable — skipping judge."
             exit 0
           fi
+
+          gh label create "ai:ready-to-merge" --repo "${REPOSITORY}" \
+            --color "0e8a16" --description "PR review complete and ready to merge" \
+            2>/dev/null || true
+          gh label create "ai:closed" --repo "${REPOSITORY}" \
+            --color "6a737d" --description "Linked PR closed without merge" \
+            2>/dev/null || true
 
           # -----------------------------------------------------------
           # Detect orchestrator-managed PRs — the poller handles those
@@ -2867,7 +2878,6 @@ jobs:
               echo "Judge says merge PR #${PR_NUMBER} as-is."
 
               # Label linked issues ready-to-merge
-              ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
               while IFS= read -r issue_number; do
                 [ -n "${issue_number}" ] || continue
                 gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
@@ -2897,7 +2907,6 @@ jobs:
               if [ "${IS_FINAL}" = "true" ]; then
                 echo "Judge returned 'fix' but retries exhausted — treating as merge."
 
-                ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
                 while IFS= read -r issue_number; do
                   [ -n "${issue_number}" ] || continue
                   gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
@@ -2981,7 +2990,6 @@ jobs:
                     fi
                   else
                     echo "Judge staged no effective changes. Treating as merge."
-                    ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
                     while IFS= read -r issue_number; do
                       [ -n "${issue_number}" ] || continue
                       gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
@@ -2992,7 +3000,6 @@ jobs:
                   fi
                 else
                   echo "Judge produced no file changes. Treating as merge."
-                  ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
                   while IFS= read -r issue_number; do
                     [ -n "${issue_number}" ] || continue
                     gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
@@ -3013,7 +3020,6 @@ jobs:
                 2>/dev/null || true
 
               # Label linked issues as closed
-              ensure_label_exists "ai:closed" "${REPOSITORY}"
               while IFS= read -r issue_number; do
                 [ -n "${issue_number}" ] || continue
                 gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
@@ -3058,7 +3064,11 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
-          source scripts/label_helpers.sh
+          # Do not source scripts/label_helpers.sh here: commit cleanup may
+          # have removed fetched helper artifacts in caller repos.
+          gh label create "ai:review-blocked" --repo "${REPOSITORY}" \
+            --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
+            2>/dev/null || true
 
           ISSUE_NUMBERS="$(gh api graphql \
             -f owner="${REPOSITORY%/*}" \
@@ -3079,7 +3089,6 @@ jobs:
             echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
           fi
 
-          ensure_label_exists "ai:review-blocked" "${REPOSITORY}"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number}"
