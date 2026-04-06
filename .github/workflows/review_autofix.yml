@@ -2453,11 +2453,11 @@ jobs:
           The repository currently contains files with Git merge conflict markers.
 
           Conflict markers appear in this format:
-          <<<<<<< HEAD
+          [CONFLICT START: HEAD]
           code
-          =======
+          [CONFLICT SPLIT]
           other code
-          >>>>>>> branch
+          [CONFLICT END: branch]
 
           Your task:
           Resolve merge conflicts safely.
