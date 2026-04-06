@@ -1791,18 +1791,22 @@ ${RB_FIX_DESC}
     # likely already exists on main.  Close the issue and let the
     # wave-completion judge verify instead of looping forever.
     NOOP_COUNT="$(get_impl_noop_count "${IF_LOCAL_ID}")"
-    if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
-      echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
+    # The current failure is itself a no-op, so the observed count
+    # includes this cycle even though we haven't bumped yet.
+    OBSERVED_NOOP_COUNT=$((NOOP_COUNT + 1))
+    if [ "${OBSERVED_NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+      echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
+      bump_impl_noop_count "${IF_LOCAL_ID}"
       gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
         --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
       gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-        -c "Closing: implementation produced no changes ${NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
-      tg_notify "⏹️ Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")"
+        -c "Closing: implementation produced no changes ${OBSERVED_NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
+      tg_notify "⏹️ Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${OBSERVED_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")"
       IMPL_FAILED_STATE_CHANGED=true
       continue
     fi
 
-    echo "  Issue #${if_issue} has implementation-failed (no-op ${NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
+    echo "  Issue #${if_issue} has implementation-failed (no-op ${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
 
     # Increment no-op counter before re-issuing
     bump_impl_noop_count "${IF_LOCAL_ID}"
