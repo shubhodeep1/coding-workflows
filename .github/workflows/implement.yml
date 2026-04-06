@@ -136,7 +136,13 @@ jobs:
             source scripts/tg_helpers.sh
           fi
 
-          tg_send_tracked "${ISSUE_NUMBER}" "Skipping implementation for issue ${ISSUE_URL} because a PR already exists."
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="Skipping implementation for issue #${ISSUE_NUMBER} — PR already exists."
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
 
       - name: Exit when existing PR is found
         if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true'
@@ -1067,10 +1073,12 @@ jobs:
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
-            MSG="AI implementation workflow cancelled/timed out for issue ${ISSUE_URL}"
+            MSG="AI implementation workflow cancelled/timed out for issue #${ISSUE_NUMBER}"
           else
-            MSG="AI implementation workflow failed for issue ${ISSUE_URL}"
+            MSG="AI implementation workflow failed for issue #${ISSUE_NUMBER}"
           fi
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"

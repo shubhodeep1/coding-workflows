@@ -84,9 +84,21 @@ if [ -f "scripts/tg_helpers.sh" ]; then
   source scripts/tg_helpers.sh
 fi
 
+_tg_link_suffix()
+{
+  local suffix=""
+  if [ -n "${TRACKING_ISSUE_RAW:-}" ] && [ "${TRACKING_ISSUE_RAW}" != "0" ] && [ -n "${GITHUB_SERVER_URL:-}" ]; then
+    suffix+=$'\n'"Issue: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_RAW}"
+  fi
+  if [ -n "${GITHUB_SERVER_URL:-}" ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
+    suffix+=$'\n'"Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+  fi
+  printf '%s' "${suffix}"
+}
+
 tg_notify()
 {
-  local msg="$1"
+  local msg="$1$(_tg_link_suffix)"
   if [ -n "${TRACKING_ISSUE_RAW:-}" ] && [ "${TRACKING_ISSUE_RAW}" != "0" ]; then
     tg_send_tracked "${TRACKING_ISSUE_RAW}" "${msg}"
   else

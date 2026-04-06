@@ -112,7 +112,14 @@ jobs:
           # Untracked send — PR merged alerts are never deleted
           MSG="PR #${PR_NUMBER} merged: ${PR_TITLE}"
           MSG+=$'\n'
-          MSG+="${PR_URL}"
+          MSG+="PR: ${PR_URL}"
+          if [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then
+            FIRST_ISSUE="$(echo "${LINKED_ISSUE_NUMBERS}" | head -n1)"
+            if [ -n "${FIRST_ISSUE}" ]; then
+              MSG+=$'\n'
+              MSG+="Issue: ${{ github.server_url }}/${REPOSITORY}/issues/${FIRST_ISSUE}"
+            fi
+          fi
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
             -d "chat_id=${TG_ADMIN_CHAT_ID}" \
             -d "disable_web_page_preview=true" \
