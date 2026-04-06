@@ -2546,7 +2546,23 @@ jobs:
         run: |
           source scripts/tg_helpers.sh
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
-          tg_send_tracked "${PR_NUMBER}" "Merge conflicts resolved automatically\nPR: ${PR_URL}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ISSUE_NUM="$(gh api graphql \
+            -f owner="${{ github.repository_owner }}" \
+            -f name="${{ github.event.repository.name }}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+          MSG="Merge conflicts resolved automatically"
+          MSG+=$'\n'
+          MSG+="PR: ${PR_URL}"
+          if [ -n "${ISSUE_NUM}" ]; then
+            MSG+=$'\n'
+            MSG+="Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
+          fi
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}"
 
       - name: Mark linked issues ready to merge
         if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'"
@@ -3147,7 +3163,23 @@ jobs:
         run: |
           source scripts/tg_helpers.sh
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
-          tg_send_tracked "${PR_NUMBER}" "PR processed: ${PR_URL}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ISSUE_NUM="$(gh api graphql \
+            -f owner="${{ github.repository_owner }}" \
+            -f name="${{ github.event.repository.name }}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+          MSG="PR processed: #${PR_NUMBER}"
+          MSG+=$'\n'
+          MSG+="PR: ${PR_URL}"
+          if [ -n "${ISSUE_NUM}" ]; then
+            MSG+=$'\n'
+            MSG+="Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
+          fi
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}"
 
       - name: Telegram review-blocked judge decision
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true'
@@ -3162,20 +3194,35 @@ jobs:
           source scripts/tg_helpers.sh
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ISSUE_NUM="$(gh api graphql \
+            -f owner="${{ github.repository_owner }}" \
+            -f name="${{ github.event.repository.name }}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+          ISSUE_LINE=""
+          if [ -n "${ISSUE_NUM}" ]; then
+            ISSUE_LINE=$'\n'"Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
+          fi
           if [ "${JUDGE_HANDLED}" = "true" ]; then
             case "${JUDGE_ACTION}" in
               merge)
-                MSG="$(printf 'Review-blocked judge merged PR as-is\nPR: %s' "${PR_URL}")" ;;
+                MSG="Review-blocked judge merged PR as-is" ;;
               fix)
-                MSG="$(printf 'Review-blocked judge pushed fix commit\nPR: %s' "${PR_URL}")" ;;
+                MSG="Review-blocked judge pushed fix commit" ;;
               close_and_reissue)
-                MSG="$(printf 'Review-blocked judge closed PR and created replacement issue\nPR: %s' "${PR_URL}")" ;;
+                MSG="Review-blocked judge closed PR and created replacement issue" ;;
               *)
-                MSG="$(printf 'Review-blocked judge action: %s\nPR: %s' "${JUDGE_ACTION}" "${PR_URL}")" ;;
+                MSG="Review-blocked judge action: ${JUDGE_ACTION}" ;;
             esac
           else
-            MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge did not handle\nNeeds human intervention\nPR: %s' "${MAX_AUTOFIX_ITERATIONS}" "${PR_URL}")"
+            MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge did not handle\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")"
           fi
+          MSG+=$'\n'
+          MSG+="PR: ${PR_URL}${ISSUE_LINE}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${PR_NUMBER}" "${MSG}"
 
       - name: Mark linked issues review-blocked (workflow failure)
@@ -3249,11 +3296,25 @@ jobs:
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ISSUE_NUM="$(gh api graphql \
+            -f owner="${{ github.repository_owner }}" \
+            -f name="${{ github.event.repository.name }}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
           if [ "${{ job.status }}" = "cancelled" ]; then
-            MSG="$(printf 'PR autofix cancelled/timed out\nPR: %s\nRun: %s' "${PR_URL}" "${RUN_URL}")"
+            MSG="PR autofix cancelled/timed out"
           else
-            MSG="$(printf 'PR autofix failed\nPR: %s\nRun: %s' "${PR_URL}" "${RUN_URL}")"
+            MSG="PR autofix failed"
           fi
+          MSG+=$'\n'
+          MSG+="PR: ${PR_URL}"
+          if [ -n "${ISSUE_NUM}" ]; then
+            MSG+=$'\n'
+            MSG+="Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
+          fi
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${PR_NUMBER}" "${MSG}"
 
       - name: Cleanup temporary artifacts

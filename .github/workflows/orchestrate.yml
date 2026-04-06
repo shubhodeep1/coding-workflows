@@ -608,13 +608,28 @@ jobs:
           source scripts/tg_helpers.sh
 
           STATUS="${{ job.status }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TRACKING_URL=""
+          if [ -n "${TRACKING_ISSUE_NUMBER:-}" ] && [ "${TRACKING_ISSUE_NUMBER}" != "0" ]; then
+            TRACKING_URL="${{ github.server_url }}/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}"
+          fi
           ISSUE_COUNT="0"
           if [ -f "${DECOMPOSITION_FILE}" ]; then
             ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
           fi
           if [ "${STATUS}" = "success" ]; then
-            MSG="✅ Orchestrator: Decomposed project into ${ISSUE_COUNT} issues. Tracking: #${TRACKING_ISSUE_NUMBER:-?}"
+            MSG="✅ Orchestrator: Decomposed project into ${ISSUE_COUNT} issues."
+            if [ -n "${TRACKING_URL}" ]; then
+              MSG+=$'\n'
+              MSG+="Tracking: ${TRACKING_URL}"
+            fi
           else
-            MSG="❌ Orchestrator: Failed (${STATUS}). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            MSG="❌ Orchestrator: Failed (${STATUS})."
+            if [ -n "${TRACKING_ISSUE_NUMBER:-}" ] && [ "${TRACKING_ISSUE_NUMBER}" != "0" ]; then
+              MSG+=$'\n'
+              MSG+="Issue: ${TRACKING_URL}"
+            fi
           fi
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${TRACKING_ISSUE_NUMBER:-0}" "${MSG}"

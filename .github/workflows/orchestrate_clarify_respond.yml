@@ -338,7 +338,7 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MSG="Orchestrator clarify-respond failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE:-}"
           MSG+=$'\n'
-          MSG+="${ISSUE_URL}"
+          MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"

@@ -130,13 +130,26 @@ jobs:
             script_ref="stable"
           fi
           mkdir -p scripts
-          gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=${script_ref}" > "scripts/tg_helpers.sh" 2>/dev/null || true
-          if [ -f scripts/tg_helpers.sh ]; then
+          helpers_tmp="$(mktemp)"
+          if gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=${script_ref}" > "${helpers_tmp}" 2>/dev/null && [ -s "${helpers_tmp}" ]; then
+            mv "${helpers_tmp}" "scripts/tg_helpers.sh"
             source scripts/tg_helpers.sh
+          else
+            rm -f "${helpers_tmp}"
           fi
 
-          tg_send_tracked "${ISSUE_NUMBER}" "Skipping implementation for issue ${ISSUE_URL} because a PR already exists."
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="Skipping implementation for issue #${ISSUE_NUMBER} — PR already exists."
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          if declare -F tg_send_tracked >/dev/null 2>&1; then
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+          else
+            echo "::warning::Telegram helper unavailable; skipping duplicate PR Telegram notification."
+          fi
 
       - name: Exit when existing PR is found
         if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true'
@@ -809,15 +822,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "$(git status --porcelain)" ]; then
-            echo "No repository changes were produced by Codex implementation."
-            echo "did_commit=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Remove only workflow-generated/fetched artifacts so they are never
-          # committed to caller repos.  The manifest tracks exactly which files
-          # were fetched — caller-repo files that were never touched are safe.
+          # Remove workflow-generated/fetched artifacts BEFORE checking for
+          # changes so they don't cause false-positive "file changes" detection.
+          # The manifest tracks exactly which files were fetched — caller-repo
+          # files that were never touched are safe.
           rm -f ./pre_assembled_static.txt
           if [ -f "${FETCHED_MANIFEST}" ]; then
             while IFS= read -r fetched_file; do
@@ -825,6 +833,12 @@ jobs:
             done < "${FETCHED_MANIFEST}"
           fi
           rm -rf .serena
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No repository changes were produced by Codex implementation."
+            echo "did_commit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
@@ -1076,21 +1090,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          if [ ! -f scripts/tg_helpers.sh ]; then
-            echo "tg_helpers.sh not available; skipping Telegram notification."
-            exit 0
+          # tg_helpers.sh may have been removed by the commit-step cleanup
+          # (it's a fetched artifact). Guard against its absence.
+          if [ -f scripts/tg_helpers.sh ]; then
+            source scripts/tg_helpers.sh
           fi
-          source scripts/tg_helpers.sh
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
-            MSG="AI implementation workflow cancelled/timed out for issue ${ISSUE_URL}"
+            MSG="AI implementation workflow cancelled/timed out for issue #${ISSUE_NUMBER}"
           else
-            MSG="AI implementation workflow failed for issue ${ISSUE_URL}"
+            MSG="AI implementation workflow failed for issue #${ISSUE_NUMBER}"
           fi
           MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+          if declare -F tg_send_tracked >/dev/null 2>&1; then
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+          else
+            echo "::warning::tg_helpers.sh unavailable; skipping Telegram notification."
+          fi
 
       - name: Exit safely
         if: failure() || cancelled()
