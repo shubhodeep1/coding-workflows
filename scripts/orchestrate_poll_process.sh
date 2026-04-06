@@ -68,11 +68,11 @@ gh_retry() {
       return 0
     fi
     local wait_secs=$(( 2 ** (attempt - 1) ))
-    echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s..."
+    echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s..." >&2
     sleep "${wait_secs}"
     attempt=$(( attempt + 1 ))
   done
-  echo "::error::gh command failed after ${max_attempts} attempts: $*"
+  echo "::error::gh command failed after ${max_attempts} attempts: $*" >&2
   return 1
 }
 
