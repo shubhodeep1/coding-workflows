@@ -473,7 +473,7 @@ close_linked_pr() {
 # Read the impl_noop_count for a local_id from the state file.
 get_impl_noop_count() {
   local lid="$1"
-  IMPL_NOOP_LID="${lid}" python3 -c "
+  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -c "
 import json, os, sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import get_impl_noop_count
@@ -492,7 +492,7 @@ except (TypeError, ValueError):
 # Increment the impl_noop_count for a local_id in the state file.
 bump_impl_noop_count() {
   local lid="$1"
-  IMPL_NOOP_LID="${lid}" python3 -c "
+  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -c "
 import json, os, sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import increment_impl_noop_count
