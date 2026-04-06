@@ -1022,9 +1022,13 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   # issues listed in the state file's current wave — orphans get
   # stuck with ai:review-blocked forever.
   # ---------------------------------------------------------------
-  ORPHAN_RB_JSON="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+  ORPHAN_RB_JSON="[]"
+  if ! ORPHAN_RB_JSON="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" \
     --label "ai:review-blocked" --state open \
-    --json number,body --limit 50 2>/dev/null || echo "[]")"
+    --json number,body --limit 50)"; then
+    echo "::warning::Failed to list ai:review-blocked issues during orphan sweep; skipping orphan injection for this pass."
+    ORPHAN_RB_JSON="[]"
+  fi
 
   if [ -n "${ORPHAN_RB_JSON}" ] && [ "${ORPHAN_RB_JSON}" != "[]" ]; then
     ORPHAN_COUNT="$(echo "${ORPHAN_RB_JSON}" | jq 'length')"
@@ -1043,12 +1047,12 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       [ "${already_tracked}" = "false" ] || continue
 
       # Skip if not part of this project (body must reference our tracking issue)
-      if ! echo "${orphan_body}" | grep -q "Tracking issue: #${TRACKING_NUM}"; then
+      if ! printf '%s' "${orphan_body}" | grep -qF "Tracking issue: #${TRACKING_NUM}"; then
         continue
       fi
 
       # Skip if not orchestrator-managed
-      if ! echo "${orphan_body}" | grep -q "Managed by: AI Orchestrator"; then
+      if ! printf '%s' "${orphan_body}" | grep -qF "Managed by: AI Orchestrator"; then
         continue
       fi
 
