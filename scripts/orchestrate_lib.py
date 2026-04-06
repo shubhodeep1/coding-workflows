@@ -512,7 +512,11 @@ def increment_impl_noop_count(
 
 	for issue in waves[current_wave_idx]["issues"]:
 		if issue.get("id") == issue_id:
-			issue["impl_noop_count"] = issue.get("impl_noop_count", 0) + 1
+			try:
+				current_value = int(issue.get("impl_noop_count", 0))
+			except (TypeError, ValueError):
+				current_value = 0
+			issue["impl_noop_count"] = current_value + 1
 			break
 
 	return state
@@ -530,7 +534,10 @@ def get_impl_noop_count(
 
 	for issue in waves[current_wave_idx]["issues"]:
 		if issue.get("id") == issue_id:
-			return issue.get("impl_noop_count", 0)
+			try:
+				return int(issue.get("impl_noop_count", 0))
+			except (TypeError, ValueError):
+				return 0
 
 	return 0
 
