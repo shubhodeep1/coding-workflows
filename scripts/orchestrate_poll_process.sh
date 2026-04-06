@@ -1032,38 +1032,52 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
   if [ -n "${ORPHAN_RB_JSON}" ] && [ "${ORPHAN_RB_JSON}" != "[]" ]; then
     ORPHAN_COUNT="$(echo "${ORPHAN_RB_JSON}" | jq 'length')"
-    for oidx in $(seq 0 $(( ORPHAN_COUNT - 1 ))); do
-      orphan_num="$(echo "${ORPHAN_RB_JSON}" | jq -r ".[${oidx}].number")"
-      orphan_body="$(echo "${ORPHAN_RB_JSON}" | jq -r ".[${oidx}].body")"
+    if ! [[ "${ORPHAN_COUNT}" =~ ^[0-9]+$ ]]; then
+      echo "::warning::Orphan sweep received invalid issue array length '${ORPHAN_COUNT}'; skipping orphan injection for this pass." >&2
+      ORPHAN_COUNT=0
+    fi
 
-      # Skip if already tracked in the current wave
-      already_tracked="false"
-      for inum in ${ISSUE_NUMS}; do
-        if [ "${inum}" = "${orphan_num}" ]; then
-          already_tracked="true"
-          break
+    if [ "${ORPHAN_COUNT}" -gt 0 ]; then
+      for oidx in $(seq 0 $(( ORPHAN_COUNT - 1 ))); do
+        orphan_num="$(echo "${ORPHAN_RB_JSON}" | jq -r ".[${oidx}].number")"
+        orphan_body="$(echo "${ORPHAN_RB_JSON}" | jq -r ".[${oidx}].body")"
+
+        case "${orphan_num}" in
+          ''|null|*[!0-9]*)
+            echo "  [orphan-sweep] Skipping orphan entry at index ${oidx}: invalid issue number '${orphan_num}'." >&2
+            continue
+            ;;
+        esac
+
+        # Skip if already tracked in the current wave
+        already_tracked="false"
+        for inum in ${ISSUE_NUMS}; do
+          if [ "${inum}" = "${orphan_num}" ]; then
+            already_tracked="true"
+            break
+          fi
+        done
+        [ "${already_tracked}" = "false" ] || continue
+
+        # Skip if not part of this project (body must reference our tracking issue)
+        if ! printf '%s' "${orphan_body}" | grep -qF "Tracking issue: #${TRACKING_NUM}"; then
+          continue
         fi
+
+        # Skip if not orchestrator-managed
+        if ! printf '%s' "${orphan_body}" | grep -qF "Managed by: AI Orchestrator"; then
+          continue
+        fi
+
+        echo "  [orphan-sweep] Injecting orphan review-blocked issue #${orphan_num} into wave ${CURRENT_WAVE}."
+
+        # Inject into the state file's current wave
+        jq "(.waves[${WAVE_IDX}].issues) += [{\"id\": \"orphan-rb-${orphan_num}\", \"github_issue\": ${orphan_num}, \"status\": \"in_progress\"}]" \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+        ISSUE_NUMS="${ISSUE_NUMS} ${orphan_num}"
       done
-      [ "${already_tracked}" = "false" ] || continue
-
-      # Skip if not part of this project (body must reference our tracking issue)
-      if ! printf '%s' "${orphan_body}" | grep -qF "Tracking issue: #${TRACKING_NUM}"; then
-        continue
-      fi
-
-      # Skip if not orchestrator-managed
-      if ! printf '%s' "${orphan_body}" | grep -qF "Managed by: AI Orchestrator"; then
-        continue
-      fi
-
-      echo "  [orphan-sweep] Injecting orphan review-blocked issue #${orphan_num} into wave ${CURRENT_WAVE}."
-
-      # Inject into the state file's current wave
-      jq "(.waves[${WAVE_IDX}].issues) += [{\"id\": \"orphan-rb-${orphan_num}\", \"github_issue\": ${orphan_num}, \"status\": \"in_progress\"}]" \
-        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-
-      ISSUE_NUMS="${ISSUE_NUMS} ${orphan_num}"
-    done
+    fi
   fi
 
   if [ -z "${ISSUE_NUMS}" ]; then
