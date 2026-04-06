@@ -23,12 +23,10 @@ on:
 env:
   REVIEWER_MODELS: |
     minimax/minimax-m2.5
-    google/gemini-3-flash-preview
     moonshotai/kimi-k2.5
     deepseek/deepseek-v3.2
-    z-ai/glm-5
-    qwen/qwen3.5-397b-a17b
-    openai/gpt-5-mini
+    stepfun/step-3.5-flash
+    google/gemini-3-flash-preview
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'high' }}
@@ -477,8 +475,8 @@ jobs:
             # Use only 2 fast models for smoke tests
             {
               echo 'REVIEWER_MODELS<<SMOKE_EOF'
-              echo 'google/gemini-3-flash-preview'
-              echo 'openai/gpt-5-mini'
+              echo 'deepseek/deepseek-v3.2'
+              echo 'stepfun/step-3.5-flash'
               echo 'SMOKE_EOF'
             } >> "$GITHUB_ENV"
             # Patch the already-written codex config to use low reasoning (if present)
