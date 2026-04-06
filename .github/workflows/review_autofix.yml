@@ -2370,6 +2370,15 @@ jobs:
           echo "MERGE_CONFLICT=false" >> "$GITHUB_ENV"
           echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
 
+          # git merge requires a clean working tree.  Save untracked dirs
+          # (like .serena/, scripts/, prompts/) so they survive into the
+          # conflict-resolver step instead of being destroyed by git clean.
+          UNTRACKED_BACKUP="$(mktemp -d)"
+          for d in .serena scripts prompts; do
+            if [ -d "${d}" ]; then
+              cp -a "${d}" "${UNTRACKED_BACKUP}/${d}"
+            fi
+          done
           git reset --hard HEAD
           git clean -fd
 
@@ -2409,6 +2418,7 @@ jobs:
             if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
               git merge --abort
             fi
+            rm -rf "${UNTRACKED_BACKUP}"
             exit 0
           else
             echo "Merge conflict detected"
@@ -2416,7 +2426,15 @@ jobs:
             if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
               git merge --abort
             fi
+            # Restore untracked dirs so the conflict resolver's codex exec
+            # has its full environment (.serena/, scripts/, prompts/).
+            for d in .serena scripts prompts; do
+              if [ -d "${UNTRACKED_BACKUP}/${d}" ]; then
+                cp -a "${UNTRACKED_BACKUP}/${d}" .
+              fi
+            done
           fi
+          rm -rf "${UNTRACKED_BACKUP}"
 
       - name: Resolve merge conflicts with Codex
         # Run conflict resolution even when max_iterations_reached — conflict
@@ -2428,34 +2446,6 @@ jobs:
           set -euo pipefail
 
           echo "Running Codex resolver"
-
-          # git clean -fd in the merge-conflict-detect step removes the
-          # .serena/ directory that setup_serena.sh created.  Codex's Serena
-          # MCP server entry in ~/.codex/config.toml uses --project-from-cwd
-          # and fails with "No such file or directory" when .serena/project.yml
-          # is missing, which kills `codex exec` entirely.
-          # Recreate a minimal project.yml so the MCP server can start.
-          if [ ! -f .serena/project.yml ] && [ -f "${CODEX_HOME:-$HOME/.codex}/config.toml" ] \
-             && grep -q 'mcp_servers.serena' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; then
-            mkdir -p .serena
-            cat > .serena/project.yml <<'SERENA_YML'
-project_name: auto
-read_only: false
-languages: []
-encoding: utf-8
-ignore_all_files_in_gitignore: true
-ignored_paths: []
-excluded_tools: []
-included_optional_tools: []
-base_modes: []
-default_modes:
-  - one-shot
-  - editing
-symbol_info_budget: 10
-initial_prompt: "Skip onboarding. Do not run serena.onboarding(). Proceed directly to the task."
-SERENA_YML
-            echo "Recreated .serena/project.yml for conflict resolver."
-          fi
 
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
 
