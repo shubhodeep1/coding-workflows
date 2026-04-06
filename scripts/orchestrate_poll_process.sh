@@ -583,13 +583,19 @@ STALL_EOF
 
     auto_approve)
       # Stuck in ai:awaiting-approval — auto-approve for orchestrator issues.
-      # Guard: skip if this task has already hit the no-op implementation cap
-      # (re-approving would just trigger another no-op cycle).
+      # Guard: close issue if this task has already hit the no-op cap
+      # (re-approving would just trigger another no-op cycle; closing
+      # lets the wave-completion judge verify instead of deadlocking).
       local noop_cnt
       noop_cnt="$(get_impl_noop_count "${local_id}")"
       if [ "${noop_cnt}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
-        echo "  [stall-recovery] Issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt}/${MAX_IMPL_NOOP_REISSUES}) — skipping auto-approve to prevent loop."
-        return 1
+        echo "  [stall-recovery] Issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt}/${MAX_IMPL_NOOP_REISSUES}) — closing to let judge verify."
+        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:awaiting-approval' --add-label 'ai:closed' 2>/dev/null || true
+        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation produced no changes ${noop_cnt} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
+        tg_notify "⏹️ Stall recovery: issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+        return 0
       fi
       echo "  Auto-approving plan for issue #${issue_num}..."
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
@@ -609,8 +615,13 @@ STALL_EOF
       local noop_cnt_impl
       noop_cnt_impl="$(get_impl_noop_count "${local_id}")"
       if [ "${noop_cnt_impl}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
-        echo "  [stall-recovery] Issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt_impl}/${MAX_IMPL_NOOP_REISSUES}) — skipping retrigger to prevent loop."
-        return 1
+        echo "  [stall-recovery] Issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt_impl}/${MAX_IMPL_NOOP_REISSUES}) — closing to let judge verify."
+        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:implementing' --add-label 'ai:closed' 2>/dev/null || true
+        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation produced no changes ${noop_cnt_impl} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
+        tg_notify "⏹️ Stall recovery: issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt_impl}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+        return 0
       fi
       echo "  Re-triggering implementation for issue #${issue_num}..."
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
