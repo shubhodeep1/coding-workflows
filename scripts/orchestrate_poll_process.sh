@@ -481,7 +481,11 @@ from orchestrate_lib import get_impl_noop_count
 with open(os.environ['STATE_FILE']) as f:
     state = json.load(f)
 
-print(get_impl_noop_count(state, os.environ['IMPL_NOOP_LID']))
+value = get_impl_noop_count(state, os.environ['IMPL_NOOP_LID'])
+try:
+    print(int(value))
+except (TypeError, ValueError):
+    print(0)
 " 2>/dev/null || echo "0"
 }
 
@@ -1794,7 +1798,9 @@ ${RB_FIX_DESC}
     # The current failure is itself a no-op, so the observed count
     # includes this cycle even though we haven't bumped yet.
     OBSERVED_NOOP_COUNT=$((NOOP_COUNT + 1))
-    if [ "${OBSERVED_NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+    # Cap semantics: MAX_IMPL_NOOP_REISSUES controls how many re-issues
+    # are allowed after prior no-op failures.
+    if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
       echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
       bump_impl_noop_count "${IF_LOCAL_ID}"
       gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
