@@ -1031,7 +1031,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   fi
 
   if [ -n "${ORPHAN_RB_JSON}" ] && [ "${ORPHAN_RB_JSON}" != "[]" ]; then
-    ORPHAN_COUNT="$(echo "${ORPHAN_RB_JSON}" | jq 'length')"
+    ORPHAN_COUNT="$(printf '%s' "${ORPHAN_RB_JSON}" | jq -r 'if type=="array" then length else 0 end' 2>/dev/null || echo 0)"
     if ! [[ "${ORPHAN_COUNT}" =~ ^[0-9]+$ ]]; then
       echo "::warning::Orphan sweep received invalid issue array length '${ORPHAN_COUNT}'; skipping orphan injection for this pass." >&2
       ORPHAN_COUNT=0
@@ -1072,10 +1072,13 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         echo "  [orphan-sweep] Injecting orphan review-blocked issue #${orphan_num} into wave ${CURRENT_WAVE}."
 
         # Inject into the state file's current wave
-        jq "(.waves[${WAVE_IDX}].issues) += [{\"id\": \"orphan-rb-${orphan_num}\", \"github_issue\": ${orphan_num}, \"status\": \"in_progress\"}]" \
-          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-
-        ISSUE_NUMS="${ISSUE_NUMS} ${orphan_num}"
+        if jq "(.waves[${WAVE_IDX}].issues) += [{\"id\": \"orphan-rb-${orphan_num}\", \"github_issue\": ${orphan_num}, \"status\": \"in_progress\"}]" \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+          ISSUE_NUMS="${ISSUE_NUMS} ${orphan_num}"
+        else
+          echo "::warning::Orphan sweep failed to update state file for issue #${orphan_num}; skipping orphan injection for this pass." >&2
+          rm -f "${STATE_FILE}.tmp"
+        fi
       done
     fi
   fi
