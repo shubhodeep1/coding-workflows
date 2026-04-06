@@ -467,6 +467,52 @@ close_linked_pr() {
 }
 
 # ---------------------------------------------------------------
+# Implementation no-op tracking helpers
+# ---------------------------------------------------------------
+
+# Read the impl_noop_count for a local_id from the state file.
+get_impl_noop_count() {
+  local lid="$1"
+  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -c "
+import json, os, sys
+sys.path.insert(0, 'scripts')
+from orchestrate_lib import get_impl_noop_count
+
+with open(os.environ['STATE_FILE']) as f:
+    state = json.load(f)
+
+value = get_impl_noop_count(state, os.environ['IMPL_NOOP_LID'])
+try:
+    print(int(value))
+except (TypeError, ValueError):
+    print(0)
+" 2>/dev/null || echo "0"
+}
+
+# Increment the impl_noop_count for a local_id in the state file.
+bump_impl_noop_count() {
+  local lid="$1"
+  STATE_FILE="${STATE_FILE}" IMPL_NOOP_LID="${lid}" python3 -c "
+import json, os, sys
+sys.path.insert(0, 'scripts')
+from orchestrate_lib import increment_impl_noop_count
+
+with open(os.environ['STATE_FILE']) as f:
+    state = json.load(f)
+
+increment_impl_noop_count(state, os.environ['IMPL_NOOP_LID'])
+
+with open(os.environ['STATE_FILE'], 'w') as f:
+    json.dump(state, f, indent=2)
+" || true
+}
+
+MAX_IMPL_NOOP_REISSUES="${MAX_IMPL_NOOP_REISSUES:-2}"
+if ! [[ "${MAX_IMPL_NOOP_REISSUES}" =~ ^[1-9][0-9]*$ ]]; then
+  MAX_IMPL_NOOP_REISSUES=2
+fi
+
+# ---------------------------------------------------------------
 # Stall recovery: phase-specific healing actions
 # ---------------------------------------------------------------
 
@@ -541,6 +587,20 @@ STALL_EOF
 
     auto_approve)
       # Stuck in ai:awaiting-approval — auto-approve for orchestrator issues.
+      # Guard: close issue if this task has already hit the no-op cap
+      # (re-approving would just trigger another no-op cycle; closing
+      # lets the wave-completion judge verify instead of deadlocking).
+      local noop_cnt
+      noop_cnt="$(get_impl_noop_count "${local_id}")"
+      if [ "${noop_cnt}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+        echo "  [stall-recovery] Issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt}/${MAX_IMPL_NOOP_REISSUES}) — closing to let judge verify."
+        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:awaiting-approval' --add-label 'ai:closed' 2>/dev/null || true
+        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation produced no changes ${noop_cnt} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
+        tg_notify "⏹️ Stall recovery: issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+        return 0
+      fi
       echo "  Auto-approving plan for issue #${issue_num}..."
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
@@ -555,6 +615,18 @@ STALL_EOF
 
     retrigger_implement)
       # Stuck in ai:implementing — re-trigger implementation.
+      # Guard: skip if this task has already hit the no-op implementation cap.
+      local noop_cnt_impl
+      noop_cnt_impl="$(get_impl_noop_count "${local_id}")"
+      if [ "${noop_cnt_impl}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+        echo "  [stall-recovery] Issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt_impl}/${MAX_IMPL_NOOP_REISSUES}) — closing to let judge verify."
+        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:implementing' --add-label 'ai:closed' 2>/dev/null || true
+        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation produced no changes ${noop_cnt_impl} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
+        tg_notify "⏹️ Stall recovery: issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt_impl}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+        return 0
+      fi
       echo "  Re-triggering implementation for issue #${issue_num}..."
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
@@ -1719,7 +1791,38 @@ ${RB_FIX_DESC}
   IMPL_FAILED_STATE_CHANGED=false
   while read -r if_issue; do
     [ -n "${if_issue}" ] && [ "${if_issue}" != "null" ] || continue
-    echo "  Issue #${if_issue} has implementation-failed. Closing and re-issuing..."
+
+    # Look up local_id for this issue so we can track no-op count
+    IF_LOCAL_ID="$(jq -r --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" \
+      '.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue) | .id' \
+      "${STATE_FILE}" | head -n 1)"
+
+    # ---- No-op loop guard: if this task has already been re-issued
+    # MAX_IMPL_NOOP_REISSUES times without producing changes, the code
+    # likely already exists on main.  Close the issue and let the
+    # wave-completion judge verify instead of looping forever.
+    NOOP_COUNT="$(get_impl_noop_count "${IF_LOCAL_ID}")"
+    # The current failure is itself a no-op, so the observed count
+    # includes this cycle even though we haven't bumped yet.
+    OBSERVED_NOOP_COUNT=$((NOOP_COUNT + 1))
+    # Cap semantics: MAX_IMPL_NOOP_REISSUES controls how many re-issues
+    # are allowed after prior no-op failures.
+    if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+      echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
+      bump_impl_noop_count "${IF_LOCAL_ID}"
+      gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+        --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+      gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+        -c "Closing: implementation produced no changes ${OBSERVED_NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
+      tg_notify "⏹️ Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${OBSERVED_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")"
+      IMPL_FAILED_STATE_CHANGED=true
+      continue
+    fi
+
+    echo "  Issue #${if_issue} has implementation-failed (no-op ${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
+
+    # Increment no-op counter before re-issuing
+    bump_impl_noop_count "${IF_LOCAL_ID}"
 
     # Read the original issue to preserve its content
     IF_TITLE="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' 2>/dev/null || echo "")"
@@ -1756,8 +1859,9 @@ REISSUE_EOF
       echo "  Created replacement issue #${NEW_ISSUE_NUM} for failed #${if_issue}."
 
       # Update state file: replace the old issue number with the new one
+      # (impl_noop_count is preserved on the issue entry since we only
+      # change github_issue, not the issue object itself)
       if [ -n "${NEW_ISSUE_NUM}" ]; then
-        IF_LOCAL_ID="$(jq -r --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" '.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue) | .id' "${STATE_FILE}" | head -n 1)"
         jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
@@ -2460,3 +2564,102 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       ;;
   esac
 done
+
+# ---------------------------------------------------------------
+# Standalone PR conflict sweep
+# ---------------------------------------------------------------
+# The tracking-issue loop above only handles PRs linked to
+# orchestrator-managed issues.  Standalone AI PRs (created by the
+# pipeline without an orchestrator tracking issue) can also develop
+# merge conflicts when the base branch advances.  The review
+# workflow already has Codex-based conflict resolution, but it only
+# runs on PR synchronize events — no event fires when the *base*
+# branch moves forward.
+#
+# This section scans all open PRs on AI-generated branches
+# (ai/issue-*) that are not mergeable and re-triggers the review
+# workflow so its conflict resolver can act.
+# ---------------------------------------------------------------
+echo ""
+echo "========================================"
+echo "Standalone PR conflict sweep"
+echo "========================================"
+
+# Collect all open PRs on ai/* branches with their mergeable status.
+# gh pr list does not expose mergeable, so we fetch the full list and
+# then query each candidate via the REST API.
+STANDALONE_PRS="$(gh pr list \
+	--repo "${GITHUB_REPOSITORY}" \
+	--state open \
+	--json number,headRefName \
+	--limit 100 2>/dev/null || echo "[]")"
+
+STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
+echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
+
+CONFLICT_SWEEP_FIXED=0
+
+for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
+	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
+	S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+	if [ -z "${S_PR}" ] || [ -z "${S_HEAD}" ] || [ "${S_PR}" = "null" ] || [ "${S_HEAD}" = "null" ]; then
+		continue
+	fi
+
+	# Only process AI-generated branches (ai/issue-*)
+	if [[ "${S_HEAD}" != ai/issue-* ]]; then
+		continue
+	fi
+
+	# Check mergeable state via REST API (dirty == merge conflicts)
+	S_PR_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" 2>/dev/null || echo '{}')"
+	S_MERGEABLE_STATE="$(echo "${S_PR_JSON}" | jq -r '.mergeable_state // ""')"
+	if [ -z "${S_MERGEABLE_STATE}" ] || [ "${S_MERGEABLE_STATE}" = "unknown" ]; then
+		continue
+	fi
+
+	if [ "${S_MERGEABLE_STATE}" != "dirty" ]; then
+		continue
+	fi
+
+	echo "  PR #${S_PR} (${S_HEAD}) is in conflicted mergeable state. Attempting to re-trigger review..."
+
+	# Stage 1: Try the GitHub API update-branch endpoint (clean merge)
+	S_HEAD_SHA="$(echo "${S_PR_JSON}" | jq -r '.head.sha // ""')"
+	if [ -n "${S_HEAD_SHA}" ] && gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}/update-branch" \
+		-X PUT -f expected_head_sha="${S_HEAD_SHA}" 2>/dev/null; then
+		echo "  PR #${S_PR} branch updated via API. Synchronize event will re-trigger review."
+		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
+		continue
+	fi
+
+	# Stage 2: Push empty commit to force a synchronize event so the
+	# review workflow's Codex conflict resolver can run.
+	if ! git fetch origin "${S_HEAD}:refs/remotes/origin/${S_HEAD}" 2>/dev/null; then
+		echo "::warning::Could not fetch standalone PR #${S_PR} head ${S_HEAD}; skipping re-trigger."
+		continue
+	fi
+	if ! git checkout --detach "refs/remotes/origin/${S_HEAD}" 2>/dev/null; then
+		echo "::warning::Could not check out standalone PR #${S_PR} head ${S_HEAD}; skipping re-trigger."
+		continue
+	fi
+	git config user.name "codex-bot"
+	git config user.email "codex@users.noreply.github.com"
+	if ! git commit --allow-empty \
+		-m "[orchestrator] re-trigger review for conflict resolution (standalone PR #${S_PR})" \
+		2>/dev/null; then
+		echo "::warning::Could not create empty commit for standalone PR #${S_PR}; skipping push."
+		git checkout --detach HEAD 2>/dev/null || true
+		continue
+	fi
+	if git push origin "HEAD:${S_HEAD}" 2>/dev/null; then
+		echo "  Pushed empty commit to PR #${S_PR} to re-trigger review workflow."
+		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
+		tg_send_msg "⚠️ Standalone PR #${S_PR} has merge conflicts. Re-triggered review for auto-resolution."$'\n'"PR: $(_gh_url "pull/${S_PR}")" >/dev/null 2>&1 || true
+	else
+		echo "::warning::Could not push empty commit to re-trigger review for standalone PR #${S_PR}."
+	fi
+	git checkout --detach HEAD 2>/dev/null || true
+done
+
+echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
