@@ -245,6 +245,28 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'close':
 	save()
 	sys.exit(0)
 
+if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
+	title = ''
+	body = ''
+	i = 2
+	while i < len(args):
+		if args[i] == '--title' and i + 1 < len(args):
+			title = args[i + 1]
+			i += 2
+			continue
+		if args[i] == '--body' and i + 1 < len(args):
+			body = args[i + 1]
+			i += 2
+			continue
+		i += 1
+	next_num = store.get('next_issue_number', 900)
+	store['next_issue_number'] = next_num + 1
+	store['issues'][str(next_num)] = {'labels': [], 'comments': [], 'body': body, 'closed': False, 'title': title}
+	store.setdefault('created_issues', []).append({'number': next_num, 'title': title})
+	save()
+	print(f'https://github.com/owner/repo/issues/{next_num}')
+	sys.exit(0)
+
 if args[0] == 'api':
 	path, jq, method, fields = parse_api()
 	if path is None:
@@ -548,6 +570,174 @@ def test_validated_label_marks_complete_and_closes():
 	assert result["latest_state"]["validation_completed_cycle"] == 2
 	assert result["tracking_closed"] is True
 	assert "ai:validated" in result["tracking_labels"]
+
+
+# ---------------------------------------------------------------------------
+# Tests: judge advancement logic (fix-up issue handling)
+# ---------------------------------------------------------------------------
+
+
+def test_in_progress_judge_does_not_advance_when_fixups_added_to_current_wave():
+	"""When the judge returns in_progress with new issues, those issues are
+	added to the current wave. The poller must NOT advance current_wave
+	because the newly-added issues are still pending (non-terminal)."""
+	state = _base_state(status="in_progress")
+	state["total_waves"] = 2
+	state["waves"].append({
+		"wave": 2,
+		"issues": [
+			{"id": "issue-2", "github_issue": None, "status": "not_created"},
+		],
+	})
+	state["pending_issue_defs"] = {
+		"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 5},
+	}
+	codex_json = {
+		"status": "in_progress",
+		"justification": "need fix-up",
+		"assessment": "Wave 1 merged but needs a fix",
+		"new_issues": [
+			{"id": "fixup-1", "title": "Fix-up 1", "body": "Fix the thing"},
+		],
+		"issues_to_revert": [],
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		codex_json=codex_json,
+	)
+	ls = result["latest_state"]
+	# Must NOT have advanced to wave 2 — fix-up is still pending in wave 1
+	assert ls["current_wave"] == 1, f"Expected current_wave=1, got {ls['current_wave']}"
+	# The fix-up issue should be in wave 1's issues
+	wave1_ids = [i["id"] for i in ls["waves"][0]["issues"]]
+	assert "fixup-1" in wave1_ids, f"fixup-1 not found in wave 1 issues: {wave1_ids}"
+
+
+def test_in_progress_judge_advances_when_no_new_issues():
+	"""When the judge returns in_progress with NO new issues, the poller
+	should advance to the next wave normally."""
+	state = _base_state(status="in_progress")
+	state["total_waves"] = 2
+	state["waves"].append({
+		"wave": 2,
+		"issues": [
+			{"id": "issue-2", "github_issue": None, "status": "not_created"},
+		],
+	})
+	state["pending_issue_defs"] = {
+		"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 5},
+	}
+	codex_json = {
+		"status": "in_progress",
+		"justification": "on track",
+		"assessment": "Wave 1 done, proceed to wave 2",
+		"new_issues": [],
+		"issues_to_revert": [],
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		codex_json=codex_json,
+	)
+	ls = result["latest_state"]
+	# Should have advanced to wave 2
+	assert ls["current_wave"] == 2, f"Expected current_wave=2, got {ls['current_wave']}"
+
+
+def test_backward_scan_updates_prior_wave_merged_issue():
+	"""When a prior wave has a non-terminal issue that is now ai:merged,
+	the backward scan should update its status in state."""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 2,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+					{"id": "fixup-1", "github_issue": 35, "status": "pending"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": 20, "status": "pending"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10, "fixup-1": 35, "issue-2": 20},
+		"pending_issue_defs": {},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 35: ["ai:merged"], 20: ["ai:implementing"]},
+	)
+	ls = result["latest_state"]
+	# The backward scan should have updated fixup-1 in wave 1 to "merged"
+	wave1_issues = {i["id"]: i["status"] for i in ls["waves"][0]["issues"]}
+	assert wave1_issues.get("fixup-1") == "merged", \
+		f"Expected fixup-1 status=merged, got {wave1_issues.get('fixup-1')}"
+
+
+def test_backward_scan_updates_prior_wave_closed_issue():
+	"""When a prior wave has a non-terminal issue that is now ai:closed,
+	the backward scan should update its status in state."""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 2,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+					{"id": "fixup-1", "github_issue": 35, "status": "pending"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": 20, "status": "pending"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10, "fixup-1": 35, "issue-2": 20},
+		"pending_issue_defs": {},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 35: ["ai:closed"], 20: ["ai:implementing"]},
+	)
+	ls = result["latest_state"]
+	wave1_issues = {i["id"]: i["status"] for i in ls["waves"][0]["issues"]}
+	assert wave1_issues.get("fixup-1") == "closed", \
+		f"Expected fixup-1 status=closed, got {wave1_issues.get('fixup-1')}"
 
 
 # ---------------------------------------------------------------------------

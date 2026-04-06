@@ -848,9 +848,63 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   echo "Current wave: ${CURRENT_WAVE}/${TOTAL_WAVES}, Judge cycle: ${JUDGE_CYCLE}, Recovery count: ${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}"
 
   # ---------------------------------------------------------------
+  # Backward scan: check prior waves for non-terminal issues
+  # ---------------------------------------------------------------
+  # Safety net: if a fix-up issue was added to a prior wave (or a
+  # status update was missed), detect it here and update state /
+  # attempt auto-merge so the issue doesn't stay orphaned forever.
+  WAVE_IDX=$(( CURRENT_WAVE - 1 ))
+
+  PRIOR_WAVE_REMEDIATED="false"
+  if [ "${WAVE_IDX}" -gt 0 ]; then
+    for prior_idx in $(seq 0 $(( WAVE_IDX - 1 ))); do
+      PRIOR_NON_TERMINAL="$(jq -r --argjson wi "${prior_idx}" \
+        '.waves[$wi].issues[] | select(.status != "merged" and .status != "closed" and .status != "skipped") | .github_issue' \
+        "${STATE_FILE}" 2>/dev/null || echo "")"
+      for pw_inum in ${PRIOR_NON_TERMINAL}; do
+        [ -n "${pw_inum}" ] && [ "${pw_inum}" != "null" ] || continue
+        echo "  [backward-scan] Prior wave $((prior_idx + 1)) issue #${pw_inum} is non-terminal. Checking labels..."
+        PW_LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+        PW_LOCAL_ID="$(jq -r --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
+          '.waves[$wi].issues[] | select((.github_issue | tostring) == $inum) | .id' "${STATE_FILE}" | head -n 1)"
+
+        if echo "${PW_LABELS}" | jq -e 'index("ai:merged")' >/dev/null 2>&1; then
+          echo "  [backward-scan] #${pw_inum} is now ai:merged. Updating state."
+          jq --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
+            '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum)).status = "merged"' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          PRIOR_WAVE_REMEDIATED="true"
+        elif echo "${PW_LABELS}" | jq -e 'index("ai:closed")' >/dev/null 2>&1; then
+          echo "  [backward-scan] #${pw_inum} is now ai:closed. Updating state."
+          jq --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
+            '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum)).status = "closed"' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          PRIOR_WAVE_REMEDIATED="true"
+        elif echo "${PW_LABELS}" | jq -e 'index("ai:ready-to-merge")' >/dev/null 2>&1; then
+          echo "  [backward-scan] #${pw_inum} is ai:ready-to-merge. Attempting auto-merge..."
+          PW_PR="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/timeline" \
+            --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+            2>/dev/null || echo "")"
+          if [ -n "${PW_PR}" ] && [ "${PW_PR}" != "null" ]; then
+            PW_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.state' 2>/dev/null || echo "")"
+            if [ "${PW_PR_STATE}" = "open" ]; then
+              gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
+                || gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+            fi
+          fi
+        else
+          echo "  [backward-scan] #${pw_inum} (${PW_LOCAL_ID}) in prior wave $((prior_idx + 1)) still non-terminal. Will be caught by next poll cycle."
+        fi
+      done
+    done
+    if [ "${PRIOR_WAVE_REMEDIATED}" = "true" ]; then
+      post_state_comment
+    fi
+  fi
+
+  # ---------------------------------------------------------------
   # Collect label states for all child issues in the current wave
   # ---------------------------------------------------------------
-  WAVE_IDX=$(( CURRENT_WAVE - 1 ))
   ISSUE_NUMS="$(jq -r ".waves[${WAVE_IDX}].issues[].github_issue" "${STATE_FILE}" 2>/dev/null || echo "")"
 
   if [ -z "${ISSUE_NUMS}" ]; then
@@ -2171,10 +2225,12 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
             --body "${FULL_FIX_BODY}")"
           echo "  Created fix-up: ${FIX_URL}"
 
-          # Record in state so subsequent cycles/iterations won't recreate
+          # Record in state so subsequent cycles/iterations won't recreate,
+          # and add to the current wave so the poller tracks merge progress.
           FIX_NEW_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$')"
           if [ -n "${FIX_NEW_NUM}" ] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
-            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" '.issue_number_map[$fix_id] = $fix_new_num' \
+            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
+              '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"}]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
           fi
         done
@@ -2193,6 +2249,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
       echo "Project in progress."
 
       # Create new issues if judge found gaps
+      WAVE_ISSUE_COUNT_BEFORE="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
         echo "Creating ${NEW_ISSUES_COUNT} new issue(s) from judge..."
         echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r new_issue; do
@@ -2238,6 +2295,21 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
           fi
         done
       fi
+
+      # ---------------------------------------------------------------
+      # Guard: do not advance if fix-up/new issues were added to the
+      # current wave during this judge cycle. Those issues are still
+      # pending and the poller only monitors current_wave, so advancing
+      # would orphan them.
+      # ---------------------------------------------------------------
+      WAVE_ISSUE_COUNT_AFTER="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
+      if [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ]; then
+        ADDED_COUNT=$(( WAVE_ISSUE_COUNT_AFTER - WAVE_ISSUE_COUNT_BEFORE ))
+        echo "Current wave gained ${ADDED_COUNT} new issue(s) from judge. Staying on wave ${CURRENT_WAVE} until they complete."
+        jq '.judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment
+        # Skip wave advancement — next poll cycle will re-check this wave
+      else
 
       # Advance to next wave
       NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
@@ -2318,6 +2390,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 
       # Post updated state
       post_state_comment
+
+      fi  # end: PENDING_IN_WAVE guard
       ;;
 
     *)
