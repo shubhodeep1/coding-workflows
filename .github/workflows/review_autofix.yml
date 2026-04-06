@@ -2371,7 +2371,7 @@ jobs:
           echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
 
           git reset --hard HEAD
-          git clean -fd -e .serena
+          git clean -fd
 
           # The scripts may have been removed during artifact cleanup in the
           # commit step (caller repos delete fetched scripts before committing)
@@ -2429,12 +2429,31 @@ jobs:
 
           echo "Running Codex resolver"
 
-          # Recreate .serena/project.yml if it was removed (e.g. by git clean)
-          # so the Serena MCP server configured in ~/.codex/config.toml can start.
+          # git clean -fd in the merge-conflict-detect step removes the
+          # .serena/ directory that setup_serena.sh created.  Codex's Serena
+          # MCP server entry in ~/.codex/config.toml uses --project-from-cwd
+          # and fails with "No such file or directory" when .serena/project.yml
+          # is missing, which kills `codex exec` entirely.
+          # Recreate a minimal project.yml so the MCP server can start.
           if [ ! -f .serena/project.yml ] && [ -f "${CODEX_HOME:-$HOME/.codex}/config.toml" ] \
              && grep -q 'mcp_servers.serena' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; then
             mkdir -p .serena
-            echo "project_root: $(pwd)" > .serena/project.yml
+            cat > .serena/project.yml <<'SERENA_YML'
+project_name: auto
+read_only: false
+languages: []
+encoding: utf-8
+ignore_all_files_in_gitignore: true
+ignored_paths: []
+excluded_tools: []
+included_optional_tools: []
+base_modes: []
+default_modes:
+  - one-shot
+  - editing
+symbol_info_budget: 10
+initial_prompt: "Skip onboarding. Do not run serena.onboarding(). Proceed directly to the task."
+SERENA_YML
             echo "Recreated .serena/project.yml for conflict resolver."
           fi
 
