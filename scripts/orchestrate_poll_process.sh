@@ -2209,6 +2209,9 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
             if [ -n "${EXISTING_NUM}" ]; then
               EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
               if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
+                jq --arg fix_id "${FIX_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
+                  'if ([.waves[$wave_idx].issues[] | select(.id == $fix_id)] | length) == 0 then .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $existing_num, "status": "pending"}] else . end' \
+                  "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
                 echo "  ${FIX_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate fix-up."
                 continue
               fi
@@ -2269,6 +2272,9 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
             if [ -n "${EXISTING_NUM}" ]; then
               EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
               if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
+                jq --arg new_id "${NEW_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
+                  'if ([.waves[$wave_idx].issues[] | select(.id == $new_id)] | length) == 0 then .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $existing_num, "status": "pending"}] else . end' \
+                  "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
                 echo "  ${NEW_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate addition."
                 continue
               fi
