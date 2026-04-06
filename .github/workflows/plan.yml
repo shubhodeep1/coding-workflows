@@ -193,7 +193,8 @@ jobs:
             echo "Issue #${ISSUE_NUMBER} is already in ai:planning phase."
           elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:clarification") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is in ai:clarification phase; transitioning to ai:planning for /answer processing."
-            source scripts/label_helpers.sh && ensure_label_exists "ai:planning" "${{ github.repository }}"
+            source scripts/label_helpers.sh
+            ensure_label_exists "ai:planning" "${{ github.repository }}"
             gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
             gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
           else

@@ -2488,7 +2488,7 @@ STANDALONE_PRS="$(gh pr list \
 	--repo "${GITHUB_REPOSITORY}" \
 	--state open \
 	--json number,headRefName \
-	--limit 50 2>/dev/null || echo "[]")"
+	--limit 100 2>/dev/null || echo "[]")"
 
 STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
 echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
@@ -2508,8 +2508,8 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 
 	# Check mergeable state via REST API (dirty == merge conflicts)
-	S_MERGEABLE_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" \
-		--jq '.mergeable_state // ""' 2>/dev/null || echo "")"
+	S_PR_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" 2>/dev/null || echo '{}')"
+	S_MERGEABLE_STATE="$(echo "${S_PR_JSON}" | jq -r '.mergeable_state // ""')"
 	if [ -z "${S_MERGEABLE_STATE}" ] || [ "${S_MERGEABLE_STATE}" = "unknown" ]; then
 		continue
 	fi
@@ -2521,8 +2521,7 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	echo "  PR #${S_PR} (${S_HEAD}) is in conflicted mergeable state. Attempting to re-trigger review..."
 
 	# Stage 1: Try the GitHub API update-branch endpoint (clean merge)
-	S_HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" \
-		--jq '.head.sha' 2>/dev/null || echo "")"
+	S_HEAD_SHA="$(echo "${S_PR_JSON}" | jq -r '.head.sha // ""')"
 	if [ -n "${S_HEAD_SHA}" ] && gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}/update-branch" \
 		-X PUT -f expected_head_sha="${S_HEAD_SHA}" 2>/dev/null; then
 		echo "  PR #${S_PR} branch updated via API. Synchronize event will re-trigger review."
