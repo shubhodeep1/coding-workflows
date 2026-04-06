@@ -865,10 +865,17 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="⚠️ AI implementation produced no repository changes despite an approved plan. This is likely a pipeline bug (e.g. workflow edits stripped without \`ALLOW_WORKFLOW_EDITS=true\`, or the model failed to write files). Labeling \`ai:implementation-failed\` for orchestrator re-processing."
 
-          # Remove ai:done (if present) and add failure label
-          gh label create "ai:implementation-failed" --repo "${{ github.repository }}" \
-            --color "e11d48" --description "Implementation produced no changes despite an approved plan — will be re-issued" \
-            2>/dev/null || true
+          # Remove ai:done (if present) and add failure label.
+          # The commit step may already have removed fetched helper artifacts
+          # in caller repos, so only source label_helpers when available.
+          if [ -f scripts/label_helpers.sh ]; then
+            source scripts/label_helpers.sh
+            ensure_label_exists "ai:implementation-failed" "${{ github.repository }}"
+          else
+            gh label create "ai:implementation-failed" --repo "${{ github.repository }}" \
+              --color "e11d48" --description "Implementation produced no changes despite an approved plan — will be re-issued" \
+              2>/dev/null || true
+          fi
           gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --remove-label 'ai:done' --add-label 'ai:implementation-failed' 2>/dev/null || \
           gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
