@@ -865,6 +865,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         [ -n "${pw_inum}" ] && [ "${pw_inum}" != "null" ] || continue
         echo "  [backward-scan] Prior wave $((prior_idx + 1)) issue #${pw_inum} is non-terminal. Checking labels..."
         PW_LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+        [ -n "${PW_LABELS}" ] || PW_LABELS='[]'
         PW_LOCAL_ID="$(jq -r --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
           '.waves[$wi].issues[] | select((.github_issue | tostring) == $inum) | .id' "${STATE_FILE}" | head -n 1)"
 
@@ -887,9 +888,14 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
             2>/dev/null || echo "")"
           if [ -n "${PW_PR}" ] && [ "${PW_PR}" != "null" ]; then
             PW_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.state' 2>/dev/null || echo "")"
-            if [ "${PW_PR_STATE}" = "open" ]; then
+            PW_PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+            if [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ]; then
               gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
                 || gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+            elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
+              gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}/update-branch" \
+                -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.head.sha' 2>/dev/null)" \
+                2>/dev/null || true
             fi
           fi
         else
@@ -2227,8 +2233,8 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 
           # Record in state so subsequent cycles/iterations won't recreate,
           # and add to the current wave so the poller tracks merge progress.
-          FIX_NEW_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$')"
-          if [ -n "${FIX_NEW_NUM}" ] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
+          FIX_NEW_NUM="$(basename "${FIX_URL%%[?#]*}")"
+          if [[ "${FIX_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
             jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
               '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"}]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -2287,8 +2293,8 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 
           # Record in state so subsequent cycles/iterations won't recreate,
           # and add to the current wave so the poller tracks merge progress.
-          ADD_NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
-          if [ -n "${ADD_NEW_NUM}" ] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
+          ADD_NEW_NUM="$(basename "${NEW_URL%%[?#]*}")"
+          if [[ "${ADD_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
             jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
               '.issue_number_map[$new_id] = $add_new_num | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $add_new_num, "status": "pending"}]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
