@@ -492,6 +492,49 @@ def increment_stall_recovery(
 	return state
 
 
+def increment_impl_noop_count(
+	state: dict[str, Any],
+	issue_id: str,
+) -> dict[str, Any]:
+	"""Increment the implementation no-op counter for *issue_id*.
+
+	Tracks consecutive cycles where implementation produced no repository
+	changes (ai:implementation-failed or stall-recovery retriggers that
+	result in no-ops).  Used to cap re-issue loops when the code already
+	exists on the default branch.
+
+	Mutates *state* in-place.
+	"""
+	current_wave_idx = state.get("current_wave", 1) - 1
+	waves = state.get("waves", [])
+	if current_wave_idx >= len(waves):
+		return state
+
+	for issue in waves[current_wave_idx]["issues"]:
+		if issue.get("id") == issue_id:
+			issue["impl_noop_count"] = issue.get("impl_noop_count", 0) + 1
+			break
+
+	return state
+
+
+def get_impl_noop_count(
+	state: dict[str, Any],
+	issue_id: str,
+) -> int:
+	"""Return the current implementation no-op counter for *issue_id*."""
+	current_wave_idx = state.get("current_wave", 1) - 1
+	waves = state.get("waves", [])
+	if current_wave_idx >= len(waves):
+		return 0
+
+	for issue in waves[current_wave_idx]["issues"]:
+		if issue.get("id") == issue_id:
+			return issue.get("impl_noop_count", 0)
+
+	return 0
+
+
 # ---------------------------------------------------------------------------
 # CLI commands
 # ---------------------------------------------------------------------------

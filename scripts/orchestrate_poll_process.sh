@@ -467,6 +467,45 @@ close_linked_pr() {
 }
 
 # ---------------------------------------------------------------
+# Implementation no-op tracking helpers
+# ---------------------------------------------------------------
+
+# Read the impl_noop_count for a local_id from the state file.
+get_impl_noop_count() {
+  local lid="$1"
+  python3 -c "
+import json, sys
+sys.path.insert(0, 'scripts')
+from orchestrate_lib import get_impl_noop_count
+
+with open('${STATE_FILE}') as f:
+    state = json.load(f)
+
+print(get_impl_noop_count(state, '${lid}'))
+" 2>/dev/null || echo "0"
+}
+
+# Increment the impl_noop_count for a local_id in the state file.
+bump_impl_noop_count() {
+  local lid="$1"
+  python3 -c "
+import json, sys
+sys.path.insert(0, 'scripts')
+from orchestrate_lib import increment_impl_noop_count
+
+with open('${STATE_FILE}') as f:
+    state = json.load(f)
+
+increment_impl_noop_count(state, '${lid}')
+
+with open('${STATE_FILE}', 'w') as f:
+    json.dump(state, f, indent=2)
+" || true
+}
+
+MAX_IMPL_NOOP_REISSUES="${MAX_IMPL_NOOP_REISSUES:-2}"
+
+# ---------------------------------------------------------------
 # Stall recovery: phase-specific healing actions
 # ---------------------------------------------------------------
 
@@ -541,6 +580,14 @@ STALL_EOF
 
     auto_approve)
       # Stuck in ai:awaiting-approval — auto-approve for orchestrator issues.
+      # Guard: skip if this task has already hit the no-op implementation cap
+      # (re-approving would just trigger another no-op cycle).
+      local noop_cnt
+      noop_cnt="$(get_impl_noop_count "${local_id}")"
+      if [ "${noop_cnt}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+        echo "  [stall-recovery] Issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt}/${MAX_IMPL_NOOP_REISSUES}) — skipping auto-approve to prevent loop."
+        return 1
+      fi
       echo "  Auto-approving plan for issue #${issue_num}..."
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
@@ -555,6 +602,13 @@ STALL_EOF
 
     retrigger_implement)
       # Stuck in ai:implementing — re-trigger implementation.
+      # Guard: skip if this task has already hit the no-op implementation cap.
+      local noop_cnt_impl
+      noop_cnt_impl="$(get_impl_noop_count "${local_id}")"
+      if [ "${noop_cnt_impl}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+        echo "  [stall-recovery] Issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt_impl}/${MAX_IMPL_NOOP_REISSUES}) — skipping retrigger to prevent loop."
+        return 1
+      fi
       echo "  Re-triggering implementation for issue #${issue_num}..."
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
@@ -1712,7 +1766,32 @@ ${RB_FIX_DESC}
   IMPL_FAILED_STATE_CHANGED=false
   while read -r if_issue; do
     [ -n "${if_issue}" ] && [ "${if_issue}" != "null" ] || continue
-    echo "  Issue #${if_issue} has implementation-failed. Closing and re-issuing..."
+
+    # Look up local_id for this issue so we can track no-op count
+    IF_LOCAL_ID="$(jq -r --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" \
+      '.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue) | .id' \
+      "${STATE_FILE}" | head -n 1)"
+
+    # ---- No-op loop guard: if this task has already been re-issued
+    # MAX_IMPL_NOOP_REISSUES times without producing changes, the code
+    # likely already exists on main.  Close the issue and let the
+    # wave-completion judge verify instead of looping forever.
+    NOOP_COUNT="$(get_impl_noop_count "${IF_LOCAL_ID}")"
+    if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+      echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
+      gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+        --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+      gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+        -c "Closing: implementation produced no changes ${NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
+      tg_notify "⏹️ Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")"
+      IMPL_FAILED_STATE_CHANGED=true
+      continue
+    fi
+
+    echo "  Issue #${if_issue} has implementation-failed (no-op ${NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
+
+    # Increment no-op counter before re-issuing
+    bump_impl_noop_count "${IF_LOCAL_ID}"
 
     # Read the original issue to preserve its content
     IF_TITLE="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' 2>/dev/null || echo "")"
@@ -1748,8 +1827,9 @@ REISSUE_EOF
       echo "  Created replacement issue #${NEW_ISSUE_NUM} for failed #${if_issue}."
 
       # Update state file: replace the old issue number with the new one
+      # (impl_noop_count is preserved on the issue entry since we only
+      # change github_issue, not the issue object itself)
       if [ -n "${NEW_ISSUE_NUM}" ]; then
-        IF_LOCAL_ID="$(jq -r --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" '.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue) | .id' "${STATE_FILE}" | head -n 1)"
         jq --arg if_issue "${if_issue}" --arg new_issue_num "${NEW_ISSUE_NUM}" --arg local_id "${IF_LOCAL_ID}" --argjson wave_idx "${WAVE_IDX}" '(.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)).github_issue = $new_issue_num | if ($local_id != "" and $local_id != "null") then .issue_number_map[$local_id] = $new_issue_num else . end' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
@@ -1837,6 +1917,13 @@ increment_stall_recovery(state, '${STALL_LOCAL_ID}')
 with open('${STATE_FILE}', 'w') as f:
     json.dump(state, f, indent=2)
 " || true
+          fi
+
+          # Also bump the impl noop counter for actions that re-trigger
+          # implementation — so the noop cap applies across both the
+          # implementation-failed handler and stall recovery paths.
+          if [ "${STALL_ACTION}" = "auto_approve" ] || [ "${STALL_ACTION}" = "retrigger_implement" ]; then
+            bump_impl_noop_count "${STALL_LOCAL_ID}"
           fi
         else
           echo "  [stall-recovery] No action taken for #${STALL_ISSUE} (active workflow or guard)."
