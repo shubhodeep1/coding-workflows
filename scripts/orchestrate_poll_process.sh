@@ -22,7 +22,13 @@ if [ -f "scripts/tg_helpers.sh" ]; then
 fi
 
 # _gh_url constructs a GitHub URL path.
-_gh_url() { printf '%s/%s/%s' "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY}" "$1"; }
+_gh_url() {
+  if [ -z "${GITHUB_REPOSITORY:-}" ]; then
+    printf ''
+    return
+  fi
+  printf '%s/%s/%s' "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY}" "$1"
+}
 
 # tg_notify wraps tg_send_tracked using the current TRACKING_NUM.
 # TRACKING_NUM is set inside the main per-issue loop below.
