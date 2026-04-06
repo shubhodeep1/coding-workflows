@@ -820,15 +820,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "$(git status --porcelain)" ]; then
-            echo "No repository changes were produced by Codex implementation."
-            echo "did_commit=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Remove only workflow-generated/fetched artifacts so they are never
-          # committed to caller repos.  The manifest tracks exactly which files
-          # were fetched — caller-repo files that were never touched are safe.
+          # Remove workflow-generated/fetched artifacts BEFORE checking for
+          # changes so they don't cause false-positive "file changes" detection.
+          # The manifest tracks exactly which files were fetched — caller-repo
+          # files that were never touched are safe.
           rm -f ./pre_assembled_static.txt
           if [ -f "${FETCHED_MANIFEST}" ]; then
             while IFS= read -r fetched_file; do
@@ -836,6 +831,12 @@ jobs:
             done < "${FETCHED_MANIFEST}"
           fi
           rm -rf .serena
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No repository changes were produced by Codex implementation."
+            echo "did_commit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
@@ -1076,7 +1077,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/tg_helpers.sh
+          # tg_helpers.sh may have been removed by the commit-step cleanup
+          # (it's a fetched artifact). Guard against its absence.
+          if [ -f scripts/tg_helpers.sh ]; then
+            source scripts/tg_helpers.sh
+          fi
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
@@ -1088,7 +1093,11 @@ jobs:
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+          if declare -F tg_send_tracked >/dev/null 2>&1; then
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+          else
+            echo "::warning::tg_helpers.sh unavailable; skipping Telegram notification."
+          fi
 
       - name: Exit safely
         if: failure() || cancelled()
