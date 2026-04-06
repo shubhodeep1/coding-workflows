@@ -731,16 +731,17 @@ ${orig_body}
 REISSUE_EOF
 )"
 
-      local new_url new_num
+      local new_url new_url_clean new_num
       new_url="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" 2>/dev/null || echo "")"
       if [ -n "${new_url}" ]; then
-        new_num="$(echo "${new_url}" | grep -oE '[0-9]+$')"
+        new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+        new_num="$(basename "${new_url_clean%%[?#]*}")"
         echo "  Created replacement issue #${new_num} for stalled #${issue_num}."
 
         # Update state: remap the local_id to the new issue number
-        if [ -n "${new_num}" ] && [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
+        if [[ "${new_num}" =~ ^[0-9]+$ ]] && [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
           jq --arg lid "${local_id}" --argjson new_num "${new_num}" --argjson wave_idx "${WAVE_IDX}" \
             '.issue_number_map[$lid] = $new_num |
              (.waves[$wave_idx].issues[] | select(.id == $lid)) |=
@@ -2542,7 +2543,12 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
             --title "${DEF_TITLE}" \
             --body "${FULL_BODY}")"
 
-          NEW_NUM="$(echo "${NEW_URL}" | grep -oE '[0-9]+$')"
+          NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+          NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
+          if ! [[ "${NEW_NUM}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Could not parse numeric issue number for pending issue ${local_id}; skipping state update."
+            continue
+          fi
           echo "  Created #${NEW_NUM}: ${DEF_TITLE} (${local_id})"
           CREATED_NUMS="${CREATED_NUMS} ${NEW_NUM}"
 
