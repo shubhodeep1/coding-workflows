@@ -2571,6 +2571,17 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if [ ! -f scripts/label_helpers.sh ]; then
+            wf_source="${{ github.repository_owner }}/coding-workflows"
+            script_ref="stable"
+            if [ "${REPOSITORY}" = "${wf_source}" ]; then
+              script_ref="${{ github.sha }}"
+            fi
+            mkdir -p scripts
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > scripts/label_helpers.sh
+            chmod +x scripts/label_helpers.sh
+          fi
           source scripts/label_helpers.sh
 
           ISSUE_NUMBERS="$(gh api graphql \
@@ -2619,6 +2630,17 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
+          if [ ! -f scripts/label_helpers.sh ]; then
+            wf_source="${{ github.repository_owner }}/coding-workflows"
+            script_ref="stable"
+            if [ "${REPOSITORY}" = "${wf_source}" ]; then
+              script_ref="${{ github.sha }}"
+            fi
+            mkdir -p scripts
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > scripts/label_helpers.sh
+            chmod +x scripts/label_helpers.sh
+          fi
           source scripts/label_helpers.sh
 
           echo "judge_handled=false" >> "$GITHUB_OUTPUT"
@@ -3058,6 +3080,17 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
+          if [ ! -f scripts/label_helpers.sh ]; then
+            wf_source="${{ github.repository_owner }}/coding-workflows"
+            script_ref="stable"
+            if [ "${REPOSITORY}" = "${wf_source}" ]; then
+              script_ref="${{ github.sha }}"
+            fi
+            mkdir -p scripts
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > scripts/label_helpers.sh
+            chmod +x scripts/label_helpers.sh
+          fi
           source scripts/label_helpers.sh
 
           ISSUE_NUMBERS="$(gh api graphql \
