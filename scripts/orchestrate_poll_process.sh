@@ -140,16 +140,22 @@ ensure_label_exists() {
   local contract_file=".github/ai/label_contract.v1.json"
   local color="1d76db"
   local description="AI workflow label"
+  local contract_color=""
+  local contract_description=""
 
-  if [ -f "${contract_file}" ]; then
-    color="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].color // "1d76db"' "${contract_file}" 2>/dev/null || echo "1d76db")"
-    description="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].description // "AI workflow label"' "${contract_file}" 2>/dev/null || echo "AI workflow label")"
-  elif [ "${label_name}" = "ai:closed" ]; then
+  if [ "${label_name}" = "ai:closed" ]; then
     color="6a737d"
     description="Linked PR closed without merge"
   elif [ "${label_name}" = "ai:ready-to-merge" ]; then
     color="0e8a16"
     description="PR review complete and ready to merge"
+  fi
+
+  if [ -f "${contract_file}" ]; then
+    contract_color="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].color // empty' "${contract_file}" 2>/dev/null || echo "")"
+    contract_description="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].description // empty' "${contract_file}" 2>/dev/null || echo "")"
+    [ -n "${contract_color}" ] && color="${contract_color}"
+    [ -n "${contract_description}" ] && description="${contract_description}"
   fi
 
   gh_retry gh label create "${label_name}" \
