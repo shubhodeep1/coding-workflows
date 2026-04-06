@@ -2578,8 +2578,12 @@ jobs:
               script_ref="${{ github.sha }}"
             fi
             mkdir -p scripts
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > scripts/label_helpers.sh
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > scripts/label_helpers.sh 2>/dev/null; then
+              echo "::warning::label_helpers.sh not found on ${script_ref}; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > scripts/label_helpers.sh
+            fi
             chmod +x scripts/label_helpers.sh
           fi
           source scripts/label_helpers.sh
@@ -2637,8 +2641,12 @@ jobs:
               script_ref="${{ github.sha }}"
             fi
             mkdir -p scripts
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > scripts/label_helpers.sh
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > scripts/label_helpers.sh 2>/dev/null; then
+              echo "::warning::label_helpers.sh not found on ${script_ref}; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > scripts/label_helpers.sh
+            fi
             chmod +x scripts/label_helpers.sh
           fi
           source scripts/label_helpers.sh
@@ -3087,8 +3095,12 @@ jobs:
               script_ref="${{ github.sha }}"
             fi
             mkdir -p scripts
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > scripts/label_helpers.sh
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > scripts/label_helpers.sh 2>/dev/null; then
+              echo "::warning::label_helpers.sh not found on ${script_ref}; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > scripts/label_helpers.sh
+            fi
             chmod +x scripts/label_helpers.sh
           fi
           source scripts/label_helpers.sh
