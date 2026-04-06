@@ -144,6 +144,12 @@ ensure_label_exists() {
   if [ -f "${contract_file}" ]; then
     color="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].color // "1d76db"' "${contract_file}" 2>/dev/null || echo "1d76db")"
     description="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].description // "AI workflow label"' "${contract_file}" 2>/dev/null || echo "AI workflow label")"
+  elif [ "${label_name}" = "ai:closed" ]; then
+    color="6a737d"
+    description="Linked PR closed without merge"
+  elif [ "${label_name}" = "ai:ready-to-merge" ]; then
+    color="0e8a16"
+    description="PR review complete and ready to merge"
   fi
 
   gh_retry gh label create "${label_name}" \
