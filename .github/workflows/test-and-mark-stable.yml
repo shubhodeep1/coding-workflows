@@ -815,8 +815,9 @@ jobs:
           ${STATE_JSON}
           ORCHESTRATOR_STATE_V1 -->"
 
-          gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}/comments" \
-            -f body="${STATE_COMMENT}" >/dev/null
+          jq -n --arg body "${STATE_COMMENT}" '{"body": $body}' \
+            | gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}/comments" \
+                --input - >/dev/null
 
           echo "Posted orchestrator state to tracking issue #${TRACKING_NUMBER}"
 

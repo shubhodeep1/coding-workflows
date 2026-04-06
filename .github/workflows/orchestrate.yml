@@ -521,8 +521,9 @@ jobs:
           EOF
           )"
 
-          gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
-            -f body="${STATE_COMMENT}" >/dev/null
+          jq -n --arg body "${STATE_COMMENT}" '{"body": $body}' \
+            | gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+                --input - >/dev/null
           echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER}"
 
       - name: Dispatch Wave 1
@@ -556,8 +557,9 @@ jobs:
 
           The orchestrator poller will monitor progress and dispatch subsequent waves when dependencies are met."
 
-          gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
-            -f body="${WAVE1_COMMENT}" >/dev/null
+          jq -n --arg body "${WAVE1_COMMENT}" '{"body": $body}' \
+            | gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+                --input - >/dev/null
 
       - name: Write run summary
         if: always()
