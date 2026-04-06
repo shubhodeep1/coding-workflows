@@ -92,8 +92,8 @@ _gh_url() {
 _tg_link_suffix()
 {
   local suffix=""
-  if [ -n "${TRACKING_ISSUE_RAW:-}" ] && [ "${TRACKING_ISSUE_RAW}" != "0" ]; then
-    suffix+=$'\n'"Issue: $(_gh_url "issues/${TRACKING_ISSUE_RAW}")"
+  if [ "${TRACKING_ISSUE_NUM}" -gt 0 ]; then
+    suffix+=$'\n'"Issue: $(_gh_url "issues/${TRACKING_ISSUE_NUM}")"
   fi
   if [ -n "${GITHUB_RUN_ID:-}" ]; then
     suffix+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
@@ -104,8 +104,8 @@ _tg_link_suffix()
 tg_notify()
 {
   local msg="$1$(_tg_link_suffix)"
-  if [ -n "${TRACKING_ISSUE_RAW:-}" ] && [ "${TRACKING_ISSUE_RAW}" != "0" ]; then
-    tg_send_tracked "${TRACKING_ISSUE_RAW}" "${msg}"
+  if [ "${TRACKING_ISSUE_NUM}" -gt 0 ]; then
+    tg_send_tracked "${TRACKING_ISSUE_NUM}" "${msg}"
   else
     # Standalone validation run (no tracking issue): untracked send
     tg_send_msg "${msg}" >/dev/null
