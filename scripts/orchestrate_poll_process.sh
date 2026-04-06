@@ -1480,13 +1480,16 @@ sys.exit(1)
             --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
 
           # Attempt squash merge (with branch update if needed)
+          RB_MERGED="false"
           PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
           PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
 		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
 		    if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		      echo "  PR #${RB_PR} merge initiated (auto)."
+		      RB_MERGED="true"
 		    elif gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
 		      echo "  PR #${RB_PR} merged directly."
+		      RB_MERGED="true"
 		    else
 		      echo "::warning::Could not merge PR #${RB_PR}."
 		    fi
@@ -1519,7 +1522,9 @@ sys.exit(1)
           fi
 
           REVIEW_BLOCKED_STATE_CHANGED=true
-          tg_notify "✅ Orchestrator judge merged review-blocked PR #${RB_PR} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+          if [ "${RB_MERGED}" = "true" ]; then
+            tg_notify "✅ Orchestrator judge merged review-blocked PR #${RB_PR} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+          fi
           ;;
 
         fix)
@@ -1527,11 +1532,16 @@ sys.exit(1)
             echo "  Judge returned 'fix' but retries exhausted — treating as merge."
             gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
+            RB_FORCE_MERGED="false"
             PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
             PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
-			if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
-			  gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
-			    || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash || true
+				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
+				  if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
+				    || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+				    RB_FORCE_MERGED="true"
+				  else
+				    echo "::warning::Could not merge PR #${RB_PR} in force-merge path."
+				  fi
             elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
               echo "  PR #${RB_PR} is not mergeable (force-merge path). Attempting branch update..."
               if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
@@ -1558,7 +1568,9 @@ sys.exit(1)
               fi
             fi
             REVIEW_BLOCKED_STATE_CHANGED=true
-            tg_notify "✅ Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+            if [ "${RB_FORCE_MERGED}" = "true" ]; then
+              tg_notify "✅ Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+            fi
           else
             echo "  Judge is applying fixes to PR #${RB_PR}..."
             # Re-check PR state before expensive fix+push (race condition safety net)
