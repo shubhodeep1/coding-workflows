@@ -81,7 +81,7 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh; do
+          for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh label_helpers.sh; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -2160,7 +2160,7 @@ jobs:
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh
             rm -rf .serena
           fi
 
@@ -2391,7 +2391,7 @@ jobs:
           else
             script_ref="stable"
           fi
-          for f in git_ref_health_check.sh tg_helpers.sh; do
+          for f in git_ref_health_check.sh tg_helpers.sh label_helpers.sh; do
             if [ ! -f "scripts/${f}" ]; then
               mkdir -p scripts
               if ! gh api -H 'Accept: application/vnd.github.raw+json' \
@@ -2518,7 +2518,7 @@ jobs:
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh
             rm -rf .serena
           fi
 
@@ -2571,6 +2571,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          source scripts/label_helpers.sh
 
           ISSUE_NUMBERS="$(gh api graphql \
             -f owner="${REPOSITORY%/*}" \
@@ -2591,6 +2592,7 @@ jobs:
             echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
           fi
 
+          ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:ready-to-merge on issue #${issue_number}"
@@ -2617,6 +2619,7 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
+          source scripts/label_helpers.sh
 
           echo "judge_handled=false" >> "$GITHUB_OUTPUT"
 
@@ -2864,6 +2867,7 @@ jobs:
               echo "Judge says merge PR #${PR_NUMBER} as-is."
 
               # Label linked issues ready-to-merge
+              ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
               while IFS= read -r issue_number; do
                 [ -n "${issue_number}" ] || continue
                 gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
@@ -2893,6 +2897,7 @@ jobs:
               if [ "${IS_FINAL}" = "true" ]; then
                 echo "Judge returned 'fix' but retries exhausted — treating as merge."
 
+                ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
                 while IFS= read -r issue_number; do
                   [ -n "${issue_number}" ] || continue
                   gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
@@ -2953,7 +2958,7 @@ jobs:
                   if [[ "${REPOSITORY}" != *"/coding-workflows" ]]; then
                     rm -f ./pre_assembled_static.txt
                     rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-                    rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py
+                    rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh
                     rm -rf .serena
                     rm -rf prompts
                   fi
@@ -2976,6 +2981,7 @@ jobs:
                     fi
                   else
                     echo "Judge staged no effective changes. Treating as merge."
+                    ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
                     while IFS= read -r issue_number; do
                       [ -n "${issue_number}" ] || continue
                       gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
@@ -2986,6 +2992,7 @@ jobs:
                   fi
                 else
                   echo "Judge produced no file changes. Treating as merge."
+                  ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
                   while IFS= read -r issue_number; do
                     [ -n "${issue_number}" ] || continue
                     gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
@@ -3006,6 +3013,7 @@ jobs:
                 2>/dev/null || true
 
               # Label linked issues as closed
+              ensure_label_exists "ai:closed" "${REPOSITORY}"
               while IFS= read -r issue_number; do
                 [ -n "${issue_number}" ] || continue
                 gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
@@ -3050,6 +3058,7 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
+          source scripts/label_helpers.sh
 
           ISSUE_NUMBERS="$(gh api graphql \
             -f owner="${REPOSITORY%/*}" \
@@ -3070,6 +3079,7 @@ jobs:
             echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
           fi
 
+          ensure_label_exists "ai:review-blocked" "${REPOSITORY}"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number}"
@@ -3222,6 +3232,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # Do not source scripts/label_helpers.sh in this failure path: the
+          # workflow can fail before support scripts are fetched.
+          gh label create "ai:review-blocked" --repo "${REPOSITORY}" \
+            --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
+            2>/dev/null || true
 
           ISSUE_NUMBERS="$(gh api graphql \
             -f owner="${REPOSITORY%/*}" \

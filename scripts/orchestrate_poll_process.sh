@@ -706,6 +706,7 @@ STALL_EOF
       orig_title="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' 2>/dev/null || echo "")"
       orig_body="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body' 2>/dev/null || echo "")"
 
+      ensure_label_exists "ai:closed"
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --remove-label 'ai:done' --remove-label 'ai:implementing' \
         --remove-label 'ai:planning' --remove-label 'ai:clarification' \
@@ -762,6 +763,7 @@ REISSUE_EOF
       close_linked_pr "${issue_num}" \
         "Closed by orchestrator: stall recovery exhausted (${recovery_count} attempts). The judge will evaluate this gap."
 
+      ensure_label_exists "ai:closed"
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --add-label 'ai:closed' 2>/dev/null || true
       gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -1262,6 +1264,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       if [ "${RB_PR_STATE}" != "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
         # PR is closed (not merged) — skip entirely
         echo "  PR #${RB_PR} is closed (not merged). Cleaning up labels and skipping."
+        ensure_label_exists "ai:closed"
         gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
           --remove-label 'ai:review-blocked' --remove-label 'ai:in-progress' \
           --add-label 'ai:closed' 2>/dev/null || true
@@ -1438,6 +1441,7 @@ sys.exit(1)
         merge)
           echo "  Judge says merge PR #${RB_PR} as-is."
           # Remove review-blocked, set ready-to-merge
+          ensure_label_exists "ai:ready-to-merge"
           gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
 
@@ -1487,6 +1491,7 @@ sys.exit(1)
         fix)
           if [ "${IS_FINAL}" = "true" ]; then
             echo "  Judge returned 'fix' but retries exhausted — treating as merge."
+            ensure_label_exists "ai:ready-to-merge"
             gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
@@ -1653,6 +1658,7 @@ ${RB_FIX_DESC}
                   tg_notify "✅ Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                 else
                   echo "  Treating as merge decision."
+                  ensure_label_exists "ai:ready-to-merge"
                   gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
                   PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
@@ -1684,6 +1690,7 @@ ${RB_FIX_DESC}
             2>/dev/null || true
 
           # Label issue as closed
+          ensure_label_exists "ai:closed"
           gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:review-blocked' --remove-label 'ai:done' \
             --add-label 'ai:closed' 2>/dev/null || true
@@ -1822,6 +1829,7 @@ ${RB_FIX_DESC}
     IF_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' 2>/dev/null || echo "")"
 
     # Close the failed issue
+    ensure_label_exists "ai:closed"
     gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
       --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
     gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
@@ -2556,3 +2564,102 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       ;;
   esac
 done
+
+# ---------------------------------------------------------------
+# Standalone PR conflict sweep
+# ---------------------------------------------------------------
+# The tracking-issue loop above only handles PRs linked to
+# orchestrator-managed issues.  Standalone AI PRs (created by the
+# pipeline without an orchestrator tracking issue) can also develop
+# merge conflicts when the base branch advances.  The review
+# workflow already has Codex-based conflict resolution, but it only
+# runs on PR synchronize events — no event fires when the *base*
+# branch moves forward.
+#
+# This section scans all open PRs on AI-generated branches
+# (ai/issue-*) that are not mergeable and re-triggers the review
+# workflow so its conflict resolver can act.
+# ---------------------------------------------------------------
+echo ""
+echo "========================================"
+echo "Standalone PR conflict sweep"
+echo "========================================"
+
+# Collect all open PRs on ai/* branches with their mergeable status.
+# gh pr list does not expose mergeable, so we fetch the full list and
+# then query each candidate via the REST API.
+STANDALONE_PRS="$(gh pr list \
+	--repo "${GITHUB_REPOSITORY}" \
+	--state open \
+	--json number,headRefName \
+	--limit 100 2>/dev/null || echo "[]")"
+
+STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
+echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
+
+CONFLICT_SWEEP_FIXED=0
+
+for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
+	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
+	S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+	if [ -z "${S_PR}" ] || [ -z "${S_HEAD}" ] || [ "${S_PR}" = "null" ] || [ "${S_HEAD}" = "null" ]; then
+		continue
+	fi
+
+	# Only process AI-generated branches (ai/issue-*)
+	if [[ "${S_HEAD}" != ai/issue-* ]]; then
+		continue
+	fi
+
+	# Check mergeable state via REST API (dirty == merge conflicts)
+	S_PR_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" 2>/dev/null || echo '{}')"
+	S_MERGEABLE_STATE="$(echo "${S_PR_JSON}" | jq -r '.mergeable_state // ""')"
+	if [ -z "${S_MERGEABLE_STATE}" ] || [ "${S_MERGEABLE_STATE}" = "unknown" ]; then
+		continue
+	fi
+
+	if [ "${S_MERGEABLE_STATE}" != "dirty" ]; then
+		continue
+	fi
+
+	echo "  PR #${S_PR} (${S_HEAD}) is in conflicted mergeable state. Attempting to re-trigger review..."
+
+	# Stage 1: Try the GitHub API update-branch endpoint (clean merge)
+	S_HEAD_SHA="$(echo "${S_PR_JSON}" | jq -r '.head.sha // ""')"
+	if [ -n "${S_HEAD_SHA}" ] && gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}/update-branch" \
+		-X PUT -f expected_head_sha="${S_HEAD_SHA}" 2>/dev/null; then
+		echo "  PR #${S_PR} branch updated via API. Synchronize event will re-trigger review."
+		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
+		continue
+	fi
+
+	# Stage 2: Push empty commit to force a synchronize event so the
+	# review workflow's Codex conflict resolver can run.
+	if ! git fetch origin "${S_HEAD}:refs/remotes/origin/${S_HEAD}" 2>/dev/null; then
+		echo "::warning::Could not fetch standalone PR #${S_PR} head ${S_HEAD}; skipping re-trigger."
+		continue
+	fi
+	if ! git checkout --detach "refs/remotes/origin/${S_HEAD}" 2>/dev/null; then
+		echo "::warning::Could not check out standalone PR #${S_PR} head ${S_HEAD}; skipping re-trigger."
+		continue
+	fi
+	git config user.name "codex-bot"
+	git config user.email "codex@users.noreply.github.com"
+	if ! git commit --allow-empty \
+		-m "[orchestrator] re-trigger review for conflict resolution (standalone PR #${S_PR})" \
+		2>/dev/null; then
+		echo "::warning::Could not create empty commit for standalone PR #${S_PR}; skipping push."
+		git checkout --detach HEAD 2>/dev/null || true
+		continue
+	fi
+	if git push origin "HEAD:${S_HEAD}" 2>/dev/null; then
+		echo "  Pushed empty commit to PR #${S_PR} to re-trigger review workflow."
+		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
+		tg_send_msg "⚠️ Standalone PR #${S_PR} has merge conflicts. Re-triggered review for auto-resolution."$'\n'"PR: $(_gh_url "pull/${S_PR}")" >/dev/null 2>&1 || true
+	else
+		echo "::warning::Could not push empty commit to re-trigger review for standalone PR #${S_PR}."
+	fi
+	git checkout --detach HEAD 2>/dev/null || true
+done
+
+echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
