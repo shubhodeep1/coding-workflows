@@ -1060,7 +1060,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         [ "${already_tracked}" = "false" ] || continue
 
         # Skip if not part of this project (body must reference our tracking issue)
-        if ! printf '%s' "${orphan_body}" | grep -qF "Tracking issue: #${TRACKING_NUM}"; then
+        if ! printf '%s\n' "${orphan_body}" | grep -qE "^- Tracking issue: #${TRACKING_NUM}[[:space:]]*$"; then
           continue
         fi
 
