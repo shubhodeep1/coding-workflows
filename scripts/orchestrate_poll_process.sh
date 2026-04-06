@@ -2259,6 +2259,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 
       # Create new issues if judge found gaps
       WAVE_ISSUE_COUNT_BEFORE="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
+      WAVE_ISSUE_TRACKING_BEFORE="$(jq -c --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | map({id, github_issue}) | sort_by(.id)' "${STATE_FILE}")"
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
         echo "Creating ${NEW_ISSUES_COUNT} new issue(s) from judge..."
         echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r new_issue; do
@@ -2315,9 +2316,14 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
       # would orphan them.
       # ---------------------------------------------------------------
       WAVE_ISSUE_COUNT_AFTER="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
-      if [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ]; then
-        ADDED_COUNT=$(( WAVE_ISSUE_COUNT_AFTER - WAVE_ISSUE_COUNT_BEFORE ))
-        echo "Current wave gained ${ADDED_COUNT} new issue(s) from judge. Staying on wave ${CURRENT_WAVE} until they complete."
+      WAVE_ISSUE_TRACKING_AFTER="$(jq -c --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | map({id, github_issue}) | sort_by(.id)' "${STATE_FILE}")"
+      if [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ] || [ "${WAVE_ISSUE_TRACKING_AFTER}" != "${WAVE_ISSUE_TRACKING_BEFORE}" ]; then
+        if [ "${WAVE_ISSUE_COUNT_AFTER}" -gt "${WAVE_ISSUE_COUNT_BEFORE}" ]; then
+          ADDED_COUNT=$(( WAVE_ISSUE_COUNT_AFTER - WAVE_ISSUE_COUNT_BEFORE ))
+          echo "Current wave gained ${ADDED_COUNT} new issue(s) from judge. Staying on wave ${CURRENT_WAVE} until they complete."
+        else
+          echo "Current wave issue tracking changed from judge output. Staying on wave ${CURRENT_WAVE} until updated issues complete."
+        fi
         jq '.judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment
         # Skip wave advancement — next poll cycle will re-check this wave

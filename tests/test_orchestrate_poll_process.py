@@ -740,6 +740,65 @@ def test_backward_scan_updates_prior_wave_closed_issue():
 		f"Expected fixup-1 status=closed, got {wave1_issues.get('fixup-1')}"
 
 
+def test_in_progress_judge_recreates_closed_fixup_id_stays_on_current_wave():
+	"""If judge reuses a local ID whose previous issue is closed, the recreated
+	issue should replace tracking for that ID and the poller must stay on the
+	current wave until the recreated issue is resolved."""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+					{"id": "fixup-1", "github_issue": 35, "status": "closed"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": None, "status": "not_created"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10, "fixup-1": 35},
+		"pending_issue_defs": {
+			"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 5},
+		},
+	}
+	codex_json = {
+		"status": "in_progress",
+		"justification": "retry fix-up",
+		"assessment": "Need another attempt for fixup-1",
+		"new_issues": [
+			{"id": "fixup-1", "title": "Fix-up 1", "body": "Retry fix"},
+		],
+		"issues_to_revert": [],
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 35: ["ai:closed"]},
+		codex_json=codex_json,
+	)
+	ls = result["latest_state"]
+	assert ls["current_wave"] == 1, f"Expected current_wave=1, got {ls['current_wave']}"
+	wave1 = {i["id"]: i for i in ls["waves"][0]["issues"]}
+	assert wave1["fixup-1"]["status"] == "pending", f"Expected recreated fixup-1 status=pending, got {wave1['fixup-1']['status']}"
+	assert str(wave1["fixup-1"]["github_issue"]) != "35", f"Expected fixup-1 github_issue to be replaced, got {wave1['fixup-1']['github_issue']}"
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
