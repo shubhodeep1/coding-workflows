@@ -2333,3 +2333,87 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       ;;
   esac
 done
+
+# ---------------------------------------------------------------
+# Standalone PR conflict sweep
+# ---------------------------------------------------------------
+# The tracking-issue loop above only handles PRs linked to
+# orchestrator-managed issues.  Standalone AI PRs (created by the
+# pipeline without an orchestrator tracking issue) can also develop
+# merge conflicts when the base branch advances.  The review
+# workflow already has Codex-based conflict resolution, but it only
+# runs on PR synchronize events — no event fires when the *base*
+# branch moves forward.
+#
+# This section scans all open PRs on AI-generated branches
+# (ai/issue-*) that are not mergeable and re-triggers the review
+# workflow so its conflict resolver can act.
+# ---------------------------------------------------------------
+echo ""
+echo "========================================"
+echo "Standalone PR conflict sweep"
+echo "========================================"
+
+# Collect all open PRs on ai/* branches with their mergeable status.
+# gh pr list does not expose mergeable, so we fetch the full list and
+# then query each candidate via the REST API.
+STANDALONE_PRS="$(gh pr list \
+	--repo "${GITHUB_REPOSITORY}" \
+	--state open \
+	--json number,headRefName \
+	--limit 50 2>/dev/null || echo "[]")"
+
+STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
+echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
+
+CONFLICT_SWEEP_FIXED=0
+
+for sidx in $(seq 0 $(( STANDALONE_COUNT - 1 ))); do
+	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
+	S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+
+	# Only process AI-generated branches (ai/issue-*)
+	if [[ "${S_HEAD}" != ai/issue-* ]]; then
+		continue
+	fi
+
+	# Check mergeable status via REST API
+	S_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" \
+		--jq '.mergeable' 2>/dev/null || echo "")"
+
+	if [ "${S_MERGEABLE}" != "false" ]; then
+		continue
+	fi
+
+	echo "  PR #${S_PR} (${S_HEAD}) has merge conflicts. Attempting to re-trigger review..."
+
+	# Stage 1: Try the GitHub API update-branch endpoint (clean merge)
+	S_HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" \
+		--jq '.head.sha' 2>/dev/null || echo "")"
+	if [ -n "${S_HEAD_SHA}" ] && gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}/update-branch" \
+		-X PUT -f expected_head_sha="${S_HEAD_SHA}" 2>/dev/null; then
+		echo "  PR #${S_PR} branch updated via API. Synchronize event will re-trigger review."
+		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
+		continue
+	fi
+
+	# Stage 2: Push empty commit to force a synchronize event so the
+	# review workflow's Codex conflict resolver can run.
+	git fetch origin "${S_HEAD}:refs/remotes/origin/${S_HEAD}" 2>/dev/null || true
+	git checkout "origin/${S_HEAD}" 2>/dev/null || true
+	git config user.name "codex-bot"
+	git config user.email "codex@users.noreply.github.com"
+	git commit --allow-empty \
+		-m "[orchestrator] re-trigger review for conflict resolution (standalone PR #${S_PR})" \
+		2>/dev/null || true
+	if git push origin "HEAD:${S_HEAD}" 2>/dev/null; then
+		echo "  Pushed empty commit to PR #${S_PR} to re-trigger review workflow."
+		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
+		tg_send_msg "⚠️ Standalone PR #${S_PR} has merge conflicts. Re-triggered review for auto-resolution."$'\n'"PR: $(_gh_url "pull/${S_PR}")" >/dev/null 2>&1 || true
+	else
+		echo "::warning::Could not push empty commit to re-trigger review for standalone PR #${S_PR}."
+	fi
+	git checkout --detach HEAD 2>/dev/null || true
+done
+
+echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
