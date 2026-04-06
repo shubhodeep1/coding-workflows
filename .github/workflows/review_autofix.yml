@@ -2371,7 +2371,7 @@ jobs:
           echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
 
           git reset --hard HEAD
-          git clean -fd
+          git clean -fd -e .serena
 
           # The scripts may have been removed during artifact cleanup in the
           # commit step (caller repos delete fetched scripts before committing)
@@ -2428,6 +2428,15 @@ jobs:
           set -euo pipefail
 
           echo "Running Codex resolver"
+
+          # Recreate .serena/project.yml if it was removed (e.g. by git clean)
+          # so the Serena MCP server configured in ~/.codex/config.toml can start.
+          if [ ! -f .serena/project.yml ] && [ -f "${CODEX_HOME:-$HOME/.codex}/config.toml" ] \
+             && grep -q 'mcp_servers.serena' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; then
+            mkdir -p .serena
+            echo "project_root: $(pwd)" > .serena/project.yml
+            echo "Recreated .serena/project.yml for conflict resolver."
+          fi
 
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
 
