@@ -109,19 +109,19 @@ _pr_checks_completed()
 	fi
 
 	local incomplete
-	incomplete="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs" \
-		--jq '[.check_runs[] | select(.status != "completed")] | length' 2>/dev/null || echo "")"
+	incomplete="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" \
+		--jq '[.[].check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped"))] | length' 2>/dev/null || echo "")"
 	if [ -z "${incomplete}" ] || [ "${incomplete}" = "null" ]; then
 		echo "  [check-runs] Could not query check-runs for PR #${pr_number} (SHA ${head_sha:0:7}). Skipping merge."
 		return 1
 	fi
 
 	if [ "${incomplete}" -gt 0 ]; then
-		echo "  [check-runs] PR #${pr_number} has ${incomplete} check-run(s) still in progress (SHA ${head_sha:0:7}). Skipping merge."
+		echo "  [check-runs] PR #${pr_number} has ${incomplete} blocking check-run(s) (SHA ${head_sha:0:7}). Skipping merge."
 		return 1
 	fi
 
-	echo "  [check-runs] All check-runs completed for PR #${pr_number} (SHA ${head_sha:0:7}). Proceeding with merge."
+		echo "  [check-runs] All check-runs completed and acceptable for PR #${pr_number} (SHA ${head_sha:0:7}). Proceeding with merge."
 	return 0
 }
 
@@ -1026,8 +1026,9 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
           if [ -n "${PW_PR}" ] && [ "${PW_PR}" != "null" ]; then
             PW_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.state' 2>/dev/null || echo "")"
             PW_PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
-            if [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}"; then
-              gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --admin 2>/dev/null || true
+			if [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}"; then
+			  gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
+			    || gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
               gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}/update-branch" \
                 -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.head.sha' 2>/dev/null)" \
@@ -1109,14 +1110,16 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.state' 2>/dev/null || echo "")"
       PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
-        if _pr_checks_completed "${RTM_PR}"; then
-          echo "  Merging PR #${RTM_PR} (squash, admin)..."
-          if gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --admin; then
-            echo "  PR #${RTM_PR} merged."
-          else
-            echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
-          fi
-        fi
+		if _pr_checks_completed "${RTM_PR}"; then
+		  echo "  Merging PR #${RTM_PR} (squash)..."
+		  if gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
+		    echo "  PR #${RTM_PR} merge initiated."
+		  elif gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+		    echo "  PR #${RTM_PR} merged directly."
+		  else
+		    echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
+		  fi
+		fi
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
         echo "  PR #${RTM_PR} is not mergeable (mergeable=${PR_MERGEABLE}). Attempting branch update..."
         if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}/update-branch" \
@@ -1479,12 +1482,14 @@ sys.exit(1)
           # Attempt squash merge (with branch update if needed)
           PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
           PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
-          if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
-            if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --admin; then
-              echo "  PR #${RB_PR} merged (admin)."
-            else
-              echo "::warning::Could not merge PR #${RB_PR}."
-            fi
+		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
+		    if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
+		      echo "  PR #${RB_PR} merge initiated (auto)."
+		    elif gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+		      echo "  PR #${RB_PR} merged directly."
+		    else
+		      echo "::warning::Could not merge PR #${RB_PR}."
+		    fi
           elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
             echo "  PR #${RB_PR} is not mergeable. Attempting branch update..."
             if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
@@ -1524,8 +1529,9 @@ sys.exit(1)
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
             PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
-            if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
-              gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --admin || true
+			if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
+			  gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
+			    || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash || true
             elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
               echo "  PR #${RB_PR} is not mergeable (force-merge path). Attempting branch update..."
               if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
@@ -1688,9 +1694,10 @@ ${RB_FIX_DESC}
                   gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
                   PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-                  if [ "${PR_STATE}" = "open" ] && _pr_checks_completed "${RB_PR}"; then
-                    gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --admin || true
-                  fi
+			  if [ "${PR_STATE}" = "open" ] && _pr_checks_completed "${RB_PR}"; then
+			    gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
+			      || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash || true
+			  fi
                   tg_notify "✅ Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                 fi
               fi
