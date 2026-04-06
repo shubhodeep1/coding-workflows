@@ -1729,7 +1729,7 @@ ${RB_FIX_DESC}
     ensure_label_exists "ai:closed"
     gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
       --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
-    gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+    gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
       -c "Closing: implementation produced no changes. Re-issuing with additional guidance." 2>/dev/null || true
 
     # Create replacement issue with extra guidance
