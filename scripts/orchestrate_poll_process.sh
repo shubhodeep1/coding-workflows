@@ -21,7 +21,7 @@ if [ -f "scripts/tg_helpers.sh" ]; then
   source scripts/tg_helpers.sh
 fi
 
-# _gh_url constructs a GitHub URL path.
+# _gh_url constructs a full GitHub URL for the current repository.
 _gh_url() {
   if [ -z "${GITHUB_REPOSITORY:-}" ]; then
     printf ''
@@ -32,14 +32,22 @@ _gh_url() {
 
 # tg_notify wraps tg_send_tracked using the current TRACKING_NUM.
 # TRACKING_NUM is set inside the main per-issue loop below.
-# Automatically appends tracking issue link and runner log link.
+# Automatically appends tracking issue link and Actions run link.
 tg_notify() {
   local msg="$1"
+  local tracking_url run_url
+  
   if [ -n "${TRACKING_NUM:-}" ] && [ "${TRACKING_NUM}" != "0" ]; then
-    msg+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+    tracking_url="$(_gh_url "issues/${TRACKING_NUM}")"
+    if [ -n "${tracking_url}" ]; then
+      msg+=$'\n'"Tracking: ${tracking_url}"
+    fi
   fi
   if [ -n "${GITHUB_RUN_ID:-}" ]; then
-    msg+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+    run_url="$(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+    if [ -n "${run_url}" ]; then
+      msg+=$'\n'"Run: ${run_url}"
+    fi
   fi
   if [ -n "${TRACKING_NUM:-}" ]; then
     tg_send_tracked "${TRACKING_NUM}" "${msg}"

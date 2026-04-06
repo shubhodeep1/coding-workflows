@@ -84,14 +84,19 @@ if [ -f "scripts/tg_helpers.sh" ]; then
   source scripts/tg_helpers.sh
 fi
 
+
+# _gh_url constructs a full GitHub URL for the current repository.
+_gh_url() {
+  printf "%s/%s/%s" "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY}" "$1"
+}
 _tg_link_suffix()
 {
   local suffix=""
-  if [ -n "${TRACKING_ISSUE_RAW:-}" ] && [ "${TRACKING_ISSUE_RAW}" != "0" ] && [ -n "${GITHUB_SERVER_URL:-}" ]; then
-    suffix+=$'\n'"Issue: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_RAW}"
+  if [ -n "${TRACKING_ISSUE_RAW:-}" ] && [ "${TRACKING_ISSUE_RAW}" != "0" ]; then
+    suffix+=$'\n'"Issue: $(_gh_url "issues/${TRACKING_ISSUE_RAW}")"
   fi
-  if [ -n "${GITHUB_SERVER_URL:-}" ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
-    suffix+=$'\n'"Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    suffix+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
   fi
   printf '%s' "${suffix}"
 }
