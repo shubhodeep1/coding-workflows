@@ -130,13 +130,26 @@ jobs:
             script_ref="stable"
           fi
           mkdir -p scripts
-          gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=${script_ref}" > "scripts/tg_helpers.sh" 2>/dev/null || true
-          if [ -f scripts/tg_helpers.sh ]; then
+          helpers_tmp="$(mktemp)"
+          if gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=${script_ref}" > "${helpers_tmp}" 2>/dev/null && [ -s "${helpers_tmp}" ]; then
+            mv "${helpers_tmp}" "scripts/tg_helpers.sh"
             source scripts/tg_helpers.sh
+          else
+            rm -f "${helpers_tmp}"
           fi
 
-          tg_send_tracked "${ISSUE_NUMBER}" "Skipping implementation for issue ${ISSUE_URL} because a PR already exists."
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="Skipping implementation for issue #${ISSUE_NUMBER} — PR already exists."
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          if declare -F tg_send_tracked >/dev/null 2>&1; then
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+          else
+            echo "::warning::Telegram helper unavailable; skipping duplicate PR Telegram notification."
+          fi
 
       - name: Exit when existing PR is found
         if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true'
@@ -1067,10 +1080,12 @@ jobs:
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
-            MSG="AI implementation workflow cancelled/timed out for issue ${ISSUE_URL}"
+            MSG="AI implementation workflow cancelled/timed out for issue #${ISSUE_NUMBER}"
           else
-            MSG="AI implementation workflow failed for issue ${ISSUE_URL}"
+            MSG="AI implementation workflow failed for issue #${ISSUE_NUMBER}"
           fi
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"

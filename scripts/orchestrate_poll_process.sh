@@ -21,10 +21,34 @@ if [ -f "scripts/tg_helpers.sh" ]; then
   source scripts/tg_helpers.sh
 fi
 
+# _gh_url constructs a full GitHub URL for the current repository.
+_gh_url() {
+  if [ -z "${GITHUB_REPOSITORY:-}" ]; then
+    printf ''
+    return
+  fi
+  printf '%s/%s/%s' "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY}" "$1"
+}
+
 # tg_notify wraps tg_send_tracked using the current TRACKING_NUM.
 # TRACKING_NUM is set inside the main per-issue loop below.
+# Automatically appends tracking issue link and Actions run link.
 tg_notify() {
   local msg="$1"
+  local tracking_url run_url
+  
+  if [ -n "${TRACKING_NUM:-}" ] && [ "${TRACKING_NUM}" != "0" ]; then
+    tracking_url="$(_gh_url "issues/${TRACKING_NUM}")"
+    if [ -n "${tracking_url}" ]; then
+      msg+=$'\n'"Tracking: ${tracking_url}"
+    fi
+  fi
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    run_url="$(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+    if [ -n "${run_url}" ]; then
+      msg+=$'\n'"Run: ${run_url}"
+    fi
+  fi
   if [ -n "${TRACKING_NUM:-}" ]; then
     tg_send_tracked "${TRACKING_NUM}" "${msg}"
   else
@@ -244,7 +268,12 @@ mark_validation_complete() {
   gh_retry gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
     --comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle})." || true
   tg_cleanup_msgs "${TRACKING_NUM}"
-  tg_send_msg "✅ Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})." >/dev/null
+  MSG="✅ Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
+  MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+  fi
+  tg_send_msg "${MSG}" >/dev/null
 }
 
 extract_fix_issues_from_comment() {
@@ -478,7 +507,7 @@ Re-triggering the clarification phase. If the issue description is
 sufficient, proceed directly to planning and implementation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: re-triggered pipeline for issue #${issue_num} (stuck ${stall_minutes}m with no labels, attempt $((recovery_count + 1)))."
+      tg_notify "🔄 Stall recovery: re-triggered pipeline for issue #${issue_num} (stuck ${stall_minutes}m with no labels, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     auto_respond_clarify)
@@ -493,7 +522,7 @@ too long. The issue description is deemed sufficient — proceed with
 planning and implementation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: auto-responded to clarification on issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      tg_notify "🔄 Stall recovery: auto-responded to clarification on issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     retrigger_plan)
@@ -507,7 +536,7 @@ _Orchestrator stall recovery: planning phase stalled. Re-triggering
 plan generation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: re-triggered planning for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      tg_notify "🔄 Stall recovery: re-triggered planning for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     auto_approve)
@@ -521,7 +550,7 @@ _Orchestrator stall recovery: auto-approving plan. This is an
 orchestrator-managed issue that does not require human approval._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: auto-approved plan for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      tg_notify "🔄 Stall recovery: auto-approved plan for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     retrigger_implement)
@@ -536,7 +565,7 @@ Re-triggering implementation. If a previous attempt crashed or timed
 out, start fresh from the approved plan._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: re-triggered implementation for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+      tg_notify "🔄 Stall recovery: re-triggered implementation for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     retrigger_review)
@@ -558,7 +587,7 @@ STALL_EOF
             git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
             if git push origin "HEAD:${head_ref}" 2>/dev/null; then
               echo "  Pushed empty commit to PR #${pr_num} to re-trigger review."
-              tg_notify "🔄 Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."
+              tg_notify "🔄 Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
             else
               echo "::warning::Could not push to re-trigger review for PR #${pr_num}."
             fi
@@ -580,7 +609,7 @@ _Orchestrator stall recovery: issue is marked done but no PR was found.
 Re-triggering implementation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-        tg_notify "🔄 Stall recovery: re-triggered implement for issue #${issue_num} (ai:done but no PR, stuck ${stall_minutes}m)."
+        tg_notify "🔄 Stall recovery: re-triggered implement for issue #${issue_num} (ai:done but no PR, stuck ${stall_minutes}m)."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       fi
       ;;
 
@@ -588,7 +617,7 @@ STALL_EOF
       # Stuck at ai:ready-to-merge — retry the merge. The main merge logic
       # already handles this each poll cycle, so just log for diagnostics.
       echo "  Issue #${issue_num} stuck at ready-to-merge. Main merge loop will retry."
-      tg_notify "🔄 Stall recovery: issue #${issue_num} stuck at ready-to-merge for ${stall_minutes}m (attempt $((recovery_count + 1))). Merge loop will retry."
+      tg_notify "🔄 Stall recovery: issue #${issue_num} stuck at ready-to-merge for ${stall_minutes}m (attempt $((recovery_count + 1))). Merge loop will retry."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     close_and_reissue)
@@ -646,7 +675,7 @@ REISSUE_EOF
             "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         fi
 
-        tg_notify "🔄 Stall recovery: closed stalled issue #${issue_num} and re-issued as #${new_num} (phase: ${phase}, stuck ${stall_minutes}m)."
+        tg_notify "🔄 Stall recovery: closed stalled issue #${issue_num} and re-issued as #${new_num} (phase: ${phase}, stuck ${stall_minutes}m)."$'\n'"Old issue: $(_gh_url "issues/${issue_num}")"$'\n'"New issue: $(_gh_url "issues/${new_num}")"
       else
         echo "::warning::Could not create replacement issue for stalled #${issue_num}."
       fi
@@ -675,7 +704,7 @@ REISSUE_EOF
 
 The judge will evaluate this gap when the wave completes and decide whether to reissue, accept, or adjust the project."
 
-      tg_notify "⏭️ Issue #${issue_num} skipped after ${recovery_count} stall recovery attempts (${stall_minutes}m in '${phase}'). Judge will handle at wave completion."
+      tg_notify "⏭️ Issue #${issue_num} skipped after ${recovery_count} stall recovery attempts (${stall_minutes}m in '${phase}'). Judge will handle at wave completion."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
     *)
@@ -1009,7 +1038,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
               git merge --abort 2>/dev/null || true
               echo "  PR #${RTM_PR} has real merge conflicts — cannot auto-resolve from poller."
               echo "  The review workflow's Codex conflict resolver handles this on synchronize events."
-              tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has real merge conflicts. Attempting to re-trigger review workflow."
+              tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has real merge conflicts. Attempting to re-trigger review workflow."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")"
 
               # Force a synchronize event by creating an empty commit on the PR branch
               git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null || true
@@ -1073,6 +1102,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.sha' 2>/dev/null)" \
       2>/dev/null; then
       echo "  PR #${IP_PR} branch updated via API. Synchronize event will re-trigger review."
+      tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) had merge conflicts. Branch updated via API to re-trigger review."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
       continue
     fi
 
@@ -1088,7 +1118,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
       if git push origin "HEAD:${IP_HEAD_REF}" 2>/dev/null; then
         echo "  Pushed empty commit to PR #${IP_PR} to re-trigger review workflow."
-        tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Re-triggered review for auto-resolution."
+        tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Re-triggered review for auto-resolution."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
       else
         echo "::warning::Could not push empty commit to re-trigger review for PR #${IP_PR}."
       fi
@@ -1265,7 +1295,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
         echo "::warning::Review-blocked judge failed for issue #${rb_issue}"
-        tg_notify "⚠️ Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle."
+        tg_notify "⚠️ Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
         continue
       fi
 
@@ -1367,7 +1397,7 @@ sys.exit(1)
                 git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
                 git push origin "HEAD:${RB_HEAD_REF}" 2>/dev/null || {
                   echo "::warning::Could not push to re-trigger review for PR #${RB_PR}."
-                  tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts that could not be auto-resolved."
+                  tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts that could not be auto-resolved."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                 }
                 git checkout --detach HEAD 2>/dev/null || true
               else
@@ -1379,7 +1409,7 @@ sys.exit(1)
           fi
 
           REVIEW_BLOCKED_STATE_CHANGED=true
-          tg_notify "✅ Orchestrator judge merged review-blocked PR #${RB_PR} (issue #${rb_issue}): ${RB_JUSTIFICATION}"
+          tg_notify "✅ Orchestrator judge merged review-blocked PR #${RB_PR} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
           ;;
 
         fix)
@@ -1409,7 +1439,7 @@ sys.exit(1)
                   git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
                   git push origin "HEAD:${RB_HEAD_REF}" 2>/dev/null || {
                     echo "::warning::Could not push to re-trigger review for force-merge PR #${RB_PR}."
-                    tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) has unresolvable merge conflicts."
+                    tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) has unresolvable merge conflicts."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                   }
                   git checkout --detach HEAD 2>/dev/null || true
                 else
@@ -1418,7 +1448,7 @@ sys.exit(1)
               fi
             fi
             REVIEW_BLOCKED_STATE_CHANGED=true
-            tg_notify "✅ Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"
+            tg_notify "✅ Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
           else
             echo "  Judge is applying fixes to PR #${RB_PR}..."
             # Re-check PR state before expensive fix+push (race condition safety net)
@@ -1522,7 +1552,7 @@ ${RB_FIX_DESC}
                       echo "  Created follow-up PR: ${FOLLOWUP_PR_URL}"
                       gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                         --remove-label 'ai:review-blocked' 2>/dev/null || true
-                      tg_notify "🔧 Orchestrator judge created follow-up PR for merged PR #${RB_PR} (issue #${rb_issue}): ${FOLLOWUP_PR_URL}"
+                      tg_notify "🔧 Orchestrator judge created follow-up PR for merged PR #${RB_PR} (issue #${rb_issue}): ${FOLLOWUP_PR_URL}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                     else
                       echo "::warning::Failed to create follow-up PR for merged PR #${RB_PR}."
                     fi
@@ -1537,7 +1567,7 @@ ${RB_FIX_DESC}
                     # which re-runs review_autofix with a reset autofix counter.
                     gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                       --remove-label 'ai:review-blocked' 2>/dev/null || true
-                    tg_notify "🔧 Orchestrator judge pushed fix for review-blocked PR #${RB_PR} (issue #${rb_issue}, retry $((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES})"
+                    tg_notify "🔧 Orchestrator judge pushed fix for review-blocked PR #${RB_PR} (issue #${rb_issue}, retry $((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                   else
                     echo "::warning::Failed to push orchestrator fix for PR #${RB_PR}."
                   fi
@@ -1548,7 +1578,7 @@ ${RB_FIX_DESC}
                   echo "  No follow-up needed — merged PR has no outstanding fixes."
                   gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' 2>/dev/null || true
-                  tg_notify "✅ Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"
+                  tg_notify "✅ Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                 else
                   echo "  Treating as merge decision."
                   gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
@@ -1558,7 +1588,7 @@ ${RB_FIX_DESC}
                     gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
                       || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash || true
                   fi
-                  tg_notify "✅ Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"
+                  tg_notify "✅ Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                 fi
               fi
 
@@ -1616,10 +1646,10 @@ ${RB_FIX_DESC}
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
             fi
 
-            tg_notify "🔄 Orchestrator closed PR #${RB_PR} and reissued as #${NEW_NUM} (issue #${rb_issue}): ${RB_JUSTIFICATION}"
+            tg_notify "🔄 Orchestrator closed PR #${RB_PR} and reissued as #${NEW_NUM} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"New issue: $(_gh_url "issues/${NEW_NUM}")"$'\n'"Old issue: $(_gh_url "issues/${rb_issue}")"
           else
             echo "::warning::Judge chose close_and_reissue but provided no new issue details."
-            tg_notify "⚠️ Orchestrator closed PR #${RB_PR} (issue #${rb_issue}) but could not create replacement issue."
+            tg_notify "⚠️ Orchestrator closed PR #${RB_PR} (issue #${rb_issue}) but could not create replacement issue."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
           fi
 
           REVIEW_BLOCKED_STATE_CHANGED=true
@@ -1724,7 +1754,7 @@ REISSUE_EOF
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
 
-      tg_notify "🔄 Re-issued implementation-failed issue #${if_issue} as #${NEW_ISSUE_NUM}: ${IF_TITLE}"
+      tg_notify "🔄 Re-issued implementation-failed issue #${if_issue} as #${NEW_ISSUE_NUM}: ${IF_TITLE}"$'\n'"Old issue: $(_gh_url "issues/${if_issue}")"$'\n'"New issue: $(_gh_url "issues/${NEW_ISSUE_NUM}")"
       IMPL_FAILED_STATE_CHANGED=true
     else
       echo "::warning::Could not create replacement issue for #${if_issue}."
@@ -2092,7 +2122,12 @@ PRs to revert: ${REVERT_COUNT}"
           --comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s)." || true
 
         tg_cleanup_msgs "${TRACKING_NUM}"
-        tg_send_msg "✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved." >/dev/null
+        MSG="✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved."
+        MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+        if [ -n "${GITHUB_RUN_ID:-}" ]; then
+          MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+        fi
+        tg_send_msg "${MSG}" >/dev/null
         continue
       fi
 
