@@ -2619,6 +2619,22 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
+          if [ ! -f "scripts/label_helpers.sh" ]; then
+            wf_source="${{ github.repository_owner }}/coding-workflows"
+            if [ "${{ github.repository }}" = "${wf_source}" ]; then
+              script_ref="${{ github.sha }}"
+            else
+              script_ref="stable"
+            fi
+            mkdir -p scripts
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "scripts/label_helpers.sh" 2>/dev/null; then
+              echo "::warning::label_helpers.sh not found on ${script_ref}; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "scripts/label_helpers.sh"
+            fi
+            chmod +x "scripts/label_helpers.sh"
+          fi
           source scripts/label_helpers.sh
 
           echo "judge_handled=false" >> "$GITHUB_OUTPUT"
@@ -3058,6 +3074,22 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
+          if [ ! -f "scripts/label_helpers.sh" ]; then
+            wf_source="${{ github.repository_owner }}/coding-workflows"
+            if [ "${{ github.repository }}" = "${wf_source}" ]; then
+              script_ref="${{ github.sha }}"
+            else
+              script_ref="stable"
+            fi
+            mkdir -p scripts
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "scripts/label_helpers.sh" 2>/dev/null; then
+              echo "::warning::label_helpers.sh not found on ${script_ref}; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "scripts/label_helpers.sh"
+            fi
+            chmod +x "scripts/label_helpers.sh"
+          fi
           source scripts/label_helpers.sh
 
           ISSUE_NUMBERS="$(gh api graphql \
