@@ -1024,10 +1024,14 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
           # Fetch the PR head branch and base branch
           RTM_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
           if [ -n "${RTM_HEAD_REF}" ] && [ "${RTM_HEAD_REF}" != "null" ]; then
-            git fetch origin "${RTM_HEAD_REF}:refs/remotes/origin/${RTM_HEAD_REF}" 2>/dev/null || true
             DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
-            git fetch origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" 2>/dev/null || true
-            git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null || true
+            if ! git fetch origin "${RTM_HEAD_REF}:refs/remotes/origin/${RTM_HEAD_REF}" 2>/dev/null || \
+               ! git fetch origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" 2>/dev/null || \
+               ! git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null; then
+              echo "::warning::Could not fetch or checkout refs for PR #${RTM_PR}; skipping local conflict handling."
+              git checkout --detach HEAD 2>/dev/null || true
+              continue
+            fi
             git config user.name "codex-bot"
             git config user.email "codex@users.noreply.github.com"
 
@@ -1043,13 +1047,16 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
               tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has real merge conflicts. Attempting to re-trigger review workflow."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")"
 
               # Force a synchronize event by creating an empty commit on the PR branch
-              git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null || true
-              git config user.name "codex-bot"
-              git config user.email "codex@users.noreply.github.com"
-              git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
-              git push origin "HEAD:${RTM_HEAD_REF}" 2>/dev/null || {
-                echo "::warning::Could not push empty commit to re-trigger review for PR #${RTM_PR}."
-              }
+              if git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null; then
+                git config user.name "codex-bot"
+                git config user.email "codex@users.noreply.github.com"
+                git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
+                git push origin "HEAD:${RTM_HEAD_REF}" 2>/dev/null || {
+                  echo "::warning::Could not push empty commit to re-trigger review for PR #${RTM_PR}."
+                }
+              else
+                echo "::warning::Could not check out ${RTM_HEAD_REF} to re-trigger review for PR #${RTM_PR}."
+              fi
             else
               git merge --abort 2>/dev/null || true
               echo "::warning::Unexpected merge state for PR #${RTM_PR}."
@@ -1113,8 +1120,11 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     # workflow's Codex conflict resolver can handle it.
     IP_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
     if [ -n "${IP_HEAD_REF}" ] && [ "${IP_HEAD_REF}" != "null" ]; then
-      git fetch origin "${IP_HEAD_REF}:refs/remotes/origin/${IP_HEAD_REF}" 2>/dev/null || true
-      git checkout "origin/${IP_HEAD_REF}" 2>/dev/null || true
+      if ! git fetch origin "${IP_HEAD_REF}:refs/remotes/origin/${IP_HEAD_REF}" 2>/dev/null || ! git checkout "origin/${IP_HEAD_REF}" 2>/dev/null; then
+        echo "::warning::Could not fetch or checkout head ref ${IP_HEAD_REF} for PR #${IP_PR}; skipping review re-trigger."
+        git checkout --detach HEAD 2>/dev/null || true
+        continue
+      fi
       git config user.name "codex-bot"
       git config user.email "codex@users.noreply.github.com"
       git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
@@ -1394,8 +1404,11 @@ sys.exit(1)
               echo "  API branch update failed for review-blocked PR #${RB_PR}. Pushing empty commit to re-trigger review workflow..."
               RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
               if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
-                git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || true
-                git checkout "origin/${RB_HEAD_REF}" 2>/dev/null || true
+                if ! git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || ! git checkout "origin/${RB_HEAD_REF}" 2>/dev/null; then
+                  echo "::warning::Could not fetch or checkout head ref ${RB_HEAD_REF} for PR #${RB_PR}; skipping review re-trigger."
+                  git checkout --detach HEAD 2>/dev/null || true
+                  continue
+                fi
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
                 git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
@@ -1437,8 +1450,11 @@ sys.exit(1)
                 echo "  API branch update failed for force-merge PR #${RB_PR}. Re-triggering review for conflict resolution..."
                 RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
                 if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
-                  git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || true
-                  git checkout "origin/${RB_HEAD_REF}" 2>/dev/null || true
+                  if ! git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || ! git checkout "origin/${RB_HEAD_REF}" 2>/dev/null; then
+                    echo "::warning::Could not fetch or checkout head ref ${RB_HEAD_REF} for force-merge PR #${RB_PR}; skipping review re-trigger."
+                    git checkout --detach HEAD 2>/dev/null || true
+                    continue
+                  fi
                   git config user.name "codex-bot"
                   git config user.email "codex@users.noreply.github.com"
                   git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
