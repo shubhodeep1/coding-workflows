@@ -82,7 +82,7 @@ jobs:
           # scripts (e.g. writing to mcp.json instead of config.toml) cause
           # silent MCP failures ("mcp startup: no servers").
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh tg_helpers.sh; do
+          for f in setup_serena.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -154,7 +154,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/label_helpers.sh
           # Add clarification label
+          ensure_label_exists "ai:clarification" "${{ github.repository }}"
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           # Remove stale phase labels only on /reclarify (new issues won't have them)
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
@@ -569,7 +571,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/label_helpers.sh
           # Swap label from ai:clarification to ai:planning since no questions needed.
+          ensure_label_exists "ai:planning" "${{ github.repository }}"
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
 
