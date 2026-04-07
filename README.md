@@ -14,6 +14,7 @@ This repository contains reusable `workflow_call` workflows that power the full 
 6. **Cancel on PR Close** — Cancels orphaned workflow runs when PRs close
 7. **Memory Maintenance** — Monthly compaction and archival of AI memory records
 8. **Validate** — Runtime harness generation + local Docker smoke validation with machine-readable results
+9. **Update Workflows** — Automatically updates workflow wrappers in consumer repos when upstream templates change
 
 ## Quickstart
 
@@ -38,7 +39,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `WORKFLOW_EDITOR_MODEL` | No | `openai/gpt-5.3-codex` | clarify, plan, implement, review_autofix | Model for code editing tasks |
 | `WORKFLOW_VALIDATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | validate | Model override for validation harness generation/diagnosis |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | No | `true` | plan | Auto-trigger implementation when plan is clear |
-| `ALLOW_WORKFLOW_EDITS` | No | `false` | review_autofix, implement | Allow AI edits to `.github/workflows` files |
+| `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. |
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | No | `true` | review_autofix | When true, non-orchestrator PRs that exhaust autofix iterations invoke a judge (LLM) to decide: merge as-is, push a fix commit, or close and reissue. Orchestrator-managed PRs are skipped (handled by the poller). PRs without linked issues use the PR title/body as requirement context. |
@@ -168,7 +169,7 @@ jobs:
   review:
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
     with:
-      allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
+      allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' }}
     secrets: inherit
 ```
 
@@ -335,6 +336,41 @@ jobs:
     secrets: inherit
 ```
 
+**`.github/workflows/ai-update-workflows.yml`** — Automatically updates workflow wrappers when upstream templates change
+```yaml
+# This workflow automatically updates AI workflow wrappers in this repo
+# when new versions are published to coding-workflows@stable.
+#
+# Opting out:
+#   Set the ALLOW_WORKFLOW_EDITS repository variable to 'false' to prevent
+#   automatic updates. The workflow will still run but skip all changes.
+#
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
+name: AI Update Workflows
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  repository_dispatch:
+    types: [coding-workflows-stable-released]
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  update:
+    uses: shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@stable
+    secrets: inherit
+```
+
+> **How auto-updates work:** The update workflow runs daily and also triggers
+> immediately when a new `@stable` release is tagged (via `repository_dispatch`
+> from this repo). It fetches the latest templates from
+> `coding-workflows@stable`, compares them against your local wrappers, and
+> overwrites any that have changed. A Telegram alert lists which files were
+> updated. To opt out, set `ALLOW_WORKFLOW_EDITS` to `false`. If you have
+> customized a wrapper and want to keep your changes, either opt out or
+> maintain your customizations after each update.
+
 > All internal wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
 
 ### 3. Open an issue
@@ -386,6 +422,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `orchestrate.yml` | `workflow_dispatch` | Project decomposition + multi-issue orchestration |
 | `orchestrate_clarify_respond.yml` | `issue_comment.created` | Auto-answers clarification questions on orchestrator issues |
 | `orchestrate_poll.yml` | `schedule` (every ~10 min) | Orchestrator progress poller + judge + auto-recovery |
+| `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates workflow wrappers from upstream templates |
 
 ## Required Secrets
 
@@ -402,7 +439,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `WORKFLOW_EDITOR_MODEL` | `openai/gpt-5.3-codex` | Model for code editing tasks |
 | `TG_ADMIN_CHAT_ID` | — | Telegram chat ID for notifications |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | `true` | Auto-approve clear plans |
-| `ALLOW_WORKFLOW_EDITS` | `false` | Allow AI edits to workflow files |
+| `ALLOW_WORKFLOW_EDITS` | `true` | Allow AI edits to workflow files and automatic wrapper updates |
 | `ENABLE_AUTO_MERGE` | `true` | Auto-merge PRs (squash) when review passes and checks are green |
 | `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before marking `ai:review-blocked` |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | `true` | Enable review-blocked judge for non-orchestrator PRs |

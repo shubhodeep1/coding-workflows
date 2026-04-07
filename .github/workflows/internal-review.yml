@@ -13,5 +13,5 @@ jobs:
   review:
     uses: ./.github/workflows/review_autofix.yml
     with:
-      allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
+      allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' }}
     secrets: inherit

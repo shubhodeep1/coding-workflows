@@ -179,6 +179,38 @@ jobs:
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
             --target main
 
+      - name: Notify consumer repos via repository_dispatch
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+
+          # Read consumer repos from .github/ai/consumer_repos.json (one
+          # entry per line, e.g. "owner/repo").  If the file is absent the
+          # step is a no-op — consumers still pick up changes via their
+          # daily schedule.
+          CONSUMER_FILE=".github/ai/consumer_repos.json"
+          if [ ! -f "$CONSUMER_FILE" ]; then
+            echo "No consumer_repos.json found — skipping repository_dispatch."
+            exit 0
+          fi
+
+          REPOS=$(jq -r '.[]' "$CONSUMER_FILE" 2>/dev/null || true)
+          if [ -z "$REPOS" ]; then
+            echo "consumer_repos.json is empty — skipping."
+            exit 0
+          fi
+
+          for REPO in $REPOS; do
+            echo "Dispatching coding-workflows-stable-released to ${REPO} ..."
+            gh api "repos/${REPO}/dispatches" \
+              -f event_type="coding-workflows-stable-released" \
+              -f "client_payload[version]=${VERSION}" \
+              || echo "::warning::Failed to dispatch to ${REPO} (may lack permissions)"
+          done
+
       - name: Dry-run summary
         if: ${{ inputs.dry_run }}
         run: |

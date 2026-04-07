@@ -10,7 +10,7 @@ on:
       allow_workflow_edits:
         description: "Allow AI/editor changes to .github/workflows files"
         required: false
-        default: false
+        default: true
         type: boolean
     secrets:
       GH_PAT:
@@ -43,7 +43,7 @@ jobs:
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number || github.event.pull_request.number }}
-      ALLOW_WORKFLOW_EDITS: ${{ inputs.allow_workflow_edits || vars.ALLOW_WORKFLOW_EDITS || 'false' }}
+      ALLOW_WORKFLOW_EDITS: ${{ inputs.allow_workflow_edits || vars.ALLOW_WORKFLOW_EDITS || 'true' }}
 
     steps:
 
