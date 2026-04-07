@@ -3253,7 +3253,8 @@ jobs:
               echo "Direct dispatch failed; trying caller workflow: ${caller_workflow}"
               if gh workflow run "${caller_workflow}" \
                 --ref "${TARGET_BRANCH}" \
-                -f pr_number="${PR_NUMBER}"; then
+                -f pr_number="${PR_NUMBER}" \
+                -f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}"; then
                 echo "Dispatched ${caller_workflow} on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
                 dispatched=true
               fi

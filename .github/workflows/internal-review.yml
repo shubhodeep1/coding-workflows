@@ -9,6 +9,11 @@ on:
         description: "Pull request number to review (used by autofix re-trigger)"
         required: true
         type: string
+      allow_workflow_edits:
+        description: "Allow AI/editor changes to .github/workflows files"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -20,5 +25,5 @@ jobs:
     uses: ./.github/workflows/review_autofix.yml
     with:
       pr_number: ${{ github.event.inputs.pr_number || '' }}
-      allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
+      allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || vars.ALLOW_WORKFLOW_EDITS == 'true' }}
     secrets: inherit
