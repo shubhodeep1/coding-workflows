@@ -10,7 +10,7 @@ on:
       allow_workflow_edits:
         description: "Allow AI/editor changes to .github/workflows files"
         required: false
-        default: false
+        default: true
         type: boolean
     secrets:
       GH_PAT:
@@ -54,7 +54,7 @@ jobs:
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
-      ALLOW_WORKFLOW_EDITS: ${{ inputs.allow_workflow_edits || vars.ALLOW_WORKFLOW_EDITS || 'false' }}
+      ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
 
     steps:
 
@@ -3288,7 +3288,7 @@ jobs:
           #    and the caller is a different file.
           if [ "${dispatched}" = "false" ]; then
             caller_ref="${{ github.workflow_ref }}"
-            caller_workflow="$(echo "${caller_ref}" | sed -n 's|.*/\.github/workflows/\([^@]*\)@.*|\1|p')"
+            caller_workflow="$(basename "${caller_ref%%@*}")"
             if [ -z "${caller_workflow}" ]; then
               caller_workflow="internal-review.yml"
             fi
@@ -3301,6 +3301,18 @@ jobs:
                 echo "Dispatched ${caller_workflow} on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
                 dispatched=true
               fi
+            else
+              for candidate in ai-review.yml internal-review.yml; do
+                echo "Direct dispatch failed; trying caller workflow: ${candidate}"
+                if gh workflow run "${candidate}" \
+                  --ref "${TARGET_BRANCH}" \
+                  -f pr_number="${PR_NUMBER}" \
+                  -f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}"; then
+                  echo "Dispatched ${candidate} on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
+                  dispatched=true
+                  break
+                fi
+              done
             fi
           fi
 

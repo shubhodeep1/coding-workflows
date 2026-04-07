@@ -1,0 +1,168 @@
+---
+name: Update Workflow Wrappers
+
+"on":
+  workflow_call:
+    inputs:
+      allow_workflow_edits:
+        description: "Allow automatic workflow wrapper updates"
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      GH_PAT:
+        required: true
+      TG_BOT_SECRET:
+        required: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  update-wrappers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ inputs.allow_workflow_edits != false }}
+    steps:
+      - name: Checkout consumer repo
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 1
+
+      - name: Fetch latest workflow templates from coding-workflows@stable
+        id: fetch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          TEMPLATES_REPO="shubhodeep1/coding-workflows"
+          TEMPLATES_REF="stable"
+          TEMPLATES_DIR="workflow-templates"
+
+          # Clone only the workflow-templates directory (sparse checkout)
+          TMPDIR=$(mktemp -d)
+          git clone --depth 1 --branch "${TEMPLATES_REF}" \
+            --filter=blob:none --sparse \
+            "https://x-access-token:${GH_TOKEN}@github.com/${TEMPLATES_REPO}.git" \
+            "${TMPDIR}/upstream"
+          cd "${TMPDIR}/upstream"
+          git sparse-checkout set "${TEMPLATES_DIR}"
+          cd -
+
+          echo "upstream_dir=${TMPDIR}/upstream/${TEMPLATES_DIR}" >> "$GITHUB_OUTPUT"
+
+      - name: Compare and update workflow wrappers
+        id: update
+        run: |
+          set -euo pipefail
+
+          UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
+          LOCAL_DIR=".github/workflows"
+          UPDATED_FILES=""
+          SKIPPED_FILES=""
+          TOTAL_CHECKED=0
+          TOTAL_UPDATED=0
+
+          shopt -s nullglob
+          for upstream_file in "${UPSTREAM_DIR}"/*.yml; do
+            filename=$(basename "$upstream_file")
+            local_file="${LOCAL_DIR}/${filename}"
+            TOTAL_CHECKED=$((TOTAL_CHECKED + 1))
+
+            if [ ! -f "$local_file" ]; then
+              # Consumer doesn't use this template — skip
+              SKIPPED_FILES="${SKIPPED_FILES}${filename} (not present)\n"
+              continue
+            fi
+
+            # Compare content (ignore trailing whitespace differences)
+            if ! diff -q --strip-trailing-cr --ignore-space-at-eol "$upstream_file" "$local_file" >/dev/null 2>&1; then
+              echo "Updating: ${filename}"
+              cp "$upstream_file" "$local_file"
+              TOTAL_UPDATED=$((TOTAL_UPDATED + 1))
+              UPDATED_FILES="${UPDATED_FILES}• ${filename}\n"
+            fi
+          done
+          shopt -u nullglob
+
+          echo "templates_checked=${TOTAL_CHECKED}" >> "$GITHUB_OUTPUT"
+          echo "templates_updated=${TOTAL_UPDATED}" >> "$GITHUB_OUTPUT"
+
+          # Store multi-line outputs via files
+          printf '%s' "$UPDATED_FILES" > /tmp/updated_files.txt
+          printf '%s' "$SKIPPED_FILES" > /tmp/skipped_files.txt
+
+          if [ "$TOTAL_UPDATED" -eq 0 ]; then
+            echo "All workflow wrappers are up to date."
+            echo "has_updates=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_updates=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push updates
+        if: steps.update.outputs.has_updates == 'true'
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .github/workflows/
+          git commit -m "chore: update AI workflow wrappers from coding-workflows@stable
+
+          Updated templates:
+          $(cat /tmp/updated_files.txt)
+          Auto-applied by ai-update-workflows. To opt out, set the
+          ALLOW_WORKFLOW_EDITS repository variable to 'false'."
+
+          git push
+
+      - name: Send Telegram notification
+        if: steps.update.outputs.has_updates == 'true'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID:-}" ]; then
+            echo "::warning::Telegram not configured (TG_BOT_SECRET or TG_ADMIN_CHAT_ID missing) — skipping notification."
+            exit 0
+          fi
+
+          REPO="${{ github.repository }}"
+          UPDATED_COUNT="${{ steps.update.outputs.templates_updated }}"
+          UPDATED_LIST=$(cat /tmp/updated_files.txt)
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          MSG="🔄 Workflow wrappers updated in ${REPO}
+
+          ${UPDATED_COUNT} wrapper(s) updated:
+          ${UPDATED_LIST}
+          Source: coding-workflows@stable
+          Run: ${RUN_URL}"
+
+          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "disable_web_page_preview=true" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
+
+      - name: Summary
+        run: |
+          set -euo pipefail
+          echo "### Workflow Wrapper Update" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Templates checked:** ${{ steps.update.outputs.templates_checked }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Templates updated:** ${{ steps.update.outputs.templates_updated }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ steps.update.outputs.has_updates }}" = "true" ]; then
+            echo "**Updated files:**" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/updated_files.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "All wrappers are up to date." >> "$GITHUB_STEP_SUMMARY"
+          fi

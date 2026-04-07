@@ -1,0 +1,33 @@
+# This workflow automatically updates AI workflow wrappers in this repo
+# when new versions are published to coding-workflows@stable.
+#
+# How it works:
+#   - Runs daily (04:00 UTC) and on repository_dispatch from the upstream
+#     coding-workflows repo when a new stable release is tagged.
+#   - Fetches the latest workflow templates from coding-workflows@stable.
+#   - Compares each template against the local wrapper in .github/workflows/.
+#   - If differences are found, overwrites the local wrapper with the upstream
+#     template and commits directly to the default branch.
+#   - Sends a Telegram alert listing which wrappers were updated.
+#
+# Opting out:
+#   Set the ALLOW_WORKFLOW_EDITS repository variable to 'false' to prevent
+#   automatic updates. The workflow will still run but skip all changes.
+#
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
+name: AI Update Workflows
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  repository_dispatch:
+    types: [coding-workflows-stable-released]
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  update:
+    uses: shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@stable
+    with:
+      allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' }}
+    secrets: inherit

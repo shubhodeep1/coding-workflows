@@ -1,3 +1,6 @@
+# IMPORTANT: This file is managed by coding-workflows and may be overwritten
+# automatically when upstream templates change. To opt out of auto-updates,
+# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
 name: AI Review
 on:
   pull_request:
@@ -22,5 +25,5 @@ jobs:
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
     with:
       pr_number: ${{ github.event.inputs.pr_number || '' }}
-      allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || vars.ALLOW_WORKFLOW_EDITS == 'true' }}
+      allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && vars.ALLOW_WORKFLOW_EDITS != 'false') }}
     secrets: inherit
