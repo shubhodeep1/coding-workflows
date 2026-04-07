@@ -11,5 +11,8 @@ permissions:
   pull-requests: write
 jobs:
   implement:
+    if: >-
+      github.event.issue.pull_request == null &&
+      startsWith(github.event.comment.body, '/approved')
     uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@stable
     secrets: inherit

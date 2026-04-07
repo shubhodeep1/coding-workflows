@@ -10,5 +10,8 @@ permissions:
   issues: write
 jobs:
   plan:
+    if: >-
+      github.event.issue.pull_request == null &&
+      startsWith(github.event.comment.body, '/answer')
     uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@stable
     secrets: inherit
