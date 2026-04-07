@@ -3,6 +3,16 @@ name: AI Orchestrate Poller (Reusable)
 
 "on":
   workflow_call:
+    inputs:
+      caller_workflow:
+        description: >
+          Filename of the caller wrapper workflow to retrigger for continuous
+          polling.  The poller dispatches this workflow at the end of each run
+          so the next cycle starts immediately instead of waiting for the cron
+          schedule.  Set to empty string to disable self-retrigger.
+        required: false
+        type: string
+        default: ai-orchestrate-poll.yml
     secrets:
       GH_PAT:
         required: true
@@ -223,3 +233,20 @@ jobs:
               echo "| Tracking issues processed | 0 |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retrigger poller for continuous polling
+        if: >-
+          !cancelled()
+          && steps.find_tracking.outputs.has_work == 'true'
+          && inputs.caller_workflow != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          CALLER="${{ inputs.caller_workflow }}"
+          echo "Retriggering ${CALLER} for continuous polling…"
+          if gh workflow run "${CALLER}" --repo "${{ github.repository }}"; then
+            echo "Successfully dispatched ${CALLER}"
+          else
+            echo "::warning::Failed to retrigger ${CALLER}; cron schedule will resume the chain"
+          fi
