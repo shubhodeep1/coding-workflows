@@ -2639,25 +2639,41 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
-          if [ -f scripts/label_helpers.sh ]; then
-            source scripts/label_helpers.sh
+          if [ -f scripts/label_helpers.sh ] && source scripts/label_helpers.sh 2>/dev/null; then
+            :
           else
-            # Helper artifacts can be removed in merge-conflict cleanup paths.
-            ensure_label_exists() {
-              local label_name="$1"
-              local repo="$2"
-              case "${label_name}" in
-                ai:ready-to-merge)
-                  gh label create "${label_name}" --repo "${repo}" --color "0e8a16" --description "PR review complete and ready to merge" 2>/dev/null || true
-                  ;;
-                ai:closed)
-                  gh label create "${label_name}" --repo "${repo}" --color "6a737d" --description "Linked PR closed without merge" 2>/dev/null || true
-                  ;;
-                *)
-                  gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
-                  ;;
-              esac
-            }
+            # Try to re-fetch the helper script if it was removed during cleanup.
+            wf_source="${{ github.repository_owner }}/coding-workflows"
+            if [ "${{ github.repository }}" = "${wf_source}" ]; then
+              script_ref="${{ github.sha }}"
+            else
+              script_ref="stable"
+            fi
+            mkdir -p scripts
+            if { gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "scripts/label_helpers.sh" 2>/dev/null || \
+               gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "scripts/label_helpers.sh" 2>/dev/null; } && \
+              [ -s "scripts/label_helpers.sh" ] && source scripts/label_helpers.sh 2>/dev/null; then
+              chmod +x "scripts/label_helpers.sh"
+            else
+              # Last-resort inline fallback if fetch fails.
+              ensure_label_exists() {
+                local label_name="$1"
+                local repo="$2"
+                case "${label_name}" in
+                  ai:ready-to-merge)
+                    gh label create "${label_name}" --repo "${repo}" --color "0e8a16" --description "PR review complete and ready to merge" 2>/dev/null || true
+                    ;;
+                  ai:closed)
+                    gh label create "${label_name}" --repo "${repo}" --color "6a737d" --description "Linked PR closed without merge" 2>/dev/null || true
+                    ;;
+                  *)
+                    gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
+                    ;;
+                esac
+              }
+            fi
           fi
 
           echo "judge_handled=false" >> "$GITHUB_OUTPUT"
@@ -3100,6 +3116,37 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
+          if [ -f scripts/label_helpers.sh ] && source scripts/label_helpers.sh 2>/dev/null; then
+            :
+          else
+            wf_source="${{ github.repository_owner }}/coding-workflows"
+            if [ "${{ github.repository }}" = "${wf_source}" ]; then
+              script_ref="${{ github.sha }}"
+            else
+              script_ref="stable"
+            fi
+            mkdir -p scripts
+            if { gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "scripts/label_helpers.sh" 2>/dev/null || \
+               gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "scripts/label_helpers.sh" 2>/dev/null; } && \
+              [ -s "scripts/label_helpers.sh" ] && source scripts/label_helpers.sh 2>/dev/null; then
+              chmod +x "scripts/label_helpers.sh"
+            else
+              ensure_label_exists() {
+                local label_name="$1"
+                local repo="$2"
+                case "${label_name}" in
+                  ai:review-blocked)
+                    gh label create "${label_name}" --repo "${repo}" --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" 2>/dev/null || true
+                    ;;
+                  *)
+                    gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
+                    ;;
+                esac
+              }
+            fi
+          fi
 
           ISSUE_NUMBERS="$(gh api graphql \
             -f owner="${REPOSITORY%/*}" \
@@ -3120,9 +3167,7 @@ jobs:
             echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
           fi
 
-          gh label create "ai:review-blocked" --repo "${REPOSITORY}" \
-            --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
-            2>/dev/null || true
+          ensure_label_exists "ai:review-blocked" "${REPOSITORY}"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number}"
