@@ -26,6 +26,8 @@ jobs:
 
       - name: Fetch latest workflow templates from coding-workflows@stable
         id: fetch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -37,7 +39,7 @@ jobs:
           TMPDIR=$(mktemp -d)
           git clone --depth 1 --branch "${TEMPLATES_REF}" \
             --filter=blob:none --sparse \
-            "https://github.com/${TEMPLATES_REPO}.git" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${TEMPLATES_REPO}.git" \
             "${TMPDIR}/upstream"
           cd "${TMPDIR}/upstream"
           git sparse-checkout set "${TEMPLATES_DIR}"
@@ -81,8 +83,8 @@ jobs:
           echo "templates_updated=${TOTAL_UPDATED}" >> "$GITHUB_OUTPUT"
 
           # Store multi-line outputs via files
-          printf '%b' "$UPDATED_FILES" > /tmp/updated_files.txt
-          printf '%b' "$SKIPPED_FILES" > /tmp/skipped_files.txt
+          printf '%s' "$UPDATED_FILES" > /tmp/updated_files.txt
+          printf '%s' "$SKIPPED_FILES" > /tmp/skipped_files.txt
 
           if [ "$TOTAL_UPDATED" -eq 0 ]; then
             echo "All workflow wrappers are up to date."
@@ -118,7 +120,7 @@ jobs:
           set -euo pipefail
 
           if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID:-}" ]; then
-            echo "Telegram not configured — skipping notification."
+            echo "::warning::Telegram not configured (TG_BOT_SECRET or TG_ADMIN_CHAT_ID missing) — skipping notification."
             exit 0
           fi
 
