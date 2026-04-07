@@ -908,7 +908,25 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     fi
 
     if has_label "${TRACKING_LABELS}" "ai:validation-failed"; then
-      mark_validation_failed "Validation workflow reported failure (label ai:validation-failed)."
+      # Extract the detailed failure diagnosis from the most recent validation
+      # comment posted by validate_process.sh (matches headings like
+      # "Runtime validation failed", "Runtime validation harness error",
+      # "Runtime validation infeasible", or "Runtime validation found fixable issues").
+      VALIDATION_FAIL_BODY="$(echo "${COMMENTS}" | jq -r '
+        [.[] | select(.body | test("## [❌🧪⚠️]+ Runtime validation"))] | last | .body // ""
+      ')"
+      if [ -n "${VALIDATION_FAIL_BODY}" ] && [ "${VALIDATION_FAIL_BODY}" != "" ]; then
+        # Store the diagnosis in state and skip the duplicate comment —
+        # the detailed comment is already on the issue.
+        jq --arg reason "${VALIDATION_FAIL_BODY}" '.status = "failed" | .validation_failure_reason = $reason | .validation_active_fix_issues = []' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment
+        set_tracking_phase_label "ai:validation-failed"
+        tg_notify "❌ Project #${TRACKING_NUM} validation failed (see tracking issue for diagnosis)."
+        tg_cleanup_msgs "${TRACKING_NUM}"
+      else
+        mark_validation_failed "Validation workflow reported failure (label ai:validation-failed)."
+      fi
       continue
     fi
 

@@ -28,6 +28,23 @@ Mandatory rules:
 - Ensure all generated `.sh` files are executable (for example, with `chmod +x`).
 - If no Dockerfile exists for the app, generate a minimal Dockerfile for validation and wire it into `validation/docker-compose.test.yml`.
 
+Docker build-context path rules (CRITICAL):
+- `docker compose` resolves `build.context` relative to the compose file's directory, NOT the working directory.
+- Since `validation/docker-compose.test.yml` lives inside `validation/`, a `context: .` resolves to the `validation/` directory.
+- To reference the repository root as the build context, use `context: ..` (one level up from the compose file).
+- The `dockerfile` path is resolved relative to the resolved `context` directory.
+- CORRECT examples when the Dockerfile is at `validation/Dockerfile.app`:
+    context: ..
+    dockerfile: validation/Dockerfile.app
+  Or when the Dockerfile is at `validation/Dockerfile.app` and you want context inside `validation/`:
+    context: .
+    dockerfile: Dockerfile.app
+- WRONG (double-nesting bug):
+    context: .
+    dockerfile: validation/Dockerfile.app
+  This resolves to `validation/validation/Dockerfile.app` which does not exist.
+- After generating the compose file, mentally verify that `<resolved_context>/<dockerfile>` points to a real file.
+
 `validation/validate.sh` requirements:
 - Bash shell with `set -euo pipefail`
 - Include `#!/usr/bin/env bash` as the first line
