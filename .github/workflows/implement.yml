@@ -1098,11 +1098,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          # tg_helpers.sh may have been removed by the commit-step cleanup
-          # (it's a fetched artifact). Guard against its absence.
-          if [ -f scripts/tg_helpers.sh ]; then
-            source scripts/tg_helpers.sh
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "tg_helpers.sh not available; skipping Telegram notification."
+            exit 0
           fi
+          source scripts/tg_helpers.sh
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
