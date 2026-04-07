@@ -2149,6 +2149,12 @@ jobs:
             echo "Removing newly created files before commit (editor may not create new files):"
             while IFS= read -r -d '' created_file; do
               [ -n "${created_file}" ] || continue
+              # Preserve infrastructure dirs needed by the conflict resolver step.
+              # They are cleaned up after conflict resolution (or are harmless
+              # untracked files if no conflicts exist).
+              case "${created_file}" in
+                .serena/*|scripts/*|prompts/*) continue ;;
+              esac
               echo "- ${created_file}"
               if ! rm -rf -- "${created_file}"; then
                 echo "Failed to remove newly created path: ${created_file}"
@@ -2168,18 +2174,19 @@ jobs:
           # Remove workflow-generated/fetched artifacts so they are never
           # committed to caller repos.  Skip when running on coding-workflows
           # itself — these files are actual source code there, not artifacts.
+          # NOTE: .serena/, scripts/, and prompts/ are preserved here for the
+          # conflict resolver step (codex exec needs Serena MCP + model catalog).
+          # They are cleaned up after conflict resolution.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh
-            rm -rf .serena
           fi
 
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
           git add -u -- ':!node_modules'
-          git ls-files --others --exclude-standard -z -- ':!node_modules' | xargs -0 -r git add --
+          git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' | xargs -0 -r git add --
 
           if git diff --cached --quiet; then
             echo "No repository changes to commit."
@@ -2524,8 +2531,8 @@ jobs:
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh
-            rm -rf .serena
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/codex_model_catalog.json
+            rm -rf .serena prompts
           fi
 
           if [ -n "$(git status --porcelain)" ]; then
