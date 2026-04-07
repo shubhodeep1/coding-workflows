@@ -2507,11 +2507,6 @@ jobs:
             sleep 2
           done
 
-          if [ -n "$(git status --porcelain .github/workflows)" ]; then
-            echo "Discarding workflow-file edits from conflict resolver."
-            git checkout -- .github/workflows || true
-          fi
-
           # Remove workflow-generated/fetched artifacts so they are never
           # committed to caller repos.  Skip when running on coding-workflows
           # itself — these files are actual source code there, not artifacts.
