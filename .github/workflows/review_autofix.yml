@@ -3197,60 +3197,38 @@ jobs:
           git push origin "HEAD:${TARGET_BRANCH}"
           echo "Push complete."
 
-      - name: Re-trigger review when workflow files changed
-        # When the pushed commits include changes to .github/workflows/,
-        # the pull_request synchronize event may silently skip the review
-        # workflow because GitHub resolves reusable workflow refs from the
-        # merge ref (refs/pull/N/merge) which can be unbuildable when
-        # workflow files diverge between the PR branch and base branch.
-        # Fall back to workflow_dispatch which resolves from the target ref.
+      - name: Re-trigger review via workflow_dispatch
+        # The push above fires a pull_request synchronize event, but GitHub
+        # resolves reusable workflow refs from the merge ref
+        # (refs/pull/N/merge).  When that merge ref is unbuildable (e.g.
+        # main advanced and introduced new conflicts), the caller workflow
+        # is silently skipped.  Dispatch the caller workflow explicitly as
+        # a fallback — workflow_dispatch resolves from the target ref (the
+        # PR branch), which always exists.  The concurrency group ensures
+        # only one run proceeds if both the synchronize event and this
+        # dispatch fire successfully.
         if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
-          # Check if any pushed commit touched workflow files.
-          workflow_changed=false
-          for sha in $(git log --format='%H' "origin/${TARGET_BRANCH}..HEAD" 2>/dev/null || true); do
-            if git diff-tree --no-commit-id --name-only -r "${sha}" | grep -q '^\.github/workflows/'; then
-              workflow_changed=true
-              break
-            fi
-          done
-
-          # After a successful push, HEAD and origin/TARGET_BRANCH are the
-          # same — the above range is empty.  Fall back to checking the
-          # commits we know we just pushed.
-          if [ "${workflow_changed}" = "false" ]; then
-            merge_base="$(git merge-base HEAD "origin/${{ github.event.pull_request.base.ref || 'main' }}" 2>/dev/null || true)"
-            if [ -n "${merge_base}" ]; then
-              if git diff --name-only "${merge_base}..HEAD" | grep -q '^\.github/workflows/'; then
-                workflow_changed=true
-              fi
-            fi
+          # Extract the caller workflow filename from github.workflow_ref.
+          # Format: owner/repo/.github/workflows/<file>@<ref>
+          caller_ref="${{ github.workflow_ref }}"
+          review_workflow="$(echo "${caller_ref}" | sed -n 's|.*/\.github/workflows/\([^@]*\)@.*|\1|p')"
+          if [ -z "${review_workflow}" ]; then
+            review_workflow="internal-review.yml"
+            echo "Could not parse caller workflow from '${caller_ref}', falling back to ${review_workflow}"
           fi
 
-          if [ "${workflow_changed}" = "true" ]; then
-            echo "Workflow files changed in pushed commits — dispatching review workflow on ${TARGET_BRANCH}."
-            # Extract the caller workflow filename from github.workflow_ref.
-            # Format: owner/repo/.github/workflows/<file>@<ref>
-            caller_ref="${{ github.workflow_ref }}"
-            review_workflow="$(echo "${caller_ref}" | sed -n 's|.*/\.github/workflows/\([^@]*\)@.*|\1|p')"
-            if [ -z "${review_workflow}" ]; then
-              review_workflow="internal-review.yml"
-              echo "Could not parse caller workflow from '${caller_ref}', falling back to ${review_workflow}"
-            fi
-            echo "Dispatching ${review_workflow} on ref ${TARGET_BRANCH} for PR #${PR_NUMBER}"
-            if gh workflow run "${review_workflow}" \
-              --ref "${TARGET_BRANCH}" \
-              -f pr_number="${PR_NUMBER}" 2>/dev/null; then
-              echo "Review workflow dispatched successfully."
-            else
-              echo "::warning::Failed to dispatch ${review_workflow} via workflow_dispatch. The synchronize event may still trigger it."
-            fi
+          echo "Dispatching ${review_workflow} on ref ${TARGET_BRANCH} for PR #${PR_NUMBER}"
+          if gh workflow run "${review_workflow}" \
+            --ref "${TARGET_BRANCH}" \
+            -f pr_number="${PR_NUMBER}" 2>/dev/null; then
+            echo "Review workflow dispatched successfully."
           else
-            echo "No workflow file changes detected — relying on synchronize event."
+            echo "::warning::Failed to dispatch ${review_workflow} via workflow_dispatch. The synchronize event may still trigger it."
           fi
 
       - name: Telegram success
