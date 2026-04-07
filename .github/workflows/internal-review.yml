@@ -21,7 +21,7 @@ permissions:
   issues: write
 
 jobs:
-  # Gate: skip synchronize events from autofix commits.  The autofix
+  # Gate: skip synchronize events caused by autofix commits.  The autofix
   # workflow already re-dispatches itself via workflow_dispatch, so the
   # synchronize trigger is redundant and causes the completing run to
   # appear "cancelled" due to the concurrency group.
