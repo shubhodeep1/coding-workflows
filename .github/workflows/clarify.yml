@@ -554,6 +554,7 @@ jobs:
           set -euo pipefail
           # Labels already set by "Set clarification phase label" step above.
           {
+            echo "<!-- ai:clarification-questions -->"
             echo "Clarification required"
             echo
             cat "${QUESTIONS_FILE}"

@@ -268,6 +268,27 @@ jobs:
           source scripts/tg_helpers.sh
           tg_cleanup_phase_msgs "${ISSUE_NUMBER}" "clarify"
 
+      - name: Delete clarification question comments
+        if: env.SKIP_PLAN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          # Find clarification comments by HTML marker or legacy "Clarification required" prefix
+          CLARIFY_IDS="$(jq -r '
+            .[]
+            | select(
+                (.user.login // "" | test("\\[bot\\]$")) and
+                ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required"))
+              )
+            | .id
+          ' "${ISSUE_COMMENTS_FILE}")"
+
+          for cid in ${CLARIFY_IDS}; do
+            echo "Deleting clarification comment ${cid}"
+            gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${cid}" || true
+          done
+
       - name: Extract clarification answers and questions
         if: env.SKIP_PLAN != 'true'
         env:
