@@ -3,6 +3,12 @@ name: Update Workflow Wrappers
 
 "on":
   workflow_call:
+    inputs:
+      allow_workflow_edits:
+        description: "Allow automatic workflow wrapper updates"
+        required: false
+        default: true
+        type: boolean
     secrets:
       GH_PAT:
         required: true
@@ -16,7 +22,7 @@ jobs:
   update-wrappers:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' }}
+    if: ${{ inputs.allow_workflow_edits != false }}
     steps:
       - name: Checkout consumer repo
         uses: actions/checkout@v5
@@ -71,7 +77,7 @@ jobs:
             fi
 
             # Compare content (ignore trailing whitespace differences)
-            if ! diff -q --strip-trailing-cr "$upstream_file" "$local_file" >/dev/null 2>&1; then
+            if ! diff -q --strip-trailing-cr --ignore-space-at-eol "$upstream_file" "$local_file" >/dev/null 2>&1; then
               echo "Updating: ${filename}"
               cp "$upstream_file" "$local_file"
               TOTAL_UPDATED=$((TOTAL_UPDATED + 1))

@@ -359,6 +359,8 @@ permissions:
 jobs:
   update:
     uses: shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@stable
+    with:
+      allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' }}
     secrets: inherit
 ```
 
