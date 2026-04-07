@@ -208,6 +208,16 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
+## 14. Consumer Repo Registry
+
+When a new consumer repository is onboarded (i.e. it copies workflow templates from `workflow-templates/`), **always** add it to `.github/ai/consumer_repos.json`. This JSON array lists all repos that receive `repository_dispatch` events when a new `@stable` release is tagged, enabling immediate workflow wrapper updates.
+
+- File: `.github/ai/consumer_repos.json`
+- Format: JSON array of `"owner/repo"` strings
+- The `GH_PAT` used in release workflows must have `repo` scope on every listed consumer repo for the dispatch to succeed.
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**
