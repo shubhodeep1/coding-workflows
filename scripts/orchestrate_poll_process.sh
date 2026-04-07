@@ -194,7 +194,7 @@ ensure_label_exists() {
     [ -n "${contract_description}" ] && description="${contract_description}"
   fi
 
-  gh label create "${label_name}" \
+  gh_retry gh label create "${label_name}" \
     --repo "${GITHUB_REPOSITORY}" \
     --color "${color}" \
     --description "${description}" >/dev/null || true
