@@ -65,6 +65,7 @@ jobs:
           TOTAL_CHECKED=0
           TOTAL_UPDATED=0
 
+          shopt -s nullglob
           for upstream_file in "${UPSTREAM_DIR}"/*.yml; do
             filename=$(basename "$upstream_file")
             local_file="${LOCAL_DIR}/${filename}"
@@ -84,6 +85,7 @@ jobs:
               UPDATED_FILES="${UPDATED_FILES}• ${filename}\n"
             fi
           done
+          shopt -u nullglob
 
           echo "templates_checked=${TOTAL_CHECKED}" >> "$GITHUB_OUTPUT"
           echo "templates_updated=${TOTAL_UPDATED}" >> "$GITHUB_OUTPUT"
