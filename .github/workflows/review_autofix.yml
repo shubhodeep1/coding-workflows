@@ -2571,7 +2571,6 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-<<<<<<< HEAD
           if [ ! -f scripts/label_helpers.sh ]; then
             wf_source="${{ github.repository_owner }}/coding-workflows"
             script_ref="stable"
@@ -2587,8 +2586,6 @@ jobs:
             fi
             chmod +x scripts/label_helpers.sh
           fi
-=======
->>>>>>> origin/main
           source scripts/label_helpers.sh
 
           ISSUE_NUMBERS="$(gh api graphql \
@@ -2637,7 +2634,6 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
-<<<<<<< HEAD
           if [ ! -f scripts/label_helpers.sh ]; then
             wf_source="${{ github.repository_owner }}/coding-workflows"
             script_ref="stable"
@@ -2653,8 +2649,6 @@ jobs:
             fi
             chmod +x scripts/label_helpers.sh
           fi
-=======
->>>>>>> origin/main
           source scripts/label_helpers.sh
 
           echo "judge_handled=false" >> "$GITHUB_OUTPUT"
@@ -3094,7 +3088,6 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
-<<<<<<< HEAD
           if [ ! -f scripts/label_helpers.sh ]; then
             wf_source="${{ github.repository_owner }}/coding-workflows"
             script_ref="stable"
@@ -3110,8 +3103,6 @@ jobs:
             fi
             chmod +x scripts/label_helpers.sh
           fi
-=======
->>>>>>> origin/main
           source scripts/label_helpers.sh
 
           ISSUE_NUMBERS="$(gh api graphql \
