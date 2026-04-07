@@ -276,14 +276,16 @@ jobs:
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
 
-            COMMENT_COUNT=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
-              --jq 'length' 2>/dev/null || echo "0")
+            COMMENTS_JSON=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" 2>/dev/null || echo "[]")
+            COMMENT_COUNT=$(echo "${COMMENTS_JSON}" | jq 'length' 2>/dev/null || echo "0")
+            # Track latest comment updated_at so progress comment edits reset the timer
+            LATEST_COMMENT_UPDATED=$(echo "${COMMENTS_JSON}" | jq -r '[.[].updated_at] | sort | last // ""' 2>/dev/null || echo "")
 
             # Also check the plan workflow run status as an activity signal
             PLAN_RUN_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
               --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
 
-            CUR_STATE="labels=${LABELS};comments=${COMMENT_COUNT};plan_run=${PLAN_RUN_STATUS}"
+            CUR_STATE="labels=${LABELS};comments=${COMMENT_COUNT};comment_updated=${LATEST_COMMENT_UPDATED};plan_run=${PLAN_RUN_STATUS}"
 
             # Reset inactivity timer on any state change
             if [ "$CUR_STATE" != "$PREV_STATE" ]; then
