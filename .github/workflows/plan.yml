@@ -458,6 +458,7 @@ jobs:
       - name: Run Codex planning
         if: env.SKIP_PLAN != 'true'
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
         run: |
