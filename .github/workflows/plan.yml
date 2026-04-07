@@ -407,6 +407,20 @@ jobs:
           set -euo pipefail
           bash scripts/setup_serena.sh --mode planning --context codex
 
+      - name: Post progress signal (setup complete)
+        if: env.SKIP_PLAN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          if PROGRESS_COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="<!-- ai:plan-progress -->⏳ Planning in progress — assembling context and invoking model…" \
+            --jq '.id' 2>/dev/null) && [ -n "${PROGRESS_COMMENT_ID}" ]; then
+            echo "PLAN_PROGRESS_COMMENT_ID=${PROGRESS_COMMENT_ID}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Could not create optional plan progress comment; continuing without progress signals."
+          fi
+
       - name: Pre-assemble static context (cacheable across runs)
         if: env.SKIP_PLAN != 'true'
         run: |
@@ -444,6 +458,7 @@ jobs:
       - name: Run Codex planning
         if: env.SKIP_PLAN != 'true'
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
         run: |
@@ -570,6 +585,14 @@ jobs:
             cat "${PLANNING_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
 
+          # Update progress comment to signal model invocation is starting
+          if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" \
+              -X PATCH \
+              -f body="<!-- ai:plan-progress -->⏳ Planning in progress — invoking model (${MODEL_EDITOR})…" \
+              >/dev/null 2>&1 || true
+          fi
+
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex planning attempt ${attempt}/${max_attempts}..."
@@ -587,6 +610,13 @@ jobs:
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$((10 * (2 ** (attempt - 1))))
               echo "Retrying in ${sleep_secs}s..."
+              # Update progress comment on retry to keep E2E inactivity timer alive
+              if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
+                gh api "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" \
+                  -X PATCH \
+                  -f body="<!-- ai:plan-progress -->⏳ Planning in progress — model attempt ${attempt} failed, retrying (${attempt}/${max_attempts})…" \
+                  >/dev/null 2>&1 || true
+              fi
               sleep "${sleep_secs}"
             else
               echo "::error::Codex planning failed after ${max_attempts} attempts."
@@ -660,6 +690,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          # Clean up progress comment — real output replaces it
+          if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
+          fi
           source scripts/label_helpers.sh
           # Strip absolute CI runner paths from Codex output
           sed -i -E 's|/home/runner/work/[^/]+/[^/]+/||g' "${CODEX_OUTPUT_FILE}"
@@ -712,6 +746,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          # Clean up progress comment — real output replaces it
+          if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
+          fi
           source scripts/label_helpers.sh
           # Strip absolute CI runner paths from Codex output so comments show clean relative paths
           sed -i -E 's|/home/runner/work/[^/]+/[^/]+/||g' "${CODEX_OUTPUT_FILE}"
@@ -795,6 +833,16 @@ jobs:
             tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
           else
             tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "${MSG}"
+          fi
+
+      - name: Clean up progress comment on failure
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
+            gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
           fi
 
       - name: Capture planning failure context
