@@ -166,6 +166,11 @@ on:
         description: "Pull request number to review (used by autofix re-trigger)"
         required: true
         type: string
+      allow_workflow_edits:
+        description: "Allow AI/editor changes to .github/workflows files"
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: write
   pull-requests: write
@@ -175,7 +180,7 @@ jobs:
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
     with:
       pr_number: ${{ github.event.inputs.pr_number || '' }}
-      allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
+      allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || vars.ALLOW_WORKFLOW_EDITS == 'true' }}
     secrets: inherit
 ```
 
@@ -188,7 +193,10 @@ jobs:
 > `pr_number` input above enable a fallback: the reusable workflow
 > dispatches the caller workflow explicitly after pushing. The concurrency
 > group deduplicates when both the `synchronize` event and the dispatch
-> fire successfully.
+> fire successfully. Because this fallback uses `gh workflow run` and the
+> Actions workflow-dispatch API, `GH_PAT` must be allowed to dispatch
+> workflows (classic PAT: include `workflow` scope with `repo`; fine-grained
+> PAT: grant Actions read/write permission).
 
 > The reusable workflow handles autofix iteration counting internally. It
 > counts consecutive `[ai-autofix]` commits and stops after
