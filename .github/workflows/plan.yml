@@ -413,10 +413,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          PROGRESS_COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          if PROGRESS_COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="<!-- ai:plan-progress -->⏳ Planning in progress — assembling context and invoking model…" \
-            --jq '.id')
-          echo "PLAN_PROGRESS_COMMENT_ID=${PROGRESS_COMMENT_ID}" >> "$GITHUB_ENV"
+            --jq '.id' 2>/dev/null) && [ -n "${PROGRESS_COMMENT_ID}" ]; then
+            echo "PLAN_PROGRESS_COMMENT_ID=${PROGRESS_COMMENT_ID}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Could not create optional plan progress comment; continuing without progress signals."
+          fi
 
       - name: Pre-assemble static context (cacheable across runs)
         if: env.SKIP_PLAN != 'true'

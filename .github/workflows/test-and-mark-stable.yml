@@ -276,7 +276,7 @@ jobs:
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
 
-            COMMENTS_JSON=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" 2>/dev/null || echo "[]")
+            COMMENTS_JSON=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2>/dev/null || echo "[]")
             COMMENT_COUNT=$(echo "${COMMENTS_JSON}" | jq 'length' 2>/dev/null || echo "0")
             # Track latest comment updated_at so progress comment edits reset the timer
             LATEST_COMMENT_UPDATED=$(echo "${COMMENTS_JSON}" | jq -r '[.[].updated_at] | sort | last // ""' 2>/dev/null || echo "")
