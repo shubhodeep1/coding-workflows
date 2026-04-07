@@ -19,6 +19,17 @@ on:
         required: true
       TG_BOT_SECRET:
         required: false
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to process (used by merge-ref fallback re-trigger)"
+        required: true
+        type: string
+      allow_workflow_edits:
+        description: "Allow AI/editor changes to .github/workflows files"
+        required: false
+        default: false
+        type: boolean
 
 env:
   REVIEWER_MODELS: |
@@ -3202,33 +3213,54 @@ jobs:
         # resolves reusable workflow refs from the merge ref
         # (refs/pull/N/merge).  When that merge ref is unbuildable (e.g.
         # main advanced and introduced new conflicts), the caller workflow
-        # is silently skipped.  Dispatch the caller workflow explicitly as
-        # a fallback — workflow_dispatch resolves from the target ref (the
-        # PR branch), which always exists.  The concurrency group ensures
-        # only one run proceeds if both the synchronize event and this
-        # dispatch fire successfully.
+        # is silently skipped.  Dispatch explicitly as a fallback —
+        # workflow_dispatch resolves from the target ref (the PR branch),
+        # which always exists.  The concurrency group ensures only one run
+        # proceeds if both the synchronize event and this dispatch fire.
+        #
+        # Dispatch order:
+        #   1. review_autofix.yml (this file) — works when it exists in the
+        #      current repo (coding-workflows itself, or consumer repos that
+        #      added workflow_dispatch to their caller workflow template).
+        #   2. Caller workflow parsed from github.workflow_ref — fallback for
+        #      consumer repos whose caller workflow has workflow_dispatch.
         if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
-          # Extract the caller workflow filename from github.workflow_ref.
-          # Format: owner/repo/.github/workflows/<file>@<ref>
-          caller_ref="${{ github.workflow_ref }}"
-          review_workflow="$(echo "${caller_ref}" | sed -n 's|.*/\.github/workflows/\([^@]*\)@.*|\1|p')"
-          if [ -z "${review_workflow}" ]; then
-            review_workflow="internal-review.yml"
-            echo "Could not parse caller workflow from '${caller_ref}', falling back to ${review_workflow}"
-          fi
+          dispatched=false
 
-          echo "Dispatching ${review_workflow} on ref ${TARGET_BRANCH} for PR #${PR_NUMBER}"
-          if gh workflow run "${review_workflow}" \
+          # 1. Try dispatching review_autofix.yml directly.  This works for
+          #    coding-workflows itself (the file exists locally) and for any
+          #    consumer repo that copies or syncs this file.
+          if gh workflow run "review_autofix.yml" \
             --ref "${TARGET_BRANCH}" \
             -f pr_number="${PR_NUMBER}" 2>/dev/null; then
-            echo "Review workflow dispatched successfully."
-          else
-            echo "::warning::Failed to dispatch ${review_workflow} via workflow_dispatch. The synchronize event may still trigger it."
+            echo "Dispatched review_autofix.yml on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
+            dispatched=true
+          fi
+
+          # 2. Fall back to the caller workflow (e.g. ai-review.yml in a
+          #    consumer repo).  Only attempt if the direct dispatch failed
+          #    and the caller is a different file.
+          if [ "${dispatched}" = "false" ]; then
+            caller_ref="${{ github.workflow_ref }}"
+            caller_workflow="$(echo "${caller_ref}" | sed -n 's|.*/\.github/workflows/\([^@]*\)@.*|\1|p')"
+            if [ -n "${caller_workflow}" ] && [ "${caller_workflow}" != "review_autofix.yml" ]; then
+              echo "Direct dispatch failed; trying caller workflow: ${caller_workflow}"
+              if gh workflow run "${caller_workflow}" \
+                --ref "${TARGET_BRANCH}" \
+                -f pr_number="${PR_NUMBER}" 2>/dev/null; then
+                echo "Dispatched ${caller_workflow} on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
+                dispatched=true
+              fi
+            fi
+          fi
+
+          if [ "${dispatched}" = "false" ]; then
+            echo "::warning::Could not dispatch review workflow via workflow_dispatch. The synchronize event may still trigger it. To enable the fallback, add a workflow_dispatch trigger with a pr_number input to your caller workflow."
           fi
 
       - name: Telegram success
