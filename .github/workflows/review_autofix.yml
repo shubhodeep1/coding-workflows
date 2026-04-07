@@ -19,6 +19,17 @@ on:
         required: true
       TG_BOT_SECRET:
         required: false
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to process (used by merge-ref fallback re-trigger)"
+        required: true
+        type: string
+      allow_workflow_edits:
+        description: "Allow AI/editor changes to .github/workflows files"
+        required: false
+        default: false
+        type: boolean
 
 env:
   REVIEWER_MODELS: |
@@ -36,13 +47,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:
-      group: pr-autofix-${{ github.event.pull_request.number || github.run_id }}
+      group: pr-autofix-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
       cancel-in-progress: true
     if: ${{ github.event_name == 'workflow_dispatch' || (!github.event.pull_request.draft && !contains(github.event.pull_request.title || '', '[skip ai]') && !contains(github.event.pull_request.body || '', '[skip ai]')) }}
 
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number || github.event.pull_request.number }}
+      PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       ALLOW_WORKFLOW_EDITS: ${{ inputs.allow_workflow_edits || vars.ALLOW_WORKFLOW_EDITS || 'false' }}
 
     steps:
@@ -3236,6 +3247,66 @@ jobs:
           echo "Pushing pending commits to ${TARGET_BRANCH}..."
           git push origin "HEAD:${TARGET_BRANCH}"
           echo "Push complete."
+
+      - name: Re-trigger review via workflow_dispatch
+        # The push above fires a pull_request synchronize event, but GitHub
+        # resolves reusable workflow refs from the merge ref
+        # (refs/pull/N/merge).  When that merge ref is unbuildable (e.g.
+        # main advanced and introduced new conflicts), the caller workflow
+        # is silently skipped.  Dispatch explicitly as a fallback —
+        # workflow_dispatch resolves from the target ref (the PR branch),
+        # which always exists.  The concurrency group ensures only one run
+        # proceeds if both the synchronize event and this dispatch fire.
+        #
+        # Dispatch order:
+        #   1. review_autofix.yml (this file) — works when it exists in the
+        #      current repo (coding-workflows itself, or consumer repos that
+        #      added workflow_dispatch to their caller workflow template).
+        #   2. Caller workflow parsed from github.workflow_ref — fallback for
+        #      consumer repos whose caller workflow has workflow_dispatch.
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          dispatched=false
+
+          # 1. Try dispatching review_autofix.yml directly.  This works for
+          #    coding-workflows itself (the file exists locally) and for any
+          #    consumer repo that copies or syncs this file.
+          if gh workflow run "review_autofix.yml" \
+            --ref "${TARGET_BRANCH}" \
+            -f pr_number="${PR_NUMBER}" \
+            -f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}"; then
+            echo "Dispatched review_autofix.yml on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
+            dispatched=true
+          fi
+
+          # 2. Fall back to the caller workflow (e.g. ai-review.yml in a
+          #    consumer repo).  Only attempt if the direct dispatch failed
+          #    and the caller is a different file.
+          if [ "${dispatched}" = "false" ]; then
+            caller_ref="${{ github.workflow_ref }}"
+            caller_workflow="$(echo "${caller_ref}" | sed -n 's|.*/\.github/workflows/\([^@]*\)@.*|\1|p')"
+            if [ -z "${caller_workflow}" ]; then
+              caller_workflow="internal-review.yml"
+            fi
+            if [ "${caller_workflow}" != "review_autofix.yml" ]; then
+              echo "Direct dispatch failed; trying caller workflow: ${caller_workflow}"
+              if gh workflow run "${caller_workflow}" \
+                --ref "${TARGET_BRANCH}" \
+                -f pr_number="${PR_NUMBER}" \
+                -f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}"; then
+                echo "Dispatched ${caller_workflow} on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
+                dispatched=true
+              fi
+            fi
+          fi
+
+          if [ "${dispatched}" = "false" ]; then
+            echo "::warning::Could not dispatch review workflow via workflow_dispatch. The synchronize event may still trigger it. To enable the fallback, add a workflow_dispatch trigger with a pr_number input and an optional allow_workflow_edits boolean input to your caller workflow. Ensure GH_PAT can dispatch workflows (classic PAT: repo+workflow; fine-grained PAT: Actions read/write)."
+          fi
 
       - name: Telegram success
         if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'"

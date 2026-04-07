@@ -160,6 +160,17 @@ name: AI Review
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review (used by autofix re-trigger)"
+        required: true
+        type: string
+      allow_workflow_edits:
+        description: "Allow AI/editor changes to .github/workflows files"
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: write
   pull-requests: write
@@ -168,9 +179,24 @@ jobs:
   review:
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
     with:
-      allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
+      pr_number: ${{ github.event.inputs.pr_number || '' }}
+      allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || vars.ALLOW_WORKFLOW_EDITS == 'true' }}
     secrets: inherit
 ```
+
+> **Merge-ref fallback re-trigger** — After pushing autofix or
+> conflict-resolution commits, GitHub fires a `pull_request` `synchronize`
+> event. However, GitHub resolves reusable workflow refs from the merge ref
+> (`refs/pull/N/merge`), which can be unbuildable when the base branch has
+> advanced and introduced new conflicts. When this happens the review
+> workflow is silently skipped. The `workflow_dispatch` trigger and
+> `pr_number` input above enable a fallback: the reusable workflow
+> dispatches the caller workflow explicitly after pushing. The concurrency
+> group deduplicates when both the `synchronize` event and the dispatch
+> fire successfully. Because this fallback uses `gh workflow run` and the
+> Actions workflow-dispatch API, `GH_PAT` must be allowed to dispatch
+> workflows (classic PAT: include `workflow` scope with `repo`; fine-grained
+> PAT: grant Actions read/write permission).
 
 > The reusable workflow handles autofix iteration counting internally. It
 > counts consecutive `[ai-autofix]` commits and stops after
