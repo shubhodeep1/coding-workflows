@@ -3,6 +3,12 @@ name: "Internal: AI Review & Autofix"
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review (used by autofix re-trigger)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -13,5 +19,6 @@ jobs:
   review:
     uses: ./.github/workflows/review_autofix.yml
     with:
+      pr_number: ${{ github.event.inputs.pr_number || '' }}
       allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS == 'true' }}
     secrets: inherit
