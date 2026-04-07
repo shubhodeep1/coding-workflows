@@ -1395,7 +1395,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         # PR is closed (not merged) — skip entirely
         echo "  PR #${RB_PR} is closed (not merged). Cleaning up labels and skipping."
         ensure_label_exists "ai:closed"
-        gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+        gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
           --remove-label 'ai:review-blocked' --remove-label 'ai:in-progress' \
           --add-label 'ai:closed' 2>/dev/null || true
         REVIEW_BLOCKED_STATE_CHANGED=true
@@ -1572,7 +1572,7 @@ sys.exit(1)
           echo "  Judge says merge PR #${RB_PR} as-is."
           # Remove review-blocked, set ready-to-merge
           ensure_label_exists "ai:ready-to-merge"
-          gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+          gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
 
           # Attempt squash merge (with branch update if needed)
@@ -1845,7 +1845,7 @@ ${RB_FIX_DESC}
 
           # Label issue as closed
           ensure_label_exists "ai:closed"
-          gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+          gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:review-blocked' --remove-label 'ai:done' \
             --add-label 'ai:closed' 2>/dev/null || true
 
@@ -1985,9 +1985,9 @@ ${RB_FIX_DESC}
 
     # Close the failed issue
     ensure_label_exists "ai:closed"
-    gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+    gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
       --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
-    gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+    gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
       -c "Closing: implementation produced no changes. Re-issuing with additional guidance." 2>/dev/null || true
 
     # Create replacement issue with extra guidance
