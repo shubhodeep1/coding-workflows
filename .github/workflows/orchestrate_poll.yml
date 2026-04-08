@@ -143,6 +143,7 @@ jobs:
           fi
 
       - name: Fetch workflow support scripts
+        continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -217,7 +218,7 @@ jobs:
             --status "ok" \
             --message "Poll cycle started for orchestrator tracking issues" \
             --actor "${GITHUB_ACTOR}" \
-            --metadata-json "{\"run_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"repository\":\"${GITHUB_REPOSITORY}\",\"has_work\":\"${{ steps.find_tracking.outputs.has_work }}\"}" || true
+            --metadata-json "{\"run_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"repository\":\"${GITHUB_REPOSITORY}\",\"has_work\":\"${{ steps.find_tracking.outputs.has_work || 'false' }}\"}" || true
 
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
