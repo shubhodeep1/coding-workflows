@@ -28,7 +28,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -322,7 +321,7 @@ def find_enclosing_symbol(line_num, symbols):
 def classify_hunk(hunk, symbols):
     """Classify a hunk as MODIFIED, ADDED, or REMOVED relative to symbols."""
     start_symbol = find_enclosing_symbol(hunk["start"], symbols)
-    end_symbol = find_enclosing_symbol(hunk["end"], symbols)
+    find_enclosing_symbol(hunk["end"], symbols)
 
     if start_symbol:
         return {

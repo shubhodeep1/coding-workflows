@@ -1238,13 +1238,95 @@ jobs:
           echo "Cleanup complete."
 
   # ──────────────────────────────────────────────────────────────────
+  # Job 1b: Script correctness validation — runs parallel with E2E
+  # ──────────────────────────────────────────────────────────────────
+  validate-scripts:
+    needs: [resolve-version]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Shell script syntax check
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do
+            bash -n "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: ShellCheck static analysis
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do
+            shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Python syntax check
+        run: |
+          set -euo pipefail
+          for f in scripts/*.py; do
+            python3 -m py_compile "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Python lint (ruff)
+        run: |
+          set -euo pipefail
+          pip install -q ruff
+          ruff check --select E,F --ignore E501 scripts/*.py
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          python3 tests/test_orchestrate_lib.py
+          python3 tests/test_orchestrate_poll_process.py
+
+      - name: Prompt files integrity
+        run: |
+          set -euo pipefail
+          for f in prompts/*.txt; do
+            if [ ! -s "$f" ]; then
+              echo "FAIL: $f is empty"
+              exit 1
+            fi
+            echo "OK: $f ($(wc -c < "$f") bytes)"
+          done
+
+      - name: Script-workflow cross-reference
+        run: |
+          set -euo pipefail
+          echo "Verifying all scripts referenced by workflows exist..."
+          MISSING=0
+          for ref in $(grep -rhoE 'scripts/[a-zA-Z0-9_.-]+\.(sh|py|json)' .github/workflows/ | sort -u); do
+            if [ ! -f "$ref" ]; then
+              echo "FAIL: $ref referenced in workflows but does not exist"
+              MISSING=$((MISSING + 1))
+            else
+              echo "OK: $ref"
+            fi
+          done
+          if [ "$MISSING" -gt 0 ]; then
+            echo "::error::${MISSING} script(s) referenced by workflows are missing"
+            exit 1
+          fi
+          echo "All referenced scripts exist."
+
+  # ──────────────────────────────────────────────────────────────────
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
   # ──────────────────────────────────────────────────────────────────
   validate:
-    needs: [resolve-version, e2e-smoke-test]
+    needs: [resolve-version, e2e-smoke-test, validate-scripts]
     if: >-
       always() &&
       needs.resolve-version.result == 'success' &&
+      needs.validate-scripts.result == 'success' &&
       (needs.e2e-smoke-test.result == 'success' || needs.e2e-smoke-test.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1395,7 +1477,7 @@ jobs:
   # Job 4: Combined Telegram notification (runs after ALL jobs)
   # ──────────────────────────────────────────────────────────────────
   notify:
-    needs: [resolve-version, e2e-smoke-test, validate, release]
+    needs: [resolve-version, e2e-smoke-test, validate-scripts, validate, release]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -1415,19 +1497,21 @@ jobs:
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           E2E="${{ needs.e2e-smoke-test.result }}"
+          SCRIPTS="${{ needs.validate-scripts.result }}"
           VALIDATE="${{ needs.validate.result }}"
           RELEASE="${{ needs.release.result }}"
 
           # Determine overall status
-          if [ "$E2E" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$RELEASE" = "success" ]; then
+          if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$RELEASE" = "success" ]; then
             MSG="✅ Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
-            MSG+=$'\n'"All jobs passed: e2e ✓ validate ✓ release ✓"
+            MSG+=$'\n'"All jobs passed: e2e ✓ scripts ✓ validate ✓ release ✓"
           else
             MSG="❌ Release ${{ needs.resolve-version.outputs.version }} FAILED"
             STATUS_LINE=""
-            for JOB_NAME in e2e-smoke-test validate release; do
+            for JOB_NAME in e2e-smoke-test validate-scripts validate release; do
               case "$JOB_NAME" in
                 e2e-smoke-test) RESULT="$E2E" ;;
+                validate-scripts) RESULT="$SCRIPTS" ;;
                 validate) RESULT="$VALIDATE" ;;
                 release) RESULT="$RELEASE" ;;
               esac

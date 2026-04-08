@@ -3,7 +3,6 @@ import argparse
 import hashlib
 import json
 import mimetypes
-import os
 import re
 import shutil
 import subprocess
@@ -170,7 +169,7 @@ def _download(url: str, out_path: Path, token: str) -> tuple[bool, str, str]:
         reason = exc.reason
         reason_str = str(reason).replace(" ", "_").lower()[:50] if reason is not None else "unknown"
         return False, reason_str, ""
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         _safe_unlink(out_path)
         return False, "internal_error", ""
 
