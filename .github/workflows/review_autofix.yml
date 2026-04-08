@@ -92,7 +92,7 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh label_helpers.sh; do
+          for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -187,6 +187,7 @@ jobs:
             echo "EDITOR_SUMMARY_FILE=${RUNTIME_DIR}/editor_summary.txt"
             echo "PR_EDITOR_COMMENT_FILE=${RUNTIME_DIR}/pr_editor_comment.txt"
             echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
+            echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
             echo "CONFLICT_RESOLVER_PROMPT_FILE=${RUNTIME_DIR}/conflict_resolver_prompt.txt"
             echo "CONFLICT_RESOLVER_SUMMARY_FILE=${RUNTIME_DIR}/conflict_resolver_summary.txt"
             echo "COMMITTED_FILES_FILE=${RUNTIME_DIR}/committed_files.txt"
@@ -194,6 +195,28 @@ jobs:
             echo "PR_DIFF_SOURCE=uninitialized"
             echo "PR_DIFF_ATTEMPTED_PATHS=gh_pr_diff:${RUNTIME_DIR}/pr_diff.patch"
           } >> "$GITHUB_ENV"
+
+      - name: Record review run start in memory (fail-open)
+        run: |
+          set +e
+
+          if [ -f scripts/memory_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/memory_helpers.sh
+            memory_record_run_event \
+              --run-id "${GITHUB_RUN_ID}" \
+              --workflow "review_autofix" \
+              --event-type "phase_started" \
+              --status "ok" \
+              --message "review_autofix run started" \
+              --pr-number "${PR_NUMBER}" \
+              --actor "${GITHUB_ACTOR}" \
+              --metadata-json "{\"run_attempt\": ${GITHUB_RUN_ATTEMPT}}"
+          else
+            echo "::warning::memory helper script missing; skipping run-start event"
+          fi
+
+          true
 
       - name: Create Codex config
         run: |
@@ -267,6 +290,23 @@ jobs:
               echo
             fi
           } > ./pre_assembled_static.txt
+
+      - name: Retrieve reviewer memory context (fail-open)
+        run: |
+          set +e
+
+          if [ -f scripts/memory_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/memory_helpers.sh
+            memory_retrieve "${MEMORY_CONTEXT_FILE}" \
+              --role reviewer \
+              --pr-number "${PR_NUMBER}"
+          else
+            echo "::warning::memory helper script missing; writing fallback reviewer memory context"
+            printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${MEMORY_CONTEXT_FILE}"
+          fi
+
+          true
 
       - name: Collect PR metadata
         env:
@@ -1193,6 +1233,14 @@ jobs:
             echo "cached by the LLM provider). Follow these before any review work."
             echo "Example command: cat ./pre_assembled_static.txt"
             echo
+            echo "=== MEMORY CONTEXT (REVIEWER) ==="
+            if [ -s "${MEMORY_CONTEXT_FILE}" ]; then
+              cat "${MEMORY_CONTEXT_FILE}"
+            else
+              echo "AI MEMORY CONTEXT"
+              echo "status: unavailable"
+            fi
+            echo
             echo "${PROMPT_ARTIFACT_PATH_HINT}"
             echo
             echo "${PROMPT_RUNTIME_CONTEXT_HINT}"
@@ -1439,6 +1487,54 @@ jobs:
               echo "(none)"
             fi
           } > "${REVIEWER_CONSENSUS_FILE}"
+
+      - name: Record reviewer consensus candidate in memory (fail-open)
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        run: |
+          set +e
+
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory helper script missing; skipping consensus candidate record"
+            exit 0
+          fi
+
+          if [ ! -s "${REVIEWER_CONSENSUS_FILE}" ]; then
+            echo "::warning::reviewer consensus file missing/empty; skipping consensus candidate record"
+            exit 0
+          fi
+
+          # shellcheck disable=SC1091
+          source scripts/memory_helpers.sh
+
+          high_confidence_count="$({
+            awk '
+              /^High confidence files \(mentioned by >=2 reviewers\):$/ { section="high"; next }
+              /^Low confidence files \(mentioned by 1 reviewer\):$/ { section="low"; next }
+              section == "high" && NF > 0 && $0 != "(none)" { count++ }
+              END { print count + 0 }
+            ' "${REVIEWER_CONSENSUS_FILE}"
+          })"
+
+          if [ "${high_confidence_count}" -gt 0 ]; then
+            summary="Reviewer consensus flagged ${high_confidence_count} high-confidence file(s)"
+          else
+            summary="Reviewer consensus found no high-confidence file-level findings"
+          fi
+
+          details="$(head -c 12000 "${REVIEWER_CONSENSUS_FILE}")"
+
+          memory_record_candidate \
+            --category "patterns" \
+            --summary "${summary}" \
+            --details "${details}" \
+            --workflow "review_autofix" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --actor "${GITHUB_ACTOR}" \
+            --pr-number "${PR_NUMBER}" \
+            --source-refs "reviewer_consensus.txt"
+
+          true
 
       - name: Install project dependencies (best-effort)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
@@ -3521,6 +3617,52 @@ jobs:
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${PR_NUMBER}" "${MSG}"
 
+      - name: Record review run completion in memory (fail-open)
+        if: success()
+        run: |
+          set +e
+
+          if [ -f scripts/memory_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/memory_helpers.sh
+            memory_record_run_event \
+              --run-id "${GITHUB_RUN_ID}" \
+              --workflow "review_autofix" \
+              --event-type "phase_completed" \
+              --status "ok" \
+              --message "review_autofix run completed" \
+              --pr-number "${PR_NUMBER}" \
+              --actor "${GITHUB_ACTOR}" \
+              --metadata-json "{\"run_attempt\": ${GITHUB_RUN_ATTEMPT}}"
+          else
+            echo "::warning::memory helper script missing; skipping run-end completion event"
+          fi
+
+          true
+
+      - name: Record review run failure in memory (fail-open)
+        if: failure() || cancelled()
+        run: |
+          set +e
+
+          if [ -f scripts/memory_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/memory_helpers.sh
+            memory_record_run_event \
+              --run-id "${GITHUB_RUN_ID}" \
+              --workflow "review_autofix" \
+              --event-type "phase_failed" \
+              --status "error" \
+              --message "review_autofix run failed or was cancelled" \
+              --pr-number "${PR_NUMBER}" \
+              --actor "${GITHUB_ACTOR}" \
+              --metadata-json "{\"run_attempt\": ${GITHUB_RUN_ATTEMPT}}"
+          else
+            echo "::warning::memory helper script missing; skipping run-end failure event"
+          fi
+
+          true
+
       - name: Cleanup temporary artifacts
         if: always()
         run: |
@@ -3532,7 +3674,7 @@ jobs:
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
-            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/codex_model_catalog.json
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/codex_model_catalog.json
             rm -rf .serena prompts
             rm -f .github/ai/orchestrate_schema.v1.json
           fi
