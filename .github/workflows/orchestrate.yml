@@ -103,6 +103,45 @@ jobs:
             exit 1
           fi
 
+      - name: Record orchestration run start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "scripts/memory_helpers.sh" ] || [ ! -f "scripts/ai_memory.py" ] || [ ! -f "scripts/ai_memory_lib.py" ]; then
+            wf_source="${{ github.repository_owner }}/coding-workflows"
+            if [ "${{ github.repository }}" = "${wf_source}" ]; then
+              script_ref="${{ github.sha }}"
+            else
+              script_ref="stable"
+            fi
+            mkdir -p scripts
+            for f in memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+                echo "::warning::${f} not found on ${script_ref}; falling back to main"
+                if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}" 2>/dev/null; then
+                  echo "::warning::Unable to fetch ${f}; skipping orchestration start memory event"
+                  exit 0
+                fi
+              fi
+              chmod +x "scripts/${f}"
+            done
+          fi
+
+          source scripts/memory_helpers.sh
+
+          memory_record_run_event \
+            --run-id "${{ github.run_id }}" \
+            --workflow "orchestrate" \
+            --event-type "orchestration_started" \
+            --status "ok" \
+            --message "Orchestration started for ${{ github.repository }}" \
+            --actor "${{ github.actor }}"
+
       - name: Create runtime workspace
         run: |
           set -euo pipefail
@@ -177,22 +216,6 @@ jobs:
             fi
           done
 
-      - name: Record orchestration run start
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          set -euo pipefail
-          source scripts/memory_helpers.sh
-
-          memory_record_run_event \
-            --run-id "${{ github.run_id }}" \
-            --workflow "orchestrate" \
-            --event-type "orchestration_started" \
-            --status "ok" \
-            --message "Orchestration started for ${{ github.repository }}" \
-            --actor "${{ github.actor }}"
-
       - name: Create Codex config
         run: |
           set -euo pipefail
@@ -262,6 +285,7 @@ jobs:
       - name: Retrieve memory context
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PYTHONDONTWRITEBYTECODE: "1"
           PROJECT_DESCRIPTION: ${{ inputs.project_description }}
         run: |
