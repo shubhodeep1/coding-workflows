@@ -132,7 +132,7 @@ jobs:
             script_ref="stable"
           fi
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py tg_helpers.sh memory_helpers.sh; do
+          for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -263,14 +263,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
+          PROJECT_DESCRIPTION: ${{ inputs.project_description }}
         run: |
           set -euo pipefail
           source scripts/memory_helpers.sh
 
           PROJECT_CONTEXT_FILE="${RUNTIME_DIR}/project_description.txt"
-          cat <<'PROJECT_DESC_EOF' > "${PROJECT_CONTEXT_FILE}"
-          ${{ inputs.project_description }}
-          PROJECT_DESC_EOF
+          printf '%s\n' "${PROJECT_DESCRIPTION}" > "${PROJECT_CONTEXT_FILE}"
 
           ISSUE_TITLE="$(head -n 1 "${PROJECT_CONTEXT_FILE}" | tr -d '\r' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
           if [ -z "${ISSUE_TITLE}" ]; then
@@ -286,6 +285,7 @@ jobs:
       - name: Build Codex prompt
         env:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_ORCHESTRATE || '40' }}
+          PROJECT_DESCRIPTION: ${{ inputs.project_description }}
         run: |
           set -euo pipefail
 
@@ -312,9 +312,7 @@ jobs:
             echo
             echo "=== PROJECT DESCRIPTION ==="
             echo
-            cat <<'PROJECT_DESC_EOF'
-          ${{ inputs.project_description }}
-          PROJECT_DESC_EOF
+            printf '%s\n' "${PROJECT_DESCRIPTION}"
           } > "${CODEX_PROMPT_FILE}"
 
           echo "Prompt built: $(wc -l < "${CODEX_PROMPT_FILE}") lines, $(wc -c < "${CODEX_PROMPT_FILE}") bytes"
