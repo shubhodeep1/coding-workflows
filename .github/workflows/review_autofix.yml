@@ -2175,8 +2175,9 @@ jobs:
           # committed to caller repos.  Skip when running on coding-workflows
           # itself — these files are actual source code there, not artifacts.
           # NOTE: .serena/, scripts/, and prompts/ are preserved here for the
-          # conflict resolver step (codex exec needs Serena MCP + model catalog).
-          # They are cleaned up after conflict resolution.
+          # conflict resolver step (codex exec needs Serena MCP + model catalog)
+          # and for later notification steps (Telegram, labeling).
+          # They are cleaned up in the final "Cleanup temporary artifacts" step.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
@@ -2525,15 +2526,17 @@ jobs:
             sleep 2
           done
 
-          # Remove workflow-generated/fetched artifacts so they are never
+          # Remove root-level workflow-generated artifacts so they are never
           # committed to caller repos.  Skip when running on coding-workflows
           # itself — these files are actual source code there, not artifacts.
+          # NOTE: scripts/, .serena/, and prompts/ are cleaned up in the final
+          # "Cleanup temporary artifacts" step because later notification steps
+          # (Telegram, labeling) still need scripts/tg_helpers.sh and
+          # scripts/label_helpers.sh.  These directories are already excluded
+          # from git add via ':!scripts', ':!.serena', ':!prompts' patterns.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/codex_model_catalog.json
-            rm -rf .serena prompts
-            rm -f .github/ai/orchestrate_schema.v1.json
           fi
 
           if [ -n "$(git status --porcelain)" ]; then
@@ -3514,3 +3517,12 @@ jobs:
           set -euo pipefail
 
           rm -rf "${RUNTIME_DIR}"
+
+          # Remove workflow-fetched support files that were preserved for
+          # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
+          # Skip when running on coding-workflows itself — these are source.
+          if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/codex_model_catalog.json
+            rm -rf .serena prompts
+            rm -f .github/ai/orchestrate_schema.v1.json
+          fi
