@@ -647,6 +647,71 @@ if ! [[ "${MAX_IMPL_NOOP_REISSUES}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 # ---------------------------------------------------------------
+# Helper: extract (RECOMMENDED) answers from clarification comments
+# ---------------------------------------------------------------
+
+# Fetches the latest clarification-questions comment for an issue and
+# parses (RECOMMENDED) choices to build a "Q1: A\nQ2: B\n..." answer
+# string.  Falls back to an empty string if no questions are found.
+extract_recommended_answers() {
+  local issue_num="$1"
+
+  # Fetch recent comments (50 is the same limit used by clarify.yml)
+  local comments_json
+  comments_json="$(gh_retry gh api \
+    "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=50" \
+    2>/dev/null || echo "[]")"
+
+  # Find the latest clarification comment (HTML marker or legacy prefix).
+  # Search from newest to oldest (direction=desc).
+  local clarify_body
+  clarify_body="$(printf '%s' "${comments_json}" | jq -r '
+    [ .[]
+      | select(
+          (.user.login // "" | test("\\[bot\\]$")) and
+          ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required"))
+        )
+    ]
+    | if length > 0 then .[0].body // "" else "" end
+  ')"
+
+  if [ -z "${clarify_body}" ]; then
+    echo ""
+    return
+  fi
+
+  # Parse Q-blocks and pick the (RECOMMENDED) letter(s) for each.
+  # When multiple options are recommended, combine with "+" (e.g. "A+C").
+  # Expected format per question:
+  #   **Q1: <question>**
+  #   Choices:
+  #   - **A** — <desc> (RECOMMENDED)
+  #   - **B** — <desc>
+  printf '%s' "${clarify_body}" | perl -ne '
+    BEGIN { @order = (); %rec = (); $qid = undef; }
+    if (/^\s*\*?\*?Q(\d+)/i) {
+      # New question block — flush previous if it had recommendations
+      if (defined $qid && exists $rec{$qid}) {
+        push @order, $qid unless grep { $_ eq $qid } @order;
+      }
+      $qid = $1;
+    }
+    if (defined $qid && /^\s*-\s*\*\*([A-Z])\*\*\s*.*\(RECOMMENDED\)/i) {
+      push @{$rec{$qid}}, $1;
+    }
+    END {
+      # Flush the last question
+      if (defined $qid && exists $rec{$qid}) {
+        push @order, $qid unless grep { $_ eq $qid } @order;
+      }
+      for my $q (@order) {
+        print "Q${q}: " . join("+", @{$rec{$q}}) . "\n";
+      }
+    }
+  '
+}
+
+# ---------------------------------------------------------------
 # Stall recovery: phase-specific healing actions
 # ---------------------------------------------------------------
 
@@ -692,16 +757,35 @@ STALL_EOF
 
     auto_respond_clarify)
       # Stuck in ai:clarification — auto-respond to move to planning.
+      # Extract (RECOMMENDED) answers from the clarification comment so the
+      # planning LLM receives real Q1/Q2/... answers instead of a bare /answer.
       echo "  Auto-responding to clarification for issue #${issue_num}..."
-      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
-        -f body="$(cat <<'STALL_EOF'
-/answer
+      local recommended_answers
+      recommended_answers="$(extract_recommended_answers "${issue_num}")"
+
+      local answer_body
+      if [ -n "${recommended_answers}" ]; then
+        answer_body="/answer [auto-answered-by-orchestrator]
 
 _Orchestrator stall recovery: this issue has been in clarification for
-too long. The issue description is deemed sufficient — proceed with
+too long. Auto-selecting recommended answers and proceeding with
 planning and implementation._
-STALL_EOF
-)" >/dev/null 2>&1 || true
+
+${recommended_answers}"
+        echo "  Extracted recommended answers for issue #${issue_num}:"
+        echo "${recommended_answers}" | sed 's/^/    /'
+      else
+        answer_body="/answer [auto-answered-by-orchestrator]
+
+_Orchestrator stall recovery: this issue has been in clarification for
+too long. No recommended answers could be extracted — the issue
+description is deemed sufficient. Proceed with planning and
+implementation._"
+        echo "  No recommended answers found for issue #${issue_num}; posting bare /answer."
+      fi
+
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+        -f body="${answer_body}" >/dev/null 2>&1 || true
       tg_notify "🔄 Stall recovery: auto-responded to clarification on issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
       ;;
 
