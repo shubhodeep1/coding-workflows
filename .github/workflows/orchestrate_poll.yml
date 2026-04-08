@@ -29,9 +29,11 @@ jobs:
   poll:
     runs-on: ubuntu-latest
     concurrency:
-      # Only one poller per repo at a time
+      # Only one poller per repo at a time; newer runs queue instead of
+      # killing the active run (which may be mid-way through conflict
+      # resolution or judge evaluation).
       group: ai-orchestrate-poll-${{ github.repository }}
-      cancel-in-progress: true
+      cancel-in-progress: false
 
     steps:
       - name: Create runtime workspace
