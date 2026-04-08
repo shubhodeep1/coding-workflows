@@ -1006,6 +1006,250 @@ The judge will evaluate this gap when the wave completes and decide whether to r
 }
 
 # ---------------------------------------------------------------
+# Helper: Resolve merge conflicts on a PR branch using Codex
+# ---------------------------------------------------------------
+# Runs a dedicated Codex instance (same model as the editor, xhigh
+# reasoning) to resolve merge conflict markers, commits the result,
+# pushes, and dispatches the review workflow.
+#
+# Previously the orchestrator pushed an empty commit to force a
+# synchronize event, expecting the review_autofix workflow's conflict
+# resolver to handle it.  But when the PR has real conflicts the merge
+# ref (refs/pull/N/merge) is unbuildable, causing GitHub to silently
+# skip the reusable workflow — stalling the pipeline.  By resolving
+# conflicts directly here, the push produces a clean merge ref so the
+# subsequent autofix run triggers normally.
+#
+# Usage: _resolve_merge_conflicts_with_codex <pr_number> <head_ref> <base_branch> [issue_number]
+# Returns 0 on success (conflicts resolved + pushed), 1 on failure.
+# Leaves the repo on a detached HEAD regardless of outcome.
+_resolve_merge_conflicts_with_codex()
+{
+	local pr_number="$1"
+	local head_ref="$2"
+	local base_branch="$3"
+	local issue_number="${4:-}"
+
+	local log_prefix="[conflict-resolver]"
+	if [ -n "${issue_number}" ]; then
+		log_prefix="[conflict-resolver] PR #${pr_number} (issue #${issue_number})"
+	else
+		log_prefix="[conflict-resolver] PR #${pr_number}"
+	fi
+
+	echo "  ${log_prefix} Starting Codex-based merge conflict resolution..."
+
+	# --- Fetch and checkout the PR branch ---
+	if ! git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+		echo "::warning::${log_prefix} Could not fetch head ref ${head_ref}; skipping."
+		return 1
+	fi
+	if ! git fetch origin "${base_branch}:refs/remotes/origin/${base_branch}" 2>/dev/null; then
+		echo "::warning::${log_prefix} Could not fetch base branch ${base_branch}; skipping."
+		return 1
+	fi
+	if ! git checkout "origin/${head_ref}" 2>/dev/null; then
+		echo "::warning::${log_prefix} Could not checkout ${head_ref}; skipping."
+		return 1
+	fi
+
+	git config user.name "codex-bot"
+	git config user.email "codex@users.noreply.github.com"
+
+	# --- Start merge to introduce conflict markers ---
+	git merge --no-commit --no-ff "origin/${base_branch}" 2>/dev/null || true
+
+	if [ -z "$(git ls-files --unmerged 2>/dev/null)" ]; then
+		# Clean merge — no actual conflicts.  Commit and push.
+		if git commit -m "[orchestrator-merge] update branch with ${base_branch}" 2>/dev/null; then
+			if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+				echo "  ${log_prefix} Clean merge committed and pushed."
+				git checkout --detach HEAD 2>/dev/null || true
+				return 0
+			fi
+		fi
+		# Merge was already up-to-date or push failed
+		if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+			git merge --abort 2>/dev/null || true
+		fi
+		git checkout --detach HEAD 2>/dev/null || true
+		echo "::warning::${log_prefix} Clean merge push failed."
+		return 1
+	fi
+
+	echo "  ${log_prefix} Conflict markers present. Running Codex to resolve..."
+
+	# --- Setup Codex config for the conflict resolver model ---
+	mkdir -p ~/.codex
+	local catalog_path
+	catalog_path="$(pwd)/scripts/codex_model_catalog.json"
+	{
+		echo 'web_search = "live"'
+		echo 'model_provider = "openrouter"'
+		echo "model = \"${MODEL_CONFLICT_RESOLVER:-${MODEL_EDITOR}}\""
+		echo "model_reasoning_effort = \"${CONFLICT_RESOLVER_REASONING_EFFORT:-xhigh}\""
+		if [ -f "${catalog_path}" ]; then
+			echo "model_catalog_json = \"${catalog_path}\""
+		fi
+		echo
+		echo '[model_providers.openrouter]'
+		echo 'name = "OpenRouter"'
+		echo 'base_url = "https://openrouter.ai/api/v1"'
+		echo 'env_key = "OPENROUTER_API_KEY"'
+		echo 'wire_api = "responses"'
+		echo 'stream_idle_timeout_ms = 600000'
+		echo 'stream_max_retries = 5'
+		echo 'request_max_retries = 3'
+		echo
+		echo '[sandbox_workspace_write]'
+		echo 'network_access = true'
+	} > ~/.codex/config.toml
+
+	# --- Build conflict resolver prompt ---
+	local prompt_file
+	prompt_file="$(mktemp)"
+	cat > "${prompt_file}" <<'__CONFLICT_RESOLVER_PROMPT__'
+Repository task: Resolve merge conflicts.
+
+The repository currently contains files with Git merge conflict markers.
+
+Conflict markers appear in this format:
+<<<<<<< HEAD
+code
+=======
+other code
+>>>>>>> branch
+
+Your task:
+Resolve merge conflicts safely.
+
+Rules:
+- Only resolve conflicts.
+- Do not introduce new functionality.
+- Do not refactor unrelated code.
+- Do not modify files that do not contain conflict markers.
+- Prefer preserving behavior from both sides when possible.
+- If both sides are incompatible, choose the version consistent with surrounding code.
+- Remove all conflict markers.
+- Ensure the final code compiles logically.
+- You may read repository files as needed.
+- You may modify repository files directly.
+- Do not generate patches.
+- Do not generate scripts.
+- Do not modify GitHub workflow files except when resolving merge conflicts.
+- Do not access the network.
+
+Final output must be plain text.
+
+Output sections:
+Conflicts resolved:
+- list files where conflicts were resolved
+
+Notes:
+- brief explanation if any resolution required choosing one side
+__CONFLICT_RESOLVER_PROMPT__
+
+	# --- Run Codex to resolve conflicts ---
+	local resolver_success=false
+	local attempt=1
+	local tmp_output
+	while [ "${attempt}" -le 3 ]; do
+		tmp_output="$(mktemp)"
+		if codex exec \
+			--model "${MODEL_CONFLICT_RESOLVER:-${MODEL_EDITOR}}" \
+			--full-auto \
+			"$(cat "${prompt_file}")" > "${tmp_output}" 2>/dev/null; then
+			if [ -s "${tmp_output}" ]; then
+				echo "  ${log_prefix} Codex resolver succeeded on attempt ${attempt}."
+				resolver_success=true
+				rm -f "${tmp_output}"
+				break
+			fi
+		fi
+		rm -f "${tmp_output}"
+		if [ "${attempt}" -eq 3 ]; then
+			echo "::warning::${log_prefix} Codex conflict resolver failed after 3 attempts."
+		fi
+		attempt=$((attempt + 1))
+		sleep 2
+	done
+	rm -f "${prompt_file}"
+
+	if [ "${resolver_success}" != "true" ]; then
+		# Abort merge and fall back to empty-commit re-trigger
+		git merge --abort 2>/dev/null || true
+		git reset --hard HEAD 2>/dev/null || true
+		echo "  ${log_prefix} Falling back to empty-commit re-trigger."
+		git commit --allow-empty \
+			-m "[orchestrator] re-trigger review for conflict resolution (PR #${pr_number})" \
+			2>/dev/null || true
+		if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+			echo "  ${log_prefix} Pushed empty commit as fallback re-trigger."
+		else
+			echo "::warning::${log_prefix} Could not push fallback empty commit."
+		fi
+		git checkout --detach HEAD 2>/dev/null || true
+		return 1
+	fi
+
+	# --- Clean up workflow artifacts so they are not committed to caller repos ---
+	if [[ "${GITHUB_REPOSITORY}" != *"/coding-workflows" ]]; then
+		rm -f ./pre_assembled_static.txt
+		rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
+		rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
+			scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
+			scripts/codex_model_catalog.json
+		rm -rf .serena prompts
+	fi
+
+	# --- Commit and push resolved files ---
+	if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+		git rm -r --cached node_modules 2>/dev/null || true
+		git add -u -- ':!node_modules' 2>/dev/null || true
+		git ls-files --others --exclude-standard -z -- ':!node_modules' | xargs -0 -r git add -- 2>/dev/null || true
+		if git commit -m "[ai-merge-resolve] resolve merge conflicts (orchestrator)" 2>/dev/null; then
+			if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+				echo "  ${log_prefix} Conflicts resolved, committed, and pushed."
+
+				# Dispatch review workflow via workflow_dispatch as a reliable
+				# re-trigger — the synchronize event from the push also fires,
+				# but workflow_dispatch resolves from the target ref (always
+				# exists) rather than the merge ref (may lag).
+				local dispatched=false
+				for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
+					if gh workflow run "${wf_candidate}" \
+						--repo "${GITHUB_REPOSITORY}" \
+						--ref "${head_ref}" \
+						-f pr_number="${pr_number}" 2>/dev/null; then
+						echo "  ${log_prefix} Dispatched ${wf_candidate} for next review cycle."
+						dispatched=true
+						break
+					fi
+				done
+				if [ "${dispatched}" = "false" ]; then
+					echo "  ${log_prefix} workflow_dispatch fallback failed; synchronize event will trigger review."
+				fi
+
+				git checkout --detach HEAD 2>/dev/null || true
+				return 0
+			else
+				echo "::warning::${log_prefix} Push failed after conflict resolution."
+			fi
+		else
+			echo "::warning::${log_prefix} Commit failed after conflict resolution."
+		fi
+	else
+		echo "  ${log_prefix} No changes after conflict resolution (conflicts may still exist)."
+	fi
+
+	# Cleanup on failure
+	git merge --abort 2>/dev/null || true
+	git reset --hard HEAD 2>/dev/null || true
+	git checkout --detach HEAD 2>/dev/null || true
+	return 1
+}
+
+# ---------------------------------------------------------------
 # Normalize truthy env vars (case-insensitive 1/true/yes/on)
 # ---------------------------------------------------------------
 _is_truthy() {
@@ -1391,51 +1635,16 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
           2>/dev/null; then
           echo "  PR #${RTM_PR} branch updated via API. The synchronize event will re-trigger review (including conflict resolution)."
         else
-          echo "  API branch update failed for PR #${RTM_PR}. Attempting local merge + conflict resolution..."
+          echo "  API branch update failed for PR #${RTM_PR}. Running Codex conflict resolution..."
 
-          # Fetch the PR head branch and base branch
           RTM_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
           if [ -n "${RTM_HEAD_REF}" ] && [ "${RTM_HEAD_REF}" != "null" ]; then
             DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
-            if ! git fetch origin "${RTM_HEAD_REF}:refs/remotes/origin/${RTM_HEAD_REF}" 2>/dev/null || \
-               ! git fetch origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" 2>/dev/null || \
-               ! git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null; then
-              echo "::warning::Could not fetch or checkout refs for PR #${RTM_PR}; skipping local conflict handling."
-              git checkout --detach HEAD 2>/dev/null || true
-              continue
-            fi
-            git config user.name "codex-bot"
-            git config user.email "codex@users.noreply.github.com"
-
-            if git merge --no-commit --no-ff "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
-              # Clean merge — no conflicts
-              git commit -m "[orchestrator-merge] update branch with ${DEFAULT_BRANCH}" 2>/dev/null || true
-              git push origin "HEAD:${RTM_HEAD_REF}" 2>/dev/null || true
-              echo "  PR #${RTM_PR} branch updated via local merge (no conflicts)."
-            elif [ -n "$(git ls-files --unmerged 2>/dev/null)" ]; then
-              git merge --abort 2>/dev/null || true
-              echo "  PR #${RTM_PR} has real merge conflicts — cannot auto-resolve from poller."
-              echo "  The review workflow's Codex conflict resolver handles this on synchronize events."
-              tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has real merge conflicts. Attempting to re-trigger review workflow."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")"
-
-              # Force a synchronize event by creating an empty commit on the PR branch
-              if git checkout "origin/${RTM_HEAD_REF}" 2>/dev/null; then
-                git config user.name "codex-bot"
-                git config user.email "codex@users.noreply.github.com"
-                git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
-                git push origin "HEAD:${RTM_HEAD_REF}" 2>/dev/null || {
-                  echo "::warning::Could not push empty commit to re-trigger review for PR #${RTM_PR}."
-                }
-              else
-                echo "::warning::Could not check out ${RTM_HEAD_REF} to re-trigger review for PR #${RTM_PR}."
-              fi
+            if _resolve_merge_conflicts_with_codex "${RTM_PR}" "${RTM_HEAD_REF}" "${DEFAULT_BRANCH}" "${rtm_issue}"; then
+              tg_notify "✅ PR #${RTM_PR} (issue #${rtm_issue}) merge conflicts resolved by orchestrator Codex."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")"
             else
-              git merge --abort 2>/dev/null || true
-              echo "::warning::Unexpected merge state for PR #${RTM_PR}."
+              tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) merge conflict resolution failed. Review workflow re-triggered as fallback."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")"
             fi
-
-            # Return to detached HEAD / original state
-            git checkout --detach HEAD 2>/dev/null || true
           else
             echo "::warning::Could not determine head ref for PR #${RTM_PR}."
           fi
@@ -1458,9 +1667,11 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   # branch moves, so the review workflow is never re-triggered.
   #
   # This block detects in-progress issues whose linked PRs have become
-  # unmergeable and pushes an empty commit to force a synchronize
-  # event, which re-triggers the review workflow (including its merge
-  # conflict resolver).
+  # unmergeable and runs a dedicated Codex conflict resolution instance
+  # to resolve conflicts directly, then pushes.  The resolved push
+  # produces a clean merge ref so the subsequent autofix run triggers
+  # normally.  If Codex resolution fails, falls back to an empty-commit
+  # push.
   # ---------------------------------------------------------------
   echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "in_progress") | .github_issue' | while read -r ip_issue; do
     [ -n "${ip_issue}" ] && [ "${ip_issue}" != "null" ] || continue
@@ -1475,7 +1686,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     if [ "${IP_PR_STATE}" != "open" ] || [ "${IP_MERGEABLE}" != "false" ]; then
       continue
     fi
-    echo "  In-progress issue #${ip_issue} has PR #${IP_PR} with merge conflicts. Attempting to re-trigger review..."
+    echo "  In-progress issue #${ip_issue} has PR #${IP_PR} with merge conflicts. Running Codex conflict resolution..."
 
     # Try the GitHub API update-branch first (creates a merge commit
     # if the merge is clean; fails when there are real conflicts).
@@ -1487,26 +1698,15 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       continue
     fi
 
-    # API update failed — real conflicts exist.  Push an empty commit
-    # on the PR branch to force a synchronize event so the review
-    # workflow's Codex conflict resolver can handle it.
+    # API update failed — real conflicts exist.  Resolve with Codex.
     IP_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
     if [ -n "${IP_HEAD_REF}" ] && [ "${IP_HEAD_REF}" != "null" ]; then
-      if ! git fetch origin "${IP_HEAD_REF}:refs/remotes/origin/${IP_HEAD_REF}" 2>/dev/null || ! git checkout "origin/${IP_HEAD_REF}" 2>/dev/null; then
-        echo "::warning::Could not fetch or checkout head ref ${IP_HEAD_REF} for PR #${IP_PR}; skipping review re-trigger."
-        git checkout --detach HEAD 2>/dev/null || true
-        continue
-      fi
-      git config user.name "codex-bot"
-      git config user.email "codex@users.noreply.github.com"
-      git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution" 2>/dev/null || true
-      if git push origin "HEAD:${IP_HEAD_REF}" 2>/dev/null; then
-        echo "  Pushed empty commit to PR #${IP_PR} to re-trigger review workflow."
-        tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Re-triggered review for auto-resolution."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
+      DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+      if _resolve_merge_conflicts_with_codex "${IP_PR}" "${IP_HEAD_REF}" "${DEFAULT_BRANCH}" "${ip_issue}"; then
+        tg_notify "✅ PR #${IP_PR} (issue #${ip_issue}) merge conflicts resolved by orchestrator Codex."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
       else
-        echo "::warning::Could not push empty commit to re-trigger review for PR #${IP_PR}."
+        tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) merge conflict resolution failed. Review workflow re-triggered as fallback."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
       fi
-      git checkout --detach HEAD 2>/dev/null || true
     else
       echo "::warning::Could not determine head ref for in-progress PR #${IP_PR}."
     fi
@@ -1776,22 +1976,16 @@ sys.exit(1)
               2>/dev/null; then
               echo "  PR #${RB_PR} branch updated. Synchronize event will re-trigger review + conflict resolution."
             else
-              echo "  API branch update failed for review-blocked PR #${RB_PR}. Pushing empty commit to re-trigger review workflow..."
+              echo "  API branch update failed for review-blocked PR #${RB_PR}. Running Codex conflict resolution..."
               RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
               if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
-                if ! git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || ! git checkout "origin/${RB_HEAD_REF}" 2>/dev/null; then
-                  echo "::warning::Could not fetch or checkout head ref ${RB_HEAD_REF} for PR #${RB_PR}; skipping review re-trigger."
-                  git checkout --detach HEAD 2>/dev/null || true
-                  continue
+                RB_BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
+                : "${RB_BASE_REF:=${DEFAULT_BRANCH:-main}}"
+                if _resolve_merge_conflicts_with_codex "${RB_PR}" "${RB_HEAD_REF}" "${RB_BASE_REF}" "${rb_issue}"; then
+                  tg_notify "✅ Review-blocked PR #${RB_PR} (issue #${rb_issue}) merge conflicts resolved by orchestrator Codex."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+                else
+                  tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) merge conflict resolution failed."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                 fi
-                git config user.name "codex-bot"
-                git config user.email "codex@users.noreply.github.com"
-                git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
-                git push origin "HEAD:${RB_HEAD_REF}" 2>/dev/null || {
-                  echo "::warning::Could not push to re-trigger review for PR #${RB_PR}."
-                  tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts that could not be auto-resolved."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
-                }
-                git checkout --detach HEAD 2>/dev/null || true
               else
                 echo "::warning::Could not determine head ref for review-blocked PR #${RB_PR}."
               fi
@@ -1829,22 +2023,16 @@ sys.exit(1)
                 2>/dev/null; then
                 echo "  PR #${RB_PR} branch updated. Will retry force-merge on next poll cycle."
               else
-                echo "  API branch update failed for force-merge PR #${RB_PR}. Re-triggering review for conflict resolution..."
+                echo "  API branch update failed for force-merge PR #${RB_PR}. Running Codex conflict resolution..."
                 RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
                 if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
-                  if ! git fetch origin "${RB_HEAD_REF}:refs/remotes/origin/${RB_HEAD_REF}" 2>/dev/null || ! git checkout "origin/${RB_HEAD_REF}" 2>/dev/null; then
-                    echo "::warning::Could not fetch or checkout head ref ${RB_HEAD_REF} for force-merge PR #${RB_PR}; skipping review re-trigger."
-                    git checkout --detach HEAD 2>/dev/null || true
-                    continue
+                  RB_BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
+                  : "${RB_BASE_REF:=${DEFAULT_BRANCH:-main}}"
+                  if _resolve_merge_conflicts_with_codex "${RB_PR}" "${RB_HEAD_REF}" "${RB_BASE_REF}" "${rb_issue}"; then
+                    echo "  PR #${RB_PR} conflicts resolved. Will retry force-merge on next poll cycle."
+                  else
+                    tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) merge conflict resolution failed."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                   fi
-                  git config user.name "codex-bot"
-                  git config user.email "codex@users.noreply.github.com"
-                  git commit --allow-empty -m "[orchestrator] re-trigger review for conflict resolution (issue #${rb_issue})" 2>/dev/null || true
-                  git push origin "HEAD:${RB_HEAD_REF}" 2>/dev/null || {
-                    echo "::warning::Could not push to re-trigger review for force-merge PR #${RB_PR}."
-                    tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) has unresolvable merge conflicts."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
-                  }
-                  git checkout --detach HEAD 2>/dev/null || true
                 else
                   echo "::warning::Could not determine head ref for force-merge PR #${RB_PR}."
                 fi
@@ -2930,8 +3118,9 @@ done
 # branch moves forward.
 #
 # This section scans all open PRs on AI-generated branches
-# (ai/issue-*) that are not mergeable and re-triggers the review
-# workflow so its conflict resolver can act.
+# (ai/issue-*) that are not mergeable and resolves conflicts
+# directly using a dedicated Codex instance, then pushes so the
+# review workflow can trigger on a clean merge ref.
 # ---------------------------------------------------------------
 echo ""
 echo "========================================"
@@ -2951,6 +3140,7 @@ STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
 echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
 
 CONFLICT_SWEEP_FIXED=0
+DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
 
 for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
@@ -2975,7 +3165,7 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		continue
 	fi
 
-	echo "  PR #${S_PR} (${S_HEAD}) is in conflicted mergeable state. Attempting to re-trigger review..."
+	echo "  PR #${S_PR} (${S_HEAD}) is in conflicted mergeable state. Running Codex conflict resolution..."
 
 	# Stage 1: Try the GitHub API update-branch endpoint (clean merge)
 	S_HEAD_SHA="$(echo "${S_PR_JSON}" | jq -r '.head.sha // ""')"
@@ -2986,33 +3176,13 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		continue
 	fi
 
-	# Stage 2: Push empty commit to force a synchronize event so the
-	# review workflow's Codex conflict resolver can run.
-	if ! git fetch origin "${S_HEAD}:refs/remotes/origin/${S_HEAD}" 2>/dev/null; then
-		echo "::warning::Could not fetch standalone PR #${S_PR} head ${S_HEAD}; skipping re-trigger."
-		continue
-	fi
-	if ! git checkout --detach "refs/remotes/origin/${S_HEAD}" 2>/dev/null; then
-		echo "::warning::Could not check out standalone PR #${S_PR} head ${S_HEAD}; skipping re-trigger."
-		continue
-	fi
-	git config user.name "codex-bot"
-	git config user.email "codex@users.noreply.github.com"
-	if ! git commit --allow-empty \
-		-m "[orchestrator] re-trigger review for conflict resolution (standalone PR #${S_PR})" \
-		2>/dev/null; then
-		echo "::warning::Could not create empty commit for standalone PR #${S_PR}; skipping push."
-		git checkout --detach HEAD 2>/dev/null || true
-		continue
-	fi
-	if git push origin "HEAD:${S_HEAD}" 2>/dev/null; then
-		echo "  Pushed empty commit to PR #${S_PR} to re-trigger review workflow."
+	# Stage 2: Resolve conflicts with Codex and push.
+	if _resolve_merge_conflicts_with_codex "${S_PR}" "${S_HEAD}" "${DEFAULT_BRANCH}"; then
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
-		tg_send_msg "⚠️ Standalone PR #${S_PR} has merge conflicts. Re-triggered review for auto-resolution."$'\n'"PR: $(_gh_url "pull/${S_PR}")" >/dev/null 2>&1 || true
+		tg_send_msg "✅ Standalone PR #${S_PR} merge conflicts resolved by orchestrator Codex."$'\n'"PR: $(_gh_url "pull/${S_PR}")" >/dev/null 2>&1 || true
 	else
-		echo "::warning::Could not push empty commit to re-trigger review for standalone PR #${S_PR}."
+		tg_send_msg "⚠️ Standalone PR #${S_PR} merge conflict resolution failed. Review workflow re-triggered as fallback."$'\n'"PR: $(_gh_url "pull/${S_PR}")" >/dev/null 2>&1 || true
 	fi
-	git checkout --detach HEAD 2>/dev/null || true
 done
 
 echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
