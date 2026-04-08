@@ -60,12 +60,17 @@ jobs:
             fi
 
             echo "Missing required file: ${repo_path} (${script_ref}) and local fallback ${target_path}" >&2
-            exit 1
+            return 1
           }
 
+          MEMORY_HELPERS_READY=1
           for f in ai_memory.py ai_memory_lib.py memory_helpers.sh; do
-            fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"
+            if ! fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"; then
+              MEMORY_HELPERS_READY=0
+            fi
           done
+
+          echo "MEMORY_HELPERS_READY=${MEMORY_HELPERS_READY}" >> "$GITHUB_ENV"
 
       - name: Update linked issue labels when PR closes
         env:
@@ -139,6 +144,16 @@ jobs:
           if [ -z "${LINKED_ISSUE_NUMBERS:-}" ]; then
             echo "No linked issues found; skipping lineage finalization."
             exit 0
+          fi
+
+          case "$(printf '%s' "${AI_MEMORY_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) ;;
+            *) echo "AI memory disabled; skipping lineage finalization."; exit 0 ;;
+          esac
+
+          if [ "${MEMORY_HELPERS_READY:-1}" != "1" ]; then
+            echo "Missing required memory helper scripts; cannot finalize lineage." >&2
+            exit 1
           fi
 
           if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
