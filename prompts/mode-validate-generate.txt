@@ -45,6 +45,18 @@ Docker build-context path rules (CRITICAL):
   This resolves to `validation/validation/Dockerfile.app` which does not exist.
 - After generating the compose file, mentally verify that `<resolved_context>/<dockerfile>` points to a real file.
 
+Docker Compose healthcheck YAML rules (CRITICAL):
+- Every entry in a `healthcheck.test` list MUST be an explicitly quoted string.
+- YAML auto-casts bare values like `true`, `false`, `yes`, `no`, `null`, and bare numbers into non-string types. Docker Compose schema validation rejects these with: `services.<name>.healthcheck.test.N must be a string`.
+- CORRECT:
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.runCommand('ping').ok"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+- WRONG (YAML casts bare words to booleans/nulls):
+    healthcheck:
+      test: ["CMD", mongosh, --eval, db.runCommand('ping').ok]
+- Always wrap every healthcheck test entry in double quotes inside the YAML list.
+
 `validation/validate.sh` requirements:
 - Bash shell with `set -euo pipefail`
 - Include `#!/usr/bin/env bash` as the first line
