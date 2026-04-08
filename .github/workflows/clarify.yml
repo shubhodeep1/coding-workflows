@@ -193,7 +193,7 @@ jobs:
           memory_record_candidate(){ return 0; }
           EOF
           fi
-          source scripts/memory_helpers.sh
+          source scripts/memory_helpers.sh 2>/dev/null || true
 
           if ! declare -F memory_retrieve >/dev/null 2>&1 \
             || ! declare -F memory_record_run_event >/dev/null 2>&1 \
@@ -331,7 +331,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_retrieve >/dev/null 2>&1 || memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
 
           jq -r '.body // ""' "${ISSUE_META_FILE}" > "${RUNTIME_DIR}/issue_body.txt"
 
@@ -636,7 +637,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_record_candidate >/dev/null 2>&1 || memory_record_candidate(){ return 0; }
 
           DETAILS="$(head -c 12000 "${QUESTIONS_FILE}")"
 
@@ -675,7 +677,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_record_candidate >/dev/null 2>&1 || memory_record_candidate(){ return 0; }
 
           memory_record_candidate \
             --category "decisions" \
@@ -720,7 +723,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
 
           OUTCOME="clear"
           if [ "${{ steps.parse_codex.outputs.needs_clarification }}" = "true" ]; then
@@ -744,7 +748,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
 
           FINAL_OUTCOME="failed"
           if [ "${{ job.status }}" = "cancelled" ]; then
