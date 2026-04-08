@@ -43,6 +43,8 @@ jobs:
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      PROCESSED_ANSWER_CLAIMED: "false"
+      PROCESSED_ANSWER_COMPLETED: "false"
 
     steps:
       - name: Cache Codex CLI
@@ -107,7 +109,7 @@ jobs:
           mkdir -p scripts
           # Only fetch scripts actually used by the plan workflow.
           # git_ref_health_check.sh is only needed by implement/edit workflows.
-          for f in setup_serena.sh tg_helpers.sh label_helpers.sh; do
+          for f in setup_serena.sh tg_helpers.sh label_helpers.sh memory_helpers.sh; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -266,6 +268,67 @@ jobs:
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             exit 0
           fi
+
+      - name: Check and claim /answer command
+        if: env.SKIP_PLAN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          CHECK_RESULT="$(memory_processed_command_check \
+            --issue-number "${ISSUE_NUMBER}" \
+            --comment-id "${TRIGGER_COMMENT_ID}" \
+            --command "answer")"
+
+          CHECK_EXISTS="$(printf '%s' "${CHECK_RESULT}" | jq -r '.exists // false' 2>/dev/null || echo "false")"
+          if [ "${CHECK_EXISTS}" = "true" ]; then
+            echo "::notice::/answer comment ${TRIGGER_COMMENT_ID} already processed; skipping."
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          CLAIM_RESULT="$(memory_processed_command_claim \
+            --issue-number "${ISSUE_NUMBER}" \
+            --comment-id "${TRIGGER_COMMENT_ID}" \
+            --command "answer" \
+            --workflow "plan" \
+            --actor "${{ github.actor }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}")"
+
+          CLAIMED="$(printf '%s' "${CLAIM_RESULT}" | jq -r '.operation_result.claimed // .claimed // false' 2>/dev/null || echo "false")"
+          if [ "${CLAIMED}" != "true" ]; then
+            echo "::notice::/answer comment ${TRIGGER_COMMENT_ID} claimed by another run; skipping."
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          {
+            echo "PROCESSED_ANSWER_CLAIMED=true"
+            echo "PROCESSED_ANSWER_COMPLETED=false"
+          } >> "$GITHUB_ENV"
+
+      - name: Record planning run start
+        if: env.SKIP_PLAN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          memory_record_run_event \
+            --run-id "${{ github.run_id }}" \
+            --workflow "plan" \
+            --event-type "phase_started" \
+            --status "ok" \
+            --message "Planning phase started for issue #${ISSUE_NUMBER}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${ISSUE_NUMBER}"
 
       - name: Cleanup clarify-phase Telegram messages
         if: env.SKIP_PLAN != 'true'
@@ -465,6 +528,25 @@ jobs:
             fi
           } > ./pre_assembled_static.txt
 
+      - name: Retrieve memory context
+        if: env.SKIP_PLAN != 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
+          jq -r '.body // ""' "${ISSUE_META_FILE}" > "${RUNTIME_DIR}/issue_body.txt"
+
+          memory_retrieve "${RUNTIME_DIR}/memory_context.txt" \
+            --role "planning" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --issue-title "${ISSUE_TITLE}" \
+            --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
+
       - name: Run Codex planning
         if: env.SKIP_PLAN != 'true'
         env:
@@ -480,6 +562,8 @@ jobs:
           # runs, enabling LLM provider prompt-prefix caching.
           {
             cat ./pre_assembled_static.txt
+            echo
+            cat "${RUNTIME_DIR}/memory_context.txt"
             echo
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
@@ -725,6 +809,46 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${PLAN_COMMENT_FILE}")"
 
+      - name: Record planning candidate (needs clarification)
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          DETAILS="$(cat "${PLAN_COMMENT_FILE}" | head -c 10000)"
+          memory_record_candidate \
+            --category "task_summaries" \
+            --summary "Plan requested re-clarification for issue #${ISSUE_NUMBER}" \
+            --details "${DETAILS}" \
+            --confidence "0.90" \
+            --workflow "plan" \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --source-refs "${ISSUE_URL}"
+
+      - name: Complete /answer command (needs clarification)
+        if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          memory_processed_command_complete \
+            --issue-number "${ISSUE_NUMBER}" \
+            --comment-id "${TRIGGER_COMMENT_ID}" \
+            --command "answer" \
+            --status "needs_clarification"
+
+          echo "PROCESSED_ANSWER_COMPLETED=true" >> "$GITHUB_ENV"
+
       - name: Telegram clarification notification
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
         env:
@@ -790,6 +914,46 @@ jobs:
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
 
+      - name: Record planning candidate (plan posted)
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          DETAILS="$(cat "${PLAN_COMMENT_FILE}" | head -c 10000)"
+          memory_record_candidate \
+            --category "task_summaries" \
+            --summary "Implementation plan posted for issue #${ISSUE_NUMBER}" \
+            --details "${DETAILS}" \
+            --confidence "0.90" \
+            --workflow "plan" \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --source-refs "${ISSUE_URL}"
+
+      - name: Complete /answer command (plan posted)
+        if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          memory_processed_command_complete \
+            --issue-number "${ISSUE_NUMBER}" \
+            --comment-id "${TRIGGER_COMMENT_ID}" \
+            --command "answer" \
+            --status "completed"
+
+          echo "PROCESSED_ANSWER_COMPLETED=true" >> "$GITHUB_ENV"
+
       - name: Auto-approve clear plan
         id: auto_approve
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
@@ -844,6 +1008,73 @@ jobs:
           else
             tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "${MSG}"
           fi
+
+      - name: Record planning run completed
+        if: env.SKIP_PLAN != 'true' && success()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          memory_record_run_event \
+            --run-id "${{ github.run_id }}" \
+            --workflow "plan" \
+            --event-type "phase_completed" \
+            --status "ok" \
+            --message "Planning completed for issue #${ISSUE_NUMBER}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --metadata-json "{\"needs_clarification\": \"${{ steps.parse_plan.outputs.needs_clarification }}\"}"
+
+      - name: Complete /answer command (failure/cancel)
+        if: (failure() || cancelled()) && env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && env.PROCESSED_ANSWER_COMPLETED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          STATUS="failed"
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            STATUS="cancelled"
+          fi
+
+          memory_processed_command_complete \
+            --issue-number "${ISSUE_NUMBER}" \
+            --comment-id "${TRIGGER_COMMENT_ID}" \
+            --command "answer" \
+            --status "${STATUS}"
+
+          echo "PROCESSED_ANSWER_COMPLETED=true" >> "$GITHUB_ENV"
+
+      - name: Record planning run failed
+        if: (failure() || cancelled()) && env.SKIP_PLAN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          STATUS="error"
+          MESSAGE="Planning failed for issue #${ISSUE_NUMBER}"
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            STATUS="cancelled"
+            MESSAGE="Planning cancelled for issue #${ISSUE_NUMBER}"
+          fi
+
+          memory_record_run_event \
+            --run-id "${{ github.run_id }}" \
+            --workflow "plan" \
+            --event-type "phase_failed" \
+            --status "${STATUS}" \
+            --message "${MESSAGE}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${ISSUE_NUMBER}"
 
       - name: Clean up progress comment on failure
         if: failure() || cancelled()
