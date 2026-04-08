@@ -1269,8 +1269,13 @@ __CONFLICT_RESOLVER_PROMPT__
 	# --- Commit and push resolved files ---
 	if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
 		git rm -r --cached node_modules 2>/dev/null || true
-		git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' 2>/dev/null || true
-		git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add -- 2>/dev/null || true
+		if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
+			git add -u -- ':!node_modules' ':!.serena' 2>/dev/null || true
+			git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' | xargs -0 -r git add -- 2>/dev/null || true
+		else
+			git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' 2>/dev/null || true
+			git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add -- 2>/dev/null || true
+		fi
 		if git commit -m "[ai-merge-resolve] resolve merge conflicts (orchestrator)" 2>/dev/null; then
 			if git push origin "HEAD:${head_ref}" 2>/dev/null; then
 				echo "  ${log_prefix} Conflicts resolved, committed, and pushed."
@@ -2223,8 +2228,13 @@ sys.exit(1)
               if [ -n "$(git status --porcelain)" ]; then
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
-                git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena'
-                git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
+                if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
+                  git add -u -- ':!node_modules' ':!.serena'
+                  git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' | xargs -0 -r git add --
+                else
+                  git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena'
+                  git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
+                fi
                 git commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}
 
 Orchestrator judge applied fixes to unblock the review pipeline.

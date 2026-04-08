@@ -2185,8 +2185,13 @@ jobs:
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
-          git add -u -- ':!node_modules'
-          git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
+          if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
+            git add -u -- ':!node_modules'
+            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' | xargs -0 -r git add --
+          else
+            git add -u -- ':!node_modules'
+            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
+          fi
 
           if git diff --cached --quiet; then
             echo "No repository changes to commit."
@@ -2540,8 +2545,13 @@ jobs:
             git config user.name "codex-bot"
             git config user.email "codex@users.noreply.github.com"
             git rm -r --cached node_modules 2>/dev/null || true
-            git add -u -- ':!node_modules'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
+            if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
+              git add -u -- ':!node_modules'
+              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' | xargs -0 -r git add --
+            else
+              git add -u -- ':!node_modules'
+              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
+            fi
             git commit -m "[ai-merge-resolve] resolve merge conflicts"
             git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}
             # NOTE: push deferred to final "Push all pending commits" step.
