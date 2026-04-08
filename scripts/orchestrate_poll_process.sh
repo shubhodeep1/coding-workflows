@@ -399,8 +399,7 @@ mark_validation_complete() {
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
   set_tracking_phase_label "ai:validated"
-  gh_retry gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
-    --comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle})." || true
+  post_tracking_comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle}). Issue kept open for manual review."
   tg_cleanup_msgs "${TRACKING_NUM}"
   MSG="✅ Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
   MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
@@ -2577,8 +2576,8 @@ PRs to revert: ${REVERT_COUNT}"
         jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment
 
-        gh issue close "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
-          --comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s)." || true
+        set_tracking_phase_label "ai:validated"
+        post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s). Issue kept open for manual review."
 
         tg_cleanup_msgs "${TRACKING_NUM}"
         MSG="✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved."

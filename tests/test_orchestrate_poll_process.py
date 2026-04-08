@@ -456,7 +456,7 @@ def test_complete_verdict_redispatches_validation_when_previous_dispatch_cycle_e
 
 
 
-def test_complete_verdict_closes_when_validation_disabled():
+def test_complete_verdict_keeps_open_when_validation_disabled():
 	state = _base_state(status="in_progress")
 	result = _run_poller(
 		state=state,
@@ -465,7 +465,7 @@ def test_complete_verdict_closes_when_validation_disabled():
 		issue_labels={10: ["ai:merged"]},
 	)
 	assert result["latest_state"]["status"] == "complete"
-	assert result["tracking_closed"] is True
+	assert result["tracking_closed"] is False
 	assert result["validation_dispatches"] == []
 
 
@@ -557,7 +557,7 @@ def test_invalid_max_validate_cycles_defaults_to_three():
 	assert result["latest_state"]["status"] == "failed"
 	assert "MAX_VALIDATE_CYCLES=3" in result["latest_state"].get("validation_failure_reason", "")
 
-def test_validated_label_marks_complete_and_closes():
+def test_validated_label_marks_complete_and_keeps_open():
 	state = _base_state(status="validating")
 	state["validation_cycle"] = 2
 	result = _run_poller(
@@ -568,7 +568,7 @@ def test_validated_label_marks_complete_and_closes():
 	)
 	assert result["latest_state"]["status"] == "complete"
 	assert result["latest_state"]["validation_completed_cycle"] == 2
-	assert result["tracking_closed"] is True
+	assert result["tracking_closed"] is False
 	assert "ai:validated" in result["tracking_labels"]
 
 
