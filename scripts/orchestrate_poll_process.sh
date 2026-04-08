@@ -253,6 +253,14 @@ ensure_label_exists() {
     [ -n "${contract_description}" ] && description="${contract_description}"
   fi
 
+  # Check if label already exists to avoid futile retries (gh label create
+  # returns a non-zero exit code for existing labels, which is not transient).
+  local encoded_name
+  encoded_name="$(printf '%s' "${label_name}" | jq -sRr @uri)"
+  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+    return 0
+  fi
+
   gh_retry gh label create "${label_name}" \
     --repo "${GITHUB_REPOSITORY}" \
     --color "${color}" \
@@ -411,7 +419,9 @@ mark_validation_complete() {
 
 extract_fix_issues_from_comment() {
   local comment_body="$1"
-  echo "${comment_body}" | sed -n 's/^- #\([0-9][0-9]*\).*$/\1/p' | awk '!seen[$0]++'
+  # Normalise literal \n sequences (produced by post_tracking_comment) into
+  # real newlines so the line-anchored sed below can match "- #<num>" items.
+  echo "${comment_body}" | sed 's/\\n/\n/g' | sed -n 's/^- #\([0-9][0-9]*\).*$/\1/p' | awk '!seen[$0]++'
 }
 
 sync_validation_fix_issues_from_comments() {

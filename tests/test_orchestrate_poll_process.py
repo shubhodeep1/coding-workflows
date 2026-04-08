@@ -542,6 +542,47 @@ def test_validation_fixing_label_collects_active_fix_issue_ids_from_comment():
 	assert result["latest_state"]["validation_active_fix_issues"] == [501, 502]
 
 
+def test_validation_fixing_extracts_issues_from_literal_backslash_n_comment():
+	"""post_tracking_comment produces literal \\n (not real newlines).
+	extract_fix_issues_from_comment must handle both formats."""
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 1
+	# Simulate what gh api stores when post_tracking_comment sends literal \n
+	comment_body = (
+		"## 🧪 Runtime validation found fixable issues\\n\\n"
+		"Diagnosis text here\\n\\nCreated fix-up issues:\\n"
+		"- #601: Fix first issue\\n- #602: Fix second issue"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-fixing"],
+		tracking_comments=[comment_body],
+	)
+	assert result["latest_state"]["status"] == "validation-fixing"
+	assert result["latest_state"]["validation_active_fix_issues"] == [601, 602]
+
+
+def test_validation_fixing_extracts_single_issue_from_literal_backslash_n():
+	"""Single fix issue after literal \\n — the exact scenario that caused
+	issue #2269 to fail before the extraction fix."""
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 1
+	comment_body = (
+		"## 🧪 Runtime validation found fixable issues\\n\\n"
+		"Diagnosis text\\n\\nCreated fix-up issues:\\n- #701: Only fix"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-fixing"],
+		tracking_comments=[comment_body],
+	)
+	assert result["latest_state"]["status"] == "validation-fixing"
+	assert result["latest_state"]["validation_active_fix_issues"] == [701]
+
 
 def test_invalid_max_validate_cycles_defaults_to_three():
 	state = _base_state(status="validation-fixing")
