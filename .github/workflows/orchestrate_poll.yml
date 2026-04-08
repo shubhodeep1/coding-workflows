@@ -28,7 +28,6 @@ env:
 jobs:
   poll:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     concurrency:
       # Only one poller per repo at a time
       group: ai-orchestrate-poll-${{ github.repository }}
@@ -264,11 +263,6 @@ jobs:
           # so the job ends just before the next billing minute boundary.
           TARGET=$(( ((MIN_TARGET + 5 + 59) / 60) * 60 - 5 ))
           SLEEP_SECS=$(( TARGET - ELAPSED ))
-          # Safety: skip if sleeping would push past 29m30s (near the
-          # 30-minute job timeout); fall back to the 30s minimum instead.
-          if [ $(( ELAPSED + SLEEP_SECS )) -gt 1770 ]; then
-            SLEEP_SECS=30
-          fi
           echo "Elapsed ${ELAPSED}s — sleeping ${SLEEP_SECS}s to align job end to ~${TARGET}s ($(( TARGET / 60 ))m$(( TARGET % 60 ))s)"
           sleep "${SLEEP_SECS}"
 
