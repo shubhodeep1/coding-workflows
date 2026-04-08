@@ -133,6 +133,12 @@ jobs:
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         run: |
           set -euo pipefail
+
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory_helpers.sh unavailable; skipping run-start memory event"
+            exit 0
+          fi
+
           source scripts/memory_helpers.sh
 
           METADATA_JSON="$(jq -cn \
@@ -236,6 +242,13 @@ jobs:
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         run: |
           set -euo pipefail
+
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory_helpers.sh unavailable; using empty memory context"
+            : > "${RUNTIME_DIR}/memory_context.txt"
+            exit 0
+          fi
+
           source scripts/memory_helpers.sh
 
           memory_retrieve "${RUNTIME_DIR}/memory_context.txt" \
@@ -331,6 +344,12 @@ jobs:
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         run: |
           set -euo pipefail
+
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory_helpers.sh unavailable; skipping memory candidate recording"
+            exit 0
+          fi
+
           source scripts/memory_helpers.sh
 
           MAX_DETAILS_CHARS=12000
@@ -382,6 +401,12 @@ jobs:
         if: success() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
         run: |
           set -euo pipefail
+
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory_helpers.sh unavailable; skipping run-end success memory event"
+            exit 0
+          fi
+
           source scripts/memory_helpers.sh
 
           METADATA_JSON="$(jq -cn \
