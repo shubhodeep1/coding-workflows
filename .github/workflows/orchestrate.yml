@@ -132,7 +132,7 @@ jobs:
             script_ref="stable"
           fi
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py tg_helpers.sh; do
+          for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py tg_helpers.sh memory_helpers.sh; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -176,6 +176,22 @@ jobs:
               fi
             fi
           done
+
+      - name: Record orchestration run start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          memory_record_run_event \
+            --run-id "${{ github.run_id }}" \
+            --workflow "orchestrate" \
+            --event-type "orchestration_started" \
+            --status "ok" \
+            --message "Orchestration started for ${{ github.repository }}" \
+            --actor "${{ github.actor }}"
 
       - name: Create Codex config
         run: |
@@ -243,6 +259,30 @@ jobs:
           STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
           echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
 
+      - name: Retrieve memory context
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          PROJECT_CONTEXT_FILE="${RUNTIME_DIR}/project_description.txt"
+          cat <<'PROJECT_DESC_EOF' > "${PROJECT_CONTEXT_FILE}"
+          ${{ inputs.project_description }}
+          PROJECT_DESC_EOF
+
+          ISSUE_TITLE="$(head -n 1 "${PROJECT_CONTEXT_FILE}" | tr -d '\r' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+          if [ -z "${ISSUE_TITLE}" ]; then
+            ISSUE_TITLE="Orchestration request"
+          fi
+          ISSUE_TITLE="$(printf '%s' "${ISSUE_TITLE}" | head -c 200)"
+
+          memory_retrieve "${RUNTIME_DIR}/memory_context.txt" \
+            --role "planning" \
+            --issue-title "${ISSUE_TITLE}" \
+            --issue-body-file "${PROJECT_CONTEXT_FILE}"
+
       - name: Build Codex prompt
         env:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_ORCHESTRATE || '40' }}
@@ -251,6 +291,14 @@ jobs:
 
           {
             cat ./pre_assembled_static.txt
+            echo
+            echo "=== AI MEMORY CONTEXT ==="
+            if [ -f "${RUNTIME_DIR}/memory_context.txt" ]; then
+              cat "${RUNTIME_DIR}/memory_context.txt"
+            else
+              echo "AI MEMORY CONTEXT"
+              echo "status: unavailable"
+            fi
             echo
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
@@ -526,6 +574,29 @@ jobs:
                 --input - >/dev/null
           echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER}"
 
+      - name: Record decomposition candidate
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
+          PROJECT_TITLE="$(jq -r '.project_title' "${DECOMPOSITION_FILE}" 2>/dev/null || echo "unknown")"
+          DETAILS="$(jq -c '{project_title: .project_title, issues: [.issues[] | {id, title, priority}], dependency_edges}' "${DECOMPOSITION_FILE}" | head -c 12000)"
+
+          memory_record_candidate \
+            --category "decisions" \
+            --summary "Decomposed project '${PROJECT_TITLE}' into ${ISSUE_COUNT} issues (tracking #${TRACKING_ISSUE_NUMBER})" \
+            --details "${DETAILS}" \
+            --confidence "0.80" \
+            --workflow "orchestrate" \
+            --run-id "${{ github.run_id }}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${TRACKING_ISSUE_NUMBER}"
+
       - name: Dispatch Wave 1
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -595,6 +666,42 @@ jobs:
               echo "| Tracking issue | #${TRACKING_ISSUE_NUMBER} |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record orchestration run end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          JOB_STATUS="${{ job.status }}"
+          EVENT_TYPE="orchestration_failed"
+          EVENT_STATUS="error"
+          EVENT_MESSAGE="Orchestration failed (${JOB_STATUS})"
+
+          if [ "${JOB_STATUS}" = "success" ]; then
+            EVENT_TYPE="orchestration_completed"
+            EVENT_STATUS="ok"
+            EVENT_MESSAGE="Orchestration completed"
+          fi
+
+          ARGS=(
+            --run-id "${{ github.run_id }}"
+            --workflow "orchestrate"
+            --event-type "${EVENT_TYPE}"
+            --status "${EVENT_STATUS}"
+            --message "${EVENT_MESSAGE}"
+            --actor "${{ github.actor }}"
+          )
+
+          if [ -n "${TRACKING_ISSUE_NUMBER:-}" ] && [ "${TRACKING_ISSUE_NUMBER}" != "0" ]; then
+            ARGS+=(--issue-number "${TRACKING_ISSUE_NUMBER}")
+          fi
+
+          memory_record_run_event "${ARGS[@]}"
 
       - name: Notify via Telegram
         if: always()
