@@ -1261,15 +1261,16 @@ __CONFLICT_RESOLVER_PROMPT__
 		rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
 		rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
 			scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
-			scripts/codex_model_catalog.json
+			scripts/codex_model_catalog.json scripts/orchestrate_poll_process.sh scripts/orchestrate_lib.py
 		rm -rf .serena prompts
+		rm -f .github/ai/orchestrate_schema.v1.json
 	fi
 
 	# --- Commit and push resolved files ---
 	if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
 		git rm -r --cached node_modules 2>/dev/null || true
-		git add -u -- ':!node_modules' 2>/dev/null || true
-		git ls-files --others --exclude-standard -z -- ':!node_modules' | xargs -0 -r git add -- 2>/dev/null || true
+		git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' 2>/dev/null || true
+		git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add -- 2>/dev/null || true
 		if git commit -m "[ai-merge-resolve] resolve merge conflicts (orchestrator)" 2>/dev/null; then
 			if git push origin "HEAD:${head_ref}" 2>/dev/null; then
 				echo "  ${log_prefix} Conflicts resolved, committed, and pushed."
@@ -2172,11 +2173,24 @@ sys.exit(1)
                 echo "::warning::Fix codex failed for PR #${RB_PR}."
               fi
 
+              # Remove workflow-generated/fetched artifacts so they are never
+              # committed to caller repos.
+              if [[ "${GITHUB_REPOSITORY}" != *"/coding-workflows" ]]; then
+                rm -f ./pre_assembled_static.txt
+                rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
+                rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
+                  scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
+                  scripts/codex_model_catalog.json scripts/orchestrate_poll_process.sh scripts/orchestrate_lib.py
+                rm -rf .serena prompts
+                rm -f .github/ai/orchestrate_schema.v1.json
+              fi
+
               # Check if there are changes to commit
               if [ -n "$(git status --porcelain)" ]; then
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
-                git add -A
+                git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena'
+                git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
                 git commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}
 
 Orchestrator judge applied fixes to unblock the review pipeline.
