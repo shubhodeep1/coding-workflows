@@ -156,6 +156,12 @@ if ! [[ "${MAX_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_RECOVERY_ATTEMPTS}
   MAX_RECOVERY_ATTEMPTS="3"
 fi
 
+MAX_VALIDATION_RECOVERY_ATTEMPTS="${MAX_VALIDATION_RECOVERY_ATTEMPTS:-2}"
+if ! [[ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" -lt 0 ]; then
+  echo "::warning::MAX_VALIDATION_RECOVERY_ATTEMPTS must be a non-negative integer; defaulting to 2"
+  MAX_VALIDATION_RECOVERY_ATTEMPTS="2"
+fi
+
 post_tracking_comment() {
   local comment_body="$1"
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
@@ -298,12 +304,39 @@ dispatch_validation_if_needed() {
 
 mark_validation_failed() {
   local reason="$1"
+
+  # Check validation recovery budget before going terminal
+  local val_recovery_count
+  val_recovery_count="$(jq -r '.validation_recovery_count // 0' "${STATE_FILE}")"
+  if ! [[ "${val_recovery_count}" =~ ^[0-9]+$ ]]; then
+    val_recovery_count="0"
+  fi
+
+  if [ "${val_recovery_count}" -lt "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" ]; then
+    echo "Validation failed but recovery budget remains ($((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Transitioning back to judge."
+    jq --arg reason "${reason}" --argjson count "$((val_recovery_count + 1))" \
+      '.status = "in_progress" |
+       .validation_recovery_count = $count |
+       .validation_failure_reason = $reason |
+       .validation_active_fix_issues = [] |
+       .validation_cycle = 1 |
+       .validation_last_dispatch_cycle = 0 |
+       .validation_completed_cycle = null' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    set_tracking_phase_label "ai:validation-recovery"
+    post_tracking_comment "## 🔄 Validation failed — recovery attempt $((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}\n\n${reason}\n\nTransitioning back to judge for re-evaluation."
+    tg_notify "🔄 Validation recovery ($((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}) for #${TRACKING_NUM}: transitioning back to judge."
+    return 0
+  fi
+
+  # Recovery budget exhausted — terminal failure
   jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason | .validation_active_fix_issues = []' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
   set_tracking_phase_label "ai:validation-failed"
-  post_tracking_comment "## ❌ Runtime validation failed\n\n${reason}"
-  tg_notify "❌ Project #${TRACKING_NUM} validation failed: ${reason}"
+  post_tracking_comment "## ❌ Runtime validation failed\n\n${reason}\n\nValidation recovery exhausted (${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Manual intervention required."
+  tg_notify "❌ Project #${TRACKING_NUM} validation failed after ${val_recovery_count} recovery attempt(s). Manual intervention required."
   tg_cleanup_msgs "${TRACKING_NUM}"
 }
 
@@ -916,14 +949,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         [.[] | select(.body | test("## [❌🧪⚠️]+ Runtime validation"))] | last | .body // ""
       ')"
       if [ -n "${VALIDATION_FAIL_BODY}" ] && [ "${VALIDATION_FAIL_BODY}" != "" ]; then
-        # Store the diagnosis in state and skip the duplicate comment —
-        # the detailed comment is already on the issue.
-        jq --arg reason "${VALIDATION_FAIL_BODY}" '.status = "failed" | .validation_failure_reason = $reason | .validation_active_fix_issues = []' \
-          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-        post_state_comment
-        set_tracking_phase_label "ai:validation-failed"
-        tg_notify "❌ Project #${TRACKING_NUM} validation failed (see tracking issue for diagnosis)."
-        tg_cleanup_msgs "${TRACKING_NUM}"
+        mark_validation_failed "${VALIDATION_FAIL_BODY}"
       else
         mark_validation_failed "Validation workflow reported failure (label ai:validation-failed)."
       fi

@@ -33,6 +33,10 @@
       "color": "d93f0b",
       "description": "Validation fix-up issues in pipeline"
     },
+    "ai:validation-recovery": {
+      "color": "e3a21a",
+      "description": "Validation failed — judge re-evaluating before retry"
+    },
     "ai:done": {
       "color": "0e8a16",
       "description": "Implementation PR created"
@@ -75,6 +79,7 @@
         "ai:validated",
         "ai:validation-failed",
         "ai:validation-fixing",
+        "ai:validation-recovery",
         "ai:done",
         "ai:ready-to-merge",
         "ai:review-blocked",
