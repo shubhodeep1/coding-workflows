@@ -841,6 +841,90 @@ def test_in_progress_judge_recreates_closed_fixup_id_stays_on_current_wave():
 
 
 # ---------------------------------------------------------------------------
+# Tests: /revalidate reset from validation-failed
+# ---------------------------------------------------------------------------
+
+
+def test_revalidate_resets_validation_failed_and_dispatches():
+	"""A /revalidate comment posted after the state comment should reset a
+	validation-failed project back to validating and dispatch validation."""
+	state = _base_state(status="failed")
+	state["validation_cycle"] = 3
+	state["validation_recovery_count"] = 2
+	state["validation_failure_reason"] = "Exceeded MAX_VALIDATE_CYCLES"
+	state["validation_active_fix_issues"] = [501]
+	state["validation_last_dispatch_cycle"] = 3
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=["/revalidate"],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", f"Expected status=validating, got {ls['status']}"
+	assert ls["validation_cycle"] == 1, f"Expected validation_cycle=1, got {ls['validation_cycle']}"
+	assert ls["validation_recovery_count"] == 0, f"Expected validation_recovery_count=0, got {ls['validation_recovery_count']}"
+	assert ls["validation_active_fix_issues"] == [], f"Expected empty fix issues, got {ls['validation_active_fix_issues']}"
+	assert ls["validation_last_dispatch_cycle"] == 1
+	assert "validation_failure_reason" not in ls, f"Expected validation_failure_reason to be removed, got {ls.get('validation_failure_reason')}"
+	assert "ai:validating" in result["tracking_labels"]
+	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert len(result["validation_dispatches"]) == 1
+
+
+def test_revalidate_ignored_when_no_comment():
+	"""Without a /revalidate comment, a validation-failed project stays skipped."""
+	state = _base_state(status="failed")
+	state["validation_failure_reason"] = "Some failure"
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "failed", f"Expected status=failed, got {ls['status']}"
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert result["validation_dispatches"] == []
+
+
+def test_revalidate_with_extra_text_after_command():
+	"""A /revalidate comment with additional text (reason) should still trigger."""
+	state = _base_state(status="failed")
+	state["validation_failure_reason"] = "Exceeded cycles"
+	state["validation_recovery_count"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=["/revalidate fixed the Docker config manually"],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", f"Expected status=validating, got {ls['status']}"
+	assert ls["validation_cycle"] == 1
+	assert ls["validation_recovery_count"] == 0
+	assert len(result["validation_dispatches"]) == 1
+
+
+def test_revalidate_not_triggered_for_non_validation_failure():
+	"""A project in failed state without ai:validation-failed label should not
+	be affected by /revalidate (e.g. judge-level failure)."""
+	state = _base_state(status="failed")
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:closed"],
+		tracking_comments=["/revalidate"],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "failed", f"Expected status=failed, got {ls['status']}"
+	assert result["validation_dispatches"] == []
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 

@@ -655,6 +655,17 @@ This phase starts only after the orchestrator judge returns `complete`.
 - Terminal failure: validation dispatch failure, harness error, infeasible diagnosis, unknown diagnosis payload, closed fix-up issues, or cycle limit exceeded.
 - Terminal failure label: `ai:validation-failed`.
 
+### Manual Reset: `/revalidate`
+
+When a tracking issue reaches `ai:validation-failed`, you can manually reset it by commenting `/revalidate` on the tracking issue. The next poller cycle will:
+
+1. Reset all validation counters (`validation_cycle` → 1, `validation_recovery_count` → 0).
+2. Clear the failure reason and any tracked fix-up issues.
+3. Transition the label from `ai:validation-failed` to `ai:validating`.
+4. Dispatch a fresh validation run (cycle 1).
+
+This is useful after fixing the root cause manually (e.g. correcting a Docker config, adding a missing env var, or updating a dependency). There is no limit on how many times `/revalidate` can be used — the operator decides when to stop retrying.
+
 ### Validation Controls
 
 | Variable | Default | Behavior |

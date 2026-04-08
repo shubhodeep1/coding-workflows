@@ -95,6 +95,13 @@ validate.yml runs:
               ├─ Cycles remaining → create more fix-ups → loop
               └─ MAX_VALIDATE_CYCLES exhausted
                   → ai:validation-failed → Telegram → manual review ❌
+
+Manual reset (comment /revalidate on tracking issue):
+  ai:validation-failed
+    │ operator comments /revalidate
+    ▼
+  Reset counters (cycle=1, recovery=0)
+    → ai:validating → dispatch validate.yml (fresh cycle 1)
 ```
 
 ### Self-healing via issue creation (not direct commits)
