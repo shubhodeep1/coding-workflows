@@ -275,7 +275,7 @@ jobs:
           if [ -z "${ISSUE_TITLE}" ]; then
             ISSUE_TITLE="Orchestration request"
           fi
-          ISSUE_TITLE="$(printf '%s' "${ISSUE_TITLE}" | head -c 200)"
+          ISSUE_TITLE="${ISSUE_TITLE:0:200}"
 
           memory_retrieve "${RUNTIME_DIR}/memory_context.txt" \
             --role "planning" \
