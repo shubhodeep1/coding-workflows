@@ -1640,7 +1640,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         echo
         echo "=== PR #${RB_PR} DIFF ==="
         echo
-        echo "${PR_DIFF}" | { head -1000 || true; }
+        head -1000 <<< "${PR_DIFF}"
         echo
         echo "=== PR #${RB_PR} COMMENTS (editor summaries, reviewer findings) ==="
         echo
