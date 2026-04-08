@@ -71,6 +71,14 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
+      - name: Configure git auth for memory helper clones
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
+
       - name: Install uv for Serena
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         uses: astral-sh/setup-uv@v7
