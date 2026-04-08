@@ -854,7 +854,7 @@ jobs:
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
           git add -u -- ':!node_modules'
-          git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
+          git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
           git commit -m "AI implementation for issue #${ISSUE_NUMBER}"
           echo "did_commit=true" >> "$GITHUB_OUTPUT"
 
