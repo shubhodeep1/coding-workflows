@@ -77,7 +77,6 @@ jobs:
           echo "${TRACKING_ISSUES}" > "${RUNTIME_DIR}/tracking_issues.json"
 
       - name: Checkout repository
-        if: steps.find_tracking.outputs.has_work == 'true'
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -144,7 +143,6 @@ jobs:
           fi
 
       - name: Fetch workflow support scripts
-        if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -159,7 +157,7 @@ jobs:
             script_ref="stable"
           fi
           mkdir -p scripts prompts .github/ai
-          for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_poll_process.sh tg_helpers.sh; do
+          for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_poll_process.sh tg_helpers.sh memory_helpers.sh; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -200,6 +198,26 @@ jobs:
               fi
             fi
           done
+
+      - name: Record poll run start
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory helpers not found; skipping poll start event"
+            exit 0
+          fi
+
+          source scripts/memory_helpers.sh
+          memory_record_run_event \
+            --run-id "${GITHUB_RUN_ID}" \
+            --workflow "orchestrate_poll" \
+            --event-type "poll_started" \
+            --status "ok" \
+            --message "Poll cycle started for orchestrator tracking issues" \
+            --actor "${GITHUB_ACTOR}" \
+            --metadata-json "{\"run_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"repository\":\"${GITHUB_REPOSITORY}\",\"has_work\":\"${{ steps.find_tracking.outputs.has_work }}\"}"
 
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
@@ -252,6 +270,33 @@ jobs:
               echo "| Tracking issues processed | 0 |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record poll run end
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory helpers not found; skipping poll end event"
+            exit 0
+          fi
+
+          source scripts/memory_helpers.sh
+
+          if [ "${{ job.status }}" = "success" ]; then
+            EVENT_STATUS="ok"
+          else
+            EVENT_STATUS="error"
+          fi
+
+          memory_record_run_event \
+            --run-id "${GITHUB_RUN_ID}" \
+            --workflow "orchestrate_poll" \
+            --event-type "poll_completed" \
+            --status "${EVENT_STATUS}" \
+            --message "Poll cycle completed with job status ${{ job.status }}" \
+            --actor "${GITHUB_ACTOR}" \
+            --metadata-json "{\"run_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"repository\":\"${GITHUB_REPOSITORY}\",\"job_status\":\"${{ job.status }}\",\"has_work\":\"${{ steps.find_tracking.outputs.has_work || 'false' }}\"}"
 
       - name: Rate-limit cooldown before retrigger
         if: >-
