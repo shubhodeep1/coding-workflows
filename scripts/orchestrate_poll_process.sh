@@ -144,6 +144,59 @@ if ! [[ "${STALL_THRESHOLD_MINUTES}" =~ ^[0-9]+$ ]] || [ "${STALL_THRESHOLD_MINU
   STALL_THRESHOLD_MINUTES="120"
 fi
 
+# Per-phase stall thresholds (override the global fallback above).
+# Each var maps to a pipeline phase label.  Unset vars use the built-in
+# defaults in orchestrate_lib.py (60 min for lightweight phases, 120 min
+# for heavy phases).
+_validate_phase_threshold() {
+  local var_name="$1" default_val="$2"
+  local val="${!var_name:-}"
+  if [ -n "${val}" ]; then
+    if ! [[ "${val}" =~ ^[0-9]+$ ]] || [ "${val}" -lt 1 ]; then
+      echo "::warning::${var_name} must be a positive integer; ignoring invalid value '${val}'"
+      eval "${var_name}="
+    fi
+  fi
+}
+
+STALL_THRESHOLD_NO_LABELS_MINUTES="${STALL_THRESHOLD_NO_LABELS_MINUTES:-}"
+STALL_THRESHOLD_CLARIFICATION_MINUTES="${STALL_THRESHOLD_CLARIFICATION_MINUTES:-}"
+STALL_THRESHOLD_PLANNING_MINUTES="${STALL_THRESHOLD_PLANNING_MINUTES:-}"
+STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES="${STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES:-}"
+STALL_THRESHOLD_IMPLEMENTING_MINUTES="${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}"
+STALL_THRESHOLD_DONE_MINUTES="${STALL_THRESHOLD_DONE_MINUTES:-}"
+STALL_THRESHOLD_READY_TO_MERGE_MINUTES="${STALL_THRESHOLD_READY_TO_MERGE_MINUTES:-}"
+
+_validate_phase_threshold STALL_THRESHOLD_NO_LABELS_MINUTES
+_validate_phase_threshold STALL_THRESHOLD_CLARIFICATION_MINUTES
+_validate_phase_threshold STALL_THRESHOLD_PLANNING_MINUTES
+_validate_phase_threshold STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES
+_validate_phase_threshold STALL_THRESHOLD_IMPLEMENTING_MINUTES
+_validate_phase_threshold STALL_THRESHOLD_DONE_MINUTES
+_validate_phase_threshold STALL_THRESHOLD_READY_TO_MERGE_MINUTES
+
+# Build the JSON dict for per-phase overrides (only include vars that are set).
+_build_phase_thresholds_json() {
+  local parts=()
+  [ -n "${STALL_THRESHOLD_NO_LABELS_MINUTES:-}" ] && parts+=("\"no_labels\":${STALL_THRESHOLD_NO_LABELS_MINUTES}")
+  [ -n "${STALL_THRESHOLD_CLARIFICATION_MINUTES:-}" ] && parts+=("\"ai:clarification\":${STALL_THRESHOLD_CLARIFICATION_MINUTES}")
+  [ -n "${STALL_THRESHOLD_PLANNING_MINUTES:-}" ] && parts+=("\"ai:planning\":${STALL_THRESHOLD_PLANNING_MINUTES}")
+  [ -n "${STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES:-}" ] && parts+=("\"ai:awaiting-approval\":${STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES}")
+  [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ] && parts+=("\"ai:implementing\":${STALL_THRESHOLD_IMPLEMENTING_MINUTES}")
+  [ -n "${STALL_THRESHOLD_DONE_MINUTES:-}" ] && parts+=("\"ai:done\":${STALL_THRESHOLD_DONE_MINUTES}")
+  [ -n "${STALL_THRESHOLD_READY_TO_MERGE_MINUTES:-}" ] && parts+=("\"ai:ready-to-merge\":${STALL_THRESHOLD_READY_TO_MERGE_MINUTES}")
+
+  if [ "${#parts[@]}" -eq 0 ]; then
+    echo ""
+    return
+  fi
+
+  local IFS=','
+  echo "{${parts[*]}}"
+}
+
+PHASE_THRESHOLDS_JSON="$(_build_phase_thresholds_json)"
+
 MAX_STALL_RECOVERIES_PER_ISSUE="${MAX_STALL_RECOVERIES_PER_ISSUE:-5}"
 if ! [[ "${MAX_STALL_RECOVERIES_PER_ISSUE}" =~ ^[0-9]+$ ]] || [ "${MAX_STALL_RECOVERIES_PER_ISSUE}" -lt 1 ]; then
   echo "::warning::MAX_STALL_RECOVERIES_PER_ISSUE must be a positive integer; defaulting to 5"
@@ -2098,11 +2151,17 @@ fi
     # ---------------------------------------------------------------
     # Stall detection and self-healing
     # ---------------------------------------------------------------
+    _stall_check_args=(
+      --state-file "${STATE_FILE}"
+      --labels-json "${LABELS_JSON}"
+      --threshold-minutes "${STALL_THRESHOLD_MINUTES}"
+      --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}"
+    )
+    if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
+      _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
+    fi
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
-      --state-file "${STATE_FILE}" \
-      --labels-json "${LABELS_JSON}" \
-      --threshold-minutes "${STALL_THRESHOLD_MINUTES}" \
-      --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
+      "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
 
     STALL_COUNT="$(echo "${STALLS_JSON}" | jq -r '.count')"
 
@@ -2156,7 +2215,11 @@ with open('${STATE_FILE}', 'w') as f:
       done < <(echo "${STALLS_JSON}" | jq -c '.stalls[]')
 
     else
-      echo "No stalled issues detected (threshold: ${STALL_THRESHOLD_MINUTES}m)."
+      if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
+        echo "No stalled issues detected (fallback: ${STALL_THRESHOLD_MINUTES}m, per-phase overrides active)."
+      else
+        echo "No stalled issues detected (threshold: ${STALL_THRESHOLD_MINUTES}m)."
+      fi
     fi
 
     if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ]; then
