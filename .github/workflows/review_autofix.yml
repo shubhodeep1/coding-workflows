@@ -2186,7 +2186,7 @@ jobs:
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
           git add -u -- ':!node_modules'
-          git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' | xargs -0 -r git add --
+          git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
 
           if git diff --cached --quiet; then
             echo "No repository changes to commit."
@@ -2533,6 +2533,7 @@ jobs:
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
             rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/codex_model_catalog.json
             rm -rf .serena prompts
+            rm -f .github/ai/orchestrate_schema.v1.json
           fi
 
           if [ -n "$(git status --porcelain)" ]; then
@@ -2540,7 +2541,7 @@ jobs:
             git config user.email "codex@users.noreply.github.com"
             git rm -r --cached node_modules 2>/dev/null || true
             git add -u -- ':!node_modules'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' | xargs -0 -r git add --
+            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
             git commit -m "[ai-merge-resolve] resolve merge conflicts"
             git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}
             # NOTE: push deferred to final "Push all pending commits" step.
