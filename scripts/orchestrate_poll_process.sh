@@ -149,7 +149,7 @@ fi
 # defaults in orchestrate_lib.py (60 min for lightweight phases, 120 min
 # for heavy phases).
 _validate_phase_threshold() {
-  local var_name="$1" default_val="$2"
+  local var_name="$1"
   local val="${!var_name:-}"
   if [ -n "${val}" ]; then
     if ! [[ "${val}" =~ ^[0-9]+$ ]] || [ "${val}" -lt 1 ]; then
