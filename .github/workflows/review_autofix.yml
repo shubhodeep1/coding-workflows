@@ -3265,6 +3265,9 @@ jobs:
         # which always exists.  The concurrency group ensures only one run
         # proceeds if both the synchronize event and this dispatch fire.
         #
+        # If the dispatch fails, the synchronize event from the push still
+        # serves as a fallback so the autofix cycle is never silently broken.
+        #
         # Dispatch order:
         #   1. review_autofix.yml (this file) — works when it exists in the
         #      current repo (coding-workflows itself, or consumer repos that
@@ -3324,7 +3327,7 @@ jobs:
           fi
 
           if [ "${dispatched}" = "false" ]; then
-            echo "::warning::Could not dispatch review workflow via workflow_dispatch. The synchronize event may still trigger it. To enable the fallback, add a workflow_dispatch trigger with a pr_number input and an optional allow_workflow_edits boolean input to your caller workflow. Ensure GH_PAT can dispatch workflows (classic PAT: repo+workflow; fine-grained PAT: Actions read/write)."
+            echo "::warning::Could not dispatch review workflow via workflow_dispatch; the synchronize event from the push will trigger the next review run instead. To enable dispatch (avoids merge-ref resolution issues), add a workflow_dispatch trigger with a pr_number input and an optional allow_workflow_edits boolean input to your caller workflow. Ensure GH_PAT can dispatch workflows (classic PAT: repo+workflow; fine-grained PAT: Actions read/write)."
           fi
 
       - name: Telegram success
