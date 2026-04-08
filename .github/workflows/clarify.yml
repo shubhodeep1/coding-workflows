@@ -82,7 +82,7 @@ jobs:
           # scripts (e.g. writing to mcp.json instead of config.toml) cause
           # silent MCP failures ("mcp startup: no servers").
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh memory_helpers.sh; do
+          for f in setup_serena.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
