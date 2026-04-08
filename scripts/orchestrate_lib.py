@@ -301,6 +301,18 @@ DEDICATED_HANDLER_PHASES: set[str] = {"ai:review-blocked", "ai:implementation-fa
 # If recovery_count exceeds the list length, the last entry is repeated.
 # After MAX_STALL_RECOVERIES_PER_ISSUE total attempts the poller skips the
 # issue (adds ai:closed) so the wave can advance and the judge handles it.
+# Per-phase stall thresholds (minutes).  Phases not listed here fall back to
+# the global --threshold-minutes value passed on the CLI.
+DEFAULT_PHASE_STALL_THRESHOLDS: dict[str, int] = {
+	"no_labels": 60,
+	"ai:clarification": 60,
+	"ai:planning": 60,
+	"ai:awaiting-approval": 60,
+	"ai:implementing": 120,
+	"ai:done": 120,
+	"ai:ready-to-merge": 60,
+}
+
 STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
 	"no_labels": [
 		"retrigger_pipeline",
@@ -358,12 +370,18 @@ def detect_stalls(
 	threshold_minutes: int,
 	now_ts: int,
 	max_recoveries: int = 5,
+	phase_thresholds: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
 	"""Detect stalled issues in the current wave.
 
 	An issue is stalled when its phase has not changed for longer than
-	*threshold_minutes* and the phase is non-terminal and not already
-	handled by a dedicated poller handler (review-blocked, impl-failed).
+	the phase-specific threshold (or the fallback *threshold_minutes*)
+	and the phase is non-terminal and not already handled by a dedicated
+	poller handler (review-blocked, impl-failed).
+
+	*phase_thresholds* maps phase labels to per-phase thresholds in
+	minutes.  Phases not present in the dict fall back to
+	*threshold_minutes*.
 
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
@@ -374,9 +392,12 @@ def detect_stalls(
 	if current_wave_idx >= len(waves):
 		return []
 
+	effective_thresholds = dict(DEFAULT_PHASE_STALL_THRESHOLDS)
+	if phase_thresholds:
+		effective_thresholds.update(phase_thresholds)
+
 	wave = waves[current_wave_idx]
 	stalled: list[dict[str, Any]] = []
-	threshold_secs = threshold_minutes * 60
 
 	for issue in wave["issues"]:
 		gh_num = issue.get("github_issue")
@@ -399,6 +420,9 @@ def detect_stalls(
 		if status_since <= 0:
 			# First observation — will be initialised this cycle
 			continue
+
+		phase_threshold = effective_thresholds.get(phase, threshold_minutes)
+		threshold_secs = phase_threshold * 60
 
 		elapsed = now_ts - status_since
 		if elapsed < threshold_secs:
@@ -700,7 +724,16 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 	threshold = int(args.threshold_minutes)
 	max_recoveries = int(args.max_recoveries)
 
-	stalls = detect_stalls(state, issue_labels, threshold, now_ts, max_recoveries)
+	phase_thresholds: dict[str, int] | None = None
+	if args.phase_thresholds_json:
+		phase_thresholds = {
+			k: int(v) for k, v in json.loads(args.phase_thresholds_json).items()
+		}
+
+	stalls = detect_stalls(
+		state, issue_labels, threshold, now_ts, max_recoveries,
+		phase_thresholds=phase_thresholds,
+	)
 	_print_json({"ok": True, "stalls": stalls, "count": len(stalls)})
 	return 0
 
@@ -755,7 +788,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls = subparsers.add_parser("check-stalls", help="Detect stalled issues in current wave")
 	p_stalls.add_argument("--state-file", required=True)
 	p_stalls.add_argument("--labels-json", required=True, help='JSON: {"issue_num": ["label1", ...]}')
-	p_stalls.add_argument("--threshold-minutes", required=True, help="Stall threshold in minutes")
+	p_stalls.add_argument("--threshold-minutes", required=True, help="Fallback stall threshold in minutes (used when a phase has no specific override)")
+	p_stalls.add_argument("--phase-thresholds-json", default=None, help='Optional JSON: {"ai:clarification": 60, "ai:implementing": 120, ...}. Per-phase overrides.')
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
 	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
 	p_stalls.set_defaults(func=cmd_check_stalls)

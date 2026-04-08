@@ -49,7 +49,14 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `MAX_VALIDATE_CYCLES` | No | `3` | orchestrate_poll | Maximum runtime validation cycles (initial run + fix/revalidate loops) before forcing `ai:validation-failed`. |
 | `VALIDATE_WORKFLOW_NAME` | No | `ai-validate.yml` | orchestrate_poll | Workflow filename to dispatch for runtime validation. Override to `internal-validate.yml` for repos using the internal naming convention. Falls back to `internal-validate.yml` automatically if the primary name fails. |
 | `MAX_JUDGE_CYCLES` | No | `25` | orchestrate_poll | Maximum judge evaluation cycles per project before forcing failure. Prevents infinite fix-up loops when the judge repeatedly returns `in_progress`. |
-| `STALL_THRESHOLD_MINUTES` | No | `120` | orchestrate_poll | Minutes an issue can remain in the same pipeline phase before the poller considers it stalled and attempts auto-recovery. |
+| `STALL_THRESHOLD_MINUTES` | No | `120` | orchestrate_poll | Fallback minutes an issue can remain in the same pipeline phase before auto-recovery. Used when no per-phase override is set. |
+| `STALL_THRESHOLD_NO_LABELS_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for issues with no AI pipeline labels (pre-pipeline). |
+| `STALL_THRESHOLD_CLARIFICATION_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for `ai:clarification` phase. |
+| `STALL_THRESHOLD_PLANNING_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for `ai:planning` phase. |
+| `STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for `ai:awaiting-approval` phase. |
+| `STALL_THRESHOLD_IMPLEMENTING_MINUTES` | No | `120` | orchestrate_poll | Stall threshold for `ai:implementing` phase. |
+| `STALL_THRESHOLD_DONE_MINUTES` | No | `120` | orchestrate_poll | Stall threshold for `ai:done` phase (review/autofix). |
+| `STALL_THRESHOLD_READY_TO_MERGE_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for `ai:ready-to-merge` phase. |
 | `MAX_STALL_RECOVERIES_PER_ISSUE` | No | `5` | orchestrate_poll | Maximum stall recovery attempts per individual issue. After exhausting this limit the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion. |
 | `MAX_RECOVERY_ATTEMPTS` | No | `3` | orchestrate_poll | Maximum project-level recovery cycles when the judge declares failure. Replaces the previous single-shot `recovery_attempted` boolean with a configurable counter. |
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | No | `2` | orchestrate_poll | Maximum times the poller transitions a validation-failed project back to the judge for re-evaluation before marking it as terminally failed. Set to `0` to disable (immediate terminal failure on first validation failure, matching pre-recovery behavior). |
@@ -477,7 +484,14 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum judge retries for review-blocked PRs (both review_autofix and orchestrate_poll) |
 | `ENABLE_VALIDATION` | `true` | Enable post-judge runtime validation gate in orchestrator poller |
 | `MAX_VALIDATE_CYCLES` | `3` | Maximum runtime validation cycles before terminal validation failure |
-| `STALL_THRESHOLD_MINUTES` | `120` | Minutes before a stalled issue triggers auto-recovery |
+| `STALL_THRESHOLD_MINUTES` | `120` | Fallback minutes before a stalled issue triggers auto-recovery |
+| `STALL_THRESHOLD_NO_LABELS_MINUTES` | `60` | Stall threshold for pre-pipeline (no labels) phase |
+| `STALL_THRESHOLD_CLARIFICATION_MINUTES` | `60` | Stall threshold for clarification phase |
+| `STALL_THRESHOLD_PLANNING_MINUTES` | `60` | Stall threshold for planning phase |
+| `STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES` | `60` | Stall threshold for plan approval phase |
+| `STALL_THRESHOLD_IMPLEMENTING_MINUTES` | `120` | Stall threshold for implementation phase |
+| `STALL_THRESHOLD_DONE_MINUTES` | `120` | Stall threshold for review/autofix phase |
+| `STALL_THRESHOLD_READY_TO_MERGE_MINUTES` | `60` | Stall threshold for ready-to-merge phase |
 | `MAX_STALL_RECOVERIES_PER_ISSUE` | `5` | Max stall recovery attempts per issue before skipping |
 | `MAX_RECOVERY_ATTEMPTS` | `3` | Max project-level recovery cycles (judge failure → auto-fix) |
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | `2` | Max validation-failure → judge re-evaluation cycles before terminal failure |
@@ -559,7 +573,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 9. **Implementation-failed recovery:** When the implementation phase produces no file changes despite an approved plan (e.g. workflow edits stripped without `ALLOW_WORKFLOW_EDITS`, or model failure), the issue is labeled `ai:implementation-failed`. The poller automatically closes the failed issue and creates a replacement with additional guidance, so the pipeline retries without manual intervention.
 10. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted up to `MAX_RECOVERY_ATTEMPTS` (default 3) times; if all attempts fail, the project stops and the operator is notified via Telegram.
 11. **Validation-failure recovery:** When runtime validation fails, the poller transitions the project back to the judge for re-evaluation (labeled `ai:validation-recovery`) up to `MAX_VALIDATION_RECOVERY_ATTEMPTS` (default 2) times. The judge sees the failure diagnosis in tracking issue comments and can issue fix-up work before re-validating. After exhausting the recovery budget, the project goes to terminal `ai:validation-failed`.
-12. **Stall detection and self-healing:** Every poll cycle, the poller tracks how long each issue has been in its current pipeline phase. If an issue is stuck in the same phase for longer than `STALL_THRESHOLD_MINUTES` (default 120), the poller attempts phase-specific auto-recovery: posting `/answer` for stuck clarification, `/approved` for stuck approval, pushing empty commits to re-trigger review, or closing and re-issuing as a last resort. Recovery actions escalate with each attempt. After `MAX_STALL_RECOVERIES_PER_ISSUE` (default 5) attempts, the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion and decides whether to reissue, accept, or fail. All stall recoveries trigger Telegram notifications.
+12. **Stall detection and self-healing:** Every poll cycle, the poller tracks how long each issue has been in its current pipeline phase. Stall thresholds are **adaptive per phase**: lightweight phases (clarification, planning, approval, merge) default to 60 minutes, while heavy phases (implementation, review/autofix) default to 120 minutes. Each threshold is independently configurable via `STALL_THRESHOLD_<PHASE>_MINUTES` env vars, with `STALL_THRESHOLD_MINUTES` as the global fallback. When an issue exceeds its phase threshold, the poller attempts phase-specific auto-recovery: posting `/answer` for stuck clarification, `/approved` for stuck approval, pushing empty commits to re-trigger review, or closing and re-issuing as a last resort. Recovery actions escalate with each attempt. After `MAX_STALL_RECOVERIES_PER_ISSUE` (default 5) attempts, the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion and decides whether to reissue, accept, or fail. All stall recoveries trigger Telegram notifications.
 13. **Validation gate:** When the judge says "complete" and `ENABLE_VALIDATION=true`, the poller dispatches `ai-validate.yml`, marks the tracking issue `ai:validating`, and only closes after `ai:validated` is reported. See [Runtime Validation Phase](#runtime-validation-phase) for the full lifecycle and operational guidance.
 14. **Completion:** When validation is disabled, completion remains judge-driven and immediate.
 
