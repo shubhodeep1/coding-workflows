@@ -486,3 +486,11 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+
+      - name: Cleanup git auth remote
+        if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+          if [ -d .git ]; then
+            git remote set-url origin "${{ github.server_url }}/${{ github.repository }}"
+          fi
