@@ -71,6 +71,20 @@ Docker Compose healthcheck YAML rules (CRITICAL):
 - The final JSON result must include: `result` (`pass` or `fail`), `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures` (array of objects with `test`, `error`, and `log_tail`), and `duration_seconds`
 - Keep each `log_tail` concise (for example, the last 30 lines)
 
+CRITICAL — safe final JSON emission:
+- The final JSON result object MUST be assembled entirely in Python, not via bash variable interpolation into Python source.
+- NEVER use an unquoted heredoc (`<<PY`) that embeds bash variables like `${FAILURES_JSON}` into Python code. Bash expansion injects raw control characters (tabs, newlines, backslashes from log tails) into the Python string literal, causing `json.decoder.JSONDecodeError`.
+- Instead, pass accumulated data to Python via environment variables or command-line arguments, and read them with `os.environ` or `sys.argv` inside the Python script.
+- Preferred pattern:
+    FAILURES_JSON="$FAILURES_JSON" python3 -c '
+    import json, os
+    failures = json.loads(os.environ["FAILURES_JSON"])
+    payload = {"result": ..., "failures": failures, ...}
+    print(json.dumps(payload))
+    '
+- Alternatively, write `FAILURES_JSON` to a temporary file and read it from Python.
+- If using a heredoc for Python, always quote it (`<<'PY'`) to suppress bash expansion, and pass all shell variables via env/argv.
+
 CRITICAL — grep-safe TAP counting under `set -e` / `pipefail`:
 - `grep` exits with code 1 when zero lines match. Under `set -e` or `pipefail`, this kills the script even when zero matches is the expected (all-pass) outcome.
 - When counting TAP `ok` / `not ok` lines, always use patterns that return exit code 0 on zero matches. Preferred approaches:
