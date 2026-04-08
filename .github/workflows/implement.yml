@@ -45,6 +45,7 @@ jobs:
       ISSUE_URL: ${{ github.event.issue.html_url }}
       APPROVAL_COMMENT_ID: ${{ github.event.comment.id }}
       SKIP_IMPLEMENT: "false"
+      RESTORE_AWAITING_APPROVAL_ON_SKIP: "false"
 
     steps:
       - name: Precheck approval phase label
@@ -83,6 +84,7 @@ jobs:
             echo "JOB_START_EPOCH=$(date +%s)"
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
+            echo "ISSUE_BODY_FILE=${RUNTIME_DIR}/issue_body.txt"
             echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
             echo "ISSUE_SUMMARY_PROMPT_FILE=${RUNTIME_DIR}/issue_summary_prompt.txt"
             echo "ISSUE_SUMMARY_FILE=${RUNTIME_DIR}/issue_summary.md"
@@ -92,6 +94,9 @@ jobs:
             echo "PLAN_FILE=${RUNTIME_DIR}/implementation_plan.txt"
             echo "CLARIFICATION_ANSWERS_FILE=${RUNTIME_DIR}/clarification_answers.txt"
             echo "PR_EXISTS_FILE=${RUNTIME_DIR}/existing_prs.txt"
+            echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
+            echo "CHANGED_FILES_FILE=${RUNTIME_DIR}/changed_files.txt"
+            echo "PR_METADATA_FILE=${RUNTIME_DIR}/pr_metadata.json"
             echo "TARGET_BRANCH=ai/issue-${ISSUE_NUMBER}"
           } >> "$GITHUB_ENV"
 
@@ -200,14 +205,18 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh; do
+          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
               gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
             fi
-            chmod +x "scripts/${f}"
+            case "${f}" in
+              *.sh|*.py)
+                chmod +x "scripts/${f}"
+                ;;
+            esac
             if [ "${is_self_repo}" = "false" ]; then
               echo "scripts/${f}" >> "${FETCHED_MANIFEST}"
             fi
@@ -246,8 +255,10 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
 
           ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
+          ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+          printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
 
           # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
           # issue. It is passed via heredoc (not shell expansion) to prevent injection
@@ -255,6 +266,9 @@ jobs:
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
+            echo 'ISSUE_TITLE<<EOF'
+            echo "${ISSUE_TITLE}"
+            echo 'EOF'
             echo 'ISSUE_BODY<<EOF'
             echo "${ISSUE_BODY}"
             echo 'EOF'
@@ -311,6 +325,64 @@ jobs:
           ensure_label_exists "ai:implementing" "${{ github.repository }}"
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:implementing' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
+          echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true" >> "$GITHUB_ENV"
+
+      - name: Claim /approved command
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          check_json="$(memory_processed_command_check \
+            --issue-number "${ISSUE_NUMBER}" \
+            --comment-id "${APPROVAL_COMMENT_ID}" \
+            --command approved)"
+          already_processed="$(printf '%s' "${check_json}" | jq -r '.exists // false')"
+          if [ "${already_processed}" = "true" ]; then
+            echo "Approval comment ${APPROVAL_COMMENT_ID} already processed. Skipping duplicate implementation run."
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          claim_json="$(memory_processed_command_claim \
+            --issue-number "${ISSUE_NUMBER}" \
+            --comment-id "${APPROVAL_COMMENT_ID}" \
+            --command approved \
+            --workflow implement \
+            --actor "${{ github.actor }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --metadata-json "$(jq -cn --arg issue_url "${ISSUE_URL}" --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '{issue_url: $issue_url, run_url: $run_url}')")"
+
+          memory_enabled="$(printf '%s' "${AI_MEMORY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+          if [ -z "${claim_json}" ] && ! [[ "${memory_enabled}" =~ ^(1|true|yes|on)$ ]]; then
+            claimed="true"
+          else
+            claimed="$(printf '%s' "${claim_json}" | jq -r '.operation_result.claimed // .claimed // false')"
+          fi
+          if [ "${claimed}" != "true" ]; then
+            echo "Approval comment ${APPROVAL_COMMENT_ID} was not claimed for this run. Skipping duplicate implementation run."
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+      - name: Record implementation run start event
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          memory_record_run_event \
+            --run-id "${{ github.run_id }}" \
+            --workflow implement \
+            --event-type phase_started \
+            --status ok \
+            --message "Implementation phase started" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --actor "${{ github.actor }}" \
+            --metadata-json "$(jq -cn --arg approval_comment_id "${APPROVAL_COMMENT_ID}" --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '{approval_comment_id: $approval_comment_id, run_url: $run_url}')"
 
       - name: Cleanup plan-phase Telegram messages
         if: env.SKIP_IMPLEMENT != 'true'
@@ -464,6 +536,19 @@ jobs:
             fi
           } > ./pre_assembled_static.txt
 
+      - name: Retrieve implementation memory context
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          ISSUE_TITLE_JSON="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
+          memory_retrieve "${MEMORY_CONTEXT_FILE}" \
+            --role implementation \
+            --issue-number "${ISSUE_NUMBER}" \
+            --issue-title "${ISSUE_TITLE_JSON}" \
+            --issue-body-file "${ISSUE_BODY_FILE}"
+
       - name: Run Codex implementation
         if: env.SKIP_IMPLEMENT != 'true'
         env:
@@ -480,6 +565,9 @@ jobs:
           # runs, enabling LLM provider prompt-prefix caching.
           {
             cat ./pre_assembled_static.txt
+            echo
+            echo "=== AI MEMORY CONTEXT ==="
+            cat "${MEMORY_CONTEXT_FILE}"
             echo
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
@@ -995,6 +1083,142 @@ jobs:
           fi
           echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
 
+      - name: Refetch memory helpers after commit cleanup
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          wf_source="${{ github.repository_owner }}/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
+
+          mkdir -p scripts
+          for f in memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+              echo "::warning::${f} not found on ${script_ref}; falling back to main"
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+            fi
+            chmod +x "scripts/${f}"
+          done
+
+      - name: Collect PR metadata and changed files
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        id: pr_metadata
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          PR_URL="${{ steps.create_pr.outputs.pr_url }}"
+          PR_NUMBER="$(printf '%s\n' "${PR_URL}" | sed -E 's#.*/pull/([0-9]+).*#\1#')"
+          if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            PR_NUMBER=""
+          fi
+
+          PR_HEAD_REF=""
+          if [ -n "${PR_NUMBER}" ]; then
+            PR_HEAD_REF="$(gh pr view "${PR_NUMBER}" --repo "${{ github.repository }}" --json headRefName --jq '.headRefName // ""' 2>/dev/null || true)"
+            gh pr view "${PR_NUMBER}" --repo "${{ github.repository }}" --json files --jq '.files[].path' > "${CHANGED_FILES_FILE}" || true
+          else
+            : > "${CHANGED_FILES_FILE}"
+          fi
+
+          if [ ! -s "${CHANGED_FILES_FILE}" ]; then
+            git show --name-only --pretty='' HEAD > "${CHANGED_FILES_FILE}" || true
+          fi
+
+          CHANGED_FILES_JSON="$(jq -R -s -c 'split("\n") | map(select(length > 0))' "${CHANGED_FILES_FILE}")"
+
+          jq -cn \
+            --arg pr_url "${PR_URL}" \
+            --arg pr_number "${PR_NUMBER}" \
+            --arg branch "${PR_HEAD_REF}" \
+            --arg issue_number "${ISSUE_NUMBER}" \
+            --arg issue_url "${ISSUE_URL}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --argjson changed_files "${CHANGED_FILES_JSON}" \
+            '{
+              issue_number: (if ($issue_number | length) > 0 then ($issue_number | tonumber) else null end),
+              issue_url: $issue_url,
+              pr_url: $pr_url,
+              pr_number: (if ($pr_number | length) > 0 then ($pr_number | tonumber) else null end),
+              branch: (if ($branch | length) > 0 then $branch else null end),
+              run_id: "${{ github.run_id }}",
+              run_attempt: "${{ github.run_attempt }}",
+              run_url: $run_url,
+              changed_files: $changed_files
+            }' > "${PR_METADATA_FILE}"
+
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "branch=${PR_HEAD_REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Record implementation candidate
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          PR_URL="$(jq -r '.pr_url // ""' "${PR_METADATA_FILE}")"
+          SUMMARY="Implementation PR created for issue #${ISSUE_NUMBER}: ${PR_URL}"
+          DETAILS="$(jq -c '.' "${PR_METADATA_FILE}")"
+          PR_NUMBER_STR="$(jq -r 'if .pr_number == null then "" else (.pr_number|tostring) end' "${PR_METADATA_FILE}")"
+
+          memory_record_candidate \
+            --category task_summaries \
+            --summary "${SUMMARY}" \
+            --details "${DETAILS}" \
+            --workflow implement \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --pr-number "${PR_NUMBER_STR}" \
+            --source-refs "${{ steps.create_pr.outputs.pr_url }}"
+
+      - name: Complete /approved processed command
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          memory_processed_command_complete \
+            --issue-number "${ISSUE_NUMBER}" \
+            --comment-id "${APPROVAL_COMMENT_ID}" \
+            --command approved \
+            --status completed \
+            --metadata-json "$(jq -c '.' "${PR_METADATA_FILE}")"
+
+      - name: Finalize implementation task lineage as in_progress
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          PR_NUMBER_STR="$(jq -r 'if .pr_number == null then "" else (.pr_number|tostring) end' "${PR_METADATA_FILE}")"
+          FINALIZE_ARGS=(
+            --issue-number "${ISSUE_NUMBER}"
+            --issue-url "${ISSUE_URL}"
+            --final-state in_progress
+            --workflow implement
+            --run-id "${{ github.run_id }}"
+            --run-attempt "${{ github.run_attempt }}"
+            --actor "${{ github.actor }}"
+            --pr-url "${{ steps.create_pr.outputs.pr_url }}"
+          )
+          if [ -n "${PR_NUMBER_STR}" ] && [ "${PR_NUMBER_STR}" != "null" ]; then
+            FINALIZE_ARGS+=(--pr-number "${PR_NUMBER_STR}")
+          fi
+          memory_finalize_task "${FINALIZE_ARGS[@]}"
+
       - name: Generate AI issue summary for PR comment
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         env:
@@ -1070,8 +1294,30 @@ jobs:
           gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:done' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
 
+      - name: Record implementation run success event
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          PR_NUMBER_STR="$(jq -r 'if .pr_number == null then "" else (.pr_number|tostring) end' "${PR_METADATA_FILE}")"
+          EVENT_ARGS=(
+            --run-id "${{ github.run_id }}"
+            --workflow implement
+            --event-type phase_completed
+            --status ok
+            --message "Implementation phase completed with PR"
+            --issue-number "${ISSUE_NUMBER}"
+            --actor "${{ github.actor }}"
+            --metadata-json "$(jq -c '.' "${PR_METADATA_FILE}")"
+          )
+          if [ -n "${PR_NUMBER_STR}" ] && [ "${PR_NUMBER_STR}" != "null" ]; then
+            EVENT_ARGS+=(--pr-number "${PR_NUMBER_STR}")
+          fi
+          memory_record_run_event "${EVENT_ARGS[@]}"
+
       - name: Restore awaiting approval label on skipped implementation
-        if: env.SKIP_IMPLEMENT == 'true'
+        if: env.SKIP_IMPLEMENT == 'true' && env.RESTORE_AWAITING_APPROVAL_ON_SKIP == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1133,6 +1379,50 @@ jobs:
             tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
           else
             echo "::warning::tg_helpers.sh unavailable; skipping Telegram notification."
+          fi
+
+      - name: Record implementation run failure event
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -f scripts/memory_helpers.sh ]; then
+            source scripts/memory_helpers.sh
+          else
+            wf_source="${{ github.repository_owner }}/coding-workflows"
+            if [ "${{ github.repository }}" = "${wf_source}" ]; then
+              script_ref="${{ github.sha }}"
+            else
+              script_ref="stable"
+            fi
+            mkdir -p scripts
+            for f in memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+                gh api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+              fi
+              chmod +x "scripts/${f}"
+            done
+            source scripts/memory_helpers.sh
+          fi
+
+          if [ -f scripts/memory_helpers.sh ]; then
+            if [ "${{ job.status }}" = "cancelled" ]; then
+              phase_message="Implementation phase cancelled"
+            else
+              phase_message="Implementation phase failed"
+            fi
+            memory_record_run_event \
+              --run-id "${{ github.run_id }}" \
+              --workflow implement \
+              --event-type phase_failed \
+              --status error \
+              --message "${phase_message}" \
+              --issue-number "${ISSUE_NUMBER}" \
+              --actor "${{ github.actor }}" \
+              --metadata-json "$(jq -cn --arg job_status "${{ job.status }}" --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '{job_status: $job_status, run_url: $run_url}')"
           fi
 
       - name: Exit safely
