@@ -45,6 +45,7 @@ jobs:
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY_RESPOND || 'medium' }}
 
@@ -99,7 +100,7 @@ jobs:
             script_ref="stable"
           fi
           mkdir -p scripts
-          for f in setup_serena.sh tg_helpers.sh; do
+          for f in setup_serena.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -127,6 +128,34 @@ jobs:
                 "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=main" > "${PROMPT_SOURCE}"
             fi
           fi
+
+      - name: Record memory run-start event
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory_helpers.sh unavailable; skipping run-start memory event"
+            exit 0
+          fi
+
+          source scripts/memory_helpers.sh
+
+          METADATA_JSON="$(jq -cn \
+            --arg repository "${{ github.repository }}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg issue_url "${ISSUE_URL}" \
+            '{repository: $repository, run_attempt: $run_attempt, issue_url: $issue_url}')"
+
+          memory_record_run_event \
+            --run-id "${GITHUB_RUN_ID}" \
+            --workflow "orchestrate_clarify_respond" \
+            --event-type "run_start" \
+            --status "start" \
+            --message "orchestrate clarify-respond started" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --actor "${GITHUB_ACTOR}" \
+            --metadata-json "${METADATA_JSON}"
 
       - name: Create runtime workspace
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
@@ -209,6 +238,25 @@ jobs:
           set -euo pipefail
           bash scripts/setup_serena.sh --mode planning --context codex
 
+      - name: Retrieve issue memory context
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory_helpers.sh unavailable; using empty memory context"
+            : > "${RUNTIME_DIR}/memory_context.txt"
+            exit 0
+          fi
+
+          source scripts/memory_helpers.sh
+
+          memory_retrieve "${RUNTIME_DIR}/memory_context.txt" \
+            --role "clarify" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --issue-title "${ISSUE_TITLE}" \
+            --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
+
       - name: Build prompt and run Codex
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         env:
@@ -219,6 +267,9 @@ jobs:
 
           {
             cat prompts/mode-clarify-respond.txt
+            echo
+            echo "=== MEMORY CONTEXT ==="
+            cat "${RUNTIME_DIR}/memory_context.txt"
             echo
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
@@ -289,6 +340,37 @@ jobs:
 
           echo "Posted auto-answer on issue #${ISSUE_NUMBER}"
 
+      - name: Record memory candidate after auto-answer
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory_helpers.sh unavailable; skipping memory candidate recording"
+            exit 0
+          fi
+
+          source scripts/memory_helpers.sh
+
+          MAX_DETAILS_CHARS=12000
+          if [ -f "${RUNTIME_DIR}/answer_comment.md" ]; then
+            CANDIDATE_DETAILS="$(head -c "${MAX_DETAILS_CHARS}" "${RUNTIME_DIR}/answer_comment.md")"
+          else
+            CANDIDATE_DETAILS="Auto-answer comment file was not found at ${RUNTIME_DIR}/answer_comment.md"
+          fi
+
+          memory_record_candidate \
+            --category "clarify_auto_answer" \
+            --summary "Orchestrator posted auto-answer for issue #${ISSUE_NUMBER}" \
+            --details "${CANDIDATE_DETAILS}" \
+            --confidence "0.90" \
+            --workflow "orchestrate_clarify_respond" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --actor "${GITHUB_ACTOR}" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --source-refs "${ISSUE_URL}"
+
       - name: Write run summary
         if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
         env:
@@ -314,6 +396,60 @@ jobs:
               fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record memory run-end success event
+        if: success() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory_helpers.sh unavailable; skipping run-end success memory event"
+            exit 0
+          fi
+
+          source scripts/memory_helpers.sh
+
+          METADATA_JSON="$(jq -cn \
+            --arg repository "${{ github.repository }}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            '{repository: $repository, run_attempt: $run_attempt}')"
+
+          memory_record_run_event \
+            --run-id "${GITHUB_RUN_ID}" \
+            --workflow "orchestrate_clarify_respond" \
+            --event-type "run_end" \
+            --status "ok" \
+            --message "orchestrate clarify-respond completed successfully" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --actor "${GITHUB_ACTOR}" \
+            --metadata-json "${METADATA_JSON}"
+
+      - name: Record memory run-end failure event
+        if: failure() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::memory_helpers.sh unavailable; skipping run-end failure memory event"
+            exit 0
+          fi
+
+          source scripts/memory_helpers.sh
+
+          METADATA_JSON="$(jq -cn \
+            --arg repository "${{ github.repository }}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            '{repository: $repository, run_attempt: $run_attempt}')"
+
+          memory_record_run_event \
+            --run-id "${GITHUB_RUN_ID}" \
+            --workflow "orchestrate_clarify_respond" \
+            --event-type "run_end" \
+            --status "error" \
+            --message "orchestrate clarify-respond failed" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --actor "${GITHUB_ACTOR}" \
+            --metadata-json "${METADATA_JSON}"
 
       - name: Comment on issue failure
         if: failure() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
