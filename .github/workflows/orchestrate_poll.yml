@@ -35,23 +35,66 @@ jobs:
       cancel-in-progress: true
 
     steps:
+      - name: Create runtime workspace
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${RUNTIME_DIR}"
+          {
+            echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "STATE_FILE=${RUNTIME_DIR}/state.json"
+            echo "JUDGE_PROMPT_FILE=${RUNTIME_DIR}/judge_prompt.txt"
+            echo "JUDGE_OUTPUT_FILE=${RUNTIME_DIR}/judge_output.txt"
+          } >> "$GITHUB_ENV"
+
+      - name: Find active tracking issues
+        id: find_tracking
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          # Find all open issues with the orchestrator tracking label
+          TRACKING_ISSUES="$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --label "ai:orchestrator-tracking" \
+            --state open \
+            --json number,title \
+            --limit 20)"
+
+          COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+          echo "Found ${COUNT} active tracking issue(s)"
+
+          if [ "${COUNT}" -eq 0 ]; then
+            echo "No active orchestrator projects. Exiting."
+            echo "has_work=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_work=true" >> "$GITHUB_OUTPUT"
+          echo "${TRACKING_ISSUES}" > "${RUNTIME_DIR}/tracking_issues.json"
+
       - name: Checkout repository
+        if: steps.find_tracking.outputs.has_work == 'true'
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
 
       - name: Setup Node.js
+        if: steps.find_tracking.outputs.has_work == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
       - name: Setup Python
+        if: steps.find_tracking.outputs.has_work == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install Codex CLI and core tools
+        if: steps.find_tracking.outputs.has_work == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -87,6 +130,7 @@ jobs:
           echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
 
       - name: Validate required environment variables
+        if: steps.find_tracking.outputs.has_work == 'true'
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -97,19 +141,8 @@ jobs:
             exit 1
           fi
 
-      - name: Create runtime workspace
-        run: |
-          set -euo pipefail
-          RUNTIME_DIR="/tmp/codex-orchestrate-poll-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -p "${RUNTIME_DIR}"
-          {
-            echo "RUNTIME_DIR=${RUNTIME_DIR}"
-            echo "STATE_FILE=${RUNTIME_DIR}/state.json"
-            echo "JUDGE_PROMPT_FILE=${RUNTIME_DIR}/judge_prompt.txt"
-            echo "JUDGE_OUTPUT_FILE=${RUNTIME_DIR}/judge_output.txt"
-          } >> "$GITHUB_ENV"
-
       - name: Fetch workflow support scripts
+        if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -165,33 +198,6 @@ jobs:
               fi
             fi
           done
-
-      - name: Find active tracking issues
-        id: find_tracking
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set -euo pipefail
-
-          # Find all open issues with the orchestrator tracking label
-          TRACKING_ISSUES="$(gh issue list \
-            --repo "${{ github.repository }}" \
-            --label "ai:orchestrator-tracking" \
-            --state open \
-            --json number,title \
-            --limit 20)"
-
-          COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
-          echo "Found ${COUNT} active tracking issue(s)"
-
-          if [ "${COUNT}" -eq 0 ]; then
-            echo "No active orchestrator projects. Exiting."
-            echo "has_work=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "has_work=true" >> "$GITHUB_OUTPUT"
-          echo "${TRACKING_ISSUES}" > "${RUNTIME_DIR}/tracking_issues.json"
 
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
