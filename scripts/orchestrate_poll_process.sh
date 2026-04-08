@@ -1039,22 +1039,65 @@ _resolve_merge_conflicts_with_codex()
 
 	echo "  ${log_prefix} Starting Codex-based merge conflict resolution..."
 
+	# --- Clean working tree before checkout ---
+	# The orchestrator downloads scripts/, prompts/, .serena/, .github/ai/,
+	# codex_system_instructions.md etc. into the working tree.  These untracked
+	# files cause "git checkout" to fail when the target branch tracks files in
+	# the same paths.  Save artifacts needed by the Codex resolver, then clean.
+	local _cr_backup
+	_cr_backup="$(mktemp -d)"
+	for _cr_dir in .serena scripts prompts .github/ai; do
+		if [ -d "${_cr_dir}" ]; then
+			mkdir -p "${_cr_backup}/${_cr_dir}"
+			cp -a "${_cr_dir}/." "${_cr_backup}/${_cr_dir}/"
+		fi
+	done
+	for _cr_file in codex_system_instructions.md ai_pipeline.md; do
+		if [ -f "${_cr_file}" ]; then
+			cp "${_cr_file}" "${_cr_backup}/"
+		fi
+	done
+	git reset --hard HEAD 2>/dev/null || true
+	git clean -fd 2>/dev/null || true
+
 	# --- Fetch and checkout the PR branch ---
 	if ! git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
 		echo "::warning::${log_prefix} Could not fetch head ref ${head_ref}; skipping."
+		rm -rf "${_cr_backup}"
 		return 1
 	fi
 	if ! git fetch origin "${base_branch}:refs/remotes/origin/${base_branch}" 2>/dev/null; then
 		echo "::warning::${log_prefix} Could not fetch base branch ${base_branch}; skipping."
+		rm -rf "${_cr_backup}"
 		return 1
 	fi
-	if ! git checkout "origin/${head_ref}" 2>/dev/null; then
+	if ! git checkout "origin/${head_ref}" 2>&1; then
 		echo "::warning::${log_prefix} Could not checkout ${head_ref}; skipping."
+		rm -rf "${_cr_backup}"
 		return 1
 	fi
 
+	# Restore artifacts the Codex resolver needs (config, Serena, prompts)
+	for _cr_dir in .serena scripts prompts .github/ai; do
+		if [ -d "${_cr_backup}/${_cr_dir}" ]; then
+			mkdir -p "${_cr_dir}"
+			cp -a "${_cr_backup}/${_cr_dir}/." "${_cr_dir}/"
+		fi
+	done
+	for _cr_file in codex_system_instructions.md ai_pipeline.md; do
+		if [ -f "${_cr_backup}/${_cr_file}" ]; then
+			cp "${_cr_backup}/${_cr_file}" .
+		fi
+	done
+	rm -rf "${_cr_backup}"
+
 	git config user.name "codex-bot"
 	git config user.email "codex@users.noreply.github.com"
+
+	# Repair any ref corruption before merge (matches review_autofix.yml)
+	if [ -f scripts/git_ref_health_check.sh ]; then
+		bash scripts/git_ref_health_check.sh repair 2>/dev/null || true
+	fi
 
 	# --- Start merge to introduce conflict markers ---
 	git merge --no-commit --no-ff "origin/${base_branch}" 2>/dev/null || true
@@ -1080,11 +1123,17 @@ _resolve_merge_conflicts_with_codex()
 	echo "  ${log_prefix} Conflict markers present. Running Codex to resolve..."
 
 	# --- Setup Codex config for the conflict resolver model ---
+	# Preserve the Serena MCP section (appended by setup_serena.sh earlier)
+	# before rewriting the base config — the old `>` clobber destroyed it.
 	mkdir -p ~/.codex
+	local _mcp_section=""
+	if [ -f ~/.codex/config.toml ]; then
+		_mcp_section="$(sed -n '/^\[mcp_servers/,$ p' ~/.codex/config.toml)"
+	fi
 	local catalog_path
 	catalog_path="$(pwd)/scripts/codex_model_catalog.json"
 	{
-		echo 'web_search = "live"'
+		echo 'web_search = "disabled"'
 		echo 'model_provider = "openrouter"'
 		echo "model = \"${MODEL_CONFLICT_RESOLVER:-${MODEL_EDITOR}}\""
 		echo "model_reasoning_effort = \"${CONFLICT_RESOLVER_REASONING_EFFORT:-xhigh}\""
@@ -1104,6 +1153,10 @@ _resolve_merge_conflicts_with_codex()
 		echo '[sandbox_workspace_write]'
 		echo 'network_access = true'
 	} > ~/.codex/config.toml
+	# Re-append Serena MCP config so the resolver has semantic tools
+	if [ -n "${_mcp_section}" ]; then
+		printf '\n%s\n' "${_mcp_section}" >> ~/.codex/config.toml
+	fi
 
 	# --- Build conflict resolver prompt ---
 	local prompt_file
@@ -1158,7 +1211,7 @@ __CONFLICT_RESOLVER_PROMPT__
 		if codex exec \
 			--model "${MODEL_CONFLICT_RESOLVER:-${MODEL_EDITOR}}" \
 			--full-auto \
-			"$(cat "${prompt_file}")" > "${tmp_output}" 2>/dev/null; then
+			"$(cat "${prompt_file}")" > "${tmp_output}" 2>&1; then
 			if [ -s "${tmp_output}" ]; then
 				echo "  ${log_prefix} Codex resolver succeeded on attempt ${attempt}."
 				resolver_success=true
