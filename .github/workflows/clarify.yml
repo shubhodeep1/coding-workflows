@@ -182,7 +182,10 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          if ! bash -n scripts/memory_helpers.sh >/dev/null 2>&1 || ! grep -q 'memory_retrieve' scripts/memory_helpers.sh; then
+          if ! bash -n scripts/memory_helpers.sh >/dev/null 2>&1 \
+            || ! grep -q 'memory_retrieve' scripts/memory_helpers.sh \
+            || ! grep -q 'memory_record_run_event' scripts/memory_helpers.sh \
+            || ! grep -q 'memory_record_candidate' scripts/memory_helpers.sh; then
             echo "::warning::memory_helpers.sh unavailable; using fail-open stubs"
             cat > scripts/memory_helpers.sh <<'EOF'
           memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
@@ -191,6 +194,15 @@ jobs:
           EOF
           fi
           source scripts/memory_helpers.sh
+
+          if ! declare -F memory_retrieve >/dev/null 2>&1 \
+            || ! declare -F memory_record_run_event >/dev/null 2>&1 \
+            || ! declare -F memory_record_candidate >/dev/null 2>&1; then
+            echo "::warning::memory_helpers.sh missing expected helpers; applying fail-open function fallbacks"
+          fi
+          declare -F memory_retrieve >/dev/null 2>&1 || memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
+          declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
+          declare -F memory_record_candidate >/dev/null 2>&1 || memory_record_candidate(){ return 0; }
 
           memory_record_run_event \
             --run-id "${{ github.run_id }}" \
@@ -343,7 +355,6 @@ jobs:
           {
             cat ./pre_assembled_static.txt
             echo
-            echo "=== AI MEMORY CONTEXT ==="
             cat "${RUNTIME_DIR}/memory_context.txt"
             echo
             # Inject the configurable tool call budget before the static heredoc
