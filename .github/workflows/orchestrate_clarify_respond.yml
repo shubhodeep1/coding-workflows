@@ -70,6 +70,19 @@ jobs:
         with:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
+
+      - name: Configure git auth for memory helper clones
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Install uv for Serena
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
@@ -257,6 +270,14 @@ jobs:
             --issue-title "${ISSUE_TITLE}" \
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
 
+      - name: Remove git auth before Codex execution
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+          if [ -d .git ]; then
+            git remote set-url origin "${{ github.server_url }}/${{ github.repository }}"
+          fi
+
       - name: Build prompt and run Codex
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         env:
@@ -339,6 +360,22 @@ jobs:
             -f body="$(cat "${RUNTIME_DIR}/answer_comment.md")"
 
           echo "Posted auto-answer on issue #${ISSUE_NUMBER}"
+
+      - name: Reconfigure git auth for memory helper clones
+        if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          if [ ! -d .git ]; then
+            echo "::warning::.git not found; skipping git auth reconfiguration"
+            exit 0
+          fi
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Record memory candidate after auto-answer
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
@@ -478,3 +515,11 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+
+      - name: Cleanup git auth remote
+        if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+          if [ -d .git ]; then
+            git remote set-url origin "${{ github.server_url }}/${{ github.repository }}"
+          fi
