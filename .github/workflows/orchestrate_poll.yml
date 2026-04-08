@@ -248,6 +248,25 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Rate-limit cooldown before retrigger
+        if: >-
+          !cancelled()
+          && steps.find_tracking.outputs.has_work == 'true'
+          && inputs.caller_workflow != ''
+        run: |
+          set -euo pipefail
+          NOW="$(date +%s)"
+          ELAPSED=$(( NOW - JOB_START_EPOCH ))
+          # Minimum 30s cooldown to avoid GitHub API rate limits
+          MIN_TARGET=$(( ELAPSED + 30 ))
+          # Round up to the next 45th-second mark (45s, 1m45s, 2m45s, …)
+          # leaving ~15s margin for the retrigger step to finish within
+          # the billing minute boundary.
+          TARGET=$(( ((MIN_TARGET + 15 + 59) / 60) * 60 - 15 ))
+          SLEEP_SECS=$(( TARGET - ELAPSED ))
+          echo "Elapsed ${ELAPSED}s — sleeping ${SLEEP_SECS}s to align to ~${TARGET}s ($(( TARGET / 60 ))m$(( TARGET % 60 ))s)"
+          sleep "${SLEEP_SECS}"
+
       - name: Retrigger poller for continuous polling
         if: >-
           !cancelled()
@@ -264,21 +283,3 @@ jobs:
           else
             echo "::warning::Failed to retrigger ${CALLER}; cron schedule will resume the chain"
           fi
-
-      - name: Billing-optimized cooldown (must be last step)
-        if: >-
-          !cancelled()
-          && steps.find_tracking.outputs.has_work == 'true'
-          && inputs.caller_workflow != ''
-        run: |
-          set -euo pipefail
-          NOW="$(date +%s)"
-          ELAPSED=$(( NOW - JOB_START_EPOCH ))
-          # Minimum 30s cooldown to avoid GitHub API rate limits
-          MIN_TARGET=$(( ELAPSED + 30 ))
-          # Round up to the next 50th-second mark (50s, 1m50s, 2m50s, …)
-          # so the job ends well before the next billing minute boundary.
-          TARGET=$(( ((MIN_TARGET + 10 + 59) / 60) * 60 - 10 ))
-          SLEEP_SECS=$(( TARGET - ELAPSED ))
-          echo "Elapsed ${ELAPSED}s — sleeping ${SLEEP_SECS}s to align job end to ~${TARGET}s ($(( TARGET / 60 ))m$(( TARGET % 60 ))s)"
-          sleep "${SLEEP_SECS}"
