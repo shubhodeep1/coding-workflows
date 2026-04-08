@@ -17,6 +17,56 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch memory helper scripts
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
+
+          mkdir -p scripts
+
+          fetch_from_ref_or_local() {
+            local repo_path="$1"
+            local target_path="$2"
+            local tmp_path="${target_path}.tmp"
+
+            if gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${repo_path}?ref=${script_ref}" > "${tmp_path}" 2>/dev/null; then
+              mv "${tmp_path}" "${target_path}"
+              return 0
+            fi
+
+            rm -f "${tmp_path}"
+            if [ -f "${target_path}" ]; then
+              echo "Using local fallback for ${target_path} (not found on ${script_ref}: ${repo_path})"
+              return 0
+            fi
+
+            echo "Missing required file: ${repo_path} (${script_ref}) and local fallback ${target_path}" >&2
+            exit 1
+          }
+
+          for f in ai_memory.py ai_memory_lib.py memory_helpers.sh; do
+            fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"
+          done
+
       - name: Update linked issue labels when PR closes
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -72,6 +122,48 @@ jobs:
           echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
           echo "${ISSUE_NUMBERS}" >> "$GITHUB_ENV"
           echo "EOF" >> "$GITHUB_ENV"
+
+      - name: Finalize linked issue lineage state
+        env:
+          AI_MEMORY_ENABLED: ${{ vars.AI_MEMORY_ENABLED || 'true' }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${LINKED_ISSUE_NUMBERS:-}" ]; then
+            echo "No linked issues found; skipping lineage finalization."
+            exit 0
+          fi
+
+          if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+            FINAL_STATE="merged"
+          else
+            FINAL_STATE="closed"
+          fi
+
+          source scripts/memory_helpers.sh
+
+          while IFS= read -r issue_number; do
+            [ -n "${issue_number}" ] || continue
+
+            ISSUE_URL="${{ github.server_url }}/${REPOSITORY}/issues/${issue_number}"
+            memory_finalize_task \
+              --issue-number "${issue_number}" \
+              --issue-url "${ISSUE_URL}" \
+              --final-state "${FINAL_STATE}" \
+              --workflow "${WORKFLOW_NAME}" \
+              --run-id "${RUN_ID}" \
+              --run-attempt "${RUN_ATTEMPT}" \
+              --actor "${ACTOR}" \
+              --pr-number "${PR_NUMBER}" \
+              --pr-url "${PR_URL}"
+          done <<< "${LINKED_ISSUE_NUMBERS}"
 
       - name: Send PR merged Telegram alert
         if: github.event.pull_request.merged == true

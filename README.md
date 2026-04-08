@@ -458,7 +458,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `implement.yml` | `issue_comment.created` (`/approved`) | Plan execution + PR creation |
 | `review_autofix.yml` | `pull_request.*` | Multi-model review + autofix |
 | `validate.yml` | `workflow_dispatch` or explicit call from orchestrator/poller | Runtime validation harness generation + Docker smoke execution |
-| `issue_pr_status.yml` | `pull_request.closed` | Label/state sync |
+| `issue_pr_status.yml` | `pull_request.closed` | Label/state sync + final lineage closure |
 | `cancel_on_pr_close.yml` | `pull_request.closed` | Active-run cancellation |
 | `memory_maintenance.yml` | `schedule` (monthly) | Memory compaction/archival |
 | `orchestrate.yml` | `workflow_dispatch` | Project decomposition + multi-issue orchestration |
