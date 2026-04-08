@@ -5,7 +5,7 @@ name: AI Orchestrate Clarify Respond (Reusable)
 # so the orchestrator pipeline can run fully unattended.
 #
 # Trigger: issue_comment.created (fires when clarify.yml posts questions).
-# Guard:   only runs when the comment starts with "Clarification required",
+# Guard:   only runs when the comment contains "Clarification required",
 #          is authored by a trusted actor (github-actions[bot] or repository
 #          owner/member/collaborator), and the issue body contains the
 #          "Managed by: AI Orchestrator" metadata marker.
@@ -36,7 +36,7 @@ jobs:
           contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
         )
       ) &&
-      startsWith(github.event.comment.body, 'Clarification required')
+      contains(github.event.comment.body, 'Clarification required')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
