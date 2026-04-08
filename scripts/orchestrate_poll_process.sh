@@ -419,7 +419,9 @@ mark_validation_complete() {
 
 extract_fix_issues_from_comment() {
   local comment_body="$1"
-  echo "${comment_body}" | sed -n 's/^- #\([0-9][0-9]*\).*$/\1/p' | awk '!seen[$0]++'
+  # Normalise literal \n sequences (produced by post_tracking_comment) into
+  # real newlines so the line-anchored sed below can match "- #<num>" items.
+  echo "${comment_body}" | sed 's/\\n/\n/g' | sed -n 's/^- #\([0-9][0-9]*\).*$/\1/p' | awk '!seen[$0]++'
 }
 
 sync_validation_fix_issues_from_comments() {
