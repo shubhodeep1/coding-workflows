@@ -182,6 +182,14 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+          if ! bash -n scripts/memory_helpers.sh >/dev/null 2>&1 || ! grep -q 'memory_retrieve' scripts/memory_helpers.sh; then
+            echo "::warning::memory_helpers.sh unavailable; using fail-open stubs"
+            cat > scripts/memory_helpers.sh <<'EOF'
+          memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
+          memory_record_run_event(){ return 0; }
+          memory_record_candidate(){ return 0; }
+          EOF
+          fi
           source scripts/memory_helpers.sh
 
           memory_record_run_event \
