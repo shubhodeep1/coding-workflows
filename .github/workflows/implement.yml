@@ -266,7 +266,9 @@ jobs:
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
-            echo "ISSUE_TITLE=${ISSUE_TITLE}"
+            echo 'ISSUE_TITLE<<EOF'
+            echo "${ISSUE_TITLE}"
+            echo 'EOF'
             echo 'ISSUE_BODY<<EOF'
             echo "${ISSUE_BODY}"
             echo 'EOF'
@@ -339,7 +341,7 @@ jobs:
           if [ "${already_processed}" = "true" ]; then
             echo "Approval comment ${APPROVAL_COMMENT_ID} already processed. Skipping duplicate implementation run."
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
-            echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=false" >> "$GITHUB_ENV"
+            echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true" >> "$GITHUB_ENV"
             exit 0
           fi
 
@@ -362,7 +364,7 @@ jobs:
           if [ "${claimed}" != "true" ]; then
             echo "Approval comment ${APPROVAL_COMMENT_ID} was not claimed for this run. Skipping duplicate implementation run."
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
-            echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=false" >> "$GITHUB_ENV"
+            echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true" >> "$GITHUB_ENV"
             exit 0
           fi
 
