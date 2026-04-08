@@ -157,6 +157,14 @@ ensure_label_exists()
     description="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].description // "AI workflow label"' "${contract_file}" 2>/dev/null || echo "AI workflow label")"
   fi
 
+  # Check if label already exists to avoid futile retries (gh label create
+  # returns a non-zero exit code for existing labels, which is not transient).
+  local encoded_name
+  encoded_name="$(printf '%s' "${label_name}" | jq -sRr @uri)"
+  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+    return 0
+  fi
+
   gh_retry gh label create "${label_name}" \
     --repo "${GITHUB_REPOSITORY}" \
     --color "${color}" \
