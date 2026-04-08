@@ -583,7 +583,11 @@ jobs:
 
           ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
           PROJECT_TITLE="$(jq -r '.project_title' "${DECOMPOSITION_FILE}" 2>/dev/null || echo "unknown")"
-          DETAILS="$(jq -c '{project_title: .project_title, issues: [.issues[] | {id, title, priority}], dependency_edges}' "${DECOMPOSITION_FILE}" | head -c 12000)"
+          if DETAILS_JSON="$(jq -c '{project_title: .project_title, issues: [.issues[] | {id, title, priority}], dependency_edges}' "${DECOMPOSITION_FILE}" 2>/dev/null)"; then
+            DETAILS="${DETAILS_JSON:0:12000}"
+          else
+            DETAILS='{"project_title":"unknown","issues":[],"dependency_edges":[]}'
+          fi
 
           memory_record_candidate \
             --category "decisions" \
