@@ -77,7 +77,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Install uv for Serena
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
