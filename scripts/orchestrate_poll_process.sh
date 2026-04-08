@@ -1118,7 +1118,13 @@ _resolve_merge_conflicts_with_codex()
 	echo "  ${log_prefix} Conflict markers present. Running Codex to resolve..."
 
 	# --- Setup Codex config for the conflict resolver model ---
+	# Preserve the Serena MCP section (appended by setup_serena.sh earlier)
+	# before rewriting the base config — the old `>` clobber destroyed it.
 	mkdir -p ~/.codex
+	local _mcp_section=""
+	if [ -f ~/.codex/config.toml ]; then
+		_mcp_section="$(sed -n '/^\[mcp_servers/,$ p' ~/.codex/config.toml)"
+	fi
 	local catalog_path
 	catalog_path="$(pwd)/scripts/codex_model_catalog.json"
 	{
@@ -1142,6 +1148,10 @@ _resolve_merge_conflicts_with_codex()
 		echo '[sandbox_workspace_write]'
 		echo 'network_access = true'
 	} > ~/.codex/config.toml
+	# Re-append Serena MCP config so the resolver has semantic tools
+	if [ -n "${_mcp_section}" ]; then
+		printf '\n%s\n' "${_mcp_section}" >> ~/.codex/config.toml
+	fi
 
 	# --- Build conflict resolver prompt ---
 	local prompt_file
