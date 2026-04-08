@@ -1094,6 +1094,11 @@ _resolve_merge_conflicts_with_codex()
 	git config user.name "codex-bot"
 	git config user.email "codex@users.noreply.github.com"
 
+	# Repair any ref corruption before merge (matches review_autofix.yml)
+	if [ -f scripts/git_ref_health_check.sh ]; then
+		bash scripts/git_ref_health_check.sh repair 2>/dev/null || true
+	fi
+
 	# --- Start merge to introduce conflict markers ---
 	git merge --no-commit --no-ff "origin/${base_branch}" 2>/dev/null || true
 
@@ -1128,7 +1133,7 @@ _resolve_merge_conflicts_with_codex()
 	local catalog_path
 	catalog_path="$(pwd)/scripts/codex_model_catalog.json"
 	{
-		echo 'web_search = "live"'
+		echo 'web_search = "disabled"'
 		echo 'model_provider = "openrouter"'
 		echo "model = \"${MODEL_CONFLICT_RESOLVER:-${MODEL_EDITOR}}\""
 		echo "model_reasoning_effort = \"${CONFLICT_RESOLVER_REASONING_EFFORT:-xhigh}\""
@@ -1206,7 +1211,7 @@ __CONFLICT_RESOLVER_PROMPT__
 		if codex exec \
 			--model "${MODEL_CONFLICT_RESOLVER:-${MODEL_EDITOR}}" \
 			--full-auto \
-			"$(cat "${prompt_file}")" > "${tmp_output}" 2>/dev/null; then
+			"$(cat "${prompt_file}")" > "${tmp_output}" 2>&1; then
 			if [ -s "${tmp_output}" ]; then
 				echo "  ${log_prefix} Codex resolver succeeded on attempt ${attempt}."
 				resolver_success=true
