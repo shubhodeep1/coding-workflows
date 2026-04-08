@@ -70,6 +70,87 @@ jobs:
 
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
 
+  # ──────────────────────────────────────────────────────────────────
+  # Script correctness validation — gates the release
+  # ──────────────────────────────────────────────────────────────────
+  validate-scripts:
+    needs: [resolve-version]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Shell script syntax check
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do
+            bash -n "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: ShellCheck static analysis
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do
+            shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Python syntax check
+        run: |
+          set -euo pipefail
+          for f in scripts/*.py; do
+            python3 -m py_compile "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Python lint (ruff)
+        run: |
+          set -euo pipefail
+          pip install -q ruff
+          ruff check --select E,F --ignore E501 scripts/*.py
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          python3 tests/test_orchestrate_lib.py
+          python3 tests/test_orchestrate_poll_process.py
+
+      - name: Prompt files integrity
+        run: |
+          set -euo pipefail
+          for f in prompts/*.txt; do
+            if [ ! -s "$f" ]; then
+              echo "FAIL: $f is empty"
+              exit 1
+            fi
+            echo "OK: $f ($(wc -c < "$f") bytes)"
+          done
+
+      - name: Script-workflow cross-reference
+        run: |
+          set -euo pipefail
+          echo "Verifying all scripts referenced by workflows exist..."
+          MISSING=0
+          for ref in $(grep -rhoE 'scripts/[a-zA-Z0-9_.-]+\.(sh|py|json)' .github/workflows/ | sort -u); do
+            if [ ! -f "$ref" ]; then
+              echo "FAIL: $ref referenced in workflows but does not exist"
+              MISSING=$((MISSING + 1))
+            else
+              echo "OK: $ref"
+            fi
+          done
+          if [ "$MISSING" -gt 0 ]; then
+            echo "::error::${MISSING} script(s) referenced by workflows are missing"
+            exit 1
+          fi
+          echo "All referenced scripts exist."
+
   validate:
     needs: [resolve-version]
     runs-on: ubuntu-latest
@@ -117,7 +198,7 @@ jobs:
           echo "CI state: $STATE — OK"
 
   release:
-    needs: [resolve-version, validate]
+    needs: [resolve-version, validate, validate-scripts]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -72,10 +72,41 @@ jobs:
             echo "OK: $f ($(wc -c < "$f") bytes)"
           done
 
-      - name: Shell script lint
+      - name: Shell script syntax check
         run: |
           set -euo pipefail
-          bash -n scripts/git_ref_health_check.sh
-          bash -n scripts/setup_serena.sh
-          bash -n scripts/mark-stable.sh
-          bash -n scripts/orchestrate_poll_process.sh
+          for f in scripts/*.sh; do
+            bash -n "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: ShellCheck static analysis
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do
+            shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Python lint (ruff)
+        run: |
+          set -euo pipefail
+          pip install -q ruff
+          ruff check --select E,F --ignore E501 scripts/*.py
+
+      - name: Script-workflow cross-reference
+        run: |
+          set -euo pipefail
+          echo "Verifying all scripts referenced by workflows exist..."
+          MISSING=0
+          for ref in $(grep -rhoE 'scripts/[a-zA-Z0-9_.-]+\.(sh|py|json)' .github/workflows/ | sort -u); do
+            if [ ! -f "$ref" ]; then
+              echo "FAIL: $ref referenced in workflows but does not exist"
+              MISSING=$((MISSING + 1))
+            else
+              echo "OK: $ref"
+            fi
+          done
+          if [ "$MISSING" -gt 0 ]; then
+            echo "::error::${MISSING} script(s) referenced by workflows are missing"
+            exit 1
+          fi
+          echo "All referenced scripts exist."

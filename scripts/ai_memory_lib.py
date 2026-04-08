@@ -845,7 +845,7 @@ def _parse_keyword_response(raw: str) -> list[str] | None:
     # Handle markdown code fences
     if raw.startswith("```"):
         lines = raw.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         raw = "\n".join(lines).strip()
     try:
         parsed = json.loads(raw)
@@ -1404,7 +1404,7 @@ def persist_memory_operation(
                 }
 
             _run_git(clone_dir, ["commit", "-m", commit_message])
-            commit_sha = _run_git(clone_dir, ["rev-parse", "HEAD"]).stdout.strip()
+            _run_git(clone_dir, ["rev-parse", "HEAD"])
 
             for attempt in range(1, push_retries + 1):
                 push = _run_git(
