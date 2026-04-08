@@ -451,14 +451,34 @@ set_tracking_phase_label "ai:validating"
 # Ensure validation/ is git-ignored so no workflow accidentally commits it.
 # If validation/ was previously committed to the repo, untrack and remove it
 # so the ownership-marker check below does not hard-fail on a stale checkout.
+# Changes are committed and pushed so the fix is permanent (one-time).
 if command -v git >/dev/null 2>&1 && [ -d .git ]; then
+  _vd_needs_commit=false
+
   if ! grep -qxF 'validation/' .gitignore 2>/dev/null; then
     echo 'validation/' >> .gitignore
+    _vd_needs_commit=true
   fi
+
   if [ -n "$(git ls-files -- validation/ 2>/dev/null)" ]; then
     echo "Untracking previously committed validation/ directory."
     git rm -r --cached -- validation/ >/dev/null 2>&1 || true
     rm -rf validation
+    _vd_needs_commit=true
+  fi
+
+  if [ "${_vd_needs_commit}" = true ]; then
+    git add .gitignore 2>/dev/null || true
+    git \
+      -c user.name="ai-workflow[bot]" \
+      -c user.email="ai-workflow[bot]@users.noreply.github.com" \
+      commit -m "chore: gitignore validation/ and remove from tracking
+
+The validation/ directory is a transient workspace used by the
+AI validation workflow and must not be committed." >/dev/null 2>&1 || true
+    if ! git push >/dev/null 2>&1; then
+      echo "Note: could not push validation/ cleanup commit (branch protection or permissions). Fix applied locally for this run."
+    fi
   fi
 fi
 
