@@ -448,6 +448,20 @@ fi
 # ---------------------------------------------------------------
 set_tracking_phase_label "ai:validating"
 
+# Ensure validation/ is git-ignored so no workflow accidentally commits it.
+# If validation/ was previously committed to the repo, untrack and remove it
+# so the ownership-marker check below does not hard-fail on a stale checkout.
+if command -v git >/dev/null 2>&1 && [ -d .git ]; then
+  if ! grep -qxF 'validation/' .gitignore 2>/dev/null; then
+    echo 'validation/' >> .gitignore
+  fi
+  if [ -n "$(git ls-files -- validation/ 2>/dev/null)" ]; then
+    echo "Untracking previously committed validation/ directory."
+    git rm -r --cached -- validation/ >/dev/null 2>&1 || true
+    rm -rf validation
+  fi
+fi
+
 if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
   echo "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." >&2
   exit 1
