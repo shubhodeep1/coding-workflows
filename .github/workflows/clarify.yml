@@ -140,6 +140,14 @@ jobs:
             echo "ISSUE_TITLE=${ISSUE_TITLE}"
           } >> "$GITHUB_ENV"
 
+      - name: Detect smoke test and tune LLM settings
+        run: |
+          set -euo pipefail
+          if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
+            echo "🔬 Smoke test detected — switching to low reasoning effort"
+            echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+          fi
+
       - name: Fetch issue comments
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
