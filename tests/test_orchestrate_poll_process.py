@@ -373,6 +373,7 @@ print(json.dumps(parsed))
 				"SERENA_DISABLED": "true",
 				"SERENA_IGNORED_DIRS": "",
 				"MAX_REVIEW_BLOCKED_RETRIES": "2",
+				"MAX_VALIDATION_RECOVERY_ATTEMPTS": "0",
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"GH_MOCK_STORE": str(store_file),
