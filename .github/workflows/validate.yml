@@ -145,6 +145,7 @@ jobs:
           fi
 
       - name: Record validation run start
+        continue-on-error: true
         env:
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
         run: |
@@ -246,6 +247,7 @@ jobs:
 
       - name: Record validation candidate
         if: always()
+        continue-on-error: true
         env:
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           STATUS_FILE_PATH: ${{ steps.collect_status.outputs.status_file }}
@@ -355,6 +357,7 @@ jobs:
 
       - name: Record validation run end
         if: always()
+        continue-on-error: true
         env:
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
