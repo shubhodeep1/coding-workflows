@@ -82,7 +82,7 @@ jobs:
           # scripts (e.g. writing to mcp.json instead of config.toml) cause
           # silent MCP failures ("mcp startup: no servers").
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh; do
+          for f in setup_serena.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             if ! gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -175,6 +175,43 @@ jobs:
               fi
             done
           fi
+
+      - name: Record clarification run start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          if ! bash -n scripts/memory_helpers.sh >/dev/null 2>&1 \
+            || ! grep -q 'memory_retrieve' scripts/memory_helpers.sh \
+            || ! grep -q 'memory_record_run_event' scripts/memory_helpers.sh \
+            || ! grep -q 'memory_record_candidate' scripts/memory_helpers.sh; then
+            echo "::warning::memory_helpers.sh unavailable; using fail-open stubs"
+            cat > scripts/memory_helpers.sh <<'EOF'
+          memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
+          memory_record_run_event(){ return 0; }
+          memory_record_candidate(){ return 0; }
+          EOF
+          fi
+          source scripts/memory_helpers.sh 2>/dev/null || true
+
+          if ! declare -F memory_retrieve >/dev/null 2>&1 \
+            || ! declare -F memory_record_run_event >/dev/null 2>&1 \
+            || ! declare -F memory_record_candidate >/dev/null 2>&1; then
+            echo "::warning::memory_helpers.sh missing expected helpers; applying fail-open function fallbacks"
+          fi
+          declare -F memory_retrieve >/dev/null 2>&1 || memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
+          declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
+          declare -F memory_record_candidate >/dev/null 2>&1 || memory_record_candidate(){ return 0; }
+
+          memory_record_run_event \
+            --run-id "${{ github.run_id }}" \
+            --workflow "clarify" \
+            --event-type "phase_started" \
+            --status "ok" \
+            --message "Clarification phase started for issue #${ISSUE_NUMBER}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${ISSUE_NUMBER}"
 
       - name: Build context file
         run: |
@@ -288,6 +325,23 @@ jobs:
           STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
           echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
 
+      - name: Retrieve memory context
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_retrieve >/dev/null 2>&1 || memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
+
+          jq -r '.body // ""' "${ISSUE_META_FILE}" > "${RUNTIME_DIR}/issue_body.txt"
+
+          memory_retrieve "${RUNTIME_DIR}/memory_context.txt" \
+            --role "clarify" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --issue-title "${ISSUE_TITLE}" \
+            --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
+
       - name: Run Codex
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -301,6 +355,8 @@ jobs:
           # runs, enabling LLM provider prompt-prefix caching.
           {
             cat ./pre_assembled_static.txt
+            echo
+            cat "${RUNTIME_DIR}/memory_context.txt"
             echo
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
@@ -574,6 +630,28 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${RUNTIME_DIR}/clarification_comment.md")"
 
+      - name: Record clarification candidate (needs clarification)
+        if: steps.parse_codex.outputs.needs_clarification == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_record_candidate >/dev/null 2>&1 || memory_record_candidate(){ return 0; }
+
+          DETAILS="$(head -c 12000 "${QUESTIONS_FILE}")"
+
+          memory_record_candidate \
+            --category "decisions" \
+            --summary "Issue #${ISSUE_NUMBER} needs clarification" \
+            --details "${DETAILS}" \
+            --confidence "0.90" \
+            --workflow "clarify" \
+            --run-id "${{ github.run_id }}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${ISSUE_NUMBER}"
+
       - name: Post clear-to-proceed comment
         if: steps.parse_codex.outputs.needs_clarification != 'true'
         env:
@@ -591,6 +669,26 @@ jobs:
 
           gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body=$'/answer [auto-answered-by-clarify]\n\nAuto answer was posted because no human clarification was required.'
+
+      - name: Record clarification candidate (clear)
+        if: steps.parse_codex.outputs.needs_clarification != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_record_candidate >/dev/null 2>&1 || memory_record_candidate(){ return 0; }
+
+          memory_record_candidate \
+            --category "decisions" \
+            --summary "Issue #${ISSUE_NUMBER} is clear - no clarification needed" \
+            --details "The issue provided sufficient context for planning. Auto-posted /answer." \
+            --confidence "0.85" \
+            --workflow "clarify" \
+            --run-id "${{ github.run_id }}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${ISSUE_NUMBER}"
 
       - name: Telegram clarification notification
         if: steps.parse_codex.outputs.needs_clarification == 'true'
@@ -617,6 +715,56 @@ jobs:
           else
             tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}"
           fi
+
+      - name: Record clarification run completed
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
+
+          OUTCOME="clear"
+          if [ "${{ steps.parse_codex.outputs.needs_clarification }}" = "true" ]; then
+            OUTCOME="needs_clarification"
+          fi
+
+          memory_record_run_event \
+            --run-id "${{ github.run_id }}" \
+            --workflow "clarify" \
+            --event-type "phase_completed" \
+            --status "ok" \
+            --message "Clarification completed: ${OUTCOME}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --metadata-json "{\"outcome\": \"${OUTCOME}\"}"
+
+      - name: Record clarification run failed
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
+
+          FINAL_OUTCOME="failed"
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            FINAL_OUTCOME="cancelled"
+          fi
+
+          memory_record_run_event \
+            --run-id "${{ github.run_id }}" \
+            --workflow "clarify" \
+            --event-type "phase_failed" \
+            --status "error" \
+            --message "Clarification ${FINAL_OUTCOME} for issue #${ISSUE_NUMBER}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --metadata-json "{\"outcome\": \"${FINAL_OUTCOME}\"}"
 
       - name: Comment on issue failure
         if: failure() || cancelled()
