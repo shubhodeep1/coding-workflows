@@ -2690,14 +2690,17 @@ jobs:
           fi
 
           echo "judge_handled=false" >> "$GITHUB_OUTPUT"
+          echo "judge_skip_reason=" >> "$GITHUB_OUTPUT"
 
           if [ "${ENABLE_REVIEW_BLOCKED_JUDGE}" != "true" ]; then
             echo "Review-blocked judge disabled (set ENABLE_REVIEW_BLOCKED_JUDGE=true to enable)."
+            echo "judge_skip_reason=disabled" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if [ "${CAN_PUSH:-false}" != "true" ]; then
             echo "Branch not writable — skipping judge."
+            echo "judge_skip_reason=not_writable" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -2740,6 +2743,7 @@ jobs:
 
           if [ "${IS_ORCHESTRATOR}" = "true" ]; then
             echo "PR is orchestrator-managed — skipping judge (poller handles review-blocked)."
+            echo "judge_skip_reason=orchestrator" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -3365,6 +3369,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
+          JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           source scripts/tg_helpers.sh
@@ -3393,7 +3398,16 @@ jobs:
                 MSG="Review-blocked judge action: ${JUDGE_ACTION}" ;;
             esac
           else
-            MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge did not handle\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")"
+            case "${JUDGE_SKIP_REASON}" in
+              orchestrator)
+                MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations)\nDeferred to orchestrator poller' "${MAX_AUTOFIX_ITERATIONS}")" ;;
+              disabled)
+                MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge disabled\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
+              not_writable)
+                MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), branch not writable\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
+              *)
+                MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations)\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
+            esac
           fi
           MSG+=$'\n'
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"
