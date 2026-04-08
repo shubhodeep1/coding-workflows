@@ -248,8 +248,8 @@ jobs:
           && steps.find_tracking.outputs.has_work == 'true'
           && inputs.caller_workflow != ''
         run: |
-          echo "Sleeping 60s to avoid GitHub API rate limits…"
-          sleep 60
+          echo "Sleeping 30s to avoid GitHub API rate limits…"
+          sleep 30
 
       - name: Retrigger poller for continuous polling
         if: >-
