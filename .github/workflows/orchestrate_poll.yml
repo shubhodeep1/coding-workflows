@@ -250,7 +250,7 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Billing-optimized cooldown before retrigger
+      - name: Rate-limit cooldown before retrigger
         if: >-
           !cancelled()
           && steps.find_tracking.outputs.has_work == 'true'
@@ -261,11 +261,12 @@ jobs:
           ELAPSED=$(( NOW - JOB_START_EPOCH ))
           # Minimum 30s cooldown to avoid GitHub API rate limits
           MIN_TARGET=$(( ELAPSED + 30 ))
-          # Round up to the next 55th-second mark (55s, 1m55s, 2m55s, …)
-          # so the job ends just before the next billing minute boundary.
-          TARGET=$(( ((MIN_TARGET + 5 + 59) / 60) * 60 - 5 ))
+          # Round up to the next 45th-second mark (45s, 1m45s, 2m45s, …)
+          # leaving ~15s margin for the retrigger step to finish within
+          # the billing minute boundary.
+          TARGET=$(( ((MIN_TARGET + 15 + 59) / 60) * 60 - 15 ))
           SLEEP_SECS=$(( TARGET - ELAPSED ))
-          echo "Elapsed ${ELAPSED}s — sleeping ${SLEEP_SECS}s to align job end to ~${TARGET}s ($(( TARGET / 60 ))m$(( TARGET % 60 ))s)"
+          echo "Elapsed ${ELAPSED}s — sleeping ${SLEEP_SECS}s to align to ~${TARGET}s ($(( TARGET / 60 ))m$(( TARGET % 60 ))s)"
           sleep "${SLEEP_SECS}"
 
       - name: Retrigger poller for continuous polling
