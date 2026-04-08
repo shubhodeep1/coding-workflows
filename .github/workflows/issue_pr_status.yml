@@ -151,10 +151,15 @@ jobs:
             *) echo "AI memory disabled; skipping lineage finalization."; exit 0 ;;
           esac
 
-          if [ "${MEMORY_HELPERS_READY:-1}" != "1" ]; then
+          if [ "${MEMORY_HELPERS_READY:-0}" != "1" ]; then
             echo "Missing required memory helper scripts; cannot finalize lineage." >&2
             exit 1
           fi
+
+          [ -f scripts/memory_helpers.sh ] || {
+            echo "memory_helpers.sh missing; cannot finalize lineage." >&2
+            exit 1
+          }
 
           if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
             FINAL_STATE="merged"
@@ -260,8 +265,13 @@ jobs:
             echo "::warning::Could not fetch tg_helpers.sh; skipping TG cleanup."
             exit 0
           }
+          [ -s "scripts/tg_helpers.sh" ] || { echo "::warning::tg_helpers.sh is empty; skipping TG cleanup."; exit 0; }
           export GITHUB_REPOSITORY="${REPOSITORY}"
           source scripts/tg_helpers.sh
+          if ! declare -F tg_cleanup_msgs >/dev/null 2>&1; then
+            echo "::warning::tg_cleanup_msgs helper missing; skipping TG cleanup."
+            exit 0
+          fi
 
           # Cleanup messages tracked on the PR
           echo "Cleaning up TG messages for PR #${PR_NUMBER}..."
