@@ -85,6 +85,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation |
 | `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
 | `THINKING_LEVEL_VALIDATE` | `xhigh` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
+| `THINKING_LEVEL_CONFLICT_RESOLVER` | `xhigh` | orchestrate_poll | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 
@@ -331,10 +332,14 @@ jobs:
 > **Standalone PR conflict sweep** — After processing orchestrator-managed
 > tracking issues, the poller scans all open PRs on `ai/issue-*` branches for
 > merge conflicts. When a conflict is detected it attempts a GitHub API branch
-> update; if that fails (real conflicts), it pushes an empty commit to force a
-> `synchronize` event so the review workflow's Codex conflict resolver can run.
-> This ensures standalone (non-orchestrator) AI PRs are not permanently blocked
-> by merge conflicts.
+> update; if that fails (real conflicts), the poller runs a dedicated Codex
+> conflict resolution instance (using `WORKFLOW_EDITOR_MODEL` at
+> `THINKING_LEVEL_CONFLICT_RESOLVER` reasoning effort) to resolve the
+> conflicts directly, commits the result, and pushes. This produces a clean
+> merge ref so the subsequent autofix run triggers normally. If Codex
+> resolution fails, it falls back to pushing an empty commit to force a
+> `synchronize` event. This ensures standalone (non-orchestrator) AI PRs are
+> not permanently blocked by merge conflicts.
 
 **`.github/workflows/ai-validate.yml`** — Runs runtime validation (generate harness -> execute -> structured artifacts)
 ```yaml
@@ -565,7 +570,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 1. **Decomposition:** The LLM reads your repo, breaks the project into scoped issues with a dependency graph, and creates a tracking issue (labeled `ai:orchestrator-tracking`).
 2. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically. If clarification questions are raised, the `orchestrate_clarify_respond` workflow answers them automatically using an LLM, so the pipeline runs fully unattended.
 3. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. If a PR has merge conflicts (e.g. `main` advanced since the PR was created), the poller automatically updates the PR branch via the GitHub API before retrying the merge. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
-4. **In-progress conflict resolution:** When the base branch advances and creates merge conflicts on in-progress PRs (still going through the review/autofix cycle), the poller detects the conflict (`mergeable == false`) and re-triggers the review workflow by pushing an empty commit. The review workflow's built-in Codex conflict resolver then handles the actual merge conflict resolution automatically.
+4. **In-progress conflict resolution:** When the base branch advances and creates merge conflicts on in-progress PRs (still going through the review/autofix cycle), the poller detects the conflict (`mergeable == false`) and runs a dedicated Codex conflict resolution instance directly (using `WORKFLOW_EDITOR_MODEL` at `THINKING_LEVEL_CONFLICT_RESOLVER` reasoning effort). The resolved files are committed and pushed, producing a clean merge ref so the subsequent autofix run triggers normally. If Codex resolution fails, it falls back to pushing an empty commit. The review workflow also retains its own built-in Codex conflict resolver as a second line of defense.
 5. **Polling:** Every 5 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
 6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
 7. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
