@@ -115,7 +115,7 @@ jobs:
             exit 1
           }
 
-          for f in setup_serena.sh ai_labels.py validate_process.sh tg_helpers.sh; do
+          for f in setup_serena.sh ai_labels.py validate_process.sh tg_helpers.sh memory_helpers.sh ai_memory.py; do
             fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"
             chmod +x "scripts/${f}"
           done
@@ -143,6 +143,35 @@ jobs:
             gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/.github/ai/label_contract.v1.json?ref=${script_ref}" > .github/ai/label_contract.v1.json 2>/dev/null || true
           fi
+
+      - name: Record validation run start
+        continue-on-error: true
+        env:
+          TRACKING_ISSUE: ${{ inputs.tracking_issue }}
+        run: |
+          set -euo pipefail
+
+          source scripts/memory_helpers.sh
+
+          issue_number="${TRACKING_ISSUE}"
+          if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
+            issue_number=""
+          fi
+
+          metadata_json="$(jq -cn \
+            --arg run_attempt "${{ github.run_attempt }}" \
+            --arg tracking_issue "${TRACKING_ISSUE:-0}" \
+            '{run_attempt:$run_attempt,tracking_issue:$tracking_issue}')"
+
+          memory_record_run_event \
+            --run-id "${{ github.run_id }}" \
+            --workflow "validate" \
+            --event-type "validation_started" \
+            --status "ok" \
+            --message "Validation run started for issue ${TRACKING_ISSUE:-0} (attempt ${{ github.run_attempt }})." \
+            --issue-number "${issue_number}" \
+            --actor "${{ github.actor }}" \
+            --metadata-json "${metadata_json}"
 
       - name: Run validation process
         id: validate_run
@@ -216,6 +245,74 @@ jobs:
             echo "metadata_file=${METADATA_FILE_PATH}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Record validation candidate
+        if: always()
+        continue-on-error: true
+        env:
+          TRACKING_ISSUE: ${{ inputs.tracking_issue }}
+          STATUS_FILE_PATH: ${{ steps.collect_status.outputs.status_file }}
+          STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
+          SUMMARY_VALUE: ${{ steps.collect_status.outputs.summary }}
+          FAILURE_SUMMARY_VALUE: ${{ steps.collect_status.outputs.failure_summary }}
+        run: |
+          set -euo pipefail
+
+          source scripts/memory_helpers.sh
+
+          issue_number="${TRACKING_ISSUE}"
+          if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
+            issue_number=""
+          fi
+
+          status_value="${STATUS_VALUE:-error}"
+          summary_value="${SUMMARY_VALUE:-}"
+          failure_summary_value="${FAILURE_SUMMARY_VALUE:-}"
+
+          if [ -n "${STATUS_FILE_PATH:-}" ] && [ -f "${STATUS_FILE_PATH}" ]; then
+            parsed_status="$(jq -r '.status // empty' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+            parsed_summary="$(jq -r '.summary // empty' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+            parsed_failure_summary="$(jq -r '.failure_summary // empty' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+
+            if [ -n "${parsed_status}" ]; then
+              status_value="${parsed_status}"
+            fi
+            if [ -n "${parsed_summary}" ]; then
+              summary_value="${parsed_summary}"
+            fi
+            if [ -n "${parsed_failure_summary}" ]; then
+              failure_summary_value="${parsed_failure_summary}"
+            fi
+          fi
+
+          summary_compact="$(printf '%s' "${summary_value}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
+          failure_summary_compact="$(printf '%s' "${failure_summary_value}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
+
+          candidate_summary="${summary_compact}"
+          if [ -z "${candidate_summary}" ]; then
+            candidate_summary="Validation status ${status_value}."
+          fi
+          candidate_summary="${candidate_summary:0:220}"
+
+          candidate_details="status=${status_value}; summary=${summary_compact}; failure_summary=${failure_summary_compact}"
+          candidate_details="$(printf '%s' "${candidate_details}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
+          candidate_details="${candidate_details:0:600}"
+
+          confidence="0.70"
+          if [ "${status_value}" = "pass" ]; then
+            confidence="0.90"
+          fi
+
+          memory_record_candidate \
+            --category "patterns" \
+            --summary "${candidate_summary}" \
+            --details "${candidate_details}" \
+            --confidence "${confidence}" \
+            --workflow "validate" \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --actor "${{ github.actor }}" \
+            --issue-number "${issue_number}"
+
       - name: Upload validation artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -257,6 +354,55 @@ jobs:
               printf '| Failure summary | %s |\n' "${failure_text_escaped}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record validation run end
+        if: always()
+        continue-on-error: true
+        env:
+          TRACKING_ISSUE: ${{ inputs.tracking_issue }}
+          STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
+          SUMMARY_VALUE: ${{ steps.collect_status.outputs.summary }}
+          FAILURE_SUMMARY_VALUE: ${{ steps.collect_status.outputs.failure_summary }}
+        run: |
+          set -euo pipefail
+
+          source scripts/memory_helpers.sh
+
+          issue_number="${TRACKING_ISSUE}"
+          if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
+            issue_number=""
+          fi
+
+          status_value="${STATUS_VALUE:-error}"
+          event_status="error"
+          if [ "${status_value}" = "pass" ]; then
+            event_status="ok"
+          fi
+
+          completion_message="${SUMMARY_VALUE:-}"
+          if [ -z "${completion_message}" ]; then
+            completion_message="${FAILURE_SUMMARY_VALUE:-}"
+          fi
+          if [ -z "${completion_message}" ]; then
+            completion_message="Validation run completed with status ${status_value}."
+          fi
+          completion_message="$(printf '%s' "${completion_message}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
+          completion_message="${completion_message:0:280}"
+
+          metadata_json="$(jq -cn \
+            --arg raw_status "${status_value}" \
+            --arg run_attempt "${{ github.run_attempt }}" \
+            '{raw_status:$raw_status,run_attempt:$run_attempt}')"
+
+          memory_record_run_event \
+            --run-id "${{ github.run_id }}" \
+            --workflow "validate" \
+            --event-type "validation_completed" \
+            --status "${event_status}" \
+            --message "${completion_message}" \
+            --issue-number "${issue_number}" \
+            --actor "${{ github.actor }}" \
+            --metadata-json "${metadata_json}"
 
       - name: Enforce validation outcome
         if: always()
