@@ -1474,6 +1474,40 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     continue
   fi
 
+  # ---------------------------------------------------------------
+  # /revalidate — manual reset from validation-failed
+  # ---------------------------------------------------------------
+  # When a project is in terminal validation-failed state (status="failed"
+  # with ai:validation-failed label), a /revalidate comment posted AFTER
+  # the latest state comment resets counters and re-dispatches validation.
+  if [ "${PROJECT_STATUS}" = "failed" ] && has_label "${TRACKING_LABELS}" "ai:validation-failed"; then
+    REVALIDATE_REQUESTED="$(echo "${COMMENTS}" | jq -r '
+      (to_entries | map(select(.value.body | contains("ORCHESTRATOR_STATE_V1"))) | last | .key // -1) as $last_state_idx |
+      [to_entries[] | select(.key > $last_state_idx and (.value.body | test("^\\s*/revalidate(\\s|$)"; "m")))] | length > 0
+    ')"
+
+    if [ "${REVALIDATE_REQUESTED}" = "true" ]; then
+      echo "  /revalidate requested for project #${TRACKING_NUM}. Resetting validation state."
+      jq \
+        '.status = "validating" |
+         .validation_cycle = 1 |
+         .validation_recovery_count = 0 |
+         .validation_active_fix_issues = [] |
+         .validation_last_dispatch_cycle = 0 |
+         .validation_completed_cycle = null |
+         del(.validation_failure_reason)' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment
+      set_tracking_phase_label "ai:validating"
+      post_tracking_comment "## 🔁 Validation reset via /revalidate\n\nAll validation counters cleared. Re-dispatching validation (cycle 1)."
+      tg_notify "🔁 /revalidate: project #${TRACKING_NUM} reset from validation-failed. Dispatching validation cycle 1."
+      if ! dispatch_validation_if_needed 1; then
+        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after /revalidate reset."
+      fi
+      continue
+    fi
+  fi
+
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
     echo "Project already ${PROJECT_STATUS}, skipping."
     continue
