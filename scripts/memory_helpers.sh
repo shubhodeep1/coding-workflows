@@ -19,7 +19,7 @@ _memory_enabled()
 
 _memory_warn()
 {
-	echo "::warning::memory $*"
+	echo "::warning::memory $*" >&2
 }
 
 _memory_retrieve_fallback()
@@ -88,7 +88,13 @@ memory_processed_command_check()
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-check "$@" 2>&1 || {
+	local check_result
+	if check_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-check "$@")"; then
+		printf '%s\n' "${check_result}"
+		return 0
+	fi
+
+	{
 		_memory_warn "processed-command-check failed (fail-open)"
 		echo '{"exists": false}'
 		return 0
