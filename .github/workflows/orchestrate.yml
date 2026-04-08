@@ -701,6 +701,12 @@ jobs:
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
         run: |
           set -euo pipefail
+
+          if [ ! -f "scripts/memory_helpers.sh" ]; then
+            echo "::warning::scripts/memory_helpers.sh not found; skipping orchestration end memory record"
+            exit 0
+          fi
+
           source scripts/memory_helpers.sh
 
           JOB_STATUS="${{ job.status }}"
