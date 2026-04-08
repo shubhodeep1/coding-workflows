@@ -109,8 +109,8 @@ _pr_checks_completed()
 	fi
 
 	local incomplete
-	incomplete="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" \
-		--jq '[.[].check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped"))] | length' 2>/dev/null || echo "")"
+	incomplete="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" \
+		--jq '[.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped"))] | length' 2>/dev/null || echo "")"
 	if [ -z "${incomplete}" ] || [ "${incomplete}" = "null" ]; then
 		echo "  [check-runs] Could not query check-runs for PR #${pr_number} (SHA ${head_sha:0:7}). Skipping merge."
 		return 1

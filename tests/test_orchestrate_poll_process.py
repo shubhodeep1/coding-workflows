@@ -163,9 +163,8 @@ def parse_api():
 	i = 1
 	while i < len(args):
 		arg = args[i]
-		if arg == '--paginate':
-			path = args[i + 1]
-			i += 2
+		if arg in ('--paginate', '--slurp'):
+			i += 1
 			continue
 		if arg == '--jq':
 			jq = args[i + 1]
@@ -319,9 +318,9 @@ if args[0] == 'api':
 			print('[]')
 		sys.exit(0)
 
-	if re.search(r'/commits/.+/check-runs$', path):
+	if re.search(r'/commits/.+/check-runs(\?.*)?$', path):
 		if jq:
-			print('[]')
+			print('0')
 		else:
 			print(json.dumps({'check_runs': []}))
 		sys.exit(0)
