@@ -353,7 +353,12 @@ jobs:
             --run-attempt "${{ github.run_attempt }}" \
             --metadata-json "$(jq -cn --arg issue_url "${ISSUE_URL}" --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '{issue_url: $issue_url, run_url: $run_url}')")"
 
-          claimed="$(printf '%s' "${claim_json}" | jq -r '.operation_result.claimed // .claimed // false')"
+          memory_enabled="$(printf '%s' "${AI_MEMORY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+          if [ -z "${claim_json}" ] && ! [[ "${memory_enabled}" =~ ^(1|true|yes|on)$ ]]; then
+            claimed="true"
+          else
+            claimed="$(printf '%s' "${claim_json}" | jq -r '.operation_result.claimed // .claimed // false')"
+          fi
           if [ "${claimed}" != "true" ]; then
             echo "Approval comment ${APPROVAL_COMMENT_ID} was not claimed for this run. Skipping duplicate implementation run."
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
