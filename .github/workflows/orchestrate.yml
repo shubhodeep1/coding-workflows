@@ -290,7 +290,11 @@ jobs:
           PROJECT_DESCRIPTION: ${{ inputs.project_description }}
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          if ! source scripts/memory_helpers.sh; then
+            echo "::warning::Unable to source scripts/memory_helpers.sh; writing fallback memory context"
+            printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${RUNTIME_DIR}/memory_context.txt"
+            exit 0
+          fi
 
           PROJECT_CONTEXT_FILE="${RUNTIME_DIR}/project_description.txt"
           printf '%s\n' "${PROJECT_DESCRIPTION}" > "${PROJECT_CONTEXT_FILE}"
@@ -603,7 +607,10 @@ jobs:
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          if ! source scripts/memory_helpers.sh; then
+            echo "::warning::Unable to source scripts/memory_helpers.sh; skipping decomposition candidate memory record"
+            exit 0
+          fi
 
           ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
           PROJECT_TITLE="$(jq -r '.project_title' "${DECOMPOSITION_FILE}" 2>/dev/null || echo "unknown")"
