@@ -125,6 +125,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           # tg_helpers.sh not yet fetched at this step; inline-fetch it
@@ -151,7 +152,7 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           if declare -F tg_send_tracked >/dev/null 2>&1; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "WARNING"
           else
             echo "::warning::Telegram helper unavailable; skipping duplicate PR Telegram notification."
           fi
@@ -217,12 +218,24 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+          # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _gh_api_fetch() {
+            local outfile="$1"; shift
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else return 1; fi
+            done; return 1
+          }
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"
             fi
             case "${f}" in
               *.sh|*.py)
@@ -233,16 +246,29 @@ jobs:
               echo "scripts/${f}" >> "${FETCHED_MANIFEST}"
             fi
           done
+          # Fetch AI memory schema files so consumer repos that lack
+          # schemas on their default branch can bootstrap the ai-memory
+          # branch (schemas are validated during memory operations).
+          mkdir -p ai-memory/schemas
+          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
+            if [ ! -f "ai-memory/schemas/${sf}" ]; then
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+              if [ "${is_self_repo}" = "false" ]; then
+                echo "ai-memory/schemas/${sf}" >> "${FETCHED_MANIFEST}"
+              fi
+            fi
+          done
           # Always use the canonical instruction files from coding-workflows
           # (must not be gated on is_external — caller repos that ship their
           # own scripts/ still need these canonical md files)
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=${script_ref}" > "${f}" 2>/dev/null; then
+              if ! _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+                _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main"
               fi
               if [ "${is_self_repo}" = "false" ]; then
                 echo "${f}" >> "${FETCHED_MANIFEST}"
@@ -254,8 +280,8 @@ jobs:
           # directory. This is combined with the caller repo's own agents.md
           # (if any) during prompt assembly — the caller's copy is never
           # overwritten or deleted.
-          gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/agents.md?ref=${script_ref}" > "${RUNTIME_DIR}/agents_canonical.md" 2>/dev/null || true
+          _gh_api_fetch "${RUNTIME_DIR}/agents_canonical.md" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/agents.md?ref=${script_ref}" || true
 
       - name: Fetch issue metadata
         if: env.SKIP_IMPLEMENT != 'true'
@@ -263,8 +289,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
 
           ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
@@ -327,15 +355,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
           source scripts/label_helpers.sh
-          ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
           if ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is not in ai:awaiting-approval phase. Exiting safely."
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
           fi
           ensure_label_exists "ai:implementing" "${{ github.repository }}"
-          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:implementing' >/dev/null
+          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:implementing' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
           echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true" >> "$GITHUB_ENV"
 
@@ -525,12 +555,26 @@ jobs:
           # across all runs, so the provider can cache it and charge reduced rates
           # for subsequent requests.
           {
-            echo "=== SYSTEM INSTRUCTIONS ==="
-            cat codex_system_instructions.md
+            echo "=== SYSTEM INSTRUCTIONS (implementation-trimmed) ==="
+            # Include Serena + sections 0-6 + code style + FINAL REMINDER.
+            awk '/^## 7\./{exit} {print}' codex_system_instructions.md
             echo
-            echo "=== AI PIPELINE ==="
-            cat ai_pipeline.md
+            awk '/^## 9\. Code Style/,/^## 10\./{if ($0 ~ /^## 10\./) exit; print}' codex_system_instructions.md
             echo
+            awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
+            echo
+
+            echo "=== AI PIPELINE (implementation-trimmed) ==="
+            # Keep shared runtime behavior and implementation phase details only.
+            awk '
+              /^## Shared Runtime Behavior/{in_shared=1}
+              /^## Phase 1/{in_shared=0}
+              /^## Phase 3/{in_impl=1}
+              /^## Failure Handling/{in_impl=0}
+              { if (in_shared || in_impl) print }
+            ' ai_pipeline.md
+            echo
+
             # Include agents.md context: canonical from coding-workflows plus
             # the caller repo's own agents.md (if present). Both are included
             # so the model has the full picture.
@@ -969,6 +1013,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           # A no-op implementation is almost always a bug — the plan approved
           # changes but codex produced none (or they were stripped, e.g.
@@ -977,7 +1023,7 @@ jobs:
           # treating this as success.
           echo "::warning::Implementation produced no repository changes. Labeling issue #${ISSUE_NUMBER} as ai:implementation-failed."
 
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="⚠️ AI implementation produced no repository changes despite an approved plan. This is likely a pipeline bug (e.g. workflow edits stripped without \`ALLOW_WORKFLOW_EDITS=true\`, or the model failed to write files). Labeling \`ai:implementation-failed\` for orchestrator re-processing."
 
           # Remove ai:done (if present) and add failure label.
@@ -1002,6 +1048,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
 
@@ -1014,10 +1062,10 @@ jobs:
             script_ref="stable"
           fi
           mkdir -p scripts
-          if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+          if ! gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
             "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=${script_ref}" > scripts/git_ref_health_check.sh 2>/dev/null; then
             echo "::warning::git_ref_health_check.sh not found on ${script_ref}; falling back to main"
-            gh api -H 'Accept: application/vnd.github.raw+json' \
+            gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=main" > scripts/git_ref_health_check.sh
           fi
           chmod +x scripts/git_ref_health_check.sh
@@ -1110,12 +1158,24 @@ jobs:
           fi
 
           mkdir -p scripts
-          for f in memory_helpers.sh ai_memory.py ai_memory_lib.py; do
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+          # Rate-limit-aware fetch
+          _gh_api_fetch() {
+            local outfile="$1"; shift
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else return 1; fi
+            done; return 1
+          }
+          for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"
             fi
             chmod +x "scripts/${f}"
           done
@@ -1252,8 +1312,6 @@ jobs:
           Use only the contents of ${RUNTIME_DIR}/issue_context_for_summary.txt.
           EOF
 
-          trap 'rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt"' EXIT
-
           {
             echo "ISSUE CONTEXT FOR SUMMARY"
             jq -r '"Title: " + (.title // "") + "\nURL: " + (.html_url // "") + "\n\nBody:\n" + (.body // "")' "${ISSUE_META_FILE}"
@@ -1261,6 +1319,54 @@ jobs:
             echo "LATEST APPROVED IMPLEMENTATION PLAN"
             cat "${PLAN_FILE}"
           } > "${RUNTIME_DIR}/issue_context_for_summary.txt"
+
+          CONFIG_FILE="${HOME}/.codex/config.toml"
+          CONFIG_BACKUP_FILE="${RUNTIME_DIR}/codex_config_issue_summary_backup.toml"
+          HAD_CONFIG="false"
+          if [ -f "${CONFIG_FILE}" ]; then
+            HAD_CONFIG="true"
+            cp "${CONFIG_FILE}" "${CONFIG_BACKUP_FILE}"
+          fi
+
+          restore_codex_config() {
+            if [ "${HAD_CONFIG}" = "true" ] && [ -f "${CONFIG_BACKUP_FILE}" ]; then
+              cp "${CONFIG_BACKUP_FILE}" "${CONFIG_FILE}"
+              rm -f "${CONFIG_BACKUP_FILE}"
+              return
+            fi
+            rm -f "${CONFIG_FILE}" "${CONFIG_BACKUP_FILE}"
+          }
+          trap 'restore_codex_config; rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt"' EXIT
+
+          mkdir -p "${HOME}/.codex"
+          if [ "${HAD_CONFIG}" = "true" ] && [ -f "${CONFIG_BACKUP_FILE}" ]; then
+            awk '
+              BEGIN { replaced = 0 }
+              /^model_reasoning_effort[[:space:]]*=/ {
+                print "model_reasoning_effort = \"low\""
+                replaced = 1
+                next
+              }
+              { print }
+              END {
+                if (!replaced) {
+                  print "model_reasoning_effort = \"low\""
+                }
+              }
+            ' "${CONFIG_BACKUP_FILE}" > "${CONFIG_FILE}"
+          else
+            {
+              echo 'model_reasoning_effort = "low"'
+              echo 'model_provider = "openrouter"'
+              echo "model = \"${MODEL_EDITOR}\""
+              echo
+              echo '[model_providers.openrouter]'
+              echo 'name = "OpenRouter"'
+              echo 'base_url = "https://openrouter.ai/api/v1"'
+              echo 'env_key = "OPENROUTER_API_KEY"'
+              echo 'wire_api = "responses"'
+            } > "${CONFIG_FILE}"
+          fi
 
           cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${ISSUE_SUMMARY_FILE}"
 
@@ -1270,6 +1376,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           if [ ! -s "${ISSUE_SUMMARY_FILE}" ]; then
             echo "AI issue summary file is missing or empty."
@@ -1290,7 +1398,7 @@ jobs:
             cat "${SERENA_REPORT_FILE}" >> "${ISSUE_SUMMARY_FILE}"
           fi
 
-          gh pr comment "${{ steps.create_pr.outputs.pr_url }}" \
+          gh_retry gh pr comment "${{ steps.create_pr.outputs.pr_url }}" \
             --repo "${{ github.repository }}" \
             --body-file "${ISSUE_SUMMARY_FILE}"
 
@@ -1300,10 +1408,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
           gh label create "ai:done" --repo "${{ github.repository }}" \
             --color "0e8a16" --description "Implementation PR created" \
             2>/dev/null || true
-          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:done' >/dev/null
+          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:done' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
 
       - name: Record implementation run success event
@@ -1334,10 +1444,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
           gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
             --color "fbca04" --description "Awaiting human approval to implement" \
             2>/dev/null || true
-          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
+          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
 
       - name: Comment on issue failure
@@ -1346,12 +1458,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
+          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
             gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
               --color "fbca04" --description "Awaiting human approval to implement" \
               2>/dev/null || true
-            gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
+            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
             gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -1360,7 +1474,7 @@ jobs:
           else
             REASON="AI implementation workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
           fi
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="${REASON}"
 
       - name: Telegram failure notification
@@ -1369,6 +1483,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           if [ ! -f scripts/tg_helpers.sh ]; then
@@ -1388,7 +1503,7 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           if declare -F tg_send_tracked >/dev/null 2>&1; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "ERROR"
           else
             echo "::warning::tg_helpers.sh unavailable; skipping Telegram notification."
           fi
@@ -1409,11 +1524,23 @@ jobs:
               script_ref="stable"
             fi
             mkdir -p scripts
-            for f in memory_helpers.sh ai_memory.py ai_memory_lib.py; do
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
-                gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+            # Rate-limit-aware fetch
+            _gh_api_fetch() {
+              local outfile="$1"; shift
+              local attempt=1
+              while [ "${attempt}" -le 4 ]; do
+                if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+                if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                  echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                  sleep 30; attempt=$((attempt + 1))
+                else return 1; fi
+              done; return 1
+            }
+            for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+              if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
+                _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/scripts/${f}?ref=main"
               fi
               chmod +x "scripts/${f}"
             done
