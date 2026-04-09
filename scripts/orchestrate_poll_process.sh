@@ -2158,16 +2158,37 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     LABELS_JSON="$(echo "${_labels_result}" | python3 -c "
 import json, sys
 raw = json.load(sys.stdin)
-repo = (raw.get('data') or {}).get('repository') or {}
 nums = $(printf '%s\n' "${_gql_issue_nums[@]}" | jq -R 'tonumber' | jq -s '.')
+data = raw.get('data')
+if not isinstance(data, dict):
+    print('{}')
+    sys.exit(0)
+repo = data.get('repository')
+if not isinstance(repo, dict):
+    print('{}')
+    sys.exit(0)
 result = {}
 for n in nums:
     key = 'i' + str(n)
     issue_data = repo.get(key)
-    if issue_data and issue_data.get('labels'):
-        result[str(n)] = [node['name'] for node in issue_data['labels'].get('nodes', [])]
-    else:
-        result[str(n)] = []
+    if not isinstance(issue_data, dict):
+        print('{}')
+        sys.exit(0)
+    labels_data = issue_data.get('labels')
+    if not isinstance(labels_data, dict):
+        print('{}')
+        sys.exit(0)
+    nodes = labels_data.get('nodes')
+    if not isinstance(nodes, list):
+        print('{}')
+        sys.exit(0)
+    names = []
+    for node in nodes:
+        if not isinstance(node, dict) or not isinstance(node.get('name'), str):
+            print('{}')
+            sys.exit(0)
+        names.append(node['name'])
+    result[str(n)] = names
 json.dump(result, sys.stdout)
 " 2>/dev/null || echo '{}')"
   else
