@@ -532,6 +532,42 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
 
+## Prompt Caching (OpenRouter + Codex)
+
+### Determination (current stack)
+
+- **Observed support (route-dependent):** `openai/gpt-5.3-codex` via OpenRouter Responses API can benefit from provider-managed prefix caching, but availability/reporting can vary by routed provider/model.
+- Caching is provider-managed prefix caching (automatic when request prefixes are identical and long enough).
+- In this repo, cache-friendly prompt shaping is enabled by design: a static pre-assembled prefix is placed first, and dynamic issue/PR/runtime content is appended after it.
+
+### What Codex CLI can and cannot control
+
+- Codex workflow config used here supports provider/network basics (for example `wire_api = "responses"`, retries, and timeouts).
+- Codex config used here does **not** expose direct request-body prompt-cache controls (for example explicit `cache_control` or manual cache keys) in workflow generation.
+- Operational result: cache behavior is achieved through stable prompt-prefix discipline, not per-request cache toggles.
+
+### Operational implications
+
+- Cache hits require identical leading content; edits near the top of prompts reduce hit rate.
+- Short prompts may not cross provider cache thresholds and can show little/no savings.
+- Cache reuse is best when requests are routed consistently; heavy concurrency and routing changes can reduce hit rates.
+- `wire_api = "responses"` is kept across workflows/scripts for the current OpenRouter path.
+
+### Verification recipe
+
+1. Send two consecutive OpenRouter Responses requests with the same large static prefix and only small trailing dynamic differences.
+2. Compare usage fields in the second response (for example cached-token indicators when present) against the first response.
+3. Repeat a few times to smooth routing variance.
+4. In this repo, also confirm generated prompts still keep `pre_assembled_static.txt` (or `judge_static.txt`) content at the top.
+
+### Expected savings assumptions
+
+- Savings are workload-dependent and primarily correlate with:
+  - stable prefix size,
+  - request repetition frequency,
+  - provider routing/cache retention behavior.
+- Practical expectation: repeated pipeline runs with large unchanged static prefixes should reduce effective input cost/latency versus fully dynamic prompts.
+
 ## Project Orchestrator
 
 The orchestrator enables complex, multi-issue projects from a single prompt. It decomposes a project description into a dependency-aware DAG of GitHub issues, dispatches them through the existing AI pipeline in waves, and uses a judge to validate results between waves.

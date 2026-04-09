@@ -118,6 +118,7 @@ jobs:
             local outfile="$1"; shift
             local attempt=1
             while [ "${attempt}" -le 4 ]; do
+              : > /tmp/_gh_rl_err
               if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
                 echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
@@ -163,6 +164,23 @@ jobs:
                 "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=main"
             fi
           fi
+
+          # Keep canonical static instructions available in caller repos where
+          # these files may not exist yet.
+          for f in codex_system_instructions.md ai_pipeline.md; do
+            if [ ! -f "${f}" ]; then
+              if ! _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
+                echo "::warning::${f} not found on ${script_ref}; falling back to main"
+                _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main"
+              fi
+            fi
+            if [ ! -s "${f}" ]; then
+              echo "::error::Failed to fetch required file ${f}"
+              exit 1
+            fi
+          done
 
       - name: Record memory run-start event
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
@@ -274,6 +292,41 @@ jobs:
           set -euo pipefail
           bash scripts/setup_serena.sh --mode planning --context codex
 
+      - name: Pre-assemble static context (cacheable across runs)
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ ! -s codex_system_instructions.md ] || [ ! -s ai_pipeline.md ]; then
+            echo "Missing or empty required codex input file(s): codex_system_instructions.md and/or ai_pipeline.md"
+            exit 1
+          fi
+
+          # Keep an identical static prefix at the start of every request so
+          # provider-side prompt prefix caching can be reused across runs.
+          {
+            echo "=== SYSTEM INSTRUCTIONS ==="
+            cat codex_system_instructions.md
+            echo
+            echo "=== AI PIPELINE ==="
+            cat ai_pipeline.md
+            echo
+            if [ -f AGENTS.md ]; then
+              echo "=== AGENTS.MD ==="
+              cat AGENTS.md
+              echo
+            elif [ -f agents.md ]; then
+              echo "=== AGENTS.MD ==="
+              cat agents.md
+              echo
+            fi
+            if [ -f README.md ]; then
+              echo "=== README.MD ==="
+              cat README.md
+              echo
+            fi
+          } > ./pre_assembled_static.txt
+
       - name: Retrieve issue memory context
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         run: |
@@ -309,7 +362,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Keep static context first for cache reuse, then append run-specific
+          # data so issue/comment changes do not invalidate the cached prefix.
           {
+            cat ./pre_assembled_static.txt
+            echo
+            echo "=== CLARIFY RESPOND TASK ==="
             cat prompts/mode-clarify-respond.txt
             echo
             echo "=== MEMORY CONTEXT ==="
