@@ -397,7 +397,7 @@ jobs:
           fi
 
           memory_record_candidate \
-            --category "clarify_auto_answer" \
+            --category "decisions" \
             --summary "Orchestrator posted auto-answer for issue #${ISSUE_NUMBER}" \
             --details "${CANDIDATE_DETAILS}" \
             --confidence "0.90" \
