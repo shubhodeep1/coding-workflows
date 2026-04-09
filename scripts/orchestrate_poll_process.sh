@@ -376,14 +376,10 @@ finalize_integration_merge_if_needed() {
   local integration_branch="$1"
   local default_branch="$2"
   local project_title="$3"
+  local final_pr
 
   if [ -z "${integration_branch}" ]; then
     return 0
-  fi
-
-  if ! integration_branch_exists "${integration_branch}"; then
-    mark_integration_branch_missing_failed "${integration_branch}"
-    return 1
   fi
 
   local final_merge_status
@@ -392,8 +388,25 @@ finalize_integration_merge_if_needed() {
     return 0
   fi
 
-  local final_pr
   final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}")"
+  if [ -n "${final_pr}" ] && [ "${final_pr}" != "null" ]; then
+    local existing_pr_state
+    local existing_pr_merged
+    existing_pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
+    existing_pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged' 2>/dev/null || echo "")"
+    if [ "${existing_pr_state}" = "closed" ] && [ "${existing_pr_merged}" = "true" ]; then
+      jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment
+      return 0
+    fi
+  fi
+
+  if ! integration_branch_exists "${integration_branch}"; then
+    mark_integration_branch_missing_failed "${integration_branch}"
+    return 1
+  fi
+
   if [ -z "${final_pr}" ] || [ "${final_pr}" = "null" ]; then
     final_pr="$(gh pr list \
       --repo "${GITHUB_REPOSITORY}" \

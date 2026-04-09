@@ -764,6 +764,35 @@ def test_final_merge_treats_closed_merged_pr_as_success():
 	assert result["latest_state"]["final_merge_status"] == "merged"
 
 
+def test_merge_conflict_state_completes_when_final_pr_already_merged_and_branch_deleted():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_status"] = "conflict"
+	state["final_merge_pr"] = 354
+	prs = [
+		{
+			"number": 354,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 354
+	assert result["latest_state"]["final_merge_status"] == "merged"
+
+
 def test_standalone_conflict_sweep_skips_integration_base_prs():
 	state = _base_state(status="complete")
 	prs = [
