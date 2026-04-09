@@ -420,8 +420,8 @@ jobs:
             CANDIDATE_DETAILS="Auto-answer comment file was not found at ${RUNTIME_DIR}/answer_comment.md"
           fi
 
+          # Keep category aligned with scripts/ai_memory_lib.py allowed values.
           memory_record_candidate \
-            # Keep category aligned with scripts/ai_memory_lib.py allowed values.
             --category "decisions" \
             --summary "Orchestrator posted auto-answer for issue #${ISSUE_NUMBER}" \
             --details "${CANDIDATE_DETAILS}" \
