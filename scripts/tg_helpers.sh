@@ -159,6 +159,7 @@ tg_store_msg_id()
 		-H "Authorization: token ${GH_TOKEN}" \
 		-H "Accept: application/vnd.github.v3+json" \
 		"${api_base}/${issue_num}/comments?per_page=30&direction=desc") || {
+		echo "::warning::Failed to fetch existing tracking comments for issue #${issue_num}; creating a new tracking comment" >&2
 		# Fallback: create a new tracking comment
 		curl -s -X POST \
 			-H "Authorization: token ${GH_TOKEN}" \
@@ -230,6 +231,7 @@ tg_store_phase_msg_id()
 		-H "Authorization: token ${GH_TOKEN}" \
 		-H "Accept: application/vnd.github.v3+json" \
 		"${api_base}/${issue_num}/comments?per_page=30&direction=desc") || {
+		echo "::warning::Failed to fetch existing phase tracking comments for issue #${issue_num} phase=${phase}; creating a new tracking comment" >&2
 		curl -s -X POST \
 			-H "Authorization: token ${GH_TOKEN}" \
 			-H "Accept: application/vnd.github.v3+json" \
@@ -301,7 +303,10 @@ tg_cleanup_phase_msgs()
 		comments_json=$(curl_gh_api -s \
 			-H "Authorization: token ${GH_TOKEN}" \
 			-H "Accept: application/vnd.github.v3+json" \
-			"${api_base}/${issue_num}/comments?per_page=100&page=${page}") || break
+			"${api_base}/${issue_num}/comments?per_page=100&page=${page}") || {
+			echo "::warning::Failed to fetch issue comments for phase cleanup (issue #${issue_num}, phase ${phase}, page ${page}); aborting cleanup" >&2
+			break
+		}
 
 		local count
 		count=$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null) || break
@@ -367,7 +372,10 @@ tg_cleanup_msgs()
 		comments_json=$(curl_gh_api -s \
 			-H "Authorization: token ${GH_TOKEN}" \
 			-H "Accept: application/vnd.github.v3+json" \
-			"${api_base}/${issue_num}/comments?per_page=100&page=${page}") || break
+			"${api_base}/${issue_num}/comments?per_page=100&page=${page}") || {
+			echo "::warning::Failed to fetch issue comments for cleanup (issue #${issue_num}, page ${page}); aborting cleanup" >&2
+			break
+		}
 
 		local count
 		count=$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null) || break

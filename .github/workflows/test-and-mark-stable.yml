@@ -1305,11 +1305,12 @@ jobs:
           TRACKING_NUMBER: ${{ steps.review-blocked-sim.outputs.tracking_number }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           echo "Cleaning up E2E test artifacts..."
 
           # Close PR without merging
           if [ -n "${PR_NUMBER}" ]; then
-            EXISTING_PR_BODY="$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' 2>/dev/null || echo "")"
+            EXISTING_PR_BODY="$(_safe_gh_jq "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' || echo "")"
             NEW_PR_BODY="${EXISTING_PR_BODY}
 
           ---

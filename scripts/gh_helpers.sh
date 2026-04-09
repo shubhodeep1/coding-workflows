@@ -127,6 +127,36 @@ gh_retry_to_file()
 }
 
 # ---------------------------------------------------------------
+# _safe_gh_jq — run gh api and suppress stdout on failure.
+#
+# When gh api receives a non-2xx response (e.g. 403 rate limit),
+# it dumps the raw error JSON to stdout WITHOUT applying the --jq
+# filter.  The common shell pattern
+#   val="$(gh api ... --jq '.field' 2>/dev/null || echo "fallback")"
+# is broken because the error JSON on stdout combines with the
+# fallback string, producing garbage that fails equality checks.
+#
+# This function captures stdout to a temp file, checks the exit
+# code, and only emits output on success.  On failure it outputs
+# nothing and returns 1, so `|| echo "fallback"` works correctly.
+#
+# Usage:
+#   val="$(_safe_gh_jq "repos/o/r/pulls/1" --jq '.state' || echo "open")"
+# ---------------------------------------------------------------
+_safe_gh_jq()
+{
+	local _tmpf
+	_tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX")
+	if gh api "$@" > "${_tmpf}" 2>/dev/null; then
+		cat "${_tmpf}"
+		rm -f "${_tmpf}"
+		return 0
+	fi
+	rm -f "${_tmpf}"
+	return 1
+}
+
+# ---------------------------------------------------------------
 # curl_gh_api — curl wrapper with rate-limit retry for GitHub API.
 #
 # Captures HTTP status code.  On 429 or 403-with-rate-limit body,
@@ -147,6 +177,7 @@ curl_gh_api()
 	body_file=$(mktemp "${TMPDIR:-/tmp}/curl_gh_body.XXXXXX")
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
+		: > "${body_file}"
 		local http_code
 		http_code=$(curl -o "${body_file}" -w '%{http_code}' "$@" 2>/dev/null) || http_code="000"
 
