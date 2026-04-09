@@ -1892,6 +1892,11 @@ jobs:
           Plain text only.
           Output exactly these sections in this order:
           Changes made:
+          IMPORTANT: If ANY bullet under "Changes made:" touches a line that was
+          also modified in the LAST RUN DIFF, you MUST include these two fields
+          in that bullet (the commit will be rejected otherwise):
+            • Regression fingerprint: <file:symbol or failure key>
+            • Runtime failure path: <execution path that fails>
           Already satisfied (suggested but already present):
           Ignored suggestions (with short reason):
           Reviewer files processed:
@@ -2366,9 +2371,29 @@ jobs:
           # never trigger the oscillation guard.
           EXCLUDED_FILES = {"pre_assembled_static.txt"}
 
+          # Non-code files where "Runtime failure path" is semantically
+          # meaningless — documentation, configs, licences, etc.
+          _NON_CODE_EXTS = {
+              ".md", ".txt", ".rst", ".adoc",
+              ".json", ".yaml", ".yml", ".toml",
+              ".csv", ".tsv",
+              ".lock",
+          }
+          _NON_CODE_BASENAMES = {"LICENSE", "LICENSE.txt", "NOTICE"}
+
+          def _is_non_code(path: str) -> bool:
+              import os as _os
+              basename = _os.path.basename(path)
+              if basename in _NON_CODE_BASENAMES:
+                  return True
+              _, ext = _os.path.splitext(basename)
+              return ext.lower() in _NON_CODE_EXTS
+
           overlaps = []
           for file_path, staged_file_ranges in staged_ranges.items():
               if file_path in EXCLUDED_FILES:
+                  continue
+              if _is_non_code(file_path):
                   continue
               previous_ranges = last_run_ranges.get(file_path, [])
               if not previous_ranges:
