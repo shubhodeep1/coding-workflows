@@ -707,6 +707,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -722,9 +723,9 @@ jobs:
           # Non-orchestrator issues: use phase tracking (cleaned up when plan starts).
           ISSUE_BODY_CHECK="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           if printf '%s' "${ISSUE_BODY_CHECK}" | grep -qF 'Managed by: AI Orchestrator'; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
           else
-            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}"
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "DEBUG"
           fi
 
       - name: Record clarification run completed
@@ -798,6 +799,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -812,4 +814,4 @@ jobs:
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "ERROR"

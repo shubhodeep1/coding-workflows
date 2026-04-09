@@ -104,11 +104,12 @@ _tg_link_suffix()
 tg_notify()
 {
   local msg="$1$(_tg_link_suffix)"
+  local level="${2:-CRITICAL}"
   if [ "${TRACKING_ISSUE_NUM}" -gt 0 ]; then
-    tg_send_tracked "${TRACKING_ISSUE_NUM}" "${msg}"
+    tg_send_tracked "${TRACKING_ISSUE_NUM}" "${msg}" "${level}"
   else
     # Standalone validation run (no tracking issue): untracked send
-    tg_send_msg "${msg}" >/dev/null
+    tg_send_msg "${msg}" "${level}" >/dev/null
   fi
 }
 
@@ -543,7 +544,7 @@ if [ "${GENERATE_SUCCESS}" != "true" ]; then
   post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for generation logs."
   set_tracking_phase_label "ai:validation-failed"
   write_result_files "error" "Validation harness generation failed" "${local_failure_summary}"
-  tg_notify "❌ Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}."
+  tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
   exit 1
 fi
 
@@ -559,7 +560,7 @@ if command -v git >/dev/null 2>&1; then
     post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nUnexpected changes:\n\n\`\`\`\n${NON_VALIDATION_CHANGES}\n\`\`\`"
     set_tracking_phase_label "ai:validation-failed"
     write_result_files "error" "Validation harness generation violated path constraints" "${local_failure_summary}"
-    tg_notify "❌ Validation harness generation touched non-validation files for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}."
+    tg_notify "Validation harness generation touched non-validation files for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
     exit 1
   fi
 fi
@@ -754,7 +755,7 @@ if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ] && [ "${PASS_
   post_tracking_comment "## ✅ Runtime validation passed\n\n- Passed tests: ${PASSED_TESTS}/${TOTAL_TESTS}\n- Duration: ${DURATION_SECONDS}s"
   set_tracking_phase_label "ai:validated"
   write_result_files "pass" "${summary_text}" ""
-  tg_notify "✅ Runtime validation passed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${PASSED_TESTS}/${TOTAL_TESTS})."
+  tg_notify "Runtime validation passed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${PASSED_TESTS}/${TOTAL_TESTS})." "DEBUG"
   exit 0
 fi
 
@@ -832,7 +833,7 @@ case "${DIAG_STATUS}" in
       post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
       set_tracking_phase_label "ai:validation-failed"
       write_result_files "fail" "Runtime validation failed" "${failure_summary}"
-      tg_notify "❌ Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: invalid diagnosis payload."
+      tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: invalid diagnosis payload." "ERROR"
       exit 0
     fi
 
@@ -892,7 +893,7 @@ case "${DIAG_STATUS}" in
     if ! is_tracking_run; then
       failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). Tracking issue is not set, so fix-up issues were not created."
       write_result_files "fail" "Validation needs fixes" "${failure_summary}"
-      tg_notify "⚠️ Validation for ${GITHUB_REPOSITORY} reported fixable failures, but TRACKING_ISSUE is not set."
+      tg_notify "Validation for ${GITHUB_REPOSITORY} reported fixable failures, but TRACKING_ISSUE is not set." "WARNING"
       exit 0
     fi
 
@@ -906,7 +907,7 @@ case "${DIAG_STATUS}" in
 
     failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). Fix-up issues were created."
     write_result_files "fail" "Validation needs fixes" "${failure_summary}"
-    tg_notify "🔧 Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes (${FIX_COUNT} issue(s) created)."
+    tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes (${FIX_COUNT} issue(s) created)." "WARNING"
     ;;
 
   harness_error)
@@ -916,7 +917,7 @@ case "${DIAG_STATUS}" in
     post_tracking_comment "## ❌ Runtime validation harness error\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}"
     set_tracking_phase_label "ai:validation-failed"
     write_result_files "fail" "Validation failed due to harness error" "${failure_summary}"
-    tg_notify "❌ Validation harness error for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}."
+    tg_notify "Validation harness error for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
     ;;
 
   infeasible)
@@ -925,7 +926,7 @@ case "${DIAG_STATUS}" in
     post_tracking_comment "## ❌ Runtime validation infeasible\n\n${DIAG_TEXT}"
     set_tracking_phase_label "ai:validation-failed"
     write_result_files "fail" "Validation marked infeasible" "${failure_summary}"
-    tg_notify "❌ Validation infeasible for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}."
+    tg_notify "Validation infeasible for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
     ;;
 
   *)
@@ -934,7 +935,7 @@ case "${DIAG_STATUS}" in
     post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
     set_tracking_phase_label "ai:validation-failed"
     write_result_files "fail" "Validation failed" "${failure_summary}"
-    tg_notify "❌ Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: unknown diagnosis status."
+    tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: unknown diagnosis status." "ERROR"
     ;;
 esac
 

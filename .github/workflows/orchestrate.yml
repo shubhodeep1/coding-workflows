@@ -758,6 +758,7 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -773,13 +774,15 @@ jobs:
             ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
           fi
           if [ "${STATUS}" = "success" ]; then
-            MSG="✅ Orchestrator: Decomposed project into ${ISSUE_COUNT} issues."
+            MSG="Orchestrator: Decomposed project into ${ISSUE_COUNT} issues."
+            LEVEL="DEBUG"
             if [ -n "${TRACKING_URL}" ]; then
               MSG+=$'\n'
               MSG+="Tracking: ${TRACKING_URL}"
             fi
           else
-            MSG="❌ Orchestrator: Failed (${STATUS})."
+            MSG="Orchestrator: Failed (${STATUS})."
+            LEVEL="ERROR"
             if [ -n "${TRACKING_ISSUE_NUMBER:-}" ] && [ "${TRACKING_ISSUE_NUMBER}" != "0" ]; then
               MSG+=$'\n'
               MSG+="Issue: ${TRACKING_URL}"
@@ -787,4 +790,4 @@ jobs:
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${TRACKING_ISSUE_NUMBER:-0}" "${MSG}"
+          tg_send_tracked "${TRACKING_ISSUE_NUMBER:-0}" "${MSG}" "${LEVEL}"

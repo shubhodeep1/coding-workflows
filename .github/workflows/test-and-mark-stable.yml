@@ -1487,12 +1487,25 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           CHAT_ID="${TG_CHAT_ID:-}"
           if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID}" ]; then
             echo "Telegram notification skipped (missing TG_BOT_SECRET or chat_id)"
             exit 0
+          fi
+
+          # Inline-fetch tg_helpers.sh for alert level support
+          mkdir -p scripts
+          helpers_tmp="$(mktemp)"
+          if gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${{ github.repository }}/contents/scripts/tg_helpers.sh?ref=${{ github.sha }}" > "${helpers_tmp}" 2>/dev/null && [ -s "${helpers_tmp}" ]; then
+            mv "${helpers_tmp}" "scripts/tg_helpers.sh"
+            source scripts/tg_helpers.sh
+          else
+            rm -f "${helpers_tmp}"
           fi
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -1503,10 +1516,11 @@ jobs:
 
           # Determine overall status
           if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$RELEASE" = "success" ]; then
-            MSG="✅ Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
+            MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
             MSG+=$'\n'"All jobs passed: e2e ✓ scripts ✓ validate ✓ release ✓"
+            LEVEL="DEBUG"
           else
-            MSG="❌ Release ${{ needs.resolve-version.outputs.version }} FAILED"
+            MSG="Release ${{ needs.resolve-version.outputs.version }} FAILED"
             STATUS_LINE=""
             for JOB_NAME in e2e-smoke-test validate-scripts validate release; do
               case "$JOB_NAME" in
@@ -1523,11 +1537,16 @@ jobs:
               STATUS_LINE+="${JOB_NAME}: ${ICON} (${RESULT})  "
             done
             MSG+=$'\n'"${STATUS_LINE}"
+            LEVEL="ERROR"
           fi
           MSG+=$'\n'"Run: ${RUN_URL}"
 
           # Send notification (persists — not auto-deleted)
-          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
+          if declare -F tg_send_msg >/dev/null 2>&1; then
+            tg_send_msg "${MSG}" "${LEVEL}" >/dev/null
+          else
+            curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+              -d "chat_id=${CHAT_ID}" \
+              -d "disable_web_page_preview=true" \
+              --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
+          fi
