@@ -351,20 +351,25 @@ set_tracking_phase_label() {
   if [ -f "${contract_file}" ]; then
     local phase_changes
     if phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>/dev/null)"; then
+      # Build a single gh issue edit command with all --remove-label and
+      # --add-label flags instead of one API call per label.
+      local edit_args=()
       while IFS= read -r remove_label; do
         [ -n "${remove_label}" ] || continue
-        gh_retry gh issue edit "${TRACKING_NUM}" \
-          --repo "${GITHUB_REPOSITORY}" \
-          --remove-label "${remove_label}" >/dev/null || true
+        edit_args+=(--remove-label "${remove_label}")
       done < <(echo "${phase_changes}" | jq -r '.remove[]?')
 
       while IFS= read -r add_label; do
         [ -n "${add_label}" ] || continue
         ensure_label_exists "${add_label}"
+        edit_args+=(--add-label "${add_label}")
+      done < <(echo "${phase_changes}" | jq -r '.add[]?')
+
+      if [ "${#edit_args[@]}" -gt 0 ]; then
         gh_retry gh issue edit "${TRACKING_NUM}" \
           --repo "${GITHUB_REPOSITORY}" \
-          --add-label "${add_label}" >/dev/null || true
-      done < <(echo "${phase_changes}" | jq -r '.add[]?')
+          "${edit_args[@]}" >/dev/null || true
+      fi
       return 0
     fi
   fi
