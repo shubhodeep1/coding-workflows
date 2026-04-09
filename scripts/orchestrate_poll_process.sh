@@ -439,6 +439,11 @@ finalize_integration_merge_if_needed() {
     return 1
   fi
 
+  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" != "true" ]; then
+    echo "  [final-merge] PR #${final_pr} mergeability is '${pr_mergeable:-unknown}'. Will retry next poll."
+    return 1
+  fi
+
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}"; then
     echo "  [final-merge] Required checks not complete for PR #${final_pr}. Will retry next poll."
     return 1
@@ -460,6 +465,11 @@ finalize_integration_merge_if_needed() {
     post_state_comment
     post_tracking_comment "## ⚠️ Final merge conflict\n\nFinal PR #${final_pr} from \\`${integration_branch}\\` to \\`${default_branch}\\` could not be squash-merged due to conflicts. Resolve manually, then re-run the poller."
     tg_notify "⚠️ Final merge conflict for #${TRACKING_NUM} (PR #${final_pr})."
+    return 1
+  fi
+
+  if [ "${pr_mergeable}" != "true" ]; then
+    echo "  [final-merge] PR #${final_pr} mergeability is '${pr_mergeable:-unknown}' after merge attempt. Will retry next poll."
     return 1
   fi
 
