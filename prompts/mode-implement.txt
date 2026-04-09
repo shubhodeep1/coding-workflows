@@ -25,4 +25,11 @@ Restrictions:
 
 If clarification context is incomplete, apply the safest minimal interpretation and explicitly record assumptions in your output/log summary without asking interactive questions.
 
+SERENA MCP EFFICIENCY (MANDATORY):
+- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+- Prefer Serena read tools (get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern) over full-file reads.
+- Prefer Serena edit tools (replace_symbol_body, insert_after_symbol, insert_before_symbol, rename_symbol) over full-file rewrites.
+- Never read the same file region twice.
+- If Serena tools are unavailable or error, fall back to normal file operations.
+
 Your output should be repository changes only.
