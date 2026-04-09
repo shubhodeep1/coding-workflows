@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping: no Q<ID> items were asked; `/answer [auto-answered-by-clarify]` indicates planning can proceed without additional clarification.\n\nImplementation plan\n\n1. Files likely to change\n- `prompts/serena-efficiency-block.txt` (new canonical source with two variants).\n- `prompts/mode-implement.txt`\n- `prompts/mode-plan.txt`\n- `prompts/mode-orchestrate.txt`\n- `prompts/mode-clarify.txt`\n- `prompts/mode-judge.txt`\n- `prompts/mode-clarify-respond.txt`\n- `prompts/mode-validate-generate.txt`\n- `prompts/mode-validate-diagnose.txt`\n- `prompts/mode-judge-review-blocked.txt`\n- Prompt assembly consumers that currently `cat` mode files directly (required to avoid unresolved include markers):\n  - `.github/workflows/orchestrate.yml`\n  - `.github/workflows/orchestrate_clarify_respond.yml`\n  - `.github/workflows/review_autofix.yml`\n  - `.github/workflows/validate.yml`\n  - `.github/workflows/orchestrate_poll.yml`\n  - `scripts/validate_process.sh`\n  - `scripts/orchestrate_poll_process.sh`\n- Optional guardrail update: `.github/workflows/test-and-mark-stable.yml` (assert canonical fragment exists and renders cleanly).\n\n2. Functions/modules to implement\n- Add a small prompt-render helper module (shell helper or script) that:\n  - Extracts `read-only` or `read-write` block from `prompts/serena-efficiency-block.txt`.\n  - Replaces mode-file placeholder token(s) before prompt submission.\n  - Fails fast if placeholders remain unresolved.\n- Migrate each mode prompt to consume canonical Serena content via placeholder token, keeping mode-specific non-Serena instructions unchanged.\n- Wire all runtime prompt builders (workflow/script call sites above) to use rendered prompt content instead of raw `cat` of mode files.\n\n3. Data structures affected\n- New canonical fragment structure with explicit section delimiters for:\n  - `READ_ONLY`\n  - `READ_WRITE`\n- Mode prompt files gain a stable placeholder token contract (one token per variant).\n- Variant mapping by mode:\n  - Read-only: `clarify`, `plan`, `orchestrate`, `judge`, `clarify-respond`, `validate-diagnose`\n  - Read-write: `implement`, `validate-generate`, `judge-review-blocked`\n\n4. API/interface changes\n- No external API, DB, or user-facing contract changes.\n- Internal prompt assembly contract changes:\n  - Mode files are no longer self-contained for Serena block text; renderer becomes required at assembly points.\n  - Workflows that fetch prompt assets must also fetch the canonical fragment (and helper if added as separate script).\n\n5. Potential risks and edge cases\n- Unresolved include/placeholder shipped to model prompt (hard failure against issue constraint).\n- Wrong variant assignment for write-capable phases (`validate-generate`, `judge-review-blocked`).\n- Semantic drift if canonical text rewrites behavior instead of preserving current intent.\n- Consumer repo compatibility when running older refs that do not yet include the new canonical file/helper.\n- Accidental modification of strict output-contract sections while editing prompt files.\n\n6. Testing considerations\n- Add/extend checks to render each mode prompt and assert:\n  - No unresolved placeholder tokens remain.\n  - Exactly one Serena block is injected.\n- Add repository grep assertions:\n  - Canonical Serena guidance appears only in `prompts/serena-efficiency-block.txt`.\n  - Mode files no longer contain independent duplicated Serena paragraphs.\n- Run syntax checks on modified shell/workflow files (`bash -n`, workflow validation already in CI).\n- Smoke-test prompt assembly paths used by:\n  - validate generate/diagnose\n  - orchestrate\n  - clarify-respond\n  - judge\n  - review-blocked judge\n\nConflict detected with issue/codebase\n- The issue scope lists only prompt files, but current runtime consumers directly `cat` mode files. To satisfy \u201cno unresolved include syntax\u201d while deduplicating, prompt assembly call sites must also be updated in scripts/workflows; prompt-only edits are insufficient.\n- `mode-clarify.txt`, `mode-plan.txt`, and `mode-implement.txt` are currently not the primary runtime source for those phases (inline workflow prompts are used there), so this issue can eliminate prompt-file duplication first but will not fully eliminate workflow-inline duplication in the same change.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d2628923b8458d862593bf07ce3dfbaf28598df2402d9627115e5485bdb4f4ce",
+  "lineage": {
+    "issue_number": 635,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24216497912",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24216497912",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/635"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409224138_833da9d083",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 635,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24216497912"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #635",
+  "timestamps": {
+    "created_at": "2026-04-09T22:41:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
