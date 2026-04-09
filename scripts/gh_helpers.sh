@@ -200,7 +200,7 @@ _safe_gh_jq()
 {
 	local _tmpf
 	_tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX")
-	if gh api "$@" > "${_tmpf}" 2>/dev/null; then
+	if gh api "$@" > "${_tmpf}"; then
 		cat "${_tmpf}"
 		rm -f "${_tmpf}"
 		return 0
