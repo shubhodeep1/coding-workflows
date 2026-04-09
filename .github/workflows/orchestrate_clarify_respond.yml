@@ -118,6 +118,7 @@ jobs:
             local outfile="$1"; shift
             local attempt=1
             while [ "${attempt}" -le 4 ]; do
+              : > /tmp/_gh_rl_err
               if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
                 echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
