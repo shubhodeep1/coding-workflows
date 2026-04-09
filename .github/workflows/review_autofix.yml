@@ -3525,6 +3525,17 @@ jobs:
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${PR_NUMBER}" "${MSG}"
 
+      - name: Check PR state before failure alerts
+        if: (failure() || cancelled()) && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+          if [ "${pr_state}" != "open" ]; then
+            echo "PR #${PR_NUMBER} is ${pr_state} — skipping failure alerts."
+            echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Mark linked issues review-blocked (workflow failure)
         if: (failure() || cancelled()) && env.PR_CLOSED != 'true'
         env:
