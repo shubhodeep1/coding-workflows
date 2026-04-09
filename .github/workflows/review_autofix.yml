@@ -3277,6 +3277,7 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           if [ -f scripts/label_helpers.sh ] && source scripts/label_helpers.sh 2>/dev/null; then
             :
           else
@@ -3348,6 +3349,7 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           BODY="$(cat <<EOF
           **AI review/autofix blocked — needs human intervention**
@@ -3374,6 +3376,7 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             echo "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable)."
@@ -3427,6 +3430,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           dispatched=false
 
@@ -3486,6 +3490,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           source scripts/tg_helpers.sh
+          source scripts/gh_helpers.sh 2>/dev/null || true
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           ISSUE_NUM="$(gh api graphql \
