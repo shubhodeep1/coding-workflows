@@ -514,6 +514,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
           PR_BODY=$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")
 
@@ -2436,6 +2437,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           if [ ! -s "${EDITOR_SUMMARY_FILE}" ]; then
             cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
