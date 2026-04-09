@@ -1317,7 +1317,7 @@ jobs:
 
               # Background watchdog for this reviewer attempt
               (
-                wd_iter=0
+                wd_iter=$(( RANDOM % 9 ))  # jitter: stagger PR state checks across reviewers
                 while true; do
                   sleep 10
                   now="$(date +%s)"
@@ -1345,7 +1345,11 @@ jobs:
                   # PR state check — abort if PR was merged/closed (~every 90s)
                   wd_iter=$((wd_iter + 1))
                   if [ $((wd_iter % 9)) -eq 0 ]; then
-                    pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+                    # Pipe through grep to reject error JSON that gh api dumps to
+                    # stdout on 403/429 rate-limit responses (--jq is not applied
+                    # to error bodies, so raw JSON leaks into the variable and
+                    # defeats the || echo "open" fallback).
+                    pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
                     if [ "${pr_state}" != "open" ]; then
                       echo "Reviewer ${model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
                       touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
@@ -2056,7 +2060,7 @@ jobs:
                 # PR state check — abort if PR was merged/closed (~every 2 min)
                 wd_iter=$((wd_iter + 1))
                 if [ $((wd_iter % 8)) -eq 0 ]; then
-                  pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+                  pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
                   if [ "${pr_state}" != "open" ]; then
                     echo "Editor aborted — PR #${PR_NUMBER} is ${pr_state} (attempt ${attempt})." >&2
                     touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
@@ -3127,8 +3131,8 @@ jobs:
               done <<< "${ISSUE_NUMBERS}"
 
               # Attempt merge
-              PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
-              PR_MERGEABLE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.mergeable' 2>/dev/null || echo "")"
+              PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+              PR_MERGEABLE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
               if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
                 if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
                   gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
@@ -3156,7 +3160,7 @@ jobs:
                   gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge' || true
                 done <<< "${ISSUE_NUMBERS}"
 
-                PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
+                PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
                 if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
                   gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
                     || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
@@ -3603,7 +3607,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           source scripts/gh_helpers.sh 2>/dev/null || true
-          pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+          pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
           if [ "${pr_state}" != "open" ]; then
             echo "PR #${PR_NUMBER} is ${pr_state} — skipping failure alerts."
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"

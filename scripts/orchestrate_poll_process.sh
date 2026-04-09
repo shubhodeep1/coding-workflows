@@ -636,7 +636,7 @@ close_linked_pr() {
     2>/dev/null || echo "")"
   if [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
     local pr_state
-    pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' 2>/dev/null || echo "")"
+    pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
     if [ "${pr_state}" = "open" ]; then
       echo "  Closing linked PR #${pr_num} for issue #${issue_num}..."
       gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -1430,8 +1430,8 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
             --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
             2>/dev/null || echo "")"
           if [ -n "${PW_PR}" ] && [ "${PW_PR}" != "null" ]; then
-            PW_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.state' 2>/dev/null || echo "")"
-            PW_PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+            PW_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+            PW_PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
 			if [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}"; then
 			  gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
 			    || gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
@@ -1582,8 +1582,8 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
       2>/dev/null || echo "")"
     if [ -n "${RTM_PR}" ] && [ "${RTM_PR}" != "null" ]; then
-      PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.state' 2>/dev/null || echo "")"
-      PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+      PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+      PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
 		if _pr_checks_completed "${RTM_PR}"; then
 		  echo "  Merging PR #${RTM_PR} (squash)..."
@@ -1650,8 +1650,8 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     if [ -z "${IP_PR}" ] || [ "${IP_PR}" = "null" ]; then
       continue
     fi
-    IP_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.state' 2>/dev/null || echo "")"
-    IP_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+    IP_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+    IP_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
     if [ "${IP_PR_STATE}" != "open" ] || [ "${IP_MERGEABLE}" != "false" ]; then
       continue
     fi
@@ -1741,8 +1741,8 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       echo "  Linked PR: #${RB_PR}"
 
       # Guard: check PR state before invoking the judge
-      RB_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-      RB_PR_MERGED="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null || echo "false")"
+      RB_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+      RB_PR_MERGED="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null | grep -xE 'true|false' || echo "false")"
       if [ "${RB_PR_STATE}" != "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
         # PR is closed (not merged) — skip entirely
         echo "  PR #${RB_PR} is closed (not merged). Cleaning up labels and skipping."
@@ -1918,8 +1918,8 @@ sys.exit(1)
 
           # Attempt squash merge (with branch update if needed)
           RB_MERGED="false"
-          PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-          PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+          PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+          PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
 		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
 		    if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		      echo "  PR #${RB_PR} merge initiated (auto)."
@@ -1970,8 +1970,8 @@ sys.exit(1)
             gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             RB_FORCE_MERGED="false"
-            PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-            PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+            PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+            PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
 				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
 				  if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
 				    || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
@@ -2010,8 +2010,8 @@ sys.exit(1)
           else
             echo "  Judge is applying fixes to PR #${RB_PR}..."
             # Re-check PR state before expensive fix+push (race condition safety net)
-            RB_PR_STATE_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-            RB_PR_MERGED_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null || echo "false")"
+            RB_PR_STATE_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+            RB_PR_MERGED_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null | grep -xE 'true|false' || echo "false")"
             if [ "${RB_PR_STATE_NOW}" != "open" ] && [ "${RB_PR_MERGED_NOW}" != "true" ]; then
               # PR was closed without merge — skip
               echo "::warning::PR #${RB_PR} is closed (not merged). Skipping fix application."
@@ -2162,8 +2162,8 @@ ${RB_FIX_DESC}
                   ensure_label_exists "ai:ready-to-merge"
                   gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
-                  PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-                  PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+                  PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+                  PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
                   if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
                     if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
                       || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
