@@ -1155,9 +1155,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}"
 
       - name: Telegram failure notification
