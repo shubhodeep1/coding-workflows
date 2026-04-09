@@ -3182,7 +3182,7 @@ jobs:
                   if [[ "${REPOSITORY}" != *"/coding-workflows" ]]; then
                     rm -f ./pre_assembled_static.txt
                     rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-                    rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh
+                    rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/codex_model_catalog.json
                     rm -rf .serena
                     rm -rf prompts
                   fi
