@@ -3522,6 +3522,7 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           source scripts/tg_helpers.sh
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -3569,6 +3570,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          source scripts/gh_helpers.sh 2>/dev/null || true
           pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
           if [ "${pr_state}" != "open" ]; then
             echo "PR #${PR_NUMBER} is ${pr_state} — skipping failure alerts."
