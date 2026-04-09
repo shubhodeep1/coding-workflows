@@ -115,7 +115,7 @@ jobs:
             exit 1
           }
 
-          for f in setup_serena.sh ai_labels.py validate_process.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in setup_serena.sh gh_helpers.sh ai_labels.py validate_process.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"
             chmod +x "scripts/${f}"
           done
