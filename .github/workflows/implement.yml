@@ -125,6 +125,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           # tg_helpers.sh not yet fetched at this step; inline-fetch it
@@ -151,7 +152,7 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           if declare -F tg_send_tracked >/dev/null 2>&1; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "WARNING"
           else
             echo "::warning::Telegram helper unavailable; skipping duplicate PR Telegram notification."
           fi
@@ -1369,6 +1370,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           if [ ! -f scripts/tg_helpers.sh ]; then
@@ -1388,7 +1390,7 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           if declare -F tg_send_tracked >/dev/null 2>&1; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "ERROR"
           else
             echo "::warning::tg_helpers.sh unavailable; skipping Telegram notification."
           fi

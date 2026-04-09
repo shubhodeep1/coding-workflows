@@ -191,6 +191,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -200,6 +201,23 @@ jobs:
           if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
             echo "Telegram not configured; skipping PR merged alert."
             exit 0
+          fi
+
+          # Inline-fetch tg_helpers.sh for alert level support
+          wf_source="${{ github.repository_owner }}/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
+          mkdir -p scripts
+          helpers_tmp="$(mktemp)"
+          if gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=${script_ref}" > "${helpers_tmp}" 2>/dev/null && [ -s "${helpers_tmp}" ]; then
+            mv "${helpers_tmp}" "scripts/tg_helpers.sh"
+            source scripts/tg_helpers.sh
+          else
+            rm -f "${helpers_tmp}"
           fi
 
           # Only alert for non-orchestrator issues (orchestrator projects
@@ -232,10 +250,14 @@ jobs:
               MSG+="Issue: ${{ github.server_url }}/${REPOSITORY}/issues/${FIRST_ISSUE}"
             fi
           fi
-          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${TG_ADMIN_CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
+          if declare -F tg_send_msg >/dev/null 2>&1; then
+            tg_send_msg "${MSG}" "DEBUG" >/dev/null
+          else
+            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+              -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+              -d "disable_web_page_preview=true" \
+              --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
+          fi
 
       - name: Cleanup tracked Telegram messages
         if: always()

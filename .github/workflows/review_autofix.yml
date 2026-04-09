@@ -2669,6 +2669,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source scripts/tg_helpers.sh
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
@@ -2688,7 +2689,7 @@ jobs:
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Mark linked issues ready to merge
         if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'"
@@ -3453,6 +3454,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source scripts/tg_helpers.sh
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
@@ -3472,7 +3474,7 @@ jobs:
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Telegram review-blocked judge decision
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true'
@@ -3484,6 +3486,7 @@ jobs:
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source scripts/tg_helpers.sh
 
@@ -3526,7 +3529,7 @@ jobs:
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
 
       - name: Check PR state before failure alerts
         if: (failure() || cancelled()) && env.PR_CLOSED != 'true'
@@ -3605,6 +3608,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source scripts/tg_helpers.sh
 
@@ -3629,7 +3633,7 @@ jobs:
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "ERROR"
 
       - name: Record review run completion in memory (fail-open)
         if: success()
