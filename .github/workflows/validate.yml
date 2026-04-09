@@ -130,12 +130,22 @@ jobs:
             rm -f "${tmp_path}"
 
             if [ "${script_ref}" = "stable" ]; then
-              if gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${repo_path}?ref=main" > "${tmp_path}" 2>/dev/null; then
+              attempt=1
+              while [ "${attempt}" -le 5 ] && ! gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${repo_path}?ref=main" > "${tmp_path}" 2>/tmp/_gh_rl_err; do
+                if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                  echo "::warning::Rate limit hit during main fallback (attempt ${attempt}/5), waiting for reset…" >&2
+                  _rl_wait; attempt=$((attempt + 1))
+                else
+                  break
+                fi
+              done
+              if [ -s "${tmp_path}" ]; then
                 mv "${tmp_path}" "${target_path}"
                 echo "Using main fallback for ${target_path} (not found on ${script_ref}: ${repo_path})"
                 return 0
               fi
+              rm -f "${tmp_path}"
             fi
 
             if [ -f "${target_path}" ]; then
