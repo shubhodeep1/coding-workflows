@@ -162,7 +162,7 @@ _pr_checks_completed()
 	local head_sha="${2:-}"
 	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
 		local pr_json
-		pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" 2>/dev/null || echo "")"
+		pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo "")"
 		head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
 	fi
 	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
@@ -171,7 +171,7 @@ _pr_checks_completed()
 	fi
 
 	local check_runs_json
-	check_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" 2>/dev/null || echo "")"
+	check_runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" || echo "")"
 
 	local incomplete
 	incomplete="$(printf '%s' "${check_runs_json}" | jq -r '
@@ -211,7 +211,7 @@ _pr_checks_completed()
 _fetch_pr_json()
 {
 	local pr_number="$1"
-	gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" 2>/dev/null || echo '{}'
+	gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo '{}'
 }
 
 # _jq_field — Extract a field from JSON, optionally validating against
@@ -850,7 +850,9 @@ run_standalone_stall_recovery() {
       t_num="$(jq -r ".[${t_idx}].number" "${RUNTIME_DIR}/tracking_issues.json" 2>/dev/null || echo "")"
       [ -n "${t_num}" ] || continue
       orchestrator_managed_set="${orchestrator_managed_set}"$'\n'"${t_num}"
-      t_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${t_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
+      if ! t_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${t_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+        t_comments='[]'
+      fi
       t_state_body="$(echo "${t_comments}" | jq -r '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | last | .body // ""' 2>/dev/null || echo "")"
       t_state_json="$(printf '%s' "${t_state_body}" | sed -n '/^<!-- ORCHESTRATOR_STATE_V1$/,/^ORCHESTRATOR_STATE_V1 -->$/p' | sed '1d;$d')"
       managed_nums="$(echo "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
@@ -1496,7 +1498,7 @@ STALL_EOF
         2>/dev/null || echo "")"
       if [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
         local head_ref
-        head_ref="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' || echo "")"
+        head_ref="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' || echo "")"
         if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
           if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && \
              git checkout "origin/${head_ref}" 2>/dev/null; then
@@ -1549,8 +1551,8 @@ STALL_EOF
         "Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
 
       local orig_title orig_body
-      orig_title="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' || echo "")"
-      orig_body="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body' || echo "")"
+      orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title // ""' || echo "")"
+      orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
 
       ensure_label_exists "ai:closed"
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -1579,7 +1581,7 @@ REISSUE_EOF
 
       local new_url new_url_clean new_num
       ensure_label_exists "ai:clarification"
-      new_url="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
+      new_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" \
         --label "ai:clarification" 2>/dev/null || echo "")"
@@ -1770,9 +1772,11 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   # ---------------------------------------------------------------
   # Extract state from the tracking issue's comments
   # ---------------------------------------------------------------
-  COMMENTS="$(gh_retry gh api --paginate \
+  if ! COMMENTS="$(gh_retry gh api --paginate \
     "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100" \
-    | jq -s 'add // []' 2>/dev/null || echo '[]')"
+    | jq -s 'add // []' 2>/dev/null)"; then
+    COMMENTS='[]'
+  fi
 
   # Find the latest state comment (search from the end)
   STATE_JSON="$(echo "${COMMENTS}" | jq -r '
