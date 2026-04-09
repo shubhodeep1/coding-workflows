@@ -2656,7 +2656,7 @@ Manual intervention required." >/dev/null
   mkdir -p ~/.codex
   JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
   EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="${MODEL_REASONING_EFFORT_JUDGE}"
-  if [ "${JUDGE_INVOCATION_CYCLE}" -gt 3 ]; then
+  if [ "${JUDGE_INVOCATION_CYCLE}" -gt 3 ] && [ "${MODEL_REASONING_EFFORT_JUDGE}" = "xhigh" ]; then
     EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="high"
   fi
   echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE}"

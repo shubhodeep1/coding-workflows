@@ -18,7 +18,7 @@ POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 def test_judge_reasoning_effort_logic_is_adaptive_after_cycle_three():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))' in script
-	assert 'if [ "${JUDGE_INVOCATION_CYCLE}" -gt 3 ]; then' in script
+	assert 'if [ "${JUDGE_INVOCATION_CYCLE}" -gt 3 ] && [ "${MODEL_REASONING_EFFORT_JUDGE}" = "xhigh" ]; then' in script
 	assert 'EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="high"' in script
 	assert 'EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE' in script
 
