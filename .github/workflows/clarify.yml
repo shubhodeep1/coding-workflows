@@ -746,11 +746,11 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
 
-          # Orchestrator-managed issues: use general tracking (cleaned up at project end).
+          # Orchestrator-managed issues: skip TG alert (auto-answered by orchestrate_clarify_respond).
           # Non-orchestrator issues: use phase tracking (cleaned up when plan starts).
           ISSUE_BODY_CHECK="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           if printf '%s' "${ISSUE_BODY_CHECK}" | grep -qF 'Managed by: AI Orchestrator'; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
+            echo "Skipping TG alert for orchestrator-managed issue (will be auto-answered)."
           else
             tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "DEBUG"
           fi

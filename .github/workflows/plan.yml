@@ -942,10 +942,10 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
 
-          # Orchestrator-managed issues: general tracking (cleaned up at project end).
+          # Orchestrator-managed issues: skip TG alert (auto-answered by orchestrate_clarify_respond).
           # Non-orchestrator issues: phase tracking (cleaned up when plan is approved).
           if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
+            echo "Skipping TG alert for orchestrator-managed issue (will be auto-answered)."
           else
             tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "DEBUG"
           fi
