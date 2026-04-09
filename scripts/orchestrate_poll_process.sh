@@ -620,12 +620,12 @@ close_linked_pr() {
   local issue_num="$1"
   local close_reason="${2:-Closed by orchestrator stall recovery.}"
   local pr_num
-  pr_num="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+  pr_num="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
     --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
     2>/dev/null || echo "")"
   if [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
     local pr_state
-    pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' 2>/dev/null || echo "")"
+    pr_state="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' 2>/dev/null || echo "")"
     if [ "${pr_state}" = "open" ]; then
       echo "  Closing linked PR #${pr_num} for issue #${issue_num}..."
       gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -758,7 +758,7 @@ run_standalone_stall_recovery() {
       t_num="$(jq -r ".[${t_idx}].number" "${RUNTIME_DIR}/tracking_issues.json" 2>/dev/null || echo "")"
       [ -n "${t_num}" ] || continue
       orchestrator_managed_set="${orchestrator_managed_set}"$'\n'"${t_num}"
-      t_comments="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${t_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
+      t_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${t_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
       t_state_body="$(echo "${t_comments}" | jq -r '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | last | .body // ""' 2>/dev/null || echo "")"
       t_state_json="$(printf '%s' "${t_state_body}" | sed -n '/^<!-- ORCHESTRATOR_STATE_V1$/,/^ORCHESTRATOR_STATE_V1 -->$/p' | sed '1d;$d')"
       managed_nums="$(echo "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
@@ -781,8 +781,8 @@ run_standalone_stall_recovery() {
   local marker_issues
   local marker_state
   local marker_clarify
-  marker_state="$(gh api "search/issues" -f q="repo:${GITHUB_REPOSITORY} is:issue is:open \"AI_STANDALONE_STALL_STATE_V1\" in:comments" --jq '[.items[] | {number}]' 2>/dev/null || echo '[]')"
-  marker_clarify="$(gh api "search/issues" -f q="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments" --jq '[.items[] | {number}]' 2>/dev/null || echo '[]')"
+  marker_state="$(gh_retry gh api "search/issues" -f q="repo:${GITHUB_REPOSITORY} is:issue is:open \"AI_STANDALONE_STALL_STATE_V1\" in:comments" --jq '[.items[] | {number}]' 2>/dev/null || echo '[]')"
+  marker_clarify="$(gh_retry gh api "search/issues" -f q="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments" --jq '[.items[] | {number}]' 2>/dev/null || echo '[]')"
   marker_issues="$(jq -nc --argjson a "${marker_state}" --argjson b "${marker_clarify}" '$a + $b | unique_by(.number)')"
 
   local candidates
@@ -819,7 +819,7 @@ run_standalone_stall_recovery() {
     labels_json="$(get_issue_labels_json "${issue_num}")"
     has_pipeline_label="$(echo "${labels_json}" | jq -r --argjson wanted "${pipeline_labels}" '[.[] | select($wanted | index(.))] | length')"
 
-    comments_json="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" 2>/dev/null || echo '[]')"
+    comments_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" 2>/dev/null || echo '[]')"
     has_marker="$(echo "${comments_json}" | jq -r '[.[] | select((.body // "") | test("<!-- AI_STANDALONE_STALL_STATE_V1|<!-- ai:clarification-questions -->"))] | length')"
 
     if [ "${has_pipeline_label}" -eq 0 ] && [ "${has_marker}" -eq 0 ]; then
