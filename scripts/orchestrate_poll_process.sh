@@ -643,7 +643,7 @@ STANDALONE_STATE_MARKER_CLOSE="AI_STANDALONE_STALL_STATE_V1 -->"
 
 get_standalone_state_comment_id() {
   local issue_num="$1"
-  gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
     --jq '[.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | first | .id // ""' \
     2>/dev/null || true
 }
@@ -651,7 +651,7 @@ get_standalone_state_comment_id() {
 read_standalone_state_json() {
   local issue_num="$1"
   local state_raw
-  state_raw="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
+  state_raw="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
     --jq '[.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | first | .body // ""' \
     2>/dev/null || echo "")"
 
