@@ -3584,6 +3584,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           # Do not source scripts/label_helpers.sh in this failure path: the
           # workflow can fail before support scripts are fetched.
           gh label create "ai:review-blocked" --repo "${REPOSITORY}" \
@@ -3622,6 +3623,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           BODY="$(cat <<EOF
@@ -3645,6 +3647,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           source scripts/tg_helpers.sh
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
