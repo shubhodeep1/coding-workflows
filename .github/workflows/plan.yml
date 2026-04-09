@@ -321,7 +321,23 @@ jobs:
             --run-id "${{ github.run_id }}" \
             --run-attempt "${{ github.run_attempt }}")"
 
-          CLAIMED="$(printf '%s' "${CLAIM_RESULT}" | jq -r '.operation_result.claimed // .claimed // false' 2>/dev/null || echo "false")"
+          memory_enabled="$(printf '%s' "${AI_MEMORY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+          if [[ "${memory_enabled}" =~ ^(1|true|yes|on)$ ]]; then
+            if [ -z "${CLAIM_RESULT}" ]; then
+              echo "::error::Empty /answer claim output while AI memory is enabled"
+              exit 1
+            fi
+
+            if ! printf '%s' "${CLAIM_RESULT}" | jq -e '((.operation_result.claimed // .claimed) | type) == "boolean"' >/dev/null 2>&1; then
+              echo "::error::Malformed /answer claim output while AI memory is enabled"
+              exit 1
+            fi
+
+            CLAIMED="$(printf '%s' "${CLAIM_RESULT}" | jq -r '.operation_result.claimed // .claimed')"
+          else
+            CLAIMED="true"
+          fi
+
           if [ "${CLAIMED}" != "true" ]; then
             echo "::notice::/answer comment ${TRIGGER_COMMENT_ID} claimed by another run; skipping."
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
