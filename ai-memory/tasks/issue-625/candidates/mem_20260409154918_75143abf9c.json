@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `serena-canonical-fragment-prompts`\n\nClarification mapping\n- `Q1: A` interpreted as: update prompt files and the minimal runtime/build callsites that currently `cat prompts/mode-*.txt`, but do not sweep all other inline workflow Serena blocks in this issue.\n- `Q2: B` interpreted as: `prompts/mode-validate-generate.txt` must use the **read-write** variant.\n- `Q3: A` interpreted as: one canonical file (`prompts/serena-efficiency-block.txt`) containing both variants with explicit delimiters, and consumers select a section.\n\nConflict detection\n- Current codebase fact: several workflows still embed large inline Serena guidance and do not consume `prompts/mode-*.txt` (notably `clarify.yml`, `plan.yml`, `implement.yml`).  \n- Issue scope fact: this ticket is prompt-file dedup first (per `Q1: A`), so those inline blocks remain out of scope for this change.\n\n1. Files likely to change\n- New:\n  - `prompts/serena-efficiency-block.txt`\n- Mode prompt files (all listed in issue):\n  - `prompts/mode-implement.txt`\n  - `prompts/mode-plan.txt`\n  - `prompts/mode-orchestrate.txt`\n  - `prompts/mode-clarify.txt`\n  - `prompts/mode-judge.txt`\n  - `prompts/mode-clarify-respond.txt`\n  - `prompts/mode-validate-generate.txt`\n  - `prompts/mode-validate-diagnose.txt`\n  - `prompts/mode-judge-review-blocked.txt`\n- Prompt assembly callsites that currently `cat` mode prompts:\n  - `.github/workflows/orchestrate.yml`\n  - `.github/workflows/orchestrate_clarify_respond.yml`\n  - `.github/workflows/review_autofix.yml`\n  - `scripts/orchestrate_poll_process.sh`\n  - `scripts/validate_process.sh`\n- Fetch/bootstrap callsites that must also pull the new canonical file for caller repos:\n  - `.github/workflows/orchestrate.yml`\n  - `.github/workflows/orchestrate_clarify_respond.yml`\n  - `.github/workflows/review_autofix.yml`\n  - `.github/workflows/orchestrate_poll.yml`\n  - `.github/workflows/validate.yml`\n- Likely CI validation touchpoint:\n  - `.github/workflows/test-and-mark-stable.yml` (only if needed for explicit canonical-fragment integrity checks)\n\n2. Functions/modules to implement\n1. Canonical Serena fragment module\n- Create `prompts/serena-efficiency-block.txt` with two explicit sections:\n  - read-only section\n  - read-write section\n- Keep the content semantically equivalent to existing guidance; only centralize shared duplicated text.\n- Use clear, machine-extractable section delimiters so callsites can reliably select one section.\n\n2. Mode prompt migration\n- Replace duplicated in-file Serena paragraphs in each mode file with a single include marker/reference to canonical variant.\n- Variant assignment:\n  - Read-write: `mode-implement`, `mode-validate-generate`, `mode-judge-review-blocked`\n  - Read-only: `mode-plan`, `mode-orchestrate`, `mode-clarify`, `mode-judge`, `mode-clarify-respond`, `mode-validate-diagnose`\n- Preserve all non-Serena mode-specific text exactly to avoid behavior/output-contract drift.\n\n3. Prompt rendering in assembly callsites\n- Add/extend prompt rendering logic at each runtime callsite that currently does raw `cat prompts/mode-*.txt`:\n  - resolve include marker by injecting selected section from `prompts/serena-efficiency-block.txt`\n  - fail fast if canonical file is missing/malformed\n  - fail fast if unresolved include markers remain in the final assembled prompt\n- Keep output prompt shape equivalent (same ordering: static context -> task prompt -> runtime context).\n\n4. Bootstrap/fetch support\n- Ensure caller-repo workflow bootstrap fetches `prompts/serena-efficiency-block.txt` alongside relevant mode files, with existing `script_ref` + fallback-to-main behavior.\n\n3. Data structures affected\n- New canonical fragment file structure with explicit section delimiters.\n- Include marker format in mode files (single marker per mode file where Serena block is injected).\n- Internal mapping of mode -> variant at assembly time (implicit via marker or explicit lookup).\n- No DB schemas/contracts, label schemas, or external JSON contracts changed.\n\n4. API or interface changes\n- External API/CLI behavior: no intended changes.\n- Internal prompt assembly contract: mode prompts become templates requiring fragment resolution before final prompt submission.\n- Backward compatibility guard: assembly fails if unresolved include syntax exists, preventing broken prompts from shipping.\n\n5. Potential risks / edge cases\n- Missing canonical file in caller repos (must be fetched everywhere a mode prompt is consumed).\n- Delimiter mismatch or malformed canonical section extraction causing empty/partial inserts.\n- Incorrect variant assignment (highest risk: `mode-validate-generate` must be read-write per `Q2: B`).\n- Residual duplicated Serena text left in one or more mode files (incomplete dedup).\n- Silent unresolved include markers reaching Codex prompt if guard checks are not strict.\n- Minor whitespace/newline drift altering wording unexpectedly; should be controlled via minimal edits and rendered output checks.\n\n6. Testing considerations\n1. Static integrity\n- Verify `prompts/serena-efficiency-block.txt` exists, non-empty, and contains both delimiter pairs.\n- Verify each targeted mode file references canonical Serena content and no longer contains independent duplicated Serena paragraphs.\n\n2. Assembly validation\n- For each runtime callsite above, generate assembled prompt and assert:\n  - include marker is resolved\n  - unresolved marker text is absent\n  - expected Serena section header/content is present\n  - assembled prompt remains non-empty\n\n3. Regression/safety\n- `bash -n` for modified shell scripts/workflow inline shell blocks.\n- Run existing script tests impacted by prompt assembly path (especially orchestrator poll tests).\n- Keep existing prompt integrity checks passing (`prompts/*.txt` non-empty) and extend only if needed for canonical-fragment guarantees.\n\nNo additional clarification is required before implementation.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5d09b56abd2744aed537e43a1ffbc1402e6ff8847040ee59be7ce1280bcdb550",
+  "lineage": {
+    "issue_number": 625,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24199168898",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24199168898",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/625"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409154918_75143abf9c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 625,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24199168898"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #625",
+  "timestamps": {
+    "created_at": "2026-04-09T15:49:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
