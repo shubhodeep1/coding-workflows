@@ -774,7 +774,7 @@ run_standalone_stall_recovery() {
   local lbl
   for lbl in ai:clarification ai:planning ai:awaiting-approval ai:implementing ai:done ai:ready-to-merge; do
     local by_label
-    by_label="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --label "${lbl}" --json number --limit 1000 2>/dev/null || echo '[]')"
+    by_label="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --state open --label "${lbl}" --json number --limit 1000 2>/dev/null || echo '[]')"
     labeled_issues="$(jq -nc --argjson cur "${labeled_issues}" --argjson add "${by_label}" '$cur + $add | unique_by(.number)')"
   done
 
@@ -974,10 +974,11 @@ STALL_EOF
         ;;
       retrigger_review)
         local pr_num
+        local pr_lookup_ok="false"
         local head_ref
-        pr_num="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' 2>/dev/null || echo "")"
-        if [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
-          head_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' 2>/dev/null || echo "")"
+        pr_num="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' 2>/dev/null)" && pr_lookup_ok="true" || pr_num=""
+        if [ "${pr_lookup_ok}" = "true" ] && [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
+          head_ref="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' 2>/dev/null || echo "")"
           if [ -n "${head_ref}" ] && git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && git checkout "origin/${head_ref}" 2>/dev/null; then
             git config user.name "codex-bot"
             git config user.email "codex@users.noreply.github.com"
@@ -985,7 +986,7 @@ STALL_EOF
             git push origin "HEAD:${head_ref}" 2>/dev/null || true
             git checkout --detach HEAD 2>/dev/null || true
           fi
-        else
+        elif [ "${pr_lookup_ok}" = "true" ]; then
           gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
 
@@ -998,12 +999,12 @@ STALL_EOF
         ;;
       attempt_merge)
         local merge_pr
-        merge_pr="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' 2>/dev/null || echo "")"
+        merge_pr="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' 2>/dev/null || echo "")"
         if [ -n "${merge_pr}" ] && [ "${merge_pr}" != "null" ]; then
           local merge_state
           local merge_mergeable
-          merge_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" --jq '.state' 2>/dev/null || echo "")"
-          merge_mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" --jq '.mergeable' 2>/dev/null || echo "")"
+          merge_state="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" --jq '.state' 2>/dev/null || echo "")"
+          merge_mergeable="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" --jq '.mergeable' 2>/dev/null || echo "")"
           if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && _pr_checks_completed "${merge_pr}"; then
             gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1 \
               || gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash >/dev/null 2>&1 \
@@ -1018,6 +1019,7 @@ STALL_EOF
         local orig_body
         local new_body
         local new_url
+        local new_url_clean
         local new_num
         orig_title="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' 2>/dev/null || echo "")"
         orig_body="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' 2>/dev/null || echo "")"
@@ -1037,7 +1039,8 @@ REISSUE_EOF
 )"
         ensure_label_exists "ai:clarification"
         new_url="$(gh issue create --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
-        new_num="$(basename "${new_url%%[?#]*}")"
+        new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+        new_num="$(basename "${new_url_clean%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
           close_linked_pr "${issue_num}" "Closed by standalone stall recovery — issue #${issue_num} was stuck in '${phase}' for ${elapsed_minutes}m."
           ensure_label_exists "ai:closed"
