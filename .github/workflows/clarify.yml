@@ -204,7 +204,7 @@ jobs:
           gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           # Remove stale phase labels only on /reclarify (new issues won't have them)
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
-            CURRENT_LABELS="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" --jq '.[].name' 2>/dev/null || true)"
+            CURRENT_LABELS="$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" --jq '.[].name' || true)"
             for label in ai:planning ai:awaiting-approval ai:implementing ai:done; do
               if echo "${CURRENT_LABELS}" | grep -qxF "${label}"; then
                 gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/${label}" >/dev/null 2>&1 || true

@@ -219,6 +219,7 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
             echo "Telegram not configured; skipping PR merged alert."
             exit 0
@@ -247,7 +248,7 @@ jobs:
           if [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then
             while IFS= read -r issue_number; do
               [ -n "${issue_number}" ] || continue
-              BODY="$(gh api "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null || echo "")"
+              BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
               if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
                 IS_ORCHESTRATED="true"
                 break
