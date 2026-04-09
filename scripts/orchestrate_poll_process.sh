@@ -757,6 +757,7 @@ run_standalone_stall_recovery() {
     for t_idx in $(seq 0 $(( t_count - 1 ))); do
       t_num="$(jq -r ".[${t_idx}].number" "${RUNTIME_DIR}/tracking_issues.json" 2>/dev/null || echo "")"
       [ -n "${t_num}" ] || continue
+      orchestrator_managed_set="${orchestrator_managed_set}"$'\n'"${t_num}"
       t_comments="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${t_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
       t_state_body="$(echo "${t_comments}" | jq -r '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | last | .body // ""' 2>/dev/null || echo "")"
       t_state_json="$(printf '%s' "${t_state_body}" | sed -n '/^<!-- ORCHESTRATOR_STATE_V1$/,/^ORCHESTRATOR_STATE_V1 -->$/p' | sed '1d;$d')"
@@ -1012,14 +1013,8 @@ STALL_EOF
         local new_body
         local new_url
         local new_num
-        close_linked_pr "${issue_num}" "Closed by standalone stall recovery — issue #${issue_num} was stuck in '${phase}' for ${elapsed_minutes}m."
         orig_title="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' 2>/dev/null || echo "")"
         orig_body="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' 2>/dev/null || echo "")"
-        ensure_label_exists "ai:closed"
-        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
-          --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
-          --add-label 'ai:closed' 2>/dev/null || true
-        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery. Issue was stuck in '${phase}' for ${elapsed_minutes} minutes after $((recovery_count + 1)) recovery attempt(s)." 2>/dev/null || true
 
         new_body="$(cat <<REISSUE_EOF
 ${orig_body}
@@ -1038,6 +1033,12 @@ REISSUE_EOF
         new_url="$(gh issue create --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
         new_num="$(basename "${new_url%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
+          close_linked_pr "${issue_num}" "Closed by standalone stall recovery — issue #${issue_num} was stuck in '${phase}' for ${elapsed_minutes}m."
+          ensure_label_exists "ai:closed"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+            --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
+            --add-label 'ai:closed' 2>/dev/null || true
+          gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery. Issue was stuck in '${phase}' for ${elapsed_minutes} minutes after $((recovery_count + 1)) recovery attempt(s)." 2>/dev/null || true
           local new_state
           new_state="$(python3 - "$updated_state" <<'PY'
 import json, sys, time
