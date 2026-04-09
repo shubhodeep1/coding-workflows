@@ -17,6 +17,17 @@ if [ "${_TG_HELPERS_LOADED:-}" = "true" ]; then
 fi
 _TG_HELPERS_LOADED="true"
 
+# Source rate-limit helpers (provides curl_gh_api)
+# shellcheck source=gh_helpers.sh
+if [ -f "scripts/gh_helpers.sh" ]; then
+	# shellcheck disable=SC1091
+	source scripts/gh_helpers.sh
+fi
+# Fallback: if curl_gh_api is not available, pass through to plain curl
+if ! type curl_gh_api >/dev/null 2>&1; then
+	curl_gh_api() { curl "$@"; }
+fi
+
 # Resolve chat ID from available env vars
 _tg_chat_id()
 {
@@ -86,10 +97,10 @@ tg_store_msg_id()
 
 	# Look for an existing tracking comment (scan last 30 comments)
 	local comments_json
-	comments_json=$(curl -s \
+	comments_json=$(curl_gh_api -s \
 		-H "Authorization: token ${GH_TOKEN}" \
 		-H "Accept: application/vnd.github.v3+json" \
-		"${api_base}/${issue_num}/comments?per_page=30&direction=desc" 2>/dev/null) || {
+		"${api_base}/${issue_num}/comments?per_page=30&direction=desc") || {
 		# Fallback: create a new tracking comment
 		curl -s -X POST \
 			-H "Authorization: token ${GH_TOKEN}" \
@@ -157,10 +168,10 @@ tg_store_phase_msg_id()
 	local marker="<!-- tg_phase:${phase}:"
 
 	local comments_json
-	comments_json=$(curl -s \
+	comments_json=$(curl_gh_api -s \
 		-H "Authorization: token ${GH_TOKEN}" \
 		-H "Accept: application/vnd.github.v3+json" \
-		"${api_base}/${issue_num}/comments?per_page=30&direction=desc" 2>/dev/null) || {
+		"${api_base}/${issue_num}/comments?per_page=30&direction=desc") || {
 		curl -s -X POST \
 			-H "Authorization: token ${GH_TOKEN}" \
 			-H "Accept: application/vnd.github.v3+json" \
@@ -229,10 +240,10 @@ tg_cleanup_phase_msgs()
 
 	while true; do
 		local comments_json
-		comments_json=$(curl -s \
+		comments_json=$(curl_gh_api -s \
 			-H "Authorization: token ${GH_TOKEN}" \
 			-H "Accept: application/vnd.github.v3+json" \
-			"${api_base}/${issue_num}/comments?per_page=100&page=${page}" 2>/dev/null) || break
+			"${api_base}/${issue_num}/comments?per_page=100&page=${page}") || break
 
 		local count
 		count=$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null) || break
@@ -295,10 +306,10 @@ tg_cleanup_msgs()
 
 	while true; do
 		local comments_json
-		comments_json=$(curl -s \
+		comments_json=$(curl_gh_api -s \
 			-H "Authorization: token ${GH_TOKEN}" \
 			-H "Accept: application/vnd.github.v3+json" \
-			"${api_base}/${issue_num}/comments?per_page=100&page=${page}" 2>/dev/null) || break
+			"${api_base}/${issue_num}/comments?per_page=100&page=${page}") || break
 
 		local count
 		count=$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null) || break

@@ -92,12 +92,24 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh; do
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+          # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _gh_api_fetch() {
+            local outfile="$1"; shift
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else return 1; fi
+            done; return 1
+          }
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh; do
+            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"
             fi
             chmod +x "scripts/${f}"
           done
@@ -105,8 +117,8 @@ jobs:
           # Write to a temp file first so the redirect doesn't clobber the
           # local copy when the gh api call fails (the file doesn't exist on
           # the stable tag yet).
-          if gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
+          if _gh_api_fetch "scripts/codex_model_catalog.json.tmp" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}"; then
             mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
           else
             rm -f "scripts/codex_model_catalog.json.tmp"
@@ -117,11 +129,11 @@ jobs:
           # caller repo ships its own scripts/ directory)
           for f in unattended_llm_system_instructions.md codex_system_instructions.md; do
             if [ ! -f "${f}" ]; then
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=${script_ref}" > "${f}" 2>/dev/null; then
+              if ! _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+                _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main"
               fi
             fi
           done
@@ -314,25 +326,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Retry wrapper for gh api calls to handle transient 5xx errors.
+          # Retry wrapper for gh api calls — rate-limit-aware.
+          # On rate-limit (403/429), sleeps 30s and retries.
+          # On other failures, uses exponential backoff.
           # Usage: gh_retry <output_file> [gh api args...]
-          # For --paginate endpoints that need jq post-processing, pipe the
-          # output through jq after calling this function.
           gh_retry() {
             local outfile="$1"; shift
-            local attempt max_attempts=4 delay=2
+            local attempt max_attempts=5 delay=2
             for attempt in $(seq 1 $max_attempts); do
               if gh "$@" > "$outfile" 2>/tmp/gh_retry_stderr; then
                 return 0
               fi
-              cat /tmp/gh_retry_stderr >&2
-              if [ "$attempt" -lt "$max_attempts" ]; then
-                echo "gh call failed (attempt ${attempt}/${max_attempts}), retrying in ${delay}s..." >&2
-                sleep "$delay"
-                delay=$((delay * 2))
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/gh_retry_stderr 2>/dev/null; then
+                echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), sleeping 30s…" >&2
+                sleep 30
+              else
+                cat /tmp/gh_retry_stderr >&2
+                if [ "$attempt" -lt "$max_attempts" ]; then
+                  echo "gh call failed (attempt ${attempt}/${max_attempts}), retrying in ${delay}s..." >&2
+                  sleep "$delay"
+                  delay=$((delay * 2))
+                fi
               fi
             done
-            echo "gh call failed after ${max_attempts} attempts" >&2
+            echo "::error::gh call failed after ${max_attempts} attempts" >&2
             return 1
           }
 
@@ -2511,14 +2528,26 @@ jobs:
           else
             script_ref="stable"
           fi
-          for f in git_ref_health_check.sh tg_helpers.sh label_helpers.sh; do
+          # Rate-limit-aware fetch
+          _gh_api_fetch() {
+            local outfile="$1"; shift
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else return 1; fi
+            done; return 1
+          }
+          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh; do
             if [ ! -f "scripts/${f}" ]; then
               mkdir -p scripts
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+              if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+                _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/scripts/${f}?ref=main"
               fi
               chmod +x "scripts/${f}"
             fi

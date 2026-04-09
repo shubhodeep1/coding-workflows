@@ -113,18 +113,30 @@ jobs:
             script_ref="stable"
           fi
           mkdir -p scripts
-          for f in setup_serena.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+          # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _gh_api_fetch() {
+            local outfile="$1"; shift
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else return 1; fi
+            done; return 1
+          }
+          for f in gh_helpers.sh setup_serena.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"
             fi
             chmod +x "scripts/${f}"
           done
           # Model catalog: try script_ref first, fall back to local copy from checkout.
-          if gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
+          if _gh_api_fetch "scripts/codex_model_catalog.json.tmp" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}"; then
             mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
           else
             rm -f "scripts/codex_model_catalog.json.tmp"
@@ -134,11 +146,11 @@ jobs:
           PROMPT_SOURCE="prompts/mode-clarify-respond.txt"
           mkdir -p prompts
           if [ ! -f "${PROMPT_SOURCE}" ]; then
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=${script_ref}" > "${PROMPT_SOURCE}" 2>/dev/null; then
+            if ! _gh_api_fetch "${PROMPT_SOURCE}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=${script_ref}"; then
               echo "::warning::${PROMPT_SOURCE} not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=main" > "${PROMPT_SOURCE}"
+              _gh_api_fetch "${PROMPT_SOURCE}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=main"
             fi
           fi
 
@@ -189,9 +201,10 @@ jobs:
           CLARIFICATION_COMMENT: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           # Fetch child issue metadata
-          ISSUE_META="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+          ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
           ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
           ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
           echo "ISSUE_TITLE=${ISSUE_TITLE}" >> "$GITHUB_ENV"
@@ -202,7 +215,7 @@ jobs:
           # Fetch tracking issue body (contains project description)
           TRACKING_BODY=""
           if [ -n "${TRACKING_NUM}" ] && [[ "${TRACKING_NUM}" =~ ^[0-9]+$ ]]; then
-            TRACKING_BODY="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+            TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
           fi
 
           # Save context for prompt assembly
@@ -333,6 +346,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           if [ -z "${CODEX_OUTPUT_FILE:-}" ] || [ ! -f "${CODEX_OUTPUT_FILE}" ]; then
             echo "::error::Missing or unreadable CODEX_OUTPUT_FILE (${CODEX_OUTPUT_FILE:-})"
@@ -356,7 +370,7 @@ jobs:
             echo "${ANSWERS_BODY}"
           } > "${RUNTIME_DIR}/answer_comment.md"
 
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${RUNTIME_DIR}/answer_comment.md")"
 
           echo "Posted auto-answer on issue #${ISSUE_NUMBER}"
@@ -494,8 +508,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="Orchestrator clarify-respond workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
 
       - name: Telegram failure notification

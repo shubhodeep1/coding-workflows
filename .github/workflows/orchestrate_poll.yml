@@ -55,9 +55,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           # Find all open issues with the orchestrator tracking label
-          TRACKING_ISSUES="$(gh issue list \
+          TRACKING_ISSUES="$(gh_retry gh issue list \
             --repo "${{ github.repository }}" \
             --label "ai:orchestrator-tracking" \
             --state open \
@@ -158,32 +159,44 @@ jobs:
             script_ref="stable"
           fi
           mkdir -p scripts prompts .github/ai
-          for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_poll_process.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+          # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _gh_api_fetch() {
+            local outfile="$1"; shift
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else return 1; fi
+            done; return 1
+          }
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_poll_process.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"
             fi
             chmod +x "scripts/${f}"
           done
           for pf in mode-judge.txt mode-judge-review-blocked.txt; do
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/${pf}?ref=${script_ref}" > "prompts/${pf}" 2>/dev/null; then
+            if ! _gh_api_fetch "prompts/${pf}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/${pf}?ref=${script_ref}"; then
               echo "::warning::${pf} not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/${pf}?ref=main" > "prompts/${pf}"
+              _gh_api_fetch "prompts/${pf}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/${pf}?ref=main"
             fi
           done
-          if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=${script_ref}" > ".github/ai/orchestrate_schema.v1.json" 2>/dev/null; then
+          if ! _gh_api_fetch ".github/ai/orchestrate_schema.v1.json" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=${script_ref}"; then
             echo "::warning::orchestrate_schema.v1.json not found on ${script_ref}; falling back to main"
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=main" > ".github/ai/orchestrate_schema.v1.json"
+            _gh_api_fetch ".github/ai/orchestrate_schema.v1.json" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=main"
           fi
           # Model catalog: try script_ref first, fall back to local copy from checkout.
-          if gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
+          if _gh_api_fetch "scripts/codex_model_catalog.json.tmp" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}"; then
             mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
           else
             rm -f "scripts/codex_model_catalog.json.tmp"
@@ -191,11 +204,11 @@ jobs:
           fi
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=${script_ref}" > "${f}" 2>/dev/null; then
+              if ! _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+                _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main"
               fi
             fi
           done
@@ -324,9 +337,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           CALLER="${{ inputs.caller_workflow }}"
           echo "Retriggering ${CALLER} for continuous polling…"
-          if gh workflow run "${CALLER}" --repo "${{ github.repository }}"; then
+          if gh_retry gh workflow run "${CALLER}" --repo "${{ github.repository }}"; then
             echo "Successfully dispatched ${CALLER}"
           else
             echo "::warning::Failed to retrigger ${CALLER}; cron schedule will resume the chain"
