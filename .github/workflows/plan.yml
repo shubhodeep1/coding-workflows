@@ -344,12 +344,23 @@ jobs:
               exit 1
             fi
 
-            if ! printf '%s' "${CLAIM_RESULT}" | jq -e '((.operation_result.claimed // .claimed) | type) == "boolean"' >/dev/null 2>&1; then
+            if ! CLAIMED="$(printf '%s' "${CLAIM_RESULT}" | jq -r '
+              if (if (.operation_result | type) == "object" then (.operation_result | has("claimed")) else false end) then
+                .operation_result.claimed
+              elif has("claimed") then
+                .claimed
+              else
+                null
+              end
+            ' 2>/dev/null)"; then
               echo "::error::Malformed /answer claim output while AI memory is enabled"
               exit 1
             fi
 
-            CLAIMED="$(printf '%s' "${CLAIM_RESULT}" | jq -r '.operation_result.claimed // .claimed')"
+            if [[ "${CLAIMED}" != "true" && "${CLAIMED}" != "false" ]]; then
+              echo "::error::Malformed /answer claim output while AI memory is enabled"
+              exit 1
+            fi
           else
             CLAIMED="true"
           fi
