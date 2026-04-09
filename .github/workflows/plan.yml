@@ -234,7 +234,7 @@ jobs:
             source scripts/label_helpers.sh
             ensure_label_exists "ai:planning" "${{ github.repository }}"
             gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
-            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
+            gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
           else
             echo "Issue #${ISSUE_NUMBER} has neither ai:planning nor ai:clarification labels. Skipping planning run."
             echo "Current labels: ${ISSUE_LABELS_JSON}"

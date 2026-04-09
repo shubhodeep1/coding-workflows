@@ -89,8 +89,9 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
-          ISSUE_NUMBERS="$(gh api graphql \
+          ISSUE_NUMBERS="$(gh_retry gh api graphql \
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
             -F number="${PR_NUMBER}" \
@@ -99,7 +100,7 @@ jobs:
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
-            PR_DATA="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
@@ -117,7 +118,7 @@ jobs:
             else
               LABEL_COLOR="6a737d"; LABEL_DESC="Linked PR closed without merge"
             fi
-            gh api "repos/${REPOSITORY}/labels" \
+            gh_retry gh api "repos/${REPOSITORY}/labels" \
               -f name="${FINAL_LABEL}" \
               -f color="${LABEL_COLOR}" \
               -f description="${LABEL_DESC}" \
@@ -127,7 +128,7 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
-            gh issue edit "${issue_number}" -R "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
+            gh_retry gh issue edit "${issue_number}" -R "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
             if ! gh_retry gh issue edit "${issue_number}" -R "${REPOSITORY}" --add-label "${FINAL_LABEL}"; then
               echo "::warning::Failed to add label '${FINAL_LABEL}' to issue #${issue_number}."
             fi
