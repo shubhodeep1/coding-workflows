@@ -83,6 +83,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `EDITOR_MAX_WALL` | No | `3300` | review_autofix, implement | Maximum wall-clock seconds per editor attempt. Budget-aware: auto-capped to remaining job time minus a 2-min buffer. |
 | `EDITOR_MIN_ATTEMPT_SECS` | No | `300` | review_autofix | Minimum remaining job budget (seconds) required to start an editor attempt. Prevents futile retries near the job deadline. |
 
+> **Note on `AI_MEMORY_*` configuration:** GitHub Actions repository variables are not auto-exported into shell environment variables for reusable workflows. In this repo, only `issue_pr_status.yml` currently maps `${{ vars.AI_MEMORY_ENABLED }}` directly; other `AI_MEMORY_*` values use runtime environment defaults unless workflow code explicitly wires them.
+
 **Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. **E2E smoke test override:** when an issue title contains `[E2E Smoke Test]`, all phases (clarify, plan, implement, review/edit) automatically switch to `low` reasoning effort to reduce cost and latency during release validation.
 
 | Variable | Default | Used By | Description |
@@ -544,6 +546,8 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
+
+> **Note on `AI_MEMORY_*` entries above:** these defaults are consumed from runtime environment variables in the memory scripts. Without explicit workflow wiring, setting repository variables in **Settings → Variables** does not automatically override them.
 
 ## Prompt Caching (OpenRouter + Codex)
 
