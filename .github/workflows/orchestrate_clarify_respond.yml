@@ -168,11 +168,11 @@ jobs:
           # these files may not exist yet.
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=${script_ref}" > "${f}" 2>/dev/null; then
+              if ! _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+                _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main"
               fi
             fi
             if [ ! -s "${f}" ]; then

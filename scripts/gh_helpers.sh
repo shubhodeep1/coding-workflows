@@ -147,6 +147,7 @@ curl_gh_api()
 	body_file=$(mktemp "${TMPDIR:-/tmp}/curl_gh_body.XXXXXX")
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
+		: > "${body_file}"
 		local http_code
 		http_code=$(curl -o "${body_file}" -w '%{http_code}' "$@" 2>/dev/null) || http_code="000"
 
