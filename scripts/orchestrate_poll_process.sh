@@ -8,7 +8,8 @@
 #   GH_TOKEN, OPENROUTER_API_KEY, GITHUB_REPOSITORY,
 #   MODEL_EDITOR, MODEL_REASONING_EFFORT_JUDGE,
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, TOOL_CALL_BUDGET_JUDGE,
-#   SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS
+#   SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS,
+#   CONTEXT7_DISABLED
 
 set -euo pipefail
 
@@ -104,6 +105,45 @@ is_truthy() {
       return 1
       ;;
   esac
+}
+
+assemble_judge_static_context() {
+  local out_file="$1"
+  local missing=""
+
+  if [ ! -s codex_system_instructions.md ]; then
+    missing="codex_system_instructions.md"
+  fi
+  if [ ! -s ai_pipeline.md ]; then
+    missing="${missing}${missing:+, }ai_pipeline.md"
+  fi
+  if [ -n "${missing}" ]; then
+    echo "::error::Required file(s) missing or empty: ${missing}" >&2
+    return 1
+  fi
+
+  {
+    echo "=== SYSTEM INSTRUCTIONS ==="
+    cat codex_system_instructions.md
+    echo
+    echo "=== AI PIPELINE ==="
+    cat ai_pipeline.md
+    echo
+    if [ -f AGENTS.md ]; then
+      echo "=== AGENTS.MD ==="
+      cat AGENTS.md
+      echo
+    elif [ -f agents.md ]; then
+      echo "=== AGENTS.MD ==="
+      cat agents.md
+      echo
+    fi
+    if [ -f README.md ]; then
+      echo "=== README.MD ==="
+      cat README.md
+      echo
+    fi
+  } > "${out_file}"
 }
 
 # ---------------------------------------------------------------
@@ -625,7 +665,7 @@ close_linked_pr() {
     2>/dev/null || echo "")"
   if [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
     local pr_state
-    pr_state="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' 2>/dev/null || echo "")"
+    pr_state="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
     if [ "${pr_state}" = "open" ]; then
       echo "  Closing linked PR #${pr_num} for issue #${issue_num}..."
       gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -1381,7 +1421,7 @@ STALL_EOF
         2>/dev/null || echo "")"
       if [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
         local head_ref
-        head_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' 2>/dev/null || echo "")"
+        head_ref="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' || echo "")"
         if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
           if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && \
              git checkout "origin/${head_ref}" 2>/dev/null; then
@@ -1434,8 +1474,8 @@ STALL_EOF
         "Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
 
       local orig_title orig_body
-      orig_title="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' 2>/dev/null || echo "")"
-      orig_body="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body' 2>/dev/null || echo "")"
+      orig_title="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' || echo "")"
+      orig_body="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body' || echo "")"
 
       ensure_label_exists "ai:closed"
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -1524,6 +1564,14 @@ The judge will evaluate this gap when the wave completes and decide whether to r
 # ---------------------------------------------------------------
 # Helper: Check if an active autofix run already exists for a PR branch
 # ---------------------------------------------------------------
+# Cycle-local dispatch tracker — prevents the same PR from being
+# dispatched for conflict resolution more than once within a single
+# orchestrate_poll execution.  File-based so it works across piped
+# subshells (the while-read loops run in subshells where shell
+# variable changes don't propagate back).
+_CONFLICT_DISPATCH_TRACKER="${TMPDIR:-/tmp}/.conflict_dispatch_$$"
+: > "${_CONFLICT_DISPATCH_TRACKER}"
+
 # Queries the GitHub Actions API for in_progress or queued runs of
 # review/autofix workflows on the given branch.  A new dispatch would
 # cancel the existing run (cancel-in-progress concurrency) and trigger
@@ -1575,7 +1623,18 @@ _dispatch_review_for_conflicts()
 	local head_ref="$2"
 	local log_prefix="[conflict-dispatch] PR #${pr_number}"
 
-	# Guard: skip dispatch if an autofix run is already active for this PR.
+	# Guard 1: skip if already dispatched in this poll cycle.
+	# Multiple code paths (ready-to-merge loop, in-progress loop,
+	# standalone sweep) can encounter the same conflicted PR within a
+	# single script execution.  The GitHub API has a visibility delay
+	# for newly-dispatched runs, so _has_active_autofix_run may miss
+	# them.  The cycle-local tracker catches this immediately.
+	if grep -qx "${pr_number}" "${_CONFLICT_DISPATCH_TRACKER}" 2>/dev/null; then
+		echo "  ${log_prefix} Already dispatched in this poll cycle. Skipping."
+		return 2
+	fi
+
+	# Guard 2: skip dispatch if an autofix run is already active for this PR.
 	# A new dispatch would cancel the running job (cancel-in-progress
 	# concurrency) and fire a spurious "cancelled/timed out" alert.
 	if _has_active_autofix_run "${pr_number}" "${head_ref}"; then
@@ -1590,6 +1649,8 @@ _dispatch_review_for_conflicts()
 			--ref "${head_ref}" \
 			-f pr_number="${pr_number}" 2>/dev/null; then
 			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref}."
+			# Record in cycle-local tracker to prevent duplicate dispatches
+			echo "${pr_number}" >> "${_CONFLICT_DISPATCH_TRACKER}"
 			return 0
 		fi
 	done
@@ -1656,7 +1717,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     # initial state comment.  Recover by parsing the tracking body
     # and searching for child issues that reference this tracker.
     # ---------------------------------------------------------------
-    TRACKING_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' 2>/dev/null || echo "")"
+    TRACKING_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
     if [ -z "${TRACKING_BODY}" ]; then
       echo "::warning::Could not fetch body for tracking issue #${TRACKING_NUM}, skipping."
       continue
@@ -1875,7 +1936,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       for pw_inum in ${PRIOR_NON_TERMINAL}; do
         [ -n "${pw_inum}" ] && [ "${pw_inum}" != "null" ] || continue
         echo "  [backward-scan] Prior wave $((prior_idx + 1)) issue #${pw_inum} is non-terminal. Checking labels..."
-        PW_LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+        PW_LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" --jq '[.[].name]' || echo '[]')"
         [ -n "${PW_LABELS}" ] || PW_LABELS='[]'
         PW_LOCAL_ID="$(jq -r --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
           '.waves[$wi].issues[] | select((.github_issue | tostring) == $inum) | .id' "${STATE_FILE}" | head -n 1)"
@@ -1898,14 +1959,14 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
             --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
             2>/dev/null || echo "")"
           if [ -n "${PW_PR}" ] && [ "${PW_PR}" != "null" ]; then
-            PW_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.state' 2>/dev/null || echo "")"
-            PW_PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+            PW_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+            PW_PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
 			if [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}"; then
 			  gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
 			    || gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
               gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}/update-branch" \
-                -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.head.sha' 2>/dev/null)" \
+                -X PUT -f expected_head_sha="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.head.sha' || echo "")" \
                 2>/dev/null || true
             fi
           fi
@@ -2005,7 +2066,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
       continue
     fi
-    LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+    LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
     if [ "${first}" = true ]; then
       first=false
     else
@@ -2050,8 +2111,8 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
       2>/dev/null || echo "")"
     if [ -n "${RTM_PR}" ] && [ "${RTM_PR}" != "null" ]; then
-      PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.state' 2>/dev/null || echo "")"
-      PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+      PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+      PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
 		if _pr_checks_completed "${RTM_PR}"; then
 		  echo "  Merging PR #${RTM_PR} (squash)..."
@@ -2066,13 +2127,13 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
         echo "  PR #${RTM_PR} is not mergeable (mergeable=${PR_MERGEABLE}). Attempting branch update..."
         if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}/update-branch" \
-          -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.sha' 2>/dev/null)" \
+          -X PUT -f expected_head_sha="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.sha' || echo "")" \
           2>/dev/null; then
           echo "  PR #${RTM_PR} branch updated via API. The synchronize event will re-trigger review (including conflict resolution)."
         else
           echo "  API branch update failed for PR #${RTM_PR}. Dispatching review workflow for conflict resolution..."
 
-          RTM_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
+          RTM_HEAD_REF="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.ref' || echo "")"
           if [ -n "${RTM_HEAD_REF}" ] && [ "${RTM_HEAD_REF}" != "null" ]; then
             _dispatch_rc=0
             _dispatch_review_for_conflicts "${RTM_PR}" "${RTM_HEAD_REF}" || _dispatch_rc=$?
@@ -2118,8 +2179,8 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     if [ -z "${IP_PR}" ] || [ "${IP_PR}" = "null" ]; then
       continue
     fi
-    IP_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.state' 2>/dev/null || echo "")"
-    IP_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+    IP_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+    IP_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
     if [ "${IP_PR_STATE}" != "open" ] || [ "${IP_MERGEABLE}" != "false" ]; then
       continue
     fi
@@ -2128,7 +2189,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     # Try the GitHub API update-branch first (creates a merge commit
     # if the merge is clean; fails when there are real conflicts).
     if gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}/update-branch" \
-      -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.sha' 2>/dev/null)" \
+      -X PUT -f expected_head_sha="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.sha' || echo "")" \
       2>/dev/null; then
       echo "  PR #${IP_PR} branch updated via API. Synchronize event will re-trigger review."
       tg_notify "PR #${IP_PR} (issue #${ip_issue}) had merge conflicts. Branch updated via API to re-trigger review."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")" "WARNING"
@@ -2136,7 +2197,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     fi
 
     # API update failed — real conflicts exist.  Dispatch review workflow.
-    IP_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
+    IP_HEAD_REF="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.ref' || echo "")"
     if [ -n "${IP_HEAD_REF}" ] && [ "${IP_HEAD_REF}" != "null" ]; then
       _dispatch_rc=0
       _dispatch_review_for_conflicts "${IP_PR}" "${IP_HEAD_REF}" || _dispatch_rc=$?
@@ -2209,8 +2270,8 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       echo "  Linked PR: #${RB_PR}"
 
       # Guard: check PR state before invoking the judge
-      RB_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-      RB_PR_MERGED="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null || echo "false")"
+      RB_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+      RB_PR_MERGED="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null | grep -xE 'true|false' || echo "false")"
       if [ "${RB_PR_STATE}" != "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
         # PR is closed (not merged) — skip entirely
         echo "  PR #${RB_PR} is closed (not merged). Cleaning up labels and skipping."
@@ -2232,9 +2293,9 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         | jq -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null || echo "[]")"
       PR_REVIEW_COMMENTS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" \
         | jq -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo "[]")"
-      PR_META="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
-        --jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
-      ISSUE_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' 2>/dev/null || echo "")"
+      PR_META="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
+        --jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' || echo "{}")"
+      ISSUE_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' || echo "")"
 
       # Determine if this is a final decision (retries exhausted) or a fix attempt
       IS_FINAL="false"
@@ -2247,22 +2308,12 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
 
+      if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
+        assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
+      fi
+
       {
-        if [ -f "${RUNTIME_DIR}/judge_static.txt" ]; then
-          cat "${RUNTIME_DIR}/judge_static.txt"
-        else
-          # Build static context if not already assembled
-          if [ -f codex_system_instructions.md ]; then
-            echo "=== SYSTEM INSTRUCTIONS ==="
-            cat codex_system_instructions.md
-            echo
-          fi
-          if [ -f ai_pipeline.md ]; then
-            echo "=== AI PIPELINE ==="
-            cat ai_pipeline.md
-            echo
-          fi
-        fi
+        cat "${RUNTIME_DIR}/judge_static.txt"
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -2307,11 +2358,10 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       RB_JUDGE_SUCCESS=false
       for attempt in 1 2; do
         echo "  Review-blocked judge attempt ${attempt}/2..."
-        if cat "${RB_JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null; then
-          if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
-            RB_JUDGE_SUCCESS=true
-            break
-          fi
+        cat "${RB_JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+        if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
+          RB_JUDGE_SUCCESS=true
+          break
         fi
         if [ "${attempt}" -lt 2 ]; then
           sleep 10
@@ -2397,8 +2447,8 @@ sys.exit(1)
 
           # Attempt squash merge (with branch update if needed)
           RB_MERGED="false"
-          PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-          PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+          PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+          PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
 		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
 		    if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		      echo "  PR #${RB_PR} merge initiated (auto)."
@@ -2412,7 +2462,7 @@ sys.exit(1)
           elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
             echo "  PR #${RB_PR} is not mergeable. Attempting branch update..."
             if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
-              -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' 2>/dev/null)" \
+              -X PUT -f expected_head_sha="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' || echo "")" \
               2>/dev/null; then
               echo "  PR #${RB_PR} branch updated. Synchronize event will re-trigger review + conflict resolution."
             else
@@ -2449,8 +2499,8 @@ sys.exit(1)
             gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             RB_FORCE_MERGED="false"
-            PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-            PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+            PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+            PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
 				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
 				  if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
 				    || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
@@ -2461,7 +2511,7 @@ sys.exit(1)
             elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
               echo "  PR #${RB_PR} is not mergeable (force-merge path). Attempting branch update..."
               if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
-                -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' 2>/dev/null)" \
+                -X PUT -f expected_head_sha="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' || echo "")" \
                 2>/dev/null; then
                 echo "  PR #${RB_PR} branch updated. Will retry force-merge on next poll cycle."
               else
@@ -2489,8 +2539,8 @@ sys.exit(1)
           else
             echo "  Judge is applying fixes to PR #${RB_PR}..."
             # Re-check PR state before expensive fix+push (race condition safety net)
-            RB_PR_STATE_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-            RB_PR_MERGED_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null || echo "false")"
+            RB_PR_STATE_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+            RB_PR_MERGED_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null | grep -xE 'true|false' || echo "false")"
             if [ "${RB_PR_STATE_NOW}" != "open" ] && [ "${RB_PR_MERGED_NOW}" != "true" ]; then
               # PR was closed without merge — skip
               echo "::warning::PR #${RB_PR} is closed (not merged). Skipping fix application."
@@ -2641,8 +2691,8 @@ ${RB_FIX_DESC}
                   ensure_label_exists "ai:ready-to-merge"
                   gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
-                  PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-                  PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null || echo "")"
+                  PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+                  PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
                   if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
                     if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
                       || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
@@ -2743,7 +2793,7 @@ ${RB_FIX_DESC}
           continue
         fi
         # Re-read labels since we may have changed them
-        LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+        LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
         if [ "${first}" = true ]; then
           first=false
         else
@@ -2760,7 +2810,7 @@ ${RB_FIX_DESC}
         if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then
           continue
         fi
-        LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+        LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
         [ -z "${LABELS}" ] && LABELS='[]'
         LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}')"
       done
@@ -2814,8 +2864,8 @@ ${RB_FIX_DESC}
     bump_impl_noop_count "${IF_LOCAL_ID}"
 
     # Read the original issue to preserve its content
-    IF_TITLE="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' 2>/dev/null || echo "")"
-    IF_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' 2>/dev/null || echo "")"
+    IF_TITLE="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
+    IF_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
 
     # Close the failed issue
     ensure_label_exists "ai:closed"
@@ -2873,7 +2923,7 @@ if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
   for rnum in ${REISSUED_NUMS}; do
     if [ -z "${rnum}" ] || [ "${rnum}" = "null" ]; then continue; fi
     if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then continue; fi
-    LABELS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]')"
+    LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
     [ -z "${LABELS}" ] && LABELS='[]'
     LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}')"
   done
@@ -3056,25 +3106,8 @@ ${PR_DIFF}
   # Get original project description from tracking issue body
   PROJECT_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body')"
 
-  # Assemble static context
-  {
-    echo "=== SYSTEM INSTRUCTIONS ==="
-    cat codex_system_instructions.md
-    echo
-    echo "=== AI PIPELINE ==="
-    cat ai_pipeline.md
-    echo
-    if [ -f agents.md ]; then
-      echo "=== AGENTS.MD ==="
-      cat agents.md
-      echo
-    fi
-    if [ -f README.md ]; then
-      echo "=== README.MD ==="
-      cat README.md
-      echo
-    fi
-  } > "${RUNTIME_DIR}/judge_static.txt"
+  # Build one stable static prefix per run for provider-side prompt caching.
+  assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
 
   # Build judge prompt
   {
@@ -3128,11 +3161,13 @@ ${PR_DIFF}
   max_attempts=2
   for attempt in $(seq 1 "${max_attempts}"); do
     echo "Judge attempt ${attempt}/${max_attempts}..."
-    if cat "${JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2); then
-      if grep -q '[^[:space:]]' "${JUDGE_OUTPUT_FILE}"; then
-        JUDGE_SUCCESS=true
-        break
-      fi
+    # The pipeline may return 141 (SIGPIPE) when the prompt is larger
+    # than the OS pipe buffer and codex closes stdin before cat finishes.
+    # This is harmless — check the output file regardless of exit code.
+    cat "${JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    if grep -q '[^[:space:]]' "${JUDGE_OUTPUT_FILE}"; then
+      JUDGE_SUCCESS=true
+      break
     fi
     if [ "${attempt}" -lt "${max_attempts}" ]; then
       sleep $(( 10 * attempt + RANDOM % 10 ))
@@ -3326,7 +3361,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 **Reason:** ${JUDGE_JUSTIFICATION}" >/dev/null 2>&1 || {
               # If API-based revert fails, create a revert via git
               echo "  API revert failed; creating revert commit..."
-              MERGE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_TO_REVERT}" --jq '.merge_commit_sha' 2>/dev/null || echo "")"
+              MERGE_SHA="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${PR_TO_REVERT}" --jq '.merge_commit_sha' || echo "")"
               if [ -n "${MERGE_SHA}" ] && [ "${MERGE_SHA}" != "null" ]; then
                 REVERT_BRANCH="revert-${PR_TO_REVERT}-$(date +%s)"
                 git checkout -b "${REVERT_BRANCH}" "${DEFAULT_BRANCH}"
@@ -3622,7 +3657,7 @@ STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
 echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
 
 CONFLICT_SWEEP_FIXED=0
-DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+DEFAULT_BRANCH="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
 
 for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"

@@ -119,8 +119,13 @@ jobs:
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+              schema_tmp="ai-memory/schemas/${sf}.tmp"
+              if _gh_api_fetch "${schema_tmp}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}"; then
+                mv "${schema_tmp}" "ai-memory/schemas/${sf}"
+              else
+                rm -f "${schema_tmp}"
+              fi
             fi
           done
           # Model catalog: try script_ref first, fall back to local copy from checkout.
@@ -273,6 +278,7 @@ jobs:
           SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
           SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
           SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
           SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -543,7 +549,7 @@ jobs:
           if [ "$IS_SMOKE" = "false" ]; then
             ISSUE_NUM=$(echo "${PR_BODY}" | grep -oP '(?:issues/|issue\s*#)(\d+)' | head -1 | grep -oP '\d+' || true)
             if [ -n "$ISSUE_NUM" ]; then
-              ISSUE_TITLE=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' 2>/dev/null || echo "")
+              ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
               if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
                 IS_SMOKE=true
               fi
@@ -1317,7 +1323,7 @@ jobs:
 
               # Background watchdog for this reviewer attempt
               (
-                wd_iter=0
+                wd_iter=$(( RANDOM % 9 ))  # jitter: stagger PR state checks across reviewers
                 while true; do
                   sleep 10
                   now="$(date +%s)"
@@ -1345,7 +1351,11 @@ jobs:
                   # PR state check — abort if PR was merged/closed (~every 90s)
                   wd_iter=$((wd_iter + 1))
                   if [ $((wd_iter % 9)) -eq 0 ]; then
-                    pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+                    # Pipe through grep to reject error JSON that gh api dumps to
+                    # stdout on 403/429 rate-limit responses (--jq is not applied
+                    # to error bodies, so raw JSON leaks into the variable and
+                    # defeats the || echo "open" fallback).
+                    pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
                     if [ "${pr_state}" != "open" ]; then
                       echo "Reviewer ${model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
                       touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
@@ -1892,6 +1902,11 @@ jobs:
           Plain text only.
           Output exactly these sections in this order:
           Changes made:
+          IMPORTANT: If ANY bullet under "Changes made:" touches a line that was
+          also modified in the LAST RUN DIFF, you MUST include these two fields
+          in that bullet (the commit will be rejected otherwise):
+            • Regression fingerprint: <file:symbol or failure key>
+            • Runtime failure path: <execution path that fails>
           Already satisfied (suggested but already present):
           Ignored suggestions (with short reason):
           Reviewer files processed:
@@ -2051,7 +2066,7 @@ jobs:
                 # PR state check — abort if PR was merged/closed (~every 2 min)
                 wd_iter=$((wd_iter + 1))
                 if [ $((wd_iter % 8)) -eq 0 ]; then
-                  pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+                  pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
                   if [ "${pr_state}" != "open" ]; then
                     echo "Editor aborted — PR #${PR_NUMBER} is ${pr_state} (attempt ${attempt})." >&2
                     touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
@@ -2366,9 +2381,29 @@ jobs:
           # never trigger the oscillation guard.
           EXCLUDED_FILES = {"pre_assembled_static.txt"}
 
+          # Non-code files where "Runtime failure path" is semantically
+          # meaningless — documentation, configs, licences, etc.
+          _NON_CODE_EXTS = {
+              ".md", ".txt", ".rst", ".adoc",
+              ".json", ".yaml", ".yml", ".toml",
+              ".csv", ".tsv",
+              ".lock",
+          }
+          _NON_CODE_BASENAMES = {"LICENSE", "LICENSE.txt", "NOTICE"}
+
+          def _is_non_code(path: str) -> bool:
+              import os as _os
+              basename = _os.path.basename(path)
+              if basename in _NON_CODE_BASENAMES:
+                  return True
+              _, ext = _os.path.splitext(basename)
+              return ext.lower() in _NON_CODE_EXTS
+
           overlaps = []
           for file_path, staged_file_ranges in staged_ranges.items():
               if file_path in EXCLUDED_FILES:
+                  continue
+              if _is_non_code(file_path):
                   continue
               previous_ranges = last_run_ranges.get(file_path, [])
               if not previous_ranges:
@@ -2763,7 +2798,7 @@ jobs:
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
-            PR_DATA="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
@@ -2867,7 +2902,7 @@ jobs:
             --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
-            PR_DATA="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
           fi
@@ -2880,7 +2915,7 @@ jobs:
             if [ -z "${FIRST_ISSUE}" ]; then
               FIRST_ISSUE="${issue_number}"
             fi
-            BODY="$(gh api "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null || echo "")"
+            BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
             if [ -z "${FIRST_ISSUE_BODY}" ]; then
               FIRST_ISSUE_BODY="${BODY}"
             fi
@@ -3102,8 +3137,8 @@ jobs:
               done <<< "${ISSUE_NUMBERS}"
 
               # Attempt merge
-              PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
-              PR_MERGEABLE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.mergeable' 2>/dev/null || echo "")"
+              PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+              PR_MERGEABLE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
               if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
                 if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
                   gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
@@ -3131,7 +3166,7 @@ jobs:
                   gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge' || true
                 done <<< "${ISSUE_NUMBERS}"
 
-                PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
+                PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
                 if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
                   gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
                     || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
@@ -3324,7 +3359,7 @@ jobs:
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
-            PR_DATA="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
@@ -3570,7 +3605,7 @@ jobs:
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "CRITICAL"
 
       - name: Check PR state before failure alerts
         if: (failure() || cancelled()) && env.PR_CLOSED != 'true'
@@ -3578,7 +3613,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           source scripts/gh_helpers.sh 2>/dev/null || true
-          pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+          pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
           if [ "${pr_state}" != "open" ]; then
             echo "PR #${PR_NUMBER} is ${pr_state} — skipping failure alerts."
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"

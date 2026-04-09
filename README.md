@@ -66,6 +66,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Version/branch of the Serena MCP server |
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Languages for Serena symbol analysis |
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Disable the Serena MCP server |
+| `CONTEXT7_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Context7 MCP server |
 | `WORKFLOW_ORCHESTRATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | orchestrate, orchestrate_poll | Model override for orchestrator decomposer and judge |
 | `ORCHESTRATE_POLL_INTERVAL` | No | `5` | orchestrate | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
 | `ORCHESTRATE_POLL_CALLER_WORKFLOW` | No | `ai-orchestrate-poll.yml` | orchestrate_poll | Filename of the caller wrapper workflow to retrigger for continuous polling. The poller dispatches this workflow via `workflow_dispatch` at the end of each run when active tracking issues exist, so the next cycle starts immediately instead of waiting for the cron schedule. Set to empty string to disable self-retrigger. |
@@ -499,6 +500,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `ENABLE_STANDALONE_STALL_RECOVERY` | `true` | Enable standalone AI issue stall recovery in the poller |
 | `MAX_RECOVERY_ATTEMPTS` | `3` | Max project-level recovery cycles (judge failure → auto-fix) |
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | `2` | Max validation-failure → judge re-evaluation cycles before terminal failure |
+| `CONTEXT7_DISABLED` | `false` | Disable the optional Context7 MCP server setup in workflows |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |
@@ -533,6 +535,42 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
+
+## Prompt Caching (OpenRouter + Codex)
+
+### Determination (current stack)
+
+- **Observed support (route-dependent):** `openai/gpt-5.3-codex` via OpenRouter Responses API can benefit from provider-managed prefix caching, but availability/reporting can vary by routed provider/model.
+- Caching is provider-managed prefix caching (automatic when request prefixes are identical and long enough).
+- In this repo, cache-friendly prompt shaping is enabled by design: a static pre-assembled prefix is placed first, and dynamic issue/PR/runtime content is appended after it.
+
+### What Codex CLI can and cannot control
+
+- Codex workflow config used here supports provider/network basics (for example `wire_api = "responses"`, retries, and timeouts).
+- Codex config used here does **not** expose direct request-body prompt-cache controls (for example explicit `cache_control` or manual cache keys) in workflow generation.
+- Operational result: cache behavior is achieved through stable prompt-prefix discipline, not per-request cache toggles.
+
+### Operational implications
+
+- Cache hits require identical leading content; edits near the top of prompts reduce hit rate.
+- Short prompts may not cross provider cache thresholds and can show little/no savings.
+- Cache reuse is best when requests are routed consistently; heavy concurrency and routing changes can reduce hit rates.
+- `wire_api = "responses"` is kept across workflows/scripts for the current OpenRouter path.
+
+### Verification recipe
+
+1. Send two consecutive OpenRouter Responses requests with the same large static prefix and only small trailing dynamic differences.
+2. Compare usage fields in the second response (for example cached-token indicators when present) against the first response.
+3. Repeat a few times to smooth routing variance.
+4. In this repo, also confirm generated prompts still keep `pre_assembled_static.txt` (or `judge_static.txt`) content at the top.
+
+### Expected savings assumptions
+
+- Savings are workload-dependent and primarily correlate with:
+  - stable prefix size,
+  - request repetition frequency,
+  - provider routing/cache retention behavior.
+- Practical expectation: repeated pipeline runs with large unchanged static prefixes should reduce effective input cost/latency versus fully dynamic prompts.
 
 ## Project Orchestrator
 
