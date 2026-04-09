@@ -248,8 +248,8 @@ jobs:
             echo "Issue #${ISSUE_NUMBER} is in ai:clarification phase; transitioning to ai:planning for /answer processing."
             source scripts/label_helpers.sh
             ensure_label_exists "ai:planning" "${{ github.repository }}"
-            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
-            gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:planning' --remove-label 'ai:clarification' >/dev/null 2>&1 || true
           else
             echo "Issue #${ISSUE_NUMBER} has neither ai:planning nor ai:clarification labels. Skipping planning run."
             echo "Current labels: ${ISSUE_LABELS_JSON}"
@@ -873,10 +873,9 @@ jobs:
           # Strip absolute CI runner paths from Codex output
           sed -i -E 's|/home/runner/work/[^/]+/[^/]+/||g' "${CODEX_OUTPUT_FILE}"
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 &
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 &
-          wait
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:clarification' --remove-label 'ai:planning' \
+            --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
 
           {
             echo "Clarification required"
@@ -994,8 +993,8 @@ jobs:
             -f body="$(cat "${PLAN_COMMENT_FILE}")"
 
           ensure_label_exists "ai:awaiting-approval" "${{ github.repository }}"
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:awaiting-approval' --remove-label 'ai:planning' >/dev/null 2>&1 || true
 
       - name: Record planning candidate (plan posted)
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
@@ -1197,8 +1196,8 @@ jobs:
           ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:planning") != null' >/dev/null; then
             ensure_label_exists "ai:clarification" "${{ github.repository }}"
-            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
-            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:clarification' --remove-label 'ai:planning' >/dev/null 2>&1 || true
           fi
 
       - name: Comment on issue failure

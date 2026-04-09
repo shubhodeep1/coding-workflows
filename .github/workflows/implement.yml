@@ -370,8 +370,8 @@ jobs:
             exit 0
           fi
           ensure_label_exists "ai:implementing" "${{ github.repository }}"
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:implementing' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:implementing' --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
           echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true" >> "$GITHUB_ENV"
 
       - name: Claim /approved command
@@ -1202,8 +1202,9 @@ jobs:
 
           PR_HEAD_REF=""
           if [ -n "${PR_NUMBER}" ]; then
-            PR_HEAD_REF="$(gh pr view "${PR_NUMBER}" --repo "${{ github.repository }}" --json headRefName --jq '.headRefName // ""' 2>/dev/null || true)"
-            gh pr view "${PR_NUMBER}" --repo "${{ github.repository }}" --json files --jq '.files[].path' > "${CHANGED_FILES_FILE}" || true
+            _pr_view_json="$(gh pr view "${PR_NUMBER}" --repo "${{ github.repository }}" --json headRefName,files 2>/dev/null || echo '{}')"
+            PR_HEAD_REF="$(echo "${_pr_view_json}" | jq -r '.headRefName // ""')"
+            echo "${_pr_view_json}" | jq -r '.files[].path' > "${CHANGED_FILES_FILE}" || true
           else
             : > "${CHANGED_FILES_FILE}"
           fi
@@ -1419,8 +1420,8 @@ jobs:
           gh label create "ai:done" --repo "${{ github.repository }}" \
             --color "0e8a16" --description "Implementation PR created" \
             2>/dev/null || true
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:done' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:done' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
 
       - name: Record implementation run success event
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
@@ -1455,8 +1456,8 @@ jobs:
           gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
             --color "fbca04" --description "Awaiting human approval to implement" \
             2>/dev/null || true
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
 
       - name: Comment on issue failure
         if: failure() || cancelled()
@@ -1471,8 +1472,8 @@ jobs:
             gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
               --color "fbca04" --description "Awaiting human approval to implement" \
               2>/dev/null || true
-            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
-            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
