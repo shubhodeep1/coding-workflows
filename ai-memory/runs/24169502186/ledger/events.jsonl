@@ -1,0 +1,1 @@
+{"actor": "shubhodeep1", "entry_id": "run_event_20260409023946_a14d6364f7", "event_type": "phase_failed", "issue_number": 542, "message": "Clarification failed for issue #542", "metadata": {"outcome": "failed"}, "pr_number": null, "run_id": "24169502186", "schema_version": "run_ledger_entry.v1", "status": "error", "timestamp": "2026-04-09T02:39:46Z", "workflow": "clarify"}
