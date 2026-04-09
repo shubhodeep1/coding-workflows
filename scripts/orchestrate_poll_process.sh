@@ -418,7 +418,7 @@ set_tracking_phase_label() {
 
 get_issue_labels_json() {
   local issue_num="$1"
-  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" --jq '[.[].name]' 2>/dev/null || echo '[]'
+  gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" --jq '[.[].name]' || echo '[]'
 }
 
 has_label() {
@@ -712,12 +712,12 @@ close_linked_pr() {
   local issue_num="$1"
   local close_reason="${2:-Closed by orchestrator stall recovery.}"
   local pr_num
-  pr_num="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+  pr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
     --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-    2>/dev/null || echo "")"
-  if [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
+    || echo "")"
+  if [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
     local pr_state
-    pr_state="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+    pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' | grep -xE 'open|closed|merged' || echo "")"
     if [ "${pr_state}" = "open" ]; then
       echo "  Closing linked PR #${pr_num} for issue #${issue_num}..."
       gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -1136,8 +1136,8 @@ STALL_EOF
         local new_url
         local new_url_clean
         local new_num
-		orig_title="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' 2>/dev/null || echo "")"
-		orig_body="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' 2>/dev/null || echo "")"
+		orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' || echo "")"
+		orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
 
         new_body="$(cat <<REISSUE_EOF
 ${orig_body}
@@ -1760,7 +1760,7 @@ fi
 TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
 
-for tidx in $(seq 0 $(( COUNT - 1 ))); do
+for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
   echo "========================================"
@@ -1770,9 +1770,9 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   # ---------------------------------------------------------------
   # Extract state from the tracking issue's comments
   # ---------------------------------------------------------------
-  COMMENTS="$(gh api --paginate \
+  COMMENTS="$(gh_retry gh api --paginate \
     "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100" \
-    | jq -s 'add // []')"
+    | jq -s 'add // []' 2>/dev/null || echo '[]')"
 
   # Find the latest state comment (search from the end)
   STATE_JSON="$(echo "${COMMENTS}" | jq -r '
@@ -3211,10 +3211,10 @@ Manual intervention required." >/dev/null
   PR_SUMMARIES=""
   ISSUE_MAP="$(jq -r '.issue_number_map // {}' "${STATE_FILE}")"
   for inum in ${ISSUE_NUMS}; do
-    PR_NUM="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${inum}/timeline" \
+    PR_NUM="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/timeline" \
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-      2>/dev/null || echo "")"
-    if [ -n "${PR_NUM}" ] && [ "${PR_NUM}" != "null" ]; then
+      || echo "")"
+    if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
       PR_DIFF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
         -H 'Accept: application/vnd.github.diff' 2>/dev/null | head -500 || echo "(diff unavailable)")"
       PR_SUMMARIES+="
@@ -3226,12 +3226,12 @@ ${PR_DIFF}
   done
 
   # Fetch CI status on default branch
-  DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')"
-  CI_STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}/check-runs" \
-    --jq '[.check_runs[] | {name: .name, conclusion: .conclusion}]' 2>/dev/null || echo "[]")"
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  CI_STATUS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}/check-runs" \
+    --jq '[.check_runs[] | {name: .name, conclusion: .conclusion}]' || echo "[]")"
 
   # Get original project description from tracking issue body
-  PROJECT_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body')"
+  PROJECT_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
 
   # Build one stable static prefix per run for provider-side prompt caching.
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
