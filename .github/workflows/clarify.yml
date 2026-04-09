@@ -752,7 +752,7 @@ jobs:
           if printf '%s' "${ISSUE_BODY_CHECK}" | grep -qF 'Managed by: AI Orchestrator'; then
             tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
           else
-            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "DEBUG"
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "CRITICAL"
           fi
 
       - name: Record clarification run completed
