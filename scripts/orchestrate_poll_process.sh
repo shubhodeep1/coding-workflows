@@ -159,7 +159,7 @@ _pr_checks_completed()
 {
 	local pr_number="$1"
 	local head_sha
-	head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" \
+	head_sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" \
 		--jq '.head.sha' 2>/dev/null || echo "")"
 	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
 		echo "  [check-runs] Could not resolve head SHA for PR #${pr_number}. Skipping merge."
@@ -167,7 +167,7 @@ _pr_checks_completed()
 	fi
 
 	local incomplete
-	incomplete="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" \
+	incomplete="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" \
 		--jq '[.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length' 2>/dev/null || echo "")"
 	if [ -z "${incomplete}" ] || [ "${incomplete}" = "null" ]; then
 		echo "  [check-runs] Could not query check-runs for PR #${pr_number} (SHA ${head_sha:0:7}). Skipping merge."
@@ -1416,7 +1416,7 @@ STALL_EOF
       # Find linked PR and push empty commit to trigger synchronize event.
       echo "  Re-triggering review for issue #${issue_num}..."
       local pr_num
-      pr_num="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+      pr_num="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
         --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
         2>/dev/null || echo "")"
       if [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
