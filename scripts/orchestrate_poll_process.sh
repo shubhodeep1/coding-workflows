@@ -1800,7 +1800,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       RB_JUDGE_SUCCESS=false
       for attempt in 1 2; do
         echo "  Review-blocked judge attempt ${attempt}/2..."
-        if cat "${RB_JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null; then
+        if codex exec --model "${MODEL_EDITOR}" --full-auto < "${RB_JUDGE_PROMPT_FILE}" > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null; then
           if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
             break
@@ -2040,7 +2040,7 @@ sys.exit(1)
                 echo "fix_description describing what you changed."
               } > "${RB_FIX_PROMPT_FILE}"
 
-              if cat "${RB_FIX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${RB_FIX_OUTPUT_FILE}" 2>/dev/null; then
+              if codex exec --model "${MODEL_EDITOR}" --full-auto < "${RB_FIX_PROMPT_FILE}" > "${RB_FIX_OUTPUT_FILE}" 2>/dev/null; then
                 echo "  Fix codex completed."
               else
                 echo "::warning::Fix codex failed for PR #${RB_PR}."
@@ -2621,7 +2621,7 @@ ${PR_DIFF}
   max_attempts=2
   for attempt in $(seq 1 "${max_attempts}"); do
     echo "Judge attempt ${attempt}/${max_attempts}..."
-    if cat "${JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2); then
+    if codex exec --model "${MODEL_EDITOR}" --full-auto < "${JUDGE_PROMPT_FILE}" > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2); then
       if grep -q '[^[:space:]]' "${JUDGE_OUTPUT_FILE}"; then
         JUDGE_SUCCESS=true
         break
