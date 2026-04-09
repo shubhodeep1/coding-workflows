@@ -1468,9 +1468,12 @@ jobs:
             exit 0
           fi
 
-          grep "File:" "${PREVIOUS_REVIEWS_DIR}"/review_*.txt |
-          sed 's/.*File: //' |
-          sort | uniq -c > "${REVIEWER_FILE_FREQUENCY_FILE}"
+          if ! grep "File:" "${PREVIOUS_REVIEWS_DIR}"/review_*.txt |
+             sed 's/.*File: //' |
+             sort | uniq -c > "${REVIEWER_FILE_FREQUENCY_FILE}"; then
+            echo "No 'File:' markers found in reviewer outputs — reviewers may have found no file-level issues."
+            : > "${REVIEWER_FILE_FREQUENCY_FILE}"
+          fi
 
           {
             echo "High confidence files (mentioned by >=2 reviewers):"
