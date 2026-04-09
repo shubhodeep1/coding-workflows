@@ -2256,6 +2256,8 @@ ${RB_FIX_DESC}" || true
                       --title "[orchestrator-fix] follow-up fixes for #${rb_issue}" \
                       --body "Follow-up fixes for issues identified during review of PR #${RB_PR} (already merged).
 
+Closes #${rb_issue}
+
 **Original issue:** #${rb_issue}
 **Original PR:** #${RB_PR}
 
