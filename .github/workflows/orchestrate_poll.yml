@@ -53,6 +53,7 @@ jobs:
         id: find_tracking
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
         run: |
           set -euo pipefail
           # gh_helpers.sh is not yet available (checkout + fetch happen later),
@@ -76,6 +77,18 @@ jobs:
             return 1
           }
 
+          _is_truthy() {
+            case "$(echo "$1" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          STANDALONE_ENABLED=false
+          if _is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY:-true}"; then
+            STANDALONE_ENABLED=true
+          fi
+
           # Find all open issues with the orchestrator tracking label
           TRACKING_ISSUES="$(_gh_retry gh issue list \
             --repo "${{ github.repository }}" \
@@ -87,14 +100,24 @@ jobs:
           COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
           echo "Found ${COUNT} active tracking issue(s)"
 
+          echo "${TRACKING_ISSUES}" > "${RUNTIME_DIR}/tracking_issues.json"
+
           if [ "${COUNT}" -eq 0 ]; then
-            echo "No active orchestrator projects. Exiting."
+            if [ "${STANDALONE_ENABLED}" = "true" ]; then
+              echo "No active orchestrator projects. Continuing for standalone stall recovery."
+              echo "has_tracking=false" >> "$GITHUB_OUTPUT"
+              echo "has_work=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "No active orchestrator projects and standalone stall recovery is disabled. Exiting."
+            echo "has_tracking=false" >> "$GITHUB_OUTPUT"
             echo "has_work=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          echo "has_tracking=true" >> "$GITHUB_OUTPUT"
           echo "has_work=true" >> "$GITHUB_OUTPUT"
-          echo "${TRACKING_ISSUES}" > "${RUNTIME_DIR}/tracking_issues.json"
 
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -289,6 +312,7 @@ jobs:
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
           MAX_RECOVERY_ATTEMPTS: ${{ vars.MAX_RECOVERY_ATTEMPTS || '3' }}
           MAX_VALIDATION_RECOVERY_ATTEMPTS: ${{ vars.MAX_VALIDATION_RECOVERY_ATTEMPTS || '2' }}
           MODEL_CONFLICT_RESOLVER: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
@@ -345,7 +369,7 @@ jobs:
       - name: Rate-limit cooldown before retrigger
         if: >-
           !cancelled()
-          && steps.find_tracking.outputs.has_work == 'true'
+          && steps.find_tracking.outputs.has_tracking == 'true'
           && inputs.caller_workflow != ''
         run: |
           set -euo pipefail
@@ -363,7 +387,7 @@ jobs:
       - name: Retrigger poller for continuous polling
         if: >-
           !cancelled()
-          && steps.find_tracking.outputs.has_work == 'true'
+          && steps.find_tracking.outputs.has_tracking == 'true'
           && inputs.caller_workflow != ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
