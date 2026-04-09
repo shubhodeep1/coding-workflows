@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue `openrouter-prompt-caching`\n\nClarification mapping (interpreted):\n- Q1: Interpreted as **A** (all Codex-via-OpenRouter workflows in this repo), based on issue scope (\u201ccurrent stack\u201d) plus explicit workflow list in the clarification prompt.\n- Q2: Interpreted intent as **A** (default-on, backward-compatible rollout), but with a technical caveat: provider-level prompt caching for OpenAI models is automatic, and Codex config does not expose request-body cache controls to hard-toggle it per request.\n\nDetermination (what we will implement against):\n- **Yes**, prompt caching is available on the current provider/model path (`openai/gpt-5.3-codex` via OpenRouter) through automatic OpenAI-style caching for sufficiently long prefixes.\n- Codex CLI currently exposes provider config like `http_headers`, `query_params`, and `wire_api=responses`, but not explicit request-body cache knobs such as `prompt_cache_key`/`cache_control` in workflow config generation.\n- Best available configuration is therefore: keep/enforce cache-friendly stable prompt prefixes across all in-scope Codex invocations, keep Responses API path, and document limits/verification clearly.\n\nFiles likely to change:\n1. `README.md`\n2. `.github/workflows/clarify.yml`\n3. `.github/workflows/plan.yml`\n4. `.github/workflows/implement.yml`\n5. `.github/workflows/review_autofix.yml`\n6. `.github/workflows/orchestrate.yml`\n7. `.github/workflows/orchestrate_clarify_respond.yml`\n8. `scripts/orchestrate_poll_process.sh`\n9. `scripts/validate_process.sh`\n\nFunctions/modules/steps to implement or adjust:\n1. \u201cCreate Codex config\u201d blocks that write `~/.codex/config.toml` for each workflow/script path.\n2. Prompt assembly blocks so static context remains the leading, stable prefix and dynamic issue/PR/runtime context is appended after.\n3. Documentation module in `README.md`:\n- yes/no support outcome for current stack\n- operational implications (min token threshold, cache TTL behavior expectations, sticky routing effects)\n- limitations of Codex CLI cache control pass-through\n- expected savings assumptions and verification method\n\nData structures affected:\n1. Codex provider config table in TOML: `[model_providers.openrouter]` and existing keys (`base_url`, `env_key`, `wire_api`, retries, optional headers/query params).\n2. Prompt artifacts used in workflows/scripts (`pre_assembled_static.txt` and equivalent static prompt sections).\n3. README variable/behavior tables and new prompt-caching section.\n4. No MongoDB collections/contracts are expected to change for this issue.\n\nAPI/interface changes:\n1. No external API contract changes in workflows.\n2. If a new variable is added for operational control/documentation, it will be backward-compatible with a default preserving current behavior.\n3. Keep OpenRouter Responses API path unchanged (`POST /api/v1/responses` via Codex provider).\n\nConflict detection (explicit):\n1. Clarification Q2 requested \u201cdefault-on with opt-out\u201d; on this stack, true provider-level disable/enable is not cleanly exposed through Codex workflow config because cache controls are request-body fields while Codex config exposes provider/network settings.\n2. Issue asks to validate whether Codex can pass cache controls \u201cif required\u201d; result is \u201cnot directly for request-body cache controls,\u201d so implementation must rely on implicit caching and prompt-shape discipline, with limitation documented.\n\nRisks/edge cases:\n1. Cache hits require identical leading prefixes; any drift in early prompt content reduces benefit.\n2. Prompts below effective cache threshold won\u2019t realize savings.\n3. High request concurrency on same prefix can reduce hit rates (overflow behavior).\n4. Forcing provider order in routing can reduce sticky-routing benefits.\n5. Changes to prompt ordering must avoid behavioral regressions in model instructions.\n\nTesting considerations:\n1. Validate docs-based support determination against current official docs and record date of verification.\n2. Add/keep a reproducible verification recipe using repeated OpenRouter Responses requests and checking usage cache fields (`cached_tokens`/cache details) for repeated-prefix prompts.\n3. For each in-scope workflow/script path, verify no regression in prompt construction and successful Codex execution.\n4. Sanity-check that existing execution paths remain backward-compatible (no required new secrets/vars for default behavior).\n\nPrimary references used:\n- https://openrouter.ai/docs/guides/best-practices/prompt-caching\n- https://openrouter.ai/docs/api/api-reference/responses/create-responses\n- https://developers.openai.com/api/docs/guides/prompt-caching\n- https://developers.openai.com/codex/config-reference\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8cc1dfd48a03fd405126afc23882950b5ca74da13349d5d568df7a52be99e5e4",
+  "lineage": {
+    "issue_number": 566,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24174376839",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24174376839",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/566"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409055049_258836ea78",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 566,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24174376839"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #566",
+  "timestamps": {
+    "created_at": "2026-04-09T05:50:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
