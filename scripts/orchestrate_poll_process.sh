@@ -222,7 +222,7 @@ _jq_field()
 	local expr="$2"
 	local pattern="${3:-}"
 	local val
-	val="$(echo "${json}" | jq -r "${expr} // \"\"" 2>/dev/null || echo "")"
+	val="$(echo "${json}" | jq -r "${expr} | if . == null then \"\" else tostring end" 2>/dev/null || echo "")"
 	if [ -n "${pattern}" ]; then
 		echo "${val}" | grep -xE "${pattern}" || echo ""
 	else
