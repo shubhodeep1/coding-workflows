@@ -315,8 +315,20 @@ integration_branch_exists() {
   local branch_name="$1"
   [ -n "${branch_name}" ] || return 1
   local branch_ref
+  local gh_error
   branch_ref="$(printf '%s' "${branch_name}" | jq -sRr @uri)"
-  gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" >/dev/null 2>&1
+
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  gh_error="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" 2>&1 >/dev/null || true)"
+  if printf '%s' "${gh_error}" | grep -Eqi '(^gh: Not Found|HTTP 404|404 Not Found|status code 404)'; then
+    return 1
+  fi
+
+  echo "::warning::Unable to verify integration branch '${branch_name}' due to GitHub API error; assuming it still exists." >&2
+  return 0
 }
 
 mark_integration_branch_missing_failed() {
@@ -347,10 +359,21 @@ sync_default_into_integration_branch() {
     return 1
   fi
 
-  if gh api "repos/${GITHUB_REPOSITORY}/merges" \
+  local merge_error
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/merges" \
     -f base="${integration_branch}" \
     -f head="${default_branch}" \
     -f commit_message="chore: sync ${default_branch} into ${integration_branch}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  merge_error="$(gh api "repos/${GITHUB_REPOSITORY}/merges" \
+    -f base="${integration_branch}" \
+    -f head="${default_branch}" \
+    -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >/dev/null || true)"
+
+  if ! printf '%s' "${merge_error}" | grep -Eqi '(HTTP 409|status code 409|merge conflict|conflict)'; then
+    echo "::warning::Unable to sync '${default_branch}' into '${integration_branch}' due to transient GitHub API error; will retry next poll." >&2
     return 0
   fi
 
@@ -1372,6 +1395,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
     && [ "${PROJECT_STATUS}" != "complete" ] \
     && [ "${PROJECT_STATUS}" != "failed" ] \
+    && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
     && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
     if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
       continue
@@ -1383,6 +1407,36 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   fi
 
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+
+  if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
+    FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+    FINAL_DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+    FINAL_PROJECT_TITLE="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
+
+    if ! finalize_integration_merge_if_needed "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" "${FINAL_PROJECT_TITLE}"; then
+      continue
+    fi
+
+    if has_label "${TRACKING_LABELS}" "ai:validated"; then
+      VALIDATION_CYCLE="$(jq -r '.validation_cycle // 1' "${STATE_FILE}")"
+      mark_validation_complete "${VALIDATION_CYCLE}"
+      continue
+    fi
+
+    echo "Project complete!"
+    jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    set_tracking_phase_label "ai:done"
+    post_tracking_comment "Project completed successfully. Issue kept open for manual review."
+    tg_cleanup_msgs "${TRACKING_NUM}"
+    MSG="✅ Project #${TRACKING_NUM} completed successfully."
+    MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+    if [ -n "${GITHUB_RUN_ID:-}" ]; then
+      MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+    fi
+    tg_send_msg "${MSG}" >/dev/null
+    continue
+  fi
 
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
     sync_validation_fix_issues_from_comments "${COMMENTS}"
