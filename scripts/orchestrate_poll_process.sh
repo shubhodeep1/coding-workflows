@@ -89,6 +89,36 @@ is_truthy() {
   esac
 }
 
+assemble_judge_static_context() {
+  local out_file="$1"
+  {
+    if [ -f codex_system_instructions.md ]; then
+      echo "=== SYSTEM INSTRUCTIONS ==="
+      cat codex_system_instructions.md
+      echo
+    fi
+    if [ -f ai_pipeline.md ]; then
+      echo "=== AI PIPELINE ==="
+      cat ai_pipeline.md
+      echo
+    fi
+    if [ -f AGENTS.md ]; then
+      echo "=== AGENTS.MD ==="
+      cat AGENTS.md
+      echo
+    elif [ -f agents.md ]; then
+      echo "=== AGENTS.MD ==="
+      cat agents.md
+      echo
+    fi
+    if [ -f README.md ]; then
+      echo "=== README.MD ==="
+      cat README.md
+      echo
+    fi
+  } > "${out_file}"
+}
+
 # ---------------------------------------------------------------
 # Helper: Check whether all check-runs on a PR's head commit have
 # completed.  Returns 0 when every check-run has status "completed"
@@ -1743,22 +1773,12 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
 
+      if [ ! -f "${RUNTIME_DIR}/judge_static.txt" ]; then
+        assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
+      fi
+
       {
-        if [ -f "${RUNTIME_DIR}/judge_static.txt" ]; then
-          cat "${RUNTIME_DIR}/judge_static.txt"
-        else
-          # Build static context if not already assembled
-          if [ -f codex_system_instructions.md ]; then
-            echo "=== SYSTEM INSTRUCTIONS ==="
-            cat codex_system_instructions.md
-            echo
-          fi
-          if [ -f ai_pipeline.md ]; then
-            echo "=== AI PIPELINE ==="
-            cat ai_pipeline.md
-            echo
-          fi
-        fi
+        cat "${RUNTIME_DIR}/judge_static.txt"
         echo
         echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
@@ -2546,25 +2566,8 @@ ${PR_DIFF}
   # Get original project description from tracking issue body
   PROJECT_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body')"
 
-  # Assemble static context
-  {
-    echo "=== SYSTEM INSTRUCTIONS ==="
-    cat codex_system_instructions.md
-    echo
-    echo "=== AI PIPELINE ==="
-    cat ai_pipeline.md
-    echo
-    if [ -f agents.md ]; then
-      echo "=== AGENTS.MD ==="
-      cat agents.md
-      echo
-    fi
-    if [ -f README.md ]; then
-      echo "=== README.MD ==="
-      cat README.md
-      echo
-    fi
-  } > "${RUNTIME_DIR}/judge_static.txt"
+  # Build one stable static prefix per run for provider-side prompt caching.
+  assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
 
   # Build judge prompt
   {
