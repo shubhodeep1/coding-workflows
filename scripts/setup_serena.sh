@@ -12,6 +12,7 @@
 #   SERENA_VERSION         Git ref to install (default: "main")
 #   SERENA_LANGUAGES       Space-separated list of languages to force (e.g. "typescript python")
 #   SERENA_DISABLED        Set to "true" to skip Serena setup entirely
+#   CONTEXT7_DISABLED      Set to "true" to skip Context7 MCP setup (default: "false")
 #
 # This script:
 #   1. Installs uv if not present
@@ -19,7 +20,7 @@
 #   3. Auto-detects project languages and installs language servers
 #   4. Creates .serena/project.yml if missing
 #   5. Creates ~/.serena/serena_config.yml (global config)
-#   6. Appends Serena MCP server config to ~/.codex/config.toml
+#   6. Writes Serena and optional Context7 MCP config to ~/.codex/config.toml
 #   7. Runs a health check
 #
 # On any failure, the script emits a warning and exits 0 so that the
@@ -70,24 +71,31 @@ warn_and_exit() {
 		tail -50 "${SERENA_DEBUG_LOG}" >&2 || true
 		echo "--- End Serena debug log ---"
 	fi
-	# Remove ALL Serena MCP server blocks (including sub-tables like
-	# [mcp_servers.serena.env]) from Codex config so that required=true
-	# doesn't prevent Codex from starting at all.
+	# Remove Serena MCP config so Codex can start without Serena when setup fails.
 	CODEX_CFG="${HOME}/.codex/config.toml"
-	if [ -f "${CODEX_CFG}" ] && grep -q '\[mcp_servers\.serena' "${CODEX_CFG}"; then
-		# Use awk to cleanly remove [mcp_servers.serena] and all its
-		# sub-tables (e.g. [mcp_servers.serena.env]) while preserving
-		# every other section.
-		awk '
-			/^\[mcp_servers\.serena\]/ { skip=1; next }
-			/^\[mcp_servers\.serena\./ { skip=1; next }
-			/^\[/ && !/^\[mcp_servers\.serena/ { skip=0 }
-			!skip { print }
-		' "${CODEX_CFG}" > "${CODEX_CFG}.tmp" && mv "${CODEX_CFG}.tmp" "${CODEX_CFG}"
+	if [ -f "${CODEX_CFG}" ] && grep -q '^\[mcp_servers\.serena' "${CODEX_CFG}"; then
+		remove_mcp_server_blocks "serena" "${CODEX_CFG}"
 		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
 	fi
 	rm -f "${SERENA_DEBUG_LOG}"
 	exit 0
+}
+
+# Remove one MCP server table and all its sub-tables (e.g. [mcp_servers.<name>.env]).
+remove_mcp_server_blocks() {
+	local server_name="$1"
+	local codex_cfg="$2"
+
+	if [ ! -f "${codex_cfg}" ]; then
+		return 0
+	fi
+
+	awk -v server_name="${server_name}" '
+		$0 ~ "^\\[mcp_servers\\." server_name "\\]$" { skip=1; next }
+		$0 ~ "^\\[mcp_servers\\." server_name "\\." { skip=1; next }
+		$0 ~ "^\\[" && $0 !~ "^\\[mcp_servers\\." server_name "(\\]|\\.)" { skip=0 }
+		!skip { print }
+	' "${codex_cfg}" > "${codex_cfg}.tmp" && mv "${codex_cfg}.tmp" "${codex_cfg}"
 }
 
 if printf '%s' "${SERENA_VERSION}" | grep -q '"'; then
@@ -495,6 +503,10 @@ if [ ! -f "${CODEX_CONFIG}" ]; then
 	touch "${CODEX_CONFIG}"
 fi
 
+# Keep config idempotent across re-runs and toggle changes.
+remove_mcp_server_blocks "serena" "${CODEX_CONFIG}"
+remove_mcp_server_blocks "context7" "${CODEX_CONFIG}"
+
 # Resolve the actual serena binary from the uvx cache.
 # The cache was warmed in step 2, so the binary should be available.
 # Using the direct binary avoids the uvx process indirection that causes
@@ -539,6 +551,20 @@ $(printf '%b' "${ENV_BLOCK}")
 MCP_EOF
 
 echo "Serena MCP server appended to ${CODEX_CONFIG}"
+
+if [ "${CONTEXT7_DISABLED:-false}" != "true" ]; then
+	cat >> "${CODEX_CONFIG}" <<CONTEXT7_MCP_EOF
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp@latest"]
+required = false
+CONTEXT7_MCP_EOF
+
+	echo "Context7 MCP server appended to ${CODEX_CONFIG}"
+else
+	echo "Context7 MCP setup skipped (CONTEXT7_DISABLED=true)."
+fi
 
 # Verify the MCP config was actually written correctly
 if grep -q '\[mcp_servers\.serena\]' "${CODEX_CONFIG}"; then
@@ -635,6 +661,7 @@ echo "uv path: $(command -v uv 2>/dev/null || echo 'NOT FOUND')"
 echo "UV_CACHE_DIR: ${UV_CACHE_DIR:-'(not set)'}"
 echo "Codex config location: ${CODEX_CONFIG}"
 echo "MCP section present: $(grep -c '\[mcp_servers\.serena\]' "${CODEX_CONFIG}" 2>/dev/null || echo '0')"
+echo "Context7 MCP section present: $(grep -c '\[mcp_servers\.context7\]' "${CODEX_CONFIG}" 2>/dev/null || echo '0')"
 echo "required=true set: $(grep -c 'required = true' "${CODEX_CONFIG}" 2>/dev/null || echo '0')"
 echo "Project root: ${PROJECT_ROOT}"
 echo ".serena/project.yml exists: $([ -f .serena/project.yml ] && echo 'yes' || echo 'no')"
