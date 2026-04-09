@@ -74,11 +74,11 @@ warn_and_exit() {
 	fi
 	# Remove Serena MCP config so Codex can start without Serena when setup fails.
 	CODEX_CFG="${HOME}/.codex/config.toml"
-	if [ -f "${CODEX_CFG}" ] && grep -Eq '^\[mcp_servers\.serena(\]|[.])' "${CODEX_CFG}"; then
+	if [ -f "${CODEX_CFG}" ] && grep -Eq '^[[:space:]]*\[mcp_servers\.serena(\]|[.])' "${CODEX_CFG}"; then
 		remove_mcp_server_blocks "serena" "${CODEX_CFG}" || true
 		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
 	fi
-	if [ "${CONTEXT7_CONFIG_TOUCHED:-false}" = "true" ] && [ -f "${CODEX_CFG}" ] && grep -Eq '^\[mcp_servers\.context7(\]|[.])' "${CODEX_CFG}"; then
+	if [ "${CONTEXT7_CONFIG_TOUCHED:-false}" = "true" ] && [ -f "${CODEX_CFG}" ] && grep -Eq '^[[:space:]]*\[mcp_servers\.context7(\]|[.])' "${CODEX_CFG}"; then
 		remove_mcp_server_blocks "context7" "${CODEX_CFG}" || true
 		echo "Removed Context7 MCP server from ${CODEX_CFG}."
 	fi
@@ -96,9 +96,9 @@ remove_mcp_server_blocks() {
 	fi
 
 	awk -v server_name="${server_name}" '
-		$0 ~ "^\\[mcp_servers\\." server_name "\\]$" { skip=1; next }
-		$0 ~ "^\\[mcp_servers\\." server_name "\\." { skip=1; next }
-		$0 ~ "^\\[" && $0 !~ "^\\[mcp_servers\\." server_name "(\\]|\\.)" { skip=0 }
+		$0 ~ "^[[:space:]]*\\[mcp_servers\\." server_name "\\]$" { skip=1; next }
+		$0 ~ "^[[:space:]]*\\[mcp_servers\\." server_name "\\." { skip=1; next }
+		$0 ~ "^[[:space:]]*\\[" && $0 !~ "^[[:space:]]*\\[mcp_servers\\." server_name "(\\]|\\.)" { skip=0 }
 		!skip { print }
 	' "${codex_cfg}" > "${codex_cfg}.tmp" && mv "${codex_cfg}.tmp" "${codex_cfg}" || { rm -f "${codex_cfg}.tmp"; return 1; }
 }
