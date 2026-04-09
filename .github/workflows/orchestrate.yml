@@ -118,17 +118,37 @@ jobs:
               script_ref="stable"
             fi
             mkdir -p scripts
-            for f in memory_helpers.sh ai_memory.py ai_memory_lib.py; do
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+            # Bootstrap: rate-limit-aware fetch
+            _gh_api_fetch() {
+              local outfile="$1"; shift
+              local attempt=1
+              while [ "${attempt}" -le 4 ]; do
+                if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+                if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                  echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                  sleep 30; attempt=$((attempt + 1))
+                else return 1; fi
+              done; return 1
+            }
+            for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+              if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}" 2>/dev/null; then
+                if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
                   echo "::warning::Unable to fetch ${f}; skipping orchestration start memory event"
                   exit 0
                 fi
               fi
               chmod +x "scripts/${f}"
+            done
+            # Also fetch memory schema files for consumer repos.
+            mkdir -p ai-memory/schemas
+            for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
+              if [ ! -f "ai-memory/schemas/${sf}" ]; then
+                gh api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+              fi
             done
           fi
 
@@ -171,35 +191,57 @@ jobs:
             script_ref="stable"
           fi
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh orchestrate_lib.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+          # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _gh_api_fetch() {
+            local outfile="$1"; shift
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else return 1; fi
+            done; return 1
+          }
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh orchestrate_lib.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"
             fi
             chmod +x "scripts/${f}"
           done
+          # Fetch AI memory schema files so consumer repos that lack
+          # schemas on their default branch can bootstrap the ai-memory
+          # branch (schemas are validated during memory operations).
+          mkdir -p ai-memory/schemas
+          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
+            if [ ! -f "ai-memory/schemas/${sf}" ]; then
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+            fi
+          done
           # Fetch prompt template
           mkdir -p prompts
-          if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/prompts/mode-orchestrate.txt?ref=${script_ref}" > "prompts/mode-orchestrate.txt" 2>/dev/null; then
+          if ! _gh_api_fetch "prompts/mode-orchestrate.txt" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/prompts/mode-orchestrate.txt?ref=${script_ref}"; then
             echo "::warning::mode-orchestrate.txt not found on ${script_ref}; falling back to main"
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-orchestrate.txt?ref=main" > "prompts/mode-orchestrate.txt"
+            _gh_api_fetch "prompts/mode-orchestrate.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/mode-orchestrate.txt?ref=main"
           fi
           # Fetch schema for reference in prompt
           mkdir -p .github/ai
-          if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=${script_ref}" > ".github/ai/orchestrate_schema.v1.json" 2>/dev/null; then
+          if ! _gh_api_fetch ".github/ai/orchestrate_schema.v1.json" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=${script_ref}"; then
             echo "::warning::orchestrate_schema.v1.json not found on ${script_ref}; falling back to main"
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=main" > ".github/ai/orchestrate_schema.v1.json"
+            _gh_api_fetch ".github/ai/orchestrate_schema.v1.json" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=main"
           fi
           # Fetch canonical instruction files
           # Model catalog: try script_ref first, fall back to local copy from checkout.
-          if gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
+          if _gh_api_fetch "scripts/codex_model_catalog.json.tmp" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}"; then
             mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
           else
             rm -f "scripts/codex_model_catalog.json.tmp"
@@ -207,11 +249,11 @@ jobs:
           fi
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=${script_ref}" > "${f}" 2>/dev/null; then
+              if ! _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+                _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main"
               fi
             fi
           done
@@ -457,6 +499,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           # Build tracking issue body
           python3 scripts/orchestrate_lib.py build-tracking-body \
@@ -464,7 +507,7 @@ jobs:
 
           PROJECT_TITLE="$(jq -r '.project_title' "${DECOMPOSITION_FILE}")"
 
-          TRACKING_ISSUE_URL="$(gh issue create \
+          TRACKING_ISSUE_URL="$(gh_retry gh issue create \
             --repo "${{ github.repository }}" \
             --title "[Orchestrator] ${PROJECT_TITLE}" \
             --body-file "${TRACKING_BODY_FILE}" \
@@ -523,6 +566,7 @@ jobs:
           INTEGRATION_BRANCH: ${{ steps.integration_branch.outputs.integration_branch }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           # Only create Wave 1 issues now. Later-wave issues are created by the
           # poller when their dependencies are met (deferred creation). This
@@ -574,7 +618,7 @@ jobs:
           EOF
           )"
 
-            ISSUE_URL="$(gh issue create \
+            ISSUE_URL="$(gh_retry gh issue create \
               --repo "${{ github.repository }}" \
               --title "${TITLE}" \
               --body "${FULL_BODY}" \
@@ -607,6 +651,7 @@ jobs:
           INTEGRATION_BRANCH: ${{ steps.integration_branch.outputs.integration_branch }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           # Build state using Python helper
           python3 -c "
@@ -644,7 +689,7 @@ jobs:
           )"
 
           jq -n --arg body "${STATE_COMMENT}" '{"body": $body}' \
-            | gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+            | gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
                 --input - >/dev/null
           echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER}"
 
@@ -684,6 +729,7 @@ jobs:
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           # Get wave 1 issues from state
           WAVE1_ISSUES="$(python3 scripts/orchestrate_lib.py next-wave --state-file "${STATE_FILE}")"
@@ -710,7 +756,7 @@ jobs:
           The orchestrator poller will monitor progress and dispatch subsequent waves when dependencies are met."
 
           jq -n --arg body "${WAVE1_COMMENT}" '{"body": $body}' \
-            | gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+            | gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
                 --input - >/dev/null
 
       - name: Write run summary
@@ -797,6 +843,7 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -812,13 +859,15 @@ jobs:
             ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
           fi
           if [ "${STATUS}" = "success" ]; then
-            MSG="✅ Orchestrator: Decomposed project into ${ISSUE_COUNT} issues."
+            MSG="Orchestrator: Decomposed project into ${ISSUE_COUNT} issues."
+            LEVEL="DEBUG"
             if [ -n "${TRACKING_URL}" ]; then
               MSG+=$'\n'
               MSG+="Tracking: ${TRACKING_URL}"
             fi
           else
-            MSG="❌ Orchestrator: Failed (${STATUS})."
+            MSG="Orchestrator: Failed (${STATUS})."
+            LEVEL="ERROR"
             if [ -n "${TRACKING_ISSUE_NUMBER:-}" ] && [ "${TRACKING_ISSUE_NUMBER}" != "0" ]; then
               MSG+=$'\n'
               MSG+="Issue: ${TRACKING_URL}"
@@ -826,4 +875,4 @@ jobs:
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${TRACKING_ISSUE_NUMBER:-0}" "${MSG}"
+          tg_send_tracked "${TRACKING_ISSUE_NUMBER:-0}" "${MSG}" "${LEVEL}"

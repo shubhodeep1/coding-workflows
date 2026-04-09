@@ -26,4 +26,12 @@ Rules:
 - If external APIs are needed, include concrete details from provided context; if missing, ask rather than invent.
 - Do not write code.
 
+SERENA MCP EFFICIENCY (MANDATORY):
+- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+- Prefer `get_symbols_overview` and `find_symbol` over raw file reads.
+- Use `find_referencing_symbols` for impact analysis.
+- Use `search_for_pattern` instead of shell grep when Serena is available.
+- Never read the same file region twice.
+- If Serena is unavailable or errors, fall back to normal file reads.
+
 Output must be plain text suitable for posting as an issue comment.

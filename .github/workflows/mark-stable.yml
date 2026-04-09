@@ -189,7 +189,22 @@ jobs:
           echo "Checking CI status for $SHA ..."
           # Allow the release even if no CI status is reported (repos
           # with no required checks). Fail only on explicit failure.
-          STATE=$(gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
+          # Rate-limit-aware gh retry
+          _gh_retry() {
+            local attempt=1
+            while [ "${attempt}" -le 5 ]; do
+              if "$@" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit (attempt ${attempt}/5), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else
+                cat /tmp/_gh_rl_err >&2 2>/dev/null; local w=$(( 2 ** (attempt - 1) ))
+                echo "::warning::gh failed (attempt ${attempt}/5), retrying in ${w}s…" >&2
+                sleep "${w}"; attempt=$((attempt + 1))
+              fi
+            done; return 1
+          }
+          STATE=$(_gh_retry gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
             --jq '.state' 2>/dev/null || echo "pending")
           if [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
             echo "::error::CI is failing on main ($STATE). Fix before releasing."
@@ -284,9 +299,24 @@ jobs:
             exit 0
           fi
 
+          # Rate-limit-aware gh retry
+          _gh_retry() {
+            local attempt=1
+            while [ "${attempt}" -le 5 ]; do
+              if "$@" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit (attempt ${attempt}/5), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else
+                cat /tmp/_gh_rl_err >&2 2>/dev/null; local w=$(( 2 ** (attempt - 1) ))
+                echo "::warning::gh failed (attempt ${attempt}/5), retrying in ${w}s…" >&2
+                sleep "${w}"; attempt=$((attempt + 1))
+              fi
+            done; return 1
+          }
           for REPO in $REPOS; do
             echo "Dispatching coding-workflows-stable-released to ${REPO} ..."
-            gh api "repos/${REPO}/dispatches" \
+            _gh_retry gh api "repos/${REPO}/dispatches" \
               -f event_type="coding-workflows-stable-released" \
               -f "client_payload[version]=${VERSION}" \
               || echo "::warning::Failed to dispatch to ${REPO} (may lack permissions)"
