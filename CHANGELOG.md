@@ -7,6 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 
 ## [Unreleased]
 
+### Changed
+- Reduced default reasoning effort where deep reasoning is unnecessary:
+  - `THINKING_LEVEL_CLARIFY_RESPOND`: `medium` -> `low`
+  - `THINKING_LEVEL_VALIDATE`: `xhigh` -> `high`
+  - `THINKING_LEVEL_CONFLICT_RESOLVER`: `xhigh` -> `medium`
+- Added adaptive judge reasoning in `orchestrate_poll_process.sh`: keep `THINKING_LEVEL_JUDGE` for cycles 1-3 and force `high` from cycle 4 onward.
+- Added a regression test in `tests/test_orchestrate_poll_process.py` to assert adaptive judge reasoning logic remains in place.
+- Lowered implement issue-summary generation effort by temporarily overriding `model_reasoning_effort` to `low` for the summary `codex exec` invocation and restoring config afterward.
+- Trimmed static prompt assembly in planning, implementation, and review/autofix workflows to reduce token overhead.
+- Updated review/autofix prompt assembly to inline pre-assembled static context directly into editor/reviewer prompts (removed runtime "read pre_assembled_static.txt first" round-trip instructions).
+- Updated README thinking-level defaults and judge adaptive behavior notes to match workflow/script behavior.
+
 ### Added
 - `test-and-mark-stable.yml`: E2E smoke test workflow that exercises all pipeline phases
   (clarify → plan → implement → review/edit) before marking a version stable. Creates a

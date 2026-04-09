@@ -93,25 +93,47 @@ jobs:
           # scripts (e.g. writing to mcp.json instead of config.toml) cause
           # silent MCP failures ("mcp startup: no servers").
           mkdir -p scripts
-          for f in setup_serena.sh gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+          # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _gh_api_fetch() {
+            local outfile="$1"; shift
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else return 1; fi
+            done; return 1
+          }
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"
             fi
             chmod +x "scripts/${f}"
+          done
+          # Fetch AI memory schema files so consumer repos that lack
+          # schemas on their default branch can bootstrap the ai-memory
+          # branch (schemas are validated during memory operations).
+          mkdir -p ai-memory/schemas
+          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
+            if [ ! -f "ai-memory/schemas/${sf}" ]; then
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+            fi
           done
           # Always use the canonical instruction files from coding-workflows
           # (must be outside the if-block so they're fetched even when the
           # caller repo ships its own scripts/ directory)
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=${script_ref}" > "${f}" 2>/dev/null; then
+              if ! _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+                _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main"
               fi
             fi
           done
@@ -136,7 +158,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
@@ -164,19 +187,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           # Fetch the 50 most recent comments in chronological order (asc) so
           # the "Build context file" step can use them directly without re-sorting.
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
 
       - name: Set clarification phase label
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           source scripts/label_helpers.sh
           # Add clarification label
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
-          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
+          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           # Remove stale phase labels only on /reclarify (new issues won't have them)
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
             CURRENT_LABELS="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" --jq '.[].name' 2>/dev/null || true)"
@@ -628,6 +653,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           # Labels already set by "Set clarification phase label" step above.
           {
             echo "<!-- ai:clarification-questions -->"
@@ -639,7 +665,7 @@ jobs:
             echo "/answer"
           } > "${RUNTIME_DIR}/clarification_comment.md"
 
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${RUNTIME_DIR}/clarification_comment.md")"
 
       - name: Record clarification candidate (needs clarification)
@@ -670,16 +696,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           source scripts/label_helpers.sh
           # Swap label from ai:clarification to ai:planning since no questions needed.
           ensure_label_exists "ai:planning" "${{ github.repository }}"
-          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
+          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
 
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body=$'The task appears clear.\n\nNo clarification questions were needed, so the workflow auto-posted /answer to continue automatically.'
 
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body=$'/answer [auto-answered-by-clarify]\n\nAuto answer was posted because no human clarification was required.'
 
       - name: Record clarification candidate (clear)
@@ -708,6 +735,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -723,9 +751,9 @@ jobs:
           # Non-orchestrator issues: use phase tracking (cleaned up when plan starts).
           ISSUE_BODY_CHECK="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           if printf '%s' "${ISSUE_BODY_CHECK}" | grep -qF 'Managed by: AI Orchestrator'; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
           else
-            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}"
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "DEBUG"
           fi
 
       - name: Record clarification run completed
@@ -784,13 +812,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
             REASON="AI clarification workflow was cancelled/timed out for ${ISSUE_URL}. Run: ${RUN_URL}"
           else
             REASON="AI clarification workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
           fi
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="${REASON}"
 
       - name: Telegram failure notification
@@ -799,6 +828,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -813,4 +843,4 @@ jobs:
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "ERROR"

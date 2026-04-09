@@ -61,6 +61,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `MAX_RECOVERY_ATTEMPTS` | No | `3` | orchestrate_poll | Maximum project-level recovery cycles when the judge declares failure. Replaces the previous single-shot `recovery_attempted` boolean with a configurable counter. |
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | No | `2` | orchestrate_poll | Maximum times the poller transitions a validation-failed project back to the judge for re-evaluation before marking it as terminally failed. Set to `0` to disable (immediate terminal failure on first validation failure, matching pre-recovery behavior). |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
+| `ALERT_MSG_LEVEL` | No | `DEBUG` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status, update_workflows, test-and-mark-stable | Minimum Telegram alert level to send. Alerts below this threshold are suppressed. Valid values: `DEBUG`, `WARNING`, `ERROR`, `CRITICAL`. Each alert is prefixed with an icon and level (e.g. `🔍 DEBUG:`, `⚠️ WARNING:`, `❌ ERROR:`, `🚨 CRITICAL:`). New alerts default to `CRITICAL` until explicitly recategorised. |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Version/branch of the Serena MCP server |
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Languages for Serena symbol analysis |
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Disable the Serena MCP server |
@@ -72,20 +73,21 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `EDITOR_MAX_WALL` | No | `3300` | review_autofix, implement | Maximum wall-clock seconds per editor attempt. Budget-aware: auto-capped to remaining job time minus a 2-min buffer. |
 | `EDITOR_MIN_ATTEMPT_SECS` | No | `300` | review_autofix | Minimum remaining job budget (seconds) required to start an editor attempt. Prevents futile retries near the job deadline. |
 
-**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). **E2E smoke test override:** when an issue title contains `[E2E Smoke Test]`, all phases (clarify, plan, implement, review/edit) automatically switch to `low` reasoning effort to reduce cost and latency during release validation.
+**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. **E2E smoke test override:** when an issue title contains `[E2E Smoke Test]`, all phases (clarify, plan, implement, review/edit) automatically switch to `low` reasoning effort to reduce cost and latency during release validation.
 
 | Variable | Default | Used By | Description |
 |---|---|---|---|
 | `THINKING_LEVEL_CLARIFY` | `medium` | clarify | Reasoning effort for the clarification phase |
 | `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
-| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
+| `THINKING_LEVEL_IMPLEMENT` | `high` | implement | Reasoning effort for the implementation phase |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
 | `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | orchestrate | Reasoning effort for project decomposition |
-| `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation |
-| `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
-| `THINKING_LEVEL_VALIDATE` | `xhigh` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
+| `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation (`xhigh` for cycles 1-3, automatically `high` from cycle 4 onward) |
+| `THINKING_LEVEL_CLARIFY_RESPOND` | `low` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
+| `THINKING_LEVEL_VALIDATE` | `high` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
+| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | orchestrate_poll | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 
 | Variable | Default | Used By | Description |
@@ -506,7 +508,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `AI_MEMORY_TOKEN_BUDGET_<ROLE>` | _(from profile)_ | Per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`) |
 | `THINKING_LEVEL_CLARIFY` | `medium` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
 | `THINKING_LEVEL_PLAN` | `xhigh` | Reasoning effort for planning |
-| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | Reasoning effort for implementation |
+| `THINKING_LEVEL_IMPLEMENT` | `high` | Reasoning effort for implementation |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | Reasoning effort for reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | Reasoning effort for editor model (applying fixes) |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
@@ -517,7 +519,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `TOKEN_WARN_THRESHOLD_IMPLEMENT` | `200000` | Token warning threshold for implementation |
 | `WORKFLOW_ORCHESTRATE_MODEL` | (falls back to `WORKFLOW_EDITOR_MODEL`) | Model override for orchestrator/judge |
 | `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | Reasoning effort for project decomposition |
-| `THINKING_LEVEL_JUDGE` | `xhigh` | Reasoning effort for judge evaluation |
+| `THINKING_LEVEL_JUDGE` | `xhigh` | Reasoning effort for judge evaluation (`xhigh` for cycles 1-3, automatically `high` from cycle 4 onward) |
 | `ORCHESTRATE_POLL_INTERVAL` | `5` | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
 | `ORCHESTRATE_POLL_CALLER_WORKFLOW` | `ai-orchestrate-poll.yml` | Caller workflow filename for self-retrigger; empty string disables |
 | `EDITOR_IDLE_TIMEOUT` | `1200` | Editor watchdog idle timeout (seconds); killed if no output and no active network connections |
@@ -526,7 +528,9 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | Tool call budget for decomposer |
 | `TOOL_CALL_BUDGET_JUDGE` | `60` | Tool call budget for judge (needs deep repo inspection) |
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |
-| `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | Reasoning effort for auto-answering clarification questions |
+| `THINKING_LEVEL_CLARIFY_RESPOND` | `low` | Reasoning effort for auto-answering clarification questions |
+| `THINKING_LEVEL_VALIDATE` | `high` | Reasoning effort for runtime validation harness generation and diagnosis |
+| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
 
@@ -542,7 +546,7 @@ workflow_dispatch (project description)
     → Creates tracking issue + child issues
     → Wave 1 issues enter pipeline (clarify → auto-answer → plan → implement → review → merge)
     → Poller (scheduled): monitors progress, dispatches next waves
-    → Judge (LLM, xhigh thinking, full repo checkout): evaluates after each wave
+    → Judge (LLM, adaptive thinking: `xhigh` cycles 1-3 then `high`, full repo checkout): evaluates after each wave
         → complete: close tracking issue
         → in_progress: create fix-up issues (added to current wave for tracking), advance to next wave
         → failed: auto-recovery (revert + re-plan, retry once), then stop
@@ -569,7 +573,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 3. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. If a PR has merge conflicts (e.g. `main` advanced since the PR was created), the poller automatically updates the PR branch via the GitHub API before retrying the merge. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
 4. **In-progress conflict resolution:** When the base branch advances and creates merge conflicts on in-progress PRs (still going through the review/autofix cycle), the poller detects the conflict (`mergeable == false`). It first tries a GitHub API branch update; if that fails (real conflicts), it dispatches the review workflow via `workflow_dispatch`. The review workflow's built-in Codex conflict resolver then handles the resolution on a dedicated runner with a clean environment.
 5. **Polling:** Every 5 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
-6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
+6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with adaptive thinking (`xhigh` for cycles 1-3, then `high`). Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
 7. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
 8. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge makes autonomous architectural and security trade-off decisions — it does not defer to humans. It can: (a) merge the PR as-is if remaining issues are cosmetic or low-risk, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts.
 9. **Implementation-failed recovery:** When the implementation phase produces no file changes despite an approved plan (e.g. workflow edits stripped without `ALLOW_WORKFLOW_EDITS`, or model failure), the issue is labeled `ai:implementation-failed`. The poller automatically closes the failed issue and creates a replacement with additional guidance, so the pipeline retries without manual intervention.

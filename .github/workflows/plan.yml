@@ -118,27 +118,49 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
+          # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _gh_api_fetch() {
+            local outfile="$1"; shift
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else return 1; fi
+            done; return 1
+          }
           # Only fetch scripts actually used by the plan workflow.
           # git_ref_health_check.sh is only needed by implement/edit workflows.
-          for f in setup_serena.sh gh_helpers.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+          for f in gh_helpers.sh setup_serena.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"
             fi
             chmod +x "scripts/${f}"
+          done
+          # Fetch AI memory schema files so consumer repos that lack
+          # schemas on their default branch can bootstrap the ai-memory
+          # branch (schemas are validated during memory operations).
+          mkdir -p ai-memory/schemas
+          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
+            if [ ! -f "ai-memory/schemas/${sf}" ]; then
+              gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+            fi
           done
           # Always use the canonical instruction files from coding-workflows
           # (must be outside the if-block so they're fetched even when the
           # caller repo ships its own scripts/ directory)
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=${script_ref}" > "${f}" 2>/dev/null; then
+              if ! _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+                _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main"
               fi
             fi
           done
@@ -163,7 +185,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
 
           ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
@@ -195,7 +218,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" > "${ISSUE_COMMENTS_FILE}"
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          gh_retry gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" > "${ISSUE_COMMENTS_FILE}"
 
       - name: Validate planning phase label
         if: env.SKIP_PLAN != 'true'
@@ -204,6 +228,7 @@ jobs:
           TRIGGER_COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           if ! printf '%s' "${TRIGGER_COMMENT_BODY}" | perl -0777 -ne 'exit((/^\s*\/answer\b/is) ? 0 : 1)'; then
             echo "Comment does not begin with /answer on first non-whitespace content. Skipping planning run."
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
@@ -218,8 +243,8 @@ jobs:
             echo "Issue #${ISSUE_NUMBER} is in ai:clarification phase; transitioning to ai:planning for /answer processing."
             source scripts/label_helpers.sh
             ensure_label_exists "ai:planning" "${{ github.repository }}"
-            gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
-            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
+            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
+            gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
           else
             echo "Issue #${ISSUE_NUMBER} has neither ai:planning nor ai:clarification labels. Skipping planning run."
             echo "Current labels: ${ISSUE_LABELS_JSON}"
@@ -233,11 +258,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           # Use the issue timeline API to find PRs that are actually
           # cross-referenced to this issue (not just text matches).
           # The previous gh pr list --search approach produced false positives
           # when unrelated PRs happened to mention the issue number.
-          LINKED_PR_COUNT="$(gh api --paginate \
+          LINKED_PR_COUNT="$(gh_retry gh api --paginate \
             "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline" \
             --jq '
               [.[]
@@ -311,7 +337,23 @@ jobs:
             --run-id "${{ github.run_id }}" \
             --run-attempt "${{ github.run_attempt }}")"
 
-          CLAIMED="$(printf '%s' "${CLAIM_RESULT}" | jq -r '.operation_result.claimed // .claimed // false' 2>/dev/null || echo "false")"
+          memory_enabled="$(printf '%s' "${AI_MEMORY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+          if [[ "${memory_enabled}" =~ ^(1|true|yes|on)$ ]]; then
+            if [ -z "${CLAIM_RESULT}" ]; then
+              echo "::error::Empty /answer claim output while AI memory is enabled"
+              exit 1
+            fi
+
+            if ! printf '%s' "${CLAIM_RESULT}" | jq -e '((.operation_result.claimed // .claimed) | type) == "boolean"' >/dev/null 2>&1; then
+              echo "::error::Malformed /answer claim output while AI memory is enabled"
+              exit 1
+            fi
+
+            CLAIMED="$(printf '%s' "${CLAIM_RESULT}" | jq -r '.operation_result.claimed // .claimed')"
+          else
+            CLAIMED="true"
+          fi
+
           if [ "${CLAIMED}" != "true" ]; then
             echo "::notice::/answer comment ${TRIGGER_COMMENT_ID} claimed by another run; skipping."
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
@@ -358,6 +400,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           # Find clarification comments by HTML marker or legacy "Clarification required" prefix
           CLARIFY_IDS="$(jq -r '
             .[]
@@ -498,6 +541,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           if PROGRESS_COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="<!-- ai:plan-progress -->⏳ Planning in progress — assembling context and invoking model…" \
             --jq '.id' 2>/dev/null) && [ -n "${PROGRESS_COMMENT_ID}" ]; then
@@ -522,20 +566,27 @@ jobs:
           # for subsequent requests. Bundling everything into one file defeats
           # prefix caching because the dynamic issue context changes every run.
           {
-            echo "=== SYSTEM INSTRUCTIONS ==="
-            cat codex_system_instructions.md
+            echo "=== SYSTEM INSTRUCTIONS (planning-trimmed) ==="
+            # Include Serena + sections 0-6 + FINAL REMINDER; skip section 7+.
+            awk '/^## 7\./{exit} {print}' codex_system_instructions.md
             echo
-            echo "=== AI PIPELINE ==="
-            cat ai_pipeline.md
+            awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
             echo
+
+            echo "=== AI PIPELINE (planning-trimmed) ==="
+            # Keep shared runtime + clarify/planning context; stop before phase 3.
+            awk '/^## Phase 3/{exit} {print}' ai_pipeline.md
+            echo
+
             if [ -f agents.md ]; then
               echo "=== AGENTS.MD ==="
               cat agents.md
               echo
             fi
             if [ -f README.md ]; then
-              echo "=== README.MD ==="
-              cat README.md
+              echo "=== README.MD (trimmed) ==="
+              # Keep overview/variables; exclude wrapper/automation docs.
+              awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
               echo
             fi
           } > ./pre_assembled_static.txt
@@ -567,6 +618,7 @@ jobs:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           # Build prompt: static context + instructions + dynamic planning context,
           # all inlined so the model doesn't waste tool calls reading files.
@@ -796,6 +848,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           # Clean up progress comment — real output replaces it
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
             gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
@@ -804,7 +857,7 @@ jobs:
           # Strip absolute CI runner paths from Codex output
           sed -i -E 's|/home/runner/work/[^/]+/[^/]+/||g' "${CODEX_OUTPUT_FILE}"
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
-          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
+          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 &
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 &
           wait
@@ -818,7 +871,7 @@ jobs:
             echo "/answer"
           } > "${PLAN_COMMENT_FILE}"
 
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${PLAN_COMMENT_FILE}")"
 
       - name: Record planning candidate (needs clarification)
@@ -867,6 +920,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -881,9 +935,9 @@ jobs:
           # Orchestrator-managed issues: general tracking (cleaned up at project end).
           # Non-orchestrator issues: phase tracking (cleaned up when plan is approved).
           if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
           else
-            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}"
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "DEBUG"
           fi
 
       - name: Post implementation plan
@@ -892,6 +946,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           # Clean up progress comment — real output replaces it
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
             gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
@@ -919,11 +974,11 @@ jobs:
             exit 1
           fi
 
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${PLAN_COMMENT_FILE}")"
 
           ensure_label_exists "ai:awaiting-approval" "${{ github.repository }}"
-          gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
+          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
           gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
 
       - name: Record planning candidate (plan posted)
@@ -973,6 +1028,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           echo "auto_approved=false" >> "$GITHUB_OUTPUT"
           normalized_flag="$(printf '%s' "${AUTO_IMPLEMENT_ON_CLEAR_PLAN:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
@@ -982,7 +1038,7 @@ jobs:
               # the auto-approval comment triggers the implement workflow. Without
               # this, the implement workflow may see stale comment state.
               sleep 3
-              gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+              gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
                 -f body=$'/approved [auto-approved-by-plan]\n\nAuto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled.'
               echo "auto_approved=true" >> "$GITHUB_OUTPUT"
               ;;
@@ -997,6 +1053,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -1016,9 +1073,9 @@ jobs:
           MSG+="Run: ${RUN_URL}"
 
           if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
           else
-            tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "${MSG}"
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "${MSG}" "DEBUG"
           fi
 
       - name: Record planning run completed
@@ -1094,6 +1151,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
             gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
           fi
@@ -1118,11 +1176,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           source scripts/label_helpers.sh
-          ISSUE_LABELS_JSON="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:planning") != null' >/dev/null; then
             ensure_label_exists "ai:clarification" "${{ github.repository }}"
-            gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
+            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
             gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
           fi
 
@@ -1132,9 +1191,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."
-          gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}"
 
       - name: Telegram failure notification
@@ -1143,6 +1203,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -1162,7 +1223,7 @@ jobs:
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}"
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "ERROR"
 
       - name: Exit safely
         if: failure() || cancelled()

@@ -123,13 +123,27 @@ jobs:
         if: steps.update.outputs.has_updates == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
-          CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
 
-          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${CHAT_ID:-}" ]; then
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
             echo "::warning::Telegram not configured (TG_BOT_SECRET or TG_ADMIN_CHAT_ID missing) — skipping notification."
             exit 0
+          fi
+
+          # Inline-fetch tg_helpers.sh for alert level support
+          wf_source="${{ github.repository_owner }}/coding-workflows"
+          mkdir -p scripts
+          helpers_tmp="$(mktemp)"
+          if gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=stable" > "${helpers_tmp}" 2>/dev/null && [ -s "${helpers_tmp}" ]; then
+            mv "${helpers_tmp}" "scripts/tg_helpers.sh"
+            source scripts/tg_helpers.sh
+          else
+            rm -f "${helpers_tmp}"
           fi
 
           REPO="${{ github.repository }}"
@@ -137,17 +151,21 @@ jobs:
           UPDATED_LIST=$(cat /tmp/updated_files.txt)
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          MSG="🔄 Workflow wrappers updated in ${REPO}
+          MSG="Workflow wrappers updated in ${REPO}
 
           ${UPDATED_COUNT} wrapper(s) updated:
           ${UPDATED_LIST}
           Source: coding-workflows@stable
           Run: ${RUN_URL}"
 
-          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "disable_web_page_preview=true" \
-            --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
+          if declare -F tg_send_msg >/dev/null 2>&1; then
+            tg_send_msg "${MSG}" "DEBUG" >/dev/null
+          else
+            curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+              -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+              -d "disable_web_page_preview=true" \
+              --data-urlencode "text=${MSG}" >/dev/null 2>&1 || echo "::warning::Telegram send failed"
+          fi
 
       - name: Summary
         run: |
