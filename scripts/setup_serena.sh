@@ -77,6 +77,10 @@ warn_and_exit() {
 		remove_mcp_server_blocks "serena" "${CODEX_CFG}"
 		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
 	fi
+	if [ -f "${CODEX_CFG}" ] && grep -q '^\[mcp_servers\.context7' "${CODEX_CFG}"; then
+		remove_mcp_server_blocks "context7" "${CODEX_CFG}"
+		echo "Removed Context7 MCP server from ${CODEX_CFG}."
+	fi
 	rm -f "${SERENA_DEBUG_LOG}"
 	exit 0
 }
