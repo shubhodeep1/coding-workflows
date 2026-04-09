@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping\n- Q1 was answered as `A`: persist standalone stall state in a hidden machine-readable issue comment marker on each standalone issue.\n\nConflict check\n- The current poller workflow short-circuits when there are no open `ai:orchestrator-tracking` issues, so standalone-only repositories are not processed at all. This conflicts with the requested standalone recovery behavior.\n- Existing `recover_stalled_issue` logic is tightly coupled to orchestrator state (`STATE_FILE`, `WAVE_IDX`, `local_id`, tracking comments), so it cannot be reused for standalone issues without adding standalone-specific handling.\n\nImplementation plan\n\n1. Files likely to change\n- [scripts/orchestrate_poll_process.sh](scripts/orchestrate_poll_process.sh)\n- [.github/workflows/orchestrate_poll.yml](.github/workflows/orchestrate_poll.yml)\n- [README.md](README.md)\n- [scripts/orchestrate_lib.py](scripts/orchestrate_lib.py) (only if a small helper CLI is needed; existing `check-stalls`/`update-timestamps` may already be sufficient)\n\n2. Functions/modules to implement\n- Add a standalone recovery section in `orchestrate_poll_process.sh` after orchestrator tracking processing, before the standalone PR conflict sweep.\n- Implement standalone candidate discovery:\n  - Open issues with pipeline labels (`ai:clarification`, `ai:planning`, `ai:awaiting-approval`, `ai:implementing`, `ai:done`, `ai:ready-to-merge`)\n  - Open issues with no AI labels but AI-marker comments (including the new standalone state marker and clarification marker)\n  - Exclude issues belonging to active orchestrator tracking state.\n- Implement hidden comment state persistence helpers:\n  - Read latest standalone state marker comment\n  - Initialize defaults when missing\n  - Update/patch or append marker comment with new state\n- Reuse stall logic by feeding per-issue synthetic state into existing `orchestrate_lib.py` commands:\n  - `update-timestamps` for phase change/reset behavior\n  - `check-stalls` for threshold + `STALL_RECOVERY_ACTIONS` selection\n- Add standalone recovery action executor using the same action names:\n  - `retrigger_pipeline`, `auto_respond_clarify`, `retrigger_plan`, `auto_approve`, `retrigger_implement`, `retrigger_review`, `attempt_merge`, `close_and_reissue`, `skip`\n- Reuse active workflow guard:\n  - `build_active_issue_set()` and `issue_has_active_workflow()` before taking action on standalone issues.\n\n3. Data structures affected\n- New hidden issue comment marker schema (per standalone issue), e.g.:\n  - `schema_version`\n  - `last_seen_phase`\n  - `status_since_ts`\n  - `stall_recovery_count`\n  - optional `updated_ts`\n- Runtime exclusion set for \u201cactive orchestrator-managed issue numbers\u201d built from active tracking states.\n- Existing per-phase threshold JSON (`PHASE_THRESHOLDS_JSON`) and existing `MAX_STALL_RECOVERIES_PER_ISSUE` remain the source of truth.\n\n4. API/interface changes\n- Add new variable: `ENABLE_STANDALONE_STALL_RECOVERY` (default `true`) in orchestrate poll workflow env.\n- Update `find_tracking` workflow behavior so the processing step runs when standalone recovery is enabled, even if active tracking issue count is zero.\n- No external API contract changes; behavior change is internal to poller automation.\n\n5. Potential risks and edge cases\n- Race: an issue can move between standalone and orchestrated ownership between poll cycles.\n- Multi-label issues: must keep using `determine_phase()` priority to avoid inconsistent action selection.\n- No-label detection false positives if AI-comment markers are too broad; marker matching should be strict.\n- Comment update races: multiple poll cycles may append competing state comments; use latest-marker semantics and idempotent writes.\n- `close_and_reissue` for standalone must preserve issue context without injecting orchestrator metadata that implies tracking linkage.\n- Telegram context: standalone notifications should not rely on `TRACKING_NUM`.\n\n6. Testing considerations\n- Validate action selection parity with orchestrator by comparing `check-stalls` output for the same phase/recovery counts.\n- Scenario tests for each standalone phase label and expected recovery action progression.\n- Verify `no_labels` path:\n  - issue with AI marker comment and no AI labels triggers `retrigger_pipeline`.\n- Verify active workflow guard:\n  - stalled issue with fresh active run is skipped.\n- Verify max cap:\n  - after `MAX_STALL_RECOVERIES_PER_ISSUE`, issue gets `ai:closed`, is closed, and Telegram alert is sent.\n- Verify detached/orphan behavior:\n  - issue formerly linked to closed tracking issue is treated as standalone.\n- Verify workflow behavior when no orchestrator tracking issues exist but standalone recovery is enabled.\n\nNotes\n- No MongoDB collections are touched, so no `db/contracts` changes are expected for this issue.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "536c1e84209c897c9e58c2b19b385fd1e0935fc513223d80a1732b176441589b",
+  "lineage": {
+    "issue_number": 607,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24185688116",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24185688116",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/607"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409104546_0be9128fde",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 607,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24185688116"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #607",
+  "timestamps": {
+    "created_at": "2026-04-09T10:45:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
