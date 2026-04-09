@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: What scope should this issue cover for deduplication rollout?**\nChoices:\n- **A** \u2014 Update prompt files and the minimal prompt-assembly callsites (workflows/scripts that currently `cat prompts/mode-*.txt`) so canonical inclusion is resolved at runtime/build time with no broken includes. **(RECOMMENDED)**\n- **B** \u2014 Update prompt files only; keep existing assembly callsites unchanged, and commit mode files already materialized with canonical text.\n- **C** \u2014 Update prompt files plus all workflow inline Serena guidance blocks in the same issue.\nReply: `Q1: A`\n**Q2: Which Serena variant should `prompts/mode-validate-generate.txt` use?**\nChoices:\n- **A** \u2014 Read-only variant.\n- **B** \u2014 Read-write variant. **(RECOMMENDED)**\n- **C** \u2014 Keep a mode-specific custom block (not strictly read-only/read-write).\nReply: `Q2: B`\n**Q3: For `prompts/serena-efficiency-block.txt`, confirm required structure.**\nChoices:\n- **A** \u2014 One file containing both variants with explicit section delimiters/markers, and consumers select one section. **(RECOMMENDED)**\n- **B** \u2014 Two separate files (one per variant), despite the proposed single-file path.\n- **C** \u2014 One unified variant shared by all modes.\nReply: `Q3: A`",
+  "fingerprint": "18bf8e78aa2953fe267d2fea4b6b9387b237c704e1fbaf45dfb7520a6c7a6df9",
+  "lineage": {
+    "issue_number": 625,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24195951502",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24195951502",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260409143717_0c0d8305dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 625,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24195951502"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #625 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-09T14:37:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
