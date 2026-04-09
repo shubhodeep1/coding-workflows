@@ -557,18 +557,21 @@ MCP_EOF
 echo "Serena MCP server appended to ${CODEX_CONFIG}"
 
 CONTEXT7_CONFIG_TOUCHED="true"
-remove_mcp_server_blocks "context7" "${CODEX_CONFIG}" || warn_and_exit "Failed to clean existing Context7 MCP config"
+remove_mcp_server_blocks "context7" "${CODEX_CONFIG}" || echo "::warning::Failed to clean existing Context7 MCP config; continuing without updating Context7 MCP config." >&2
 
 if [ "${CONTEXT7_DISABLED:-false}" != "true" ]; then
-	cat >> "${CODEX_CONFIG}" <<CONTEXT7_MCP_EOF || warn_and_exit "Failed to append Context7 MCP config"
+	if cat >> "${CODEX_CONFIG}" <<CONTEXT7_MCP_EOF
 
 [mcp_servers.context7]
 command = "npx"
 args = ["-y", "@upstash/context7-mcp@latest"]
 required = false
 CONTEXT7_MCP_EOF
-
-	echo "Context7 MCP server appended to ${CODEX_CONFIG}"
+	then
+		echo "Context7 MCP server appended to ${CODEX_CONFIG}"
+	else
+		echo "::warning::Failed to append Context7 MCP config; continuing without Context7 MCP setup." >&2
+	fi
 else
 	echo "Context7 MCP setup skipped (CONTEXT7_DISABLED=true)."
 fi
