@@ -357,10 +357,10 @@ jobs:
           set -euo pipefail
           NOW="$(date +%s)"
           ELAPSED=$(( NOW - JOB_START_EPOCH ))
-          # Ensure at least 30s cooldown, then round up to the next
-          # 45th-second mark (45s, 1m45s, 2m45s, …) leaving ~15s margin
+          # Ensure at least 60s cooldown, then round up to the next
+          # 45th-second mark (1m45s, 2m45s, …) leaving ~15s margin
           # for the retrigger step to finish within the billing minute.
-          EARLIEST=$(( ELAPSED + 30 ))
+          EARLIEST=$(( ELAPSED + 60 ))
           TARGET=$(( (((EARLIEST + 74) / 60) * 60) - 15 ))
           SLEEP_SECS=$(( TARGET - ELAPSED ))
           echo "Elapsed ${ELAPSED}s — sleeping ${SLEEP_SECS}s to align to ~${TARGET}s ($(( TARGET / 60 ))m$(( TARGET % 60 ))s)"
