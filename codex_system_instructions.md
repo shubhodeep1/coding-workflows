@@ -54,7 +54,8 @@ Use Context7 only when library/framework API details are uncertain and current d
 
 Rules:
 - Resolve the library first (`mcp__context7__resolve-library-id`).
-- Then fetch targeted docs (`mcp__context7__get-library-docs`) for the exact API surface being changed.
+- Then fetch targeted docs (`mcp__context7__query-docs`) for the exact API surface being changed.
+- If naming differs across environments, use the exact Context7 doc-query tool name exposed in the current tool list.
 - Keep normal Serena-first code navigation/editing workflow for repository semantics.
 - If Context7 is unavailable or errors, continue without it. Do not block implementation.
 
