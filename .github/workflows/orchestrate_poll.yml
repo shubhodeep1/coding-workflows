@@ -55,10 +55,29 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          # gh_helpers.sh is not yet available (checkout + fetch happen later),
+          # so use an inline retry helper — same pattern as "Fetch workflow
+          # support scripts".
+          _gh_retry() {
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if "$@" 2>/tmp/_gh_retry_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_retry_err 2>/dev/null; then
+                echo "::warning::Rate limit hit (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30
+              else
+                local wait_secs=$(( 2 ** (attempt - 1) ))
+                echo "::warning::gh command failed (attempt ${attempt}/4), retrying in ${wait_secs}s…" >&2
+                sleep "${wait_secs}"
+              fi
+              attempt=$((attempt + 1))
+            done
+            echo "::error::gh command failed after 4 attempts: $*" >&2
+            return 1
+          }
 
           # Find all open issues with the orchestrator tracking label
-          TRACKING_ISSUES="$(gh_retry gh issue list \
+          TRACKING_ISSUES="$(_gh_retry gh issue list \
             --repo "${{ github.repository }}" \
             --label "ai:orchestrator-tracking" \
             --state open \
