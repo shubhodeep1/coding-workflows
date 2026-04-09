@@ -1464,7 +1464,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     echo "Project complete!"
     jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
-    set_tracking_phase_label "ai:done"
+    set_tracking_phase_label "ai:merged"
     post_tracking_comment "Project completed successfully. Issue kept open for manual review."
     tg_cleanup_msgs "${TRACKING_NUM}"
     MSG="✅ Project #${TRACKING_NUM} completed successfully."
@@ -3015,7 +3015,7 @@ PRs to revert: ${REVERT_COUNT}"
         jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment
 
-        set_tracking_phase_label "ai:validated"
+        set_tracking_phase_label "ai:merged"
         post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s). Issue kept open for manual review."
 
         tg_cleanup_msgs "${TRACKING_NUM}"

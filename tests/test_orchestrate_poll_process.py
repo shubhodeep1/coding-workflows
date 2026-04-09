@@ -662,6 +662,7 @@ def test_complete_verdict_keeps_open_when_validation_disabled():
 	assert result["latest_state"]["status"] == "complete"
 	assert result["tracking_closed"] is False
 	assert result["validation_dispatches"] == []
+	assert "ai:merged" in result["tracking_labels"]
 	assert result["latest_state"]["final_merge_pr"] == 350
 	assert result["latest_state"]["final_merge_status"] == "merged"
 
@@ -789,6 +790,7 @@ def test_merge_conflict_state_completes_when_final_pr_already_merged_and_branch_
 		existing_branches=["main"],
 	)
 	assert result["latest_state"]["status"] == "complete"
+	assert "ai:merged" in result["tracking_labels"]
 	assert result["latest_state"]["final_merge_pr"] == 354
 	assert result["latest_state"]["final_merge_status"] == "merged"
 
