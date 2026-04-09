@@ -5,13 +5,36 @@
   "entry_id": "processed_command_565_4211722241_approved",
   "issue_number": 565,
   "metadata": {
+    "branch": "ai/issue-565",
+    "changed_files": [
+      ".github/workflows/clarify.yml",
+      ".github/workflows/implement.yml",
+      ".github/workflows/orchestrate.yml",
+      ".github/workflows/orchestrate_clarify_respond.yml",
+      ".github/workflows/orchestrate_poll.yml",
+      ".github/workflows/plan.yml",
+      ".github/workflows/review_autofix.yml",
+      ".github/workflows/validate.yml",
+      "README.md",
+      "codex_system_instructions.md",
+      "scripts/ai_memory.py",
+      "scripts/ai_memory_lib.py",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/setup_serena.sh",
+      "scripts/validate_process.sh"
+    ],
+    "issue_number": 565,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/565",
+    "pr_number": 576,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/576",
+    "run_attempt": "1",
+    "run_id": "24174575227",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24174575227"
   },
   "run_attempt": 1,
   "run_id": "24174575227",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-09T05:44:28Z",
+  "status": "completed",
+  "timestamp": "2026-04-09T05:58:16Z",
   "workflow": "implement"
 }
