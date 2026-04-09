@@ -938,11 +938,11 @@ PY
     action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
     echo "  [standalone-stall] Issue #${issue_num} stuck in '${phase}' for ${elapsed_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
 
-    if [ "${action}" != "skip" ] && issue_has_active_workflow "${issue_num}"; then
-      echo "  [standalone-stall] Issue #${issue_num} has a recent active workflow run — skipping recovery."
-      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
-        write_standalone_state_json "${issue_num}" "${updated_state}"
-      fi
+	if issue_has_active_workflow "${issue_num}"; then
+	  echo "  [standalone-stall] Issue #${issue_num} has a recent active workflow run — skipping recovery."
+	  if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+		write_standalone_state_json "${issue_num}" "${updated_state}"
+	  fi
       continue
     fi
 
@@ -1061,8 +1061,8 @@ STALL_EOF
         local new_url
         local new_url_clean
         local new_num
-        orig_title="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' 2>/dev/null || echo "")"
-        orig_body="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' 2>/dev/null || echo "")"
+		orig_title="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' 2>/dev/null || echo "")"
+		orig_body="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' 2>/dev/null || echo "")"
 
         new_body="$(cat <<REISSUE_EOF
 ${orig_body}
@@ -1078,7 +1078,7 @@ ${orig_body}
 REISSUE_EOF
 )"
         ensure_label_exists "ai:clarification"
-        new_url="$(gh issue create --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
+		new_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
