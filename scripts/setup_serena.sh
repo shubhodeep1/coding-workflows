@@ -75,11 +75,11 @@ warn_and_exit() {
 	# Remove Serena MCP config so Codex can start without Serena when setup fails.
 	CODEX_CFG="${HOME}/.codex/config.toml"
 	if [ -f "${CODEX_CFG}" ] && grep -Eq '^\[mcp_servers\.serena(\]|[.])' "${CODEX_CFG}"; then
-		remove_mcp_server_blocks "serena" "${CODEX_CFG}"
+		remove_mcp_server_blocks "serena" "${CODEX_CFG}" || true
 		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
 	fi
 	if [ "${CONTEXT7_CONFIG_TOUCHED:-false}" = "true" ] && [ -f "${CODEX_CFG}" ] && grep -Eq '^\[mcp_servers\.context7(\]|[.])' "${CODEX_CFG}"; then
-		remove_mcp_server_blocks "context7" "${CODEX_CFG}"
+		remove_mcp_server_blocks "context7" "${CODEX_CFG}" || true
 		echo "Removed Context7 MCP server from ${CODEX_CFG}."
 	fi
 	rm -f "${SERENA_DEBUG_LOG}"
@@ -100,7 +100,7 @@ remove_mcp_server_blocks() {
 		$0 ~ "^\\[mcp_servers\\." server_name "\\." { skip=1; next }
 		$0 ~ "^\\[" && $0 !~ "^\\[mcp_servers\\." server_name "(\\]|\\.)" { skip=0 }
 		!skip { print }
-	' "${codex_cfg}" > "${codex_cfg}.tmp" && mv "${codex_cfg}.tmp" "${codex_cfg}"
+	' "${codex_cfg}" > "${codex_cfg}.tmp" && mv "${codex_cfg}.tmp" "${codex_cfg}" || { rm -f "${codex_cfg}.tmp"; return 1; }
 }
 
 if printf '%s' "${SERENA_VERSION}" | grep -q '"'; then
@@ -509,7 +509,7 @@ if [ ! -f "${CODEX_CONFIG}" ]; then
 fi
 
 # Keep config idempotent across re-runs and toggle changes.
-remove_mcp_server_blocks "serena" "${CODEX_CONFIG}"
+remove_mcp_server_blocks "serena" "${CODEX_CONFIG}" || warn_and_exit "Failed to clean existing Serena MCP config"
 
 # Resolve the actual serena binary from the uvx cache.
 # The cache was warmed in step 2, so the binary should be available.
@@ -557,10 +557,10 @@ MCP_EOF
 echo "Serena MCP server appended to ${CODEX_CONFIG}"
 
 CONTEXT7_CONFIG_TOUCHED="true"
-remove_mcp_server_blocks "context7" "${CODEX_CONFIG}"
+remove_mcp_server_blocks "context7" "${CODEX_CONFIG}" || warn_and_exit "Failed to clean existing Context7 MCP config"
 
 if [ "${CONTEXT7_DISABLED:-false}" != "true" ]; then
-	cat >> "${CODEX_CONFIG}" <<CONTEXT7_MCP_EOF
+	cat >> "${CODEX_CONFIG}" <<CONTEXT7_MCP_EOF || warn_and_exit "Failed to append Context7 MCP config"
 
 [mcp_servers.context7]
 command = "npx"
