@@ -91,17 +91,19 @@ is_truthy() {
 
 assemble_judge_static_context() {
   local out_file="$1"
+
+  if [ ! -s codex_system_instructions.md ] || [ ! -s ai_pipeline.md ]; then
+    echo "ERROR: Required files codex_system_instructions.md and/or ai_pipeline.md are missing or empty" >&2
+    return 1
+  fi
+
   {
-    if [ -f codex_system_instructions.md ]; then
-      echo "=== SYSTEM INSTRUCTIONS ==="
-      cat codex_system_instructions.md
-      echo
-    fi
-    if [ -f ai_pipeline.md ]; then
-      echo "=== AI PIPELINE ==="
-      cat ai_pipeline.md
-      echo
-    fi
+    echo "=== SYSTEM INSTRUCTIONS ==="
+    cat codex_system_instructions.md
+    echo
+    echo "=== AI PIPELINE ==="
+    cat ai_pipeline.md
+    echo
     if [ -f AGENTS.md ]; then
       echo "=== AGENTS.MD ==="
       cat AGENTS.md

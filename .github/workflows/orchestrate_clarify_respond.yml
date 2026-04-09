@@ -153,6 +153,10 @@ jobs:
                   "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
               fi
             fi
+            if [ ! -s "${f}" ]; then
+              echo "::error::Failed to fetch required file ${f}"
+              exit 1
+            fi
           done
 
       - name: Record memory run-start event
