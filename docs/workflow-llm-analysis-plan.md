@@ -136,6 +136,7 @@ jobs:
       - Run scripts/analyze_workflow_logs.py
         (env: OPENROUTER_API_KEY, model from vars)
       - Commit + push analysis/workflow-optimization-YYYY-MM-DD.md
+      - Send Telegram notification with report link
 ```
 
 **Key decisions:**
@@ -147,6 +148,8 @@ jobs:
 - Commits directly to the branch the workflow was dispatched from (typically
   `main`). Uses `GH_PAT` for push so it can write to protected branches if
   configured.
+- Sends a Telegram alert with a direct link to the committed report file on
+  GitHub after a successful analysis run.
 
 ---
 
@@ -330,7 +333,68 @@ suggested fixes.)
 
 ---
 
-### 5. Metrics Extraction — What We Parse From Logs
+### 5. Telegram Notification
+
+After the report is committed and pushed, the analyze job sends a Telegram
+message to `TG_ADMIN_CHAT_ID` with a link to the new report file on GitHub.
+
+**Integration pattern:** Uses the existing `tg_helpers.sh` (already fetched by
+the workflow). Since the analysis workflow has no associated issue, use the
+simple `tg_send_msg` function (fire-and-forget, no issue-based tracking needed).
+
+**Workflow step (end of analyze job):**
+
+```yaml
+- name: Notify via Telegram
+  if: env.REPORT_FILE != ''
+  env:
+    TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+    TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+  run: |
+    set -euo pipefail
+    source scripts/tg_helpers.sh
+
+    REPORT_NAME="$(basename "${REPORT_FILE}")"
+    REPORT_URL="https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/analysis/${REPORT_NAME}"
+
+    # Build a compact summary from the executive summary section
+    EXEC_SUMMARY=""
+    if [ -f "${REPORT_FILE}" ]; then
+      EXEC_SUMMARY=$(sed -n '/^## Executive Summary/,/^## /{ /^## /d; p; }' \
+        "${REPORT_FILE}" | head -10 | sed 's/^[[:space:]]*//')
+    fi
+
+    MSG="📊 Workflow Optimization Report
+${REPORT_NAME}
+
+${EXEC_SUMMARY}
+
+📄 ${REPORT_URL}"
+
+    tg_send_msg "${MSG}"
+```
+
+**Behavior when Telegram is not configured:**
+
+`tg_send_msg` degrades gracefully — if `TG_BOT_SECRET` or `TG_ADMIN_CHAT_ID`
+are unset, the function returns immediately without error. No workflow failure.
+
+**Message content:**
+
+- Report filename (includes date for quick identification)
+- First ~10 lines of the Executive Summary section (key findings at a glance)
+- Direct GitHub link to the full report
+
+**Required secrets/variables (all existing, all optional):**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `TG_BOT_SECRET` | Secret | Telegram bot token |
+| `TG_ADMIN_CHAT_ID` | Variable | Telegram chat ID for notifications |
+
+---
+
+### 6. Metrics Extraction — What We Parse From Logs
 
 | Metric | Source | Extraction Method |
 |--------|--------|-------------------|
@@ -355,7 +419,7 @@ report itself.
 
 ---
 
-### 6. GitHub API Endpoints Used
+### 7. GitHub API Endpoints Used
 
 | Endpoint | Purpose | Auth |
 |----------|---------|------|
@@ -369,7 +433,7 @@ included with `repo` scope, so no PAT changes are needed.
 
 ---
 
-### 7. Report Output Format
+### 8. Report Output Format
 
 Example filename: `analysis/workflow-optimization-2026-04-09.md`
 
@@ -441,8 +505,9 @@ These are not part of the initial implementation but are worth tracking:
    into dollar estimates per phase.
 5. **Scheduled runs:** Add an optional `schedule` trigger (e.g., weekly Monday)
    if on-demand proves insufficient.
-6. **Telegram notification:** Post a summary to the admin chat when a new
-   report is generated (reuse existing `tg_helpers.sh`).
+6. **Configurable notification channel:** Support posting to a per-repo or
+   per-run Telegram chat (e.g., via a `TG_ANALYSIS_CHAT_ID` override) in
+   addition to the default admin chat.
 
 ---
 
