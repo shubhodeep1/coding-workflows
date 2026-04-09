@@ -536,13 +536,13 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 
 ### Determination (current stack)
 
-- **Supported: Yes** for `openai/gpt-5.3-codex` via OpenRouter Responses API.
+- **Observed support (route-dependent):** `openai/gpt-5.3-codex` via OpenRouter Responses API can benefit from provider-managed prefix caching, but availability/reporting can vary by routed provider/model.
 - Caching is provider-managed prefix caching (automatic when request prefixes are identical and long enough).
 - In this repo, cache-friendly prompt shaping is enabled by design: a static pre-assembled prefix is placed first, and dynamic issue/PR/runtime content is appended after it.
 
 ### What Codex CLI can and cannot control
 
-- Codex workflow config supports provider/network settings (for example `wire_api = "responses"`, retries, optional provider headers/query params).
+- Codex workflow config used here supports provider/network basics (for example `wire_api = "responses"`, retries, and timeouts).
 - Codex config used here does **not** expose direct request-body prompt-cache controls (for example explicit `cache_control` or manual cache keys) in workflow generation.
 - Operational result: cache behavior is achieved through stable prompt-prefix discipline, not per-request cache toggles.
 

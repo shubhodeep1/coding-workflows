@@ -87,9 +87,16 @@ is_truthy() {
 
 assemble_judge_static_context() {
   local out_file="$1"
+  local missing=""
 
-  if [ ! -s codex_system_instructions.md ] || [ ! -s ai_pipeline.md ]; then
-    echo "ERROR: Required files codex_system_instructions.md and/or ai_pipeline.md are missing or empty" >&2
+  if [ ! -s codex_system_instructions.md ]; then
+    missing="codex_system_instructions.md"
+  fi
+  if [ ! -s ai_pipeline.md ]; then
+    missing="${missing}${missing:+, }ai_pipeline.md"
+  fi
+  if [ -n "${missing}" ]; then
+    echo "::error::Required file(s) missing or empty: ${missing}" >&2
     return 1
   fi
 
