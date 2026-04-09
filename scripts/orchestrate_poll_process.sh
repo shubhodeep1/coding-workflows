@@ -1017,6 +1017,39 @@ The judge will evaluate this gap when the wave completes and decide whether to r
 }
 
 # ---------------------------------------------------------------
+# Helper: Check if an active autofix run already exists for a PR branch
+# ---------------------------------------------------------------
+# Queries the GitHub Actions API for in_progress or queued runs of
+# review/autofix workflows on the given branch.  A new dispatch would
+# cancel the existing run (cancel-in-progress concurrency) and trigger
+# a spurious "cancelled/timed out" Telegram alert.
+#
+# Usage: _has_active_autofix_run <pr_number> <head_ref>
+# Returns 0 if an active run exists (skip dispatch), 1 otherwise.
+_has_active_autofix_run()
+{
+	local pr_number="$1"
+	local head_ref="$2"
+	local log_prefix="[conflict-dispatch] PR #${pr_number}"
+
+	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
+		local active
+		active="$(gh run list --repo "${GITHUB_REPOSITORY}" \
+			--workflow "${wf_candidate}" \
+			--branch "${head_ref}" \
+			--limit 5 \
+			--json status \
+			--jq '[.[] | select(.status == "in_progress" or .status == "queued")] | length' \
+			2>/dev/null || echo "0")"
+		if [ "${active}" -gt 0 ]; then
+			echo "  ${log_prefix} Active autofix run found (workflow=${wf_candidate}, count=${active}). Skipping dispatch."
+			return 0
+		fi
+	done
+
+	return 1
+}
+
 # Helper: Dispatch review workflow for merge conflict resolution
 # ---------------------------------------------------------------
 # Instead of resolving conflicts locally with Codex, dispatch the
@@ -1030,12 +1063,19 @@ The judge will evaluate this gap when the wave completes and decide whether to r
 # that affects pull_request synchronize events.
 #
 # Usage: _dispatch_review_for_conflicts <pr_number> <head_ref>
-# Returns 0 if dispatch succeeded, 1 otherwise.
+# Returns: 0 = dispatched, 1 = dispatch failed, 2 = skipped (active run exists).
 _dispatch_review_for_conflicts()
 {
 	local pr_number="$1"
 	local head_ref="$2"
 	local log_prefix="[conflict-dispatch] PR #${pr_number}"
+
+	# Guard: skip dispatch if an autofix run is already active for this PR.
+	# A new dispatch would cancel the running job (cancel-in-progress
+	# concurrency) and fire a spurious "cancelled/timed out" alert.
+	if _has_active_autofix_run "${pr_number}" "${head_ref}"; then
+		return 2
+	fi
 
 	echo "  ${log_prefix} Dispatching review workflow for conflict resolution..."
 
@@ -1477,8 +1517,12 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
           RTM_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
           if [ -n "${RTM_HEAD_REF}" ] && [ "${RTM_HEAD_REF}" != "null" ]; then
-            if _dispatch_review_for_conflicts "${RTM_PR}" "${RTM_HEAD_REF}"; then
+            _dispatch_rc=0
+            _dispatch_review_for_conflicts "${RTM_PR}" "${RTM_HEAD_REF}" || _dispatch_rc=$?
+            if [ "${_dispatch_rc}" -eq 0 ]; then
               tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has merge conflicts. Review workflow dispatched for resolution."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")"
+            elif [ "${_dispatch_rc}" -eq 2 ]; then
+              echo "  PR #${RTM_PR}: autofix already in progress, skipping dispatch."
             else
               tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")"
             fi
@@ -1537,8 +1581,12 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     # API update failed — real conflicts exist.  Dispatch review workflow.
     IP_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
     if [ -n "${IP_HEAD_REF}" ] && [ "${IP_HEAD_REF}" != "null" ]; then
-      if _dispatch_review_for_conflicts "${IP_PR}" "${IP_HEAD_REF}"; then
+      _dispatch_rc=0
+      _dispatch_review_for_conflicts "${IP_PR}" "${IP_HEAD_REF}" || _dispatch_rc=$?
+      if [ "${_dispatch_rc}" -eq 0 ]; then
         tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Review workflow dispatched for resolution."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
+      elif [ "${_dispatch_rc}" -eq 2 ]; then
+        echo "  PR #${IP_PR}: autofix already in progress, skipping dispatch."
       else
         tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
       fi
@@ -1814,8 +1862,12 @@ sys.exit(1)
               echo "  API branch update failed for review-blocked PR #${RB_PR}. Dispatching review workflow for conflict resolution..."
               RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
               if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
-                if _dispatch_review_for_conflicts "${RB_PR}" "${RB_HEAD_REF}"; then
+                _dispatch_rc=0
+                _dispatch_review_for_conflicts "${RB_PR}" "${RB_HEAD_REF}" || _dispatch_rc=$?
+                if [ "${_dispatch_rc}" -eq 0 ]; then
                   tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts. Review workflow dispatched for resolution."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+                elif [ "${_dispatch_rc}" -eq 2 ]; then
+                  echo "  PR #${RB_PR}: autofix already in progress, skipping dispatch."
                 else
                   tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                 fi
@@ -1859,8 +1911,12 @@ sys.exit(1)
                 echo "  API branch update failed for force-merge PR #${RB_PR}. Dispatching review workflow for conflict resolution..."
                 RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
                 if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
-                  if _dispatch_review_for_conflicts "${RB_PR}" "${RB_HEAD_REF}"; then
+                  _dispatch_rc=0
+                  _dispatch_review_for_conflicts "${RB_PR}" "${RB_HEAD_REF}" || _dispatch_rc=$?
+                  if [ "${_dispatch_rc}" -eq 0 ]; then
                     echo "  PR #${RB_PR} review workflow dispatched. Will retry force-merge on next poll cycle."
+                  elif [ "${_dispatch_rc}" -eq 2 ]; then
+                    echo "  PR #${RB_PR}: autofix already in progress, skipping dispatch. Will retry force-merge on next poll cycle."
                   else
                     tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
                   fi
@@ -3028,9 +3084,13 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 
 	# Stage 2: Dispatch review workflow for conflict resolution.
-	if _dispatch_review_for_conflicts "${S_PR}" "${S_HEAD}"; then
+	_dispatch_rc=0
+	_dispatch_review_for_conflicts "${S_PR}" "${S_HEAD}" || _dispatch_rc=$?
+	if [ "${_dispatch_rc}" -eq 0 ]; then
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
 		tg_send_msg "⚠️ Standalone PR #${S_PR} has merge conflicts. Review workflow dispatched for resolution."$'\n'"PR: $(_gh_url "pull/${S_PR}")" >/dev/null 2>&1 || true
+	elif [ "${_dispatch_rc}" -eq 2 ]; then
+		echo "  PR #${S_PR}: autofix already in progress, skipping dispatch."
 	else
 		tg_send_msg "⚠️ Standalone PR #${S_PR} has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${S_PR}")" >/dev/null 2>&1 || true
 	fi
