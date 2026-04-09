@@ -201,6 +201,10 @@ if not args:
 if args[0] == 'label' and len(args) >= 3 and args[1] == 'create':
 	sys.exit(0)
 
+if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
+	print('[]')
+	sys.exit(0)
+
 if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 	wf = args[2]
 	if wf in ('ai-validate.yml', 'internal-validate.yml'):
@@ -353,6 +357,14 @@ sys.exit(1)
 			"""#!/usr/bin/env python3
 import json
 import os
+import sys
+
+# Drain stdin to avoid SIGPIPE on the upstream cat process
+# when the prompt file is larger than the OS pipe buffer.
+try:
+	sys.stdin.read()
+except Exception:
+	pass
 
 output = os.environ.get('MOCK_CODEX_JSON', '{}')
 parsed = json.loads(output)

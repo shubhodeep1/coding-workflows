@@ -1829,11 +1829,10 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       RB_JUDGE_SUCCESS=false
       for attempt in 1 2; do
         echo "  Review-blocked judge attempt ${attempt}/2..."
-        if cat "${RB_JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null; then
-          if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
-            RB_JUDGE_SUCCESS=true
-            break
-          fi
+        cat "${RB_JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+        if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
+          RB_JUDGE_SUCCESS=true
+          break
         fi
         if [ "${attempt}" -lt 2 ]; then
           sleep 10
@@ -2633,11 +2632,13 @@ ${PR_DIFF}
   max_attempts=2
   for attempt in $(seq 1 "${max_attempts}"); do
     echo "Judge attempt ${attempt}/${max_attempts}..."
-    if cat "${JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2); then
-      if grep -q '[^[:space:]]' "${JUDGE_OUTPUT_FILE}"; then
-        JUDGE_SUCCESS=true
-        break
-      fi
+    # The pipeline may return 141 (SIGPIPE) when the prompt is larger
+    # than the OS pipe buffer and codex closes stdin before cat finishes.
+    # This is harmless — check the output file regardless of exit code.
+    cat "${JUDGE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    if grep -q '[^[:space:]]' "${JUDGE_OUTPUT_FILE}"; then
+      JUDGE_SUCCESS=true
+      break
     fi
     if [ "${attempt}" -lt "${max_attempts}" ]; then
       sleep $(( 10 * attempt + RANDOM % 10 ))
