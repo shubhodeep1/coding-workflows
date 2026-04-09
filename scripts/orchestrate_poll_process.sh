@@ -643,16 +643,16 @@ STANDALONE_STATE_MARKER_CLOSE="AI_STANDALONE_STALL_STATE_V1 -->"
 
 get_standalone_state_comment_id() {
   local issue_num="$1"
-  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
-    --jq '[.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | first | .id // ""' \
+  gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
+    | jq -s -r 'add // [] | [.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | first | .id // ""' \
     2>/dev/null || true
 }
 
 read_standalone_state_json() {
   local issue_num="$1"
   local state_raw
-  state_raw="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
-    --jq '[.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | first | .body // ""' \
+  state_raw="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
+    | jq -s -r 'add // [] | [.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | first | .body // ""' \
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
@@ -754,7 +754,7 @@ run_standalone_stall_recovery() {
 
   if [ -f "${RUNTIME_DIR}/tracking_issues.json" ]; then
     t_count="$(jq 'length' "${RUNTIME_DIR}/tracking_issues.json" 2>/dev/null || echo "0")"
-    for t_idx in $(seq 0 $(( t_count - 1 ))); do
+    for ((t_idx=0; t_idx<t_count; t_idx++)); do
       t_num="$(jq -r ".[${t_idx}].number" "${RUNTIME_DIR}/tracking_issues.json" 2>/dev/null || echo "")"
       [ -n "${t_num}" ] || continue
       orchestrator_managed_set="${orchestrator_managed_set}"$'\n'"${t_num}"
@@ -774,15 +774,21 @@ run_standalone_stall_recovery() {
   local lbl
   for lbl in ai:clarification ai:planning ai:awaiting-approval ai:implementing ai:done ai:ready-to-merge; do
     local by_label
-    by_label="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --label "${lbl}" --json number --limit 200 2>/dev/null || echo '[]')"
+    by_label="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --label "${lbl}" --json number --limit 1000 2>/dev/null || echo '[]')"
     labeled_issues="$(jq -nc --argjson cur "${labeled_issues}" --argjson add "${by_label}" '$cur + $add | unique_by(.number)')"
   done
 
   local marker_issues
   local marker_state
   local marker_clarify
-  marker_state="$(gh_retry gh api "search/issues" -f q="repo:${GITHUB_REPOSITORY} is:issue is:open \"AI_STANDALONE_STALL_STATE_V1\" in:comments" --jq '[.items[] | {number}]' 2>/dev/null || echo '[]')"
-  marker_clarify="$(gh_retry gh api "search/issues" -f q="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments" --jq '[.items[] | {number}]' 2>/dev/null || echo '[]')"
+  marker_state="$(gh_retry gh api --paginate "search/issues" \
+    -f per_page=100 \
+    -f q="repo:${GITHUB_REPOSITORY} is:issue is:open \"AI_STANDALONE_STALL_STATE_V1\" in:comments" \
+    2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+  marker_clarify="$(gh_retry gh api --paginate "search/issues" \
+    -f per_page=100 \
+    -f q="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments" \
+    2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
   marker_issues="$(jq -nc --argjson a "${marker_state}" --argjson b "${marker_clarify}" '$a + $b | unique_by(.number)')"
 
   local candidates
@@ -809,7 +815,7 @@ run_standalone_stall_recovery() {
   local action
   local took_action
 
-  for c_idx in $(seq 0 $(( c_count - 1 ))); do
+  for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
     [ -n "${issue_num}" ] || continue
 
@@ -1054,6 +1060,18 @@ PY
           write_standalone_state_json "${new_num}" "${new_state}"
           tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
         else
+          local failed_state
+          failed_state="$(python3 - "$updated_state" <<'PY'
+import json, sys, time
+state = json.loads(sys.argv[1])
+now = int(time.time())
+state["stall_recovery_count"] = int(state.get("stall_recovery_count", 0)) + 1
+state["status_since_ts"] = now
+state["updated_ts"] = now
+print(json.dumps(state, separators=(",", ":")))
+PY
+)"
+          write_standalone_state_json "${issue_num}" "${failed_state}"
           tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted close-and-reissue but could not create replacement issue." "ERROR"
         fi
         took_action="true"
