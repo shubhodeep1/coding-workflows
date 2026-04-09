@@ -442,6 +442,14 @@ jobs:
             --color "a2eeef" \
             --description "Orchestrator project tracking issue" \
             2>/dev/null || true
+          # Ensure the ai:clarification label exists so Wave 1 issues can
+          # be labelled at creation time (prevents reliance on clarify.yml
+          # auto-triggering via issues.opened event).
+          gh label create "ai:clarification" \
+            --repo "${{ github.repository }}" \
+            --color "f9d0c4" \
+            --description "AI clarification required before planning" \
+            2>/dev/null || true
 
       - name: Create tracking issue
         id: tracking_issue
@@ -531,7 +539,8 @@ jobs:
             ISSUE_URL="$(gh issue create \
               --repo "${{ github.repository }}" \
               --title "${TITLE}" \
-              --body "${FULL_BODY}")"
+              --body "${FULL_BODY}" \
+              --label "ai:clarification")"
 
             ISSUE_NUM="$(echo "${ISSUE_URL}" | grep -oE '[0-9]+$')"
             ISSUE_MAP["${LOCAL_ID}"]="${ISSUE_NUM}"

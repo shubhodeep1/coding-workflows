@@ -960,9 +960,11 @@ REISSUE_EOF
 )"
 
       local new_url new_url_clean new_num
+      ensure_label_exists "ai:clarification"
       new_url="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
-        --body "${new_body}" 2>/dev/null || echo "")"
+        --body "${new_body}" \
+        --label "ai:clarification" 2>/dev/null || echo "")"
       if [ -n "${new_url}" ]; then
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
@@ -1103,8 +1105,59 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   ' 2>/dev/null || echo "")"
 
   if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then
-    echo "::warning::No state found for tracking issue #${TRACKING_NUM}, skipping."
-    continue
+    echo "::warning::No state found for tracking issue #${TRACKING_NUM}. Attempting state reconstruction..."
+
+    # ---------------------------------------------------------------
+    # State reconstruction: the orchestrate.yml workflow created the
+    # tracking issue and child issues but failed before posting the
+    # initial state comment.  Recover by parsing the tracking body
+    # and searching for child issues that reference this tracker.
+    # ---------------------------------------------------------------
+    TRACKING_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' 2>/dev/null || echo "")"
+    if [ -z "${TRACKING_BODY}" ]; then
+      echo "::warning::Could not fetch body for tracking issue #${TRACKING_NUM}, skipping."
+      continue
+    fi
+
+    # Search for child issues whose body contains the tracking reference
+    CHILD_ISSUES="$(gh api "search/issues" \
+      -f q="repo:${GITHUB_REPOSITORY} \"Tracking issue: #${TRACKING_NUM}\" in:body" \
+      --jq '.items // []' 2>/dev/null || echo '[]')"
+
+    # Build issue_number_map from child issue bodies: extract Local ID metadata
+    ISSUE_MAP_JSON="$(echo "${CHILD_ISSUES}" | jq '
+      reduce .[] as $issue ({};
+        ($issue.body | capture("Local ID: `(?<id>[^`]+)`") // null) as $cap |
+        if $cap != null then
+          . + {($cap.id): $issue.number}
+        else . end
+      )
+    ' 2>/dev/null || echo '{}')"
+
+    echo "  Discovered issue map: ${ISSUE_MAP_JSON}"
+
+    # Write tracking body to temp file for the Python helper
+    REBUILD_BODY_FILE="${RUNTIME_DIR}/rebuild_body_${TRACKING_NUM}.txt"
+    printf '%s\n' "${TRACKING_BODY}" > "${REBUILD_BODY_FILE}"
+
+    if python3 scripts/orchestrate_lib.py rebuild-state \
+      --body-file "${REBUILD_BODY_FILE}" \
+      --issue-map-json "${ISSUE_MAP_JSON}" \
+      --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>/dev/null; then
+
+      if [ -s "${STATE_FILE}" ] && jq -e '.schema_version' "${STATE_FILE}" >/dev/null 2>&1; then
+        # Post the reconstructed state so future poll cycles find it
+        post_state_comment
+        echo "  State reconstructed and posted for tracking issue #${TRACKING_NUM}."
+        tg_notify "🔧 Auto-recovery: rebuilt missing orchestrator state for tracking issue #${TRACKING_NUM}."
+      else
+        echo "::warning::State reconstruction produced invalid output for #${TRACKING_NUM}, skipping."
+        continue
+      fi
+    else
+      echo "::warning::State reconstruction failed for tracking issue #${TRACKING_NUM}, skipping."
+      continue
+    fi
   fi
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
@@ -2081,10 +2134,12 @@ ${RB_FIX_DESC}
 - Type: review-blocked-reissue
 - Managed by: AI Orchestrator"
 
+            ensure_label_exists "ai:clarification"
             NEW_URL="$(gh issue create \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${NEW_ISSUE_TITLE}" \
-              --body "${FULL_NEW_BODY}")"
+              --body "${FULL_NEW_BODY}" \
+              --label "ai:clarification")"
             NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
             NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
             echo "  Created replacement issue #${NEW_NUM}: ${NEW_ISSUE_TITLE}"
@@ -2225,9 +2280,11 @@ ${IF_BODY}
 REISSUE_EOF
 )"
 
+    ensure_label_exists "ai:clarification"
     NEW_ISSUE_URL="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
       --title "${IF_TITLE}" \
-      --body "${NEW_BODY}" 2>/dev/null || echo "")"
+      --body "${NEW_BODY}" \
+      --label "ai:clarification" 2>/dev/null || echo "")"
     if [ -n "${NEW_ISSUE_URL}" ]; then
       NEW_ISSUE_URL_CLEAN="$(printf '%s\n' "${NEW_ISSUE_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
       NEW_ISSUE_NUM="$(basename "${NEW_ISSUE_URL_CLEAN%%[?#]*}")"
@@ -2760,10 +2817,12 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Type: judge-fix-up (cycle $((JUDGE_CYCLE + 1)))
 - Managed by: AI Orchestrator"
 
+          ensure_label_exists "ai:clarification"
           FIX_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${FIX_TITLE}" \
-            --body "${FULL_FIX_BODY}")"
+            --body "${FULL_FIX_BODY}" \
+            --label "ai:clarification")"
           echo "  Created fix-up: ${FIX_URL}"
 
           # Record in state so subsequent cycles/iterations won't recreate,
@@ -2825,10 +2884,12 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Type: judge-addition (cycle $((JUDGE_CYCLE + 1)))
 - Managed by: AI Orchestrator"
 
+          ensure_label_exists "ai:clarification"
           NEW_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${NEW_TITLE}" \
-            --body "${FULL_NEW_BODY}")"
+            --body "${FULL_NEW_BODY}" \
+            --label "ai:clarification")"
           echo "  Created: ${NEW_URL}"
 
           # Record in state so subsequent cycles/iterations won't recreate,
@@ -2904,10 +2965,12 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Priority: ${DEF_PRIORITY}
 - Managed by: AI Orchestrator"
 
+          ensure_label_exists "ai:clarification"
           NEW_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${DEF_TITLE}" \
-            --body "${FULL_BODY}")"
+            --body "${FULL_BODY}" \
+            --label "ai:clarification")"
 
           NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
           NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
