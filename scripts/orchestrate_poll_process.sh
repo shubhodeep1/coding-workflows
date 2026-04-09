@@ -314,12 +314,11 @@ integration_branch_exists() {
   local gh_error
   branch_ref="$(printf '%s' "${branch_name}" | jq -sRr @uri)"
 
-  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" >/dev/null 2>&1; then
+  if gh_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" 2>&1 >/dev/null)"; then
     return 0
   fi
 
-  gh_error="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" 2>&1 >/dev/null || true)"
-  if printf '%s' "${gh_error}" | grep -Eqi '(^gh: Not Found|HTTP 404|404 Not Found|status code 404)'; then
+  if printf '%s' "${gh_error}" | grep -Eqi '(^gh: Not Found|HTTP 404|404 Not Found|status code 404|\bnot found\b)'; then
     return 1
   fi
 
@@ -356,17 +355,12 @@ sync_default_into_integration_branch() {
   fi
 
   local merge_error
-  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/merges" \
+  if merge_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/merges" \
     -f base="${integration_branch}" \
     -f head="${default_branch}" \
-    -f commit_message="chore: sync ${default_branch} into ${integration_branch}" >/dev/null 2>&1; then
+    -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >/dev/null)"; then
     return 0
   fi
-
-  merge_error="$(gh api "repos/${GITHUB_REPOSITORY}/merges" \
-    -f base="${integration_branch}" \
-    -f head="${default_branch}" \
-    -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >/dev/null || true)"
 
   if ! printf '%s' "${merge_error}" | grep -Eqi '(HTTP 409|status code 409|merge conflict|conflict)'; then
     echo "::warning::Unable to sync '${default_branch}' into '${integration_branch}' due to transient GitHub API error; will retry next poll." >&2
@@ -442,6 +436,11 @@ finalize_integration_merge_if_needed() {
     post_state_comment
     post_tracking_comment "## ⚠️ Final merge conflict\n\nFinal PR #${final_pr} from \\`${integration_branch}\\` to \\`${default_branch}\\` has merge conflicts. Resolve conflicts manually, then re-run the poller."
     tg_notify "⚠️ Final merge conflict for #${TRACKING_NUM} (PR #${final_pr})."
+    return 1
+  fi
+
+  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}"; then
+    echo "  [final-merge] Required checks not complete for PR #${final_pr}. Will retry next poll."
     return 1
   fi
 

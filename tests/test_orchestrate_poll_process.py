@@ -86,6 +86,7 @@ def _run_poller(
 	prs: list[dict] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
+	blocked_check_shas: list[str] | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -93,6 +94,7 @@ def _run_poller(
 	issue_labels = issue_labels or {10: ["ai:merged"]}
 	prs = prs or []
 	existing_branches = existing_branches or ["main"]
+	blocked_check_shas = blocked_check_shas or []
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -144,6 +146,7 @@ def _run_poller(
 			"existing_branches": existing_branches,
 			"merge_conflict_on_sync": merge_conflict_on_sync,
 			"merge_calls": [],
+			"blocked_check_shas": blocked_check_shas,
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -439,7 +442,7 @@ if args[0] == 'api':
 			else:
 				print('null')
 		elif jq == '.head.sha':
-			print(pr.get('headSha', 'mocksha'))
+			print(pr.get('headSha', f'mocksha{pr_num}'))
 		else:
 			print(json.dumps({'state': pr.get('state', 'open'), 'mergeable': pr.get('mergeable', True)}))
 		sys.exit(0)
@@ -478,11 +481,17 @@ if args[0] == 'api':
 			print('[]')
 		sys.exit(0)
 
-	if re.search(r'/commits/.+/check-runs(\?.*)?$', path):
+	m = re.search(r'/commits/([^/]+)/check-runs(\?.*)?$', path)
+	if m:
+		sha = m.group(1)
+		incomplete = 1 if sha in store.get('blocked_check_shas', []) else 0
 		if jq:
-			print('0')
+			print(str(incomplete))
 		else:
-			print(json.dumps({'check_runs': []}))
+			if incomplete:
+				print(json.dumps({'check_runs': [{'status': 'in_progress', 'conclusion': None}]}))
+			else:
+				print(json.dumps({'check_runs': []}))
 		sys.exit(0)
 
 	if re.search(r'^repos/[^/]+/[^/]+$', path):
@@ -690,6 +699,35 @@ def test_final_merge_conflict_sets_merge_conflict_status():
 	assert result["latest_state"]["status"] == "merge_conflict"
 	assert result["latest_state"]["final_merge_status"] == "conflict"
 	assert result["latest_state"]["final_merge_pr"] == 351
+
+
+def test_final_merge_waits_for_required_checks_before_merging():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 352,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"headSha": "blockedsha352",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		blocked_check_shas=["blockedsha352"],
+	)
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result["latest_state"]["final_merge_pr"] == 352
+	assert result.get("merged_prs", []) == []
 
 
 def test_standalone_conflict_sweep_skips_integration_base_prs():
