@@ -507,6 +507,30 @@ if command -v git >/dev/null 2>&1; then
   git status --porcelain --untracked-files=all -- . ':!validation/**' | sort > "${PRE_GENERATE_STATUS_FILE}" 2>/dev/null || true
 fi
 
+# ---------------------------------------------------------------
+# Cycle 2+: gather previous validation failure context so the LLM
+# avoids repeating the same harness mistakes.
+# ---------------------------------------------------------------
+PRIOR_FAILURE_CONTEXT_FILE="${RUNTIME_DIR}/prior_validation_failures.txt"
+: > "${PRIOR_FAILURE_CONTEXT_FILE}"
+
+if [ "${VALIDATION_CYCLE}" -gt 1 ] && is_tracking_run; then
+  echo "Cycle ${VALIDATION_CYCLE}: fetching prior validation failure context from tracking issue #${TRACKING_ISSUE_NUM}."
+  PRIOR_COMMENTS="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments" \
+    --paginate --jq '[.[] | select(.body | test("Runtime validation"))] | .[-3:] | .[].body' 2>/dev/null || true)"
+  if [ -n "${PRIOR_COMMENTS}" ]; then
+    {
+      echo "IMPORTANT — PREVIOUS VALIDATION CYCLE FAILURES (cycle $((VALIDATION_CYCLE - 1))):"
+      echo "The following failures occurred in prior validation cycles. Your generated"
+      echo "harness MUST avoid these same patterns. If a prior failure was caused by"
+      echo "fragile shell output parsing (e.g. raw mongosh text matching), use the"
+      echo "deterministic assertion patterns described above instead."
+      echo
+      echo "${PRIOR_COMMENTS}"
+    } > "${PRIOR_FAILURE_CONTEXT_FILE}"
+  fi
+fi
+
 {
   cat "${STATIC_CONTEXT_FILE}"
   echo
@@ -516,6 +540,11 @@ fi
   echo
   cat prompts/mode-validate-generate.txt
   echo
+  if [ -s "${PRIOR_FAILURE_CONTEXT_FILE}" ]; then
+    echo "=== PRIOR VALIDATION FAILURES (DO NOT REPEAT) ==="
+    cat "${PRIOR_FAILURE_CONTEXT_FILE}"
+    echo
+  fi
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
   echo
@@ -526,6 +555,7 @@ fi
   echo "TRACKING_ISSUE: ${TRACKING_ISSUE_RAW}"
   echo "VALIDATION_TIMEOUT_MINUTES: ${VALIDATION_TIMEOUT}"
   echo "PREFERRED_COMPOSE_FILE: ${VALIDATION_COMPOSE_FILE}"
+  echo "VALIDATION_CYCLE: ${VALIDATION_CYCLE}"
   echo "SYNTHETIC_TEST_USERNAME_ENV_VAR: VALIDATION_TEST_USERNAME"
   echo "SYNTHETIC_TEST_PASSWORD_ENV_VAR: VALIDATION_TEST_PASSWORD"
   echo "SYNTHETIC_TEST_API_KEY_ENV_VAR: VALIDATION_TEST_API_KEY"
