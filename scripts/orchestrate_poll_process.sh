@@ -1186,6 +1186,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>/dev/null; then
 
       if [ -s "${STATE_FILE}" ] && jq -e '.schema_version' "${STATE_FILE}" >/dev/null 2>&1; then
+        STATE_JSON="$(cat "${STATE_FILE}")"
         # Post the reconstructed state so future poll cycles find it
         post_state_comment
         echo "  State reconstructed and posted for tracking issue #${TRACKING_NUM}."
