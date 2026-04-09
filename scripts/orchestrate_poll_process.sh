@@ -1057,6 +1057,14 @@ The judge will evaluate this gap when the wave completes and decide whether to r
 # ---------------------------------------------------------------
 # Helper: Check if an active autofix run already exists for a PR branch
 # ---------------------------------------------------------------
+# Cycle-local dispatch tracker — prevents the same PR from being
+# dispatched for conflict resolution more than once within a single
+# orchestrate_poll execution.  File-based so it works across piped
+# subshells (the while-read loops run in subshells where shell
+# variable changes don't propagate back).
+_CONFLICT_DISPATCH_TRACKER="${TMPDIR:-/tmp}/.conflict_dispatch_$$"
+: > "${_CONFLICT_DISPATCH_TRACKER}"
+
 # Queries the GitHub Actions API for in_progress or queued runs of
 # review/autofix workflows on the given branch.  A new dispatch would
 # cancel the existing run (cancel-in-progress concurrency) and trigger
@@ -1108,7 +1116,18 @@ _dispatch_review_for_conflicts()
 	local head_ref="$2"
 	local log_prefix="[conflict-dispatch] PR #${pr_number}"
 
-	# Guard: skip dispatch if an autofix run is already active for this PR.
+	# Guard 1: skip if already dispatched in this poll cycle.
+	# Multiple code paths (ready-to-merge loop, in-progress loop,
+	# standalone sweep) can encounter the same conflicted PR within a
+	# single script execution.  The GitHub API has a visibility delay
+	# for newly-dispatched runs, so _has_active_autofix_run may miss
+	# them.  The cycle-local tracker catches this immediately.
+	if grep -qx "${pr_number}" "${_CONFLICT_DISPATCH_TRACKER}" 2>/dev/null; then
+		echo "  ${log_prefix} Already dispatched in this poll cycle. Skipping."
+		return 2
+	fi
+
+	# Guard 2: skip dispatch if an autofix run is already active for this PR.
 	# A new dispatch would cancel the running job (cancel-in-progress
 	# concurrency) and fire a spurious "cancelled/timed out" alert.
 	if _has_active_autofix_run "${pr_number}" "${head_ref}"; then
@@ -1123,6 +1142,8 @@ _dispatch_review_for_conflicts()
 			--ref "${head_ref}" \
 			-f pr_number="${pr_number}" 2>/dev/null; then
 			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref}."
+			# Record in cycle-local tracker to prevent duplicate dispatches
+			echo "${pr_number}" >> "${_CONFLICT_DISPATCH_TRACKER}"
 			return 0
 		fi
 	done
