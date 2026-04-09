@@ -2643,11 +2643,11 @@ jobs:
           The repository currently contains files with Git merge conflict markers.
 
           Conflict markers appear in this format:
-          <<<<<<< HEAD
+          [CONFLICT-START] HEAD
           code
-          =======
+          [CONFLICT-SPLIT]
           other code
-          >>>>>>> branch
+          [CONFLICT-END] branch
 
           Your task:
           Resolve merge conflicts safely.
@@ -2812,9 +2812,8 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:ready-to-merge on issue #${issue_number}"
-            gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge'; then
-              echo "::warning::Failed to add ai:ready-to-merge label to issue #${issue_number} — retrying in 2s..."
+            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:ready-to-merge'; then
+              echo "::warning::Failed to update labels on issue #${issue_number} — retrying in 2s..."
               sleep 2
               gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge' \
                 || echo "::warning::Retry also failed for issue #${issue_number}. Label may need manual application."
@@ -3132,13 +3131,14 @@ jobs:
                 gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
                   --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' \
                   --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' \
-                  --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-                gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge' || true
+                  --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' \
+                  --add-label 'ai:ready-to-merge' || true
               done <<< "${ISSUE_NUMBERS}"
 
               # Attempt merge
-              PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
-              PR_MERGEABLE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
+              _pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+              PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed|merged' || echo "")"
+              PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
               if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
                 if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
                   gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
@@ -3162,8 +3162,8 @@ jobs:
                   gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
                     --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' \
                     --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' \
-                    --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-                  gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge' || true
+                    --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' \
+                    --add-label 'ai:ready-to-merge' || true
                 done <<< "${ISSUE_NUMBERS}"
 
                 PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
@@ -3373,9 +3373,8 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number}"
-            gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:review-blocked'; then
-              echo "::warning::Failed to add ai:review-blocked label to issue #${issue_number} — retrying in 2s..."
+            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:review-blocked'; then
+              echo "::warning::Failed to update labels on issue #${issue_number} — retrying in 2s..."
               sleep 2
               gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:review-blocked' \
                 || echo "::warning::Retry also failed for issue #${issue_number}. Label may need manual application."
@@ -3656,8 +3655,7 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number} (workflow failure)"
-            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:review-blocked' || true
+            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:review-blocked' || true
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (workflow failure)

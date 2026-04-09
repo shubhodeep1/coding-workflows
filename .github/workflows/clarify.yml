@@ -206,15 +206,14 @@ jobs:
           source scripts/label_helpers.sh
           # Add clarification label
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           # Remove stale phase labels only on /reclarify (new issues won't have them)
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
-            CURRENT_LABELS="$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" --jq '.[].name' || true)"
-            for label in ai:planning ai:awaiting-approval ai:implementing ai:done; do
-              if echo "${CURRENT_LABELS}" | grep -qxF "${label}"; then
-                gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/${label}" >/dev/null 2>&1 || true
-              fi
-            done
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:clarification' \
+              --remove-label 'ai:planning' --remove-label 'ai:awaiting-approval' \
+              --remove-label 'ai:implementing' --remove-label 'ai:done' >/dev/null 2>&1 || true
+          else
+            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           fi
 
       - name: Record clarification run start
@@ -705,8 +704,8 @@ jobs:
           source scripts/label_helpers.sh
           # Swap label from ai:clarification to ai:planning since no questions needed.
           ensure_label_exists "ai:planning" "${{ github.repository }}"
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:planning' --remove-label 'ai:clarification' >/dev/null 2>&1 || true
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body=$'The task appears clear.\n\nNo clarification questions were needed, so the workflow auto-posted /answer to continue automatically.'

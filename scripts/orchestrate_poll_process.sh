@@ -153,14 +153,17 @@ assemble_judge_static_context() {
 # 1 otherwise (including API errors).  Callers should skip the merge
 # when this returns non-zero so we never merge while checks (e.g.
 # autofix) are still running.
-# Usage:  _pr_checks_completed <PR_NUMBER>
+# Usage:  _pr_checks_completed <PR_NUMBER> [<HEAD_SHA>]
+#   HEAD_SHA is optional; when provided the extra PR fetch is skipped.
 # ---------------------------------------------------------------
 _pr_checks_completed()
 {
 	local pr_number="$1"
-	local head_sha
-	head_sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" \
-		--jq '.head.sha' 2>/dev/null || echo "")"
+	local head_sha="${2:-}"
+	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
+		head_sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" \
+			--jq '.head.sha' 2>/dev/null || echo "")"
+	fi
 	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
 		echo "  [check-runs] Could not resolve head SHA for PR #${pr_number}. Skipping merge."
 		return 1
@@ -181,6 +184,41 @@ _pr_checks_completed()
 
 		echo "  [check-runs] All check-runs completed and acceptable for PR #${pr_number} (SHA ${head_sha:0:7}). Proceeding with merge."
 	return 0
+}
+
+# ---------------------------------------------------------------
+# Helper: Fetch PR JSON once and extract multiple fields.
+#
+# Reduces GitHub API calls by fetching the PR endpoint once instead
+# of making separate calls for state, mergeable, merged, head SHA,
+# head ref, and base ref.
+#
+# Usage:
+#   local pr_json
+#   pr_json="$(_fetch_pr_json "${PR_NUMBER}")"
+#   PR_STATE="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
+#   PR_MERGEABLE="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
+# ---------------------------------------------------------------
+_fetch_pr_json()
+{
+	local pr_number="$1"
+	gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" 2>/dev/null || echo '{}'
+}
+
+# _jq_field — Extract a field from JSON, optionally validating against
+# a grep pattern.  Returns empty string on mismatch or null.
+_jq_field()
+{
+	local json="$1"
+	local expr="$2"
+	local pattern="${3:-}"
+	local val
+	val="$(echo "${json}" | jq -r "${expr} // \"\"" 2>/dev/null || echo "")"
+	if [ -n "${pattern}" ]; then
+		echo "${val}" | grep -xE "${pattern}" || echo ""
+	else
+		echo "${val}"
+	fi
 }
 
 ENABLE_VALIDATION_RAW="${ENABLE_VALIDATION:-true}"
@@ -341,20 +379,25 @@ set_tracking_phase_label() {
   if [ -f "${contract_file}" ]; then
     local phase_changes
     if phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>/dev/null)"; then
+      # Build a single gh issue edit command with all --remove-label and
+      # --add-label flags instead of one API call per label.
+      local edit_args=()
       while IFS= read -r remove_label; do
         [ -n "${remove_label}" ] || continue
-        gh_retry gh issue edit "${TRACKING_NUM}" \
-          --repo "${GITHUB_REPOSITORY}" \
-          --remove-label "${remove_label}" >/dev/null || true
+        edit_args+=(--remove-label "${remove_label}")
       done < <(echo "${phase_changes}" | jq -r '.remove[]?')
 
       while IFS= read -r add_label; do
         [ -n "${add_label}" ] || continue
         ensure_label_exists "${add_label}"
+        edit_args+=(--add-label "${add_label}")
+      done < <(echo "${phase_changes}" | jq -r '.add[]?')
+
+      if [ "${#edit_args[@]}" -gt 0 ]; then
         gh_retry gh issue edit "${TRACKING_NUM}" \
           --repo "${GITHUB_REPOSITORY}" \
-          --add-label "${add_label}" >/dev/null || true
-      done < <(echo "${phase_changes}" | jq -r '.add[]?')
+          "${edit_args[@]}" >/dev/null || true
+      fi
       return 0
     fi
   fi
@@ -1959,14 +2002,16 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
             --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
             2>/dev/null || echo "")"
           if [ -n "${PW_PR}" ] && [ "${PW_PR}" != "null" ]; then
-            PW_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
-            PW_PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
-			if [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}"; then
+            _pw_pr_json="$(_fetch_pr_json "${PW_PR}")"
+            PW_PR_STATE="$(_jq_field "${_pw_pr_json}" '.state' 'open|closed|merged')"
+            PW_PR_MERGEABLE="$(_jq_field "${_pw_pr_json}" '.mergeable' 'true|false')"
+            _pw_head_sha="$(_jq_field "${_pw_pr_json}" '.head.sha')"
+			if [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}" "${_pw_head_sha}"; then
 			  gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
 			    || gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
               gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}/update-branch" \
-                -X PUT -f expected_head_sha="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}" --jq '.head.sha' || echo "")" \
+                -X PUT -f expected_head_sha="${_pw_head_sha}" \
                 2>/dev/null || true
             fi
           fi
@@ -2059,22 +2104,56 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     continue
   fi
 
-  LABELS_JSON="{"
-  first=true
+  # Batch-fetch labels for all wave issues in a single GraphQL query
+  # instead of N individual REST calls (one per issue).
+  _repo_owner="${GITHUB_REPOSITORY%%/*}"
+  _repo_name="${GITHUB_REPOSITORY##*/}"
+  _gql_fields=""
+  _gql_issue_nums=()
   for inum in ${ISSUE_NUMS}; do
-    # Skip null/empty entries (not-yet-created issues in deferred waves)
-    if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
-      continue
-    fi
-    LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
-    if [ "${first}" = true ]; then
-      first=false
-    else
-      LABELS_JSON+=","
-    fi
-    LABELS_JSON+="\"${inum}\":${LABELS}"
+    [ -n "${inum}" ] && [ "${inum}" != "null" ] || continue
+    _gql_fields+=" i${inum}: issue(number: ${inum}) { labels(first: 50) { nodes { name } } }"
+    _gql_issue_nums+=("${inum}")
   done
-  LABELS_JSON+="}"
+
+  if [ "${#_gql_issue_nums[@]}" -gt 0 ]; then
+    _gql_query="query { repository(owner: \"${_repo_owner}\", name: \"${_repo_name}\") {${_gql_fields} } }"
+    _labels_result="$(gh api graphql -f query="${_gql_query}" 2>/dev/null || echo '{}')"
+    LABELS_JSON="$(echo "${_labels_result}" | python3 -c "
+import json, sys
+raw = json.load(sys.stdin)
+repo = (raw.get('data') or {}).get('repository') or {}
+nums = $(printf '%s\n' "${_gql_issue_nums[@]}" | jq -R 'tonumber' | jq -s '.')
+result = {}
+for n in nums:
+    key = 'i' + str(n)
+    issue_data = repo.get(key)
+    if issue_data and issue_data.get('labels'):
+        result[str(n)] = [node['name'] for node in issue_data['labels'].get('nodes', [])]
+    else:
+        result[str(n)] = []
+json.dump(result, sys.stdout)
+" 2>/dev/null || echo '{}')"
+  else
+    LABELS_JSON="{}"
+  fi
+
+  # Fallback: if GraphQL failed, fall back to per-issue REST
+  if [ "${LABELS_JSON}" = "{}" ] && [ "${#_gql_issue_nums[@]}" -gt 0 ]; then
+    echo "  [labels] GraphQL batch failed, falling back to per-issue REST"
+    LABELS_JSON="{"
+    first=true
+    for inum in "${_gql_issue_nums[@]}"; do
+      LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
+      if [ "${first}" = true ]; then
+        first=false
+      else
+        LABELS_JSON+=","
+      fi
+      LABELS_JSON+="\"${inum}\":${LABELS}"
+    done
+    LABELS_JSON+="}"
+  fi
 
   # ---------------------------------------------------------------
   # Update issue phase timestamps for stall tracking
@@ -2111,10 +2190,12 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
       2>/dev/null || echo "")"
     if [ -n "${RTM_PR}" ] && [ "${RTM_PR}" != "null" ]; then
-      PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
-      PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
+      _rtm_pr_json="$(_fetch_pr_json "${RTM_PR}")"
+      PR_STATE="$(_jq_field "${_rtm_pr_json}" '.state' 'open|closed|merged')"
+      PR_MERGEABLE="$(_jq_field "${_rtm_pr_json}" '.mergeable' 'true|false')"
+      _rtm_head_sha="$(_jq_field "${_rtm_pr_json}" '.head.sha')"
       if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
-		if _pr_checks_completed "${RTM_PR}"; then
+		if _pr_checks_completed "${RTM_PR}" "${_rtm_head_sha}"; then
 		  echo "  Merging PR #${RTM_PR} (squash)..."
 		  if gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		    echo "  PR #${RTM_PR} merge initiated."
@@ -2127,13 +2208,13 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
         echo "  PR #${RTM_PR} is not mergeable (mergeable=${PR_MERGEABLE}). Attempting branch update..."
         if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}/update-branch" \
-          -X PUT -f expected_head_sha="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.sha' || echo "")" \
+          -X PUT -f expected_head_sha="${_rtm_head_sha}" \
           2>/dev/null; then
           echo "  PR #${RTM_PR} branch updated via API. The synchronize event will re-trigger review (including conflict resolution)."
         else
           echo "  API branch update failed for PR #${RTM_PR}. Dispatching review workflow for conflict resolution..."
 
-          RTM_HEAD_REF="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.ref' || echo "")"
+          RTM_HEAD_REF="$(_jq_field "${_rtm_pr_json}" '.head.ref')"
           if [ -n "${RTM_HEAD_REF}" ] && [ "${RTM_HEAD_REF}" != "null" ]; then
             _dispatch_rc=0
             _dispatch_review_for_conflicts "${RTM_PR}" "${RTM_HEAD_REF}" || _dispatch_rc=$?
@@ -2179,17 +2260,20 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     if [ -z "${IP_PR}" ] || [ "${IP_PR}" = "null" ]; then
       continue
     fi
-    IP_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
-    IP_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
+    _ip_pr_json="$(_fetch_pr_json "${IP_PR}")"
+    IP_PR_STATE="$(_jq_field "${_ip_pr_json}" '.state' 'open|closed|merged')"
+    IP_MERGEABLE="$(_jq_field "${_ip_pr_json}" '.mergeable' 'true|false')"
     if [ "${IP_PR_STATE}" != "open" ] || [ "${IP_MERGEABLE}" != "false" ]; then
       continue
     fi
     echo "  In-progress issue #${ip_issue} has PR #${IP_PR} with merge conflicts. Running Codex conflict resolution..."
 
+    _ip_head_sha="$(_jq_field "${_ip_pr_json}" '.head.sha')"
+
     # Try the GitHub API update-branch first (creates a merge commit
     # if the merge is clean; fails when there are real conflicts).
     if gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}/update-branch" \
-      -X PUT -f expected_head_sha="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.sha' || echo "")" \
+      -X PUT -f expected_head_sha="${_ip_head_sha}" \
       2>/dev/null; then
       echo "  PR #${IP_PR} branch updated via API. Synchronize event will re-trigger review."
       tg_notify "PR #${IP_PR} (issue #${ip_issue}) had merge conflicts. Branch updated via API to re-trigger review."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")" "WARNING"
@@ -2197,7 +2281,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
     fi
 
     # API update failed — real conflicts exist.  Dispatch review workflow.
-    IP_HEAD_REF="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.ref' || echo "")"
+    IP_HEAD_REF="$(_jq_field "${_ip_pr_json}" '.head.ref')"
     if [ -n "${IP_HEAD_REF}" ] && [ "${IP_HEAD_REF}" != "null" ]; then
       _dispatch_rc=0
       _dispatch_review_for_conflicts "${IP_PR}" "${IP_HEAD_REF}" || _dispatch_rc=$?
@@ -2270,8 +2354,11 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       echo "  Linked PR: #${RB_PR}"
 
       # Guard: check PR state before invoking the judge
-      RB_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
-      RB_PR_MERGED="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null | grep -xE 'true|false' || echo "false")"
+      # Fetch PR JSON once — reused for state/merged checks and PR_META below.
+      _rb_pr_json="$(_fetch_pr_json "${RB_PR}")"
+      RB_PR_STATE="$(_jq_field "${_rb_pr_json}" '.state' 'open|closed|merged')"
+      RB_PR_MERGED="$(_jq_field "${_rb_pr_json}" '.merged' 'true|false')"
+      [ -n "${RB_PR_MERGED}" ] || RB_PR_MERGED="false"
       if [ "${RB_PR_STATE}" != "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
         # PR is closed (not merged) — skip entirely
         echo "  PR #${RB_PR} is closed (not merged). Cleaning up labels and skipping."
@@ -2293,8 +2380,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
         | jq -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null || echo "[]")"
       PR_REVIEW_COMMENTS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" \
         | jq -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo "[]")"
-      PR_META="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
-        --jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' || echo "{}")"
+      PR_META="$(echo "${_rb_pr_json}" | jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
       ISSUE_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' || echo "")"
 
       # Determine if this is a final decision (retries exhausted) or a fix attempt
@@ -2446,10 +2532,13 @@ sys.exit(1)
             --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
 
           # Attempt squash merge (with branch update if needed)
+          # Re-fetch PR data (state may have changed since the judge ran)
           RB_MERGED="false"
-          PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
-          PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
-		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
+          _rb_merge_json="$(_fetch_pr_json "${RB_PR}")"
+          PR_STATE="$(_jq_field "${_rb_merge_json}" '.state' 'open|closed|merged')"
+          PR_MERGEABLE="$(_jq_field "${_rb_merge_json}" '.mergeable' 'true|false')"
+          _rb_merge_sha="$(_jq_field "${_rb_merge_json}" '.head.sha')"
+		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}"; then
 		    if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		      echo "  PR #${RB_PR} merge initiated (auto)."
 		      RB_MERGED="true"
@@ -2462,7 +2551,7 @@ sys.exit(1)
           elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
             echo "  PR #${RB_PR} is not mergeable. Attempting branch update..."
             if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
-              -X PUT -f expected_head_sha="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' || echo "")" \
+              -X PUT -f expected_head_sha="${_rb_merge_sha}" \
               2>/dev/null; then
               echo "  PR #${RB_PR} branch updated. Synchronize event will re-trigger review + conflict resolution."
             else
@@ -2499,9 +2588,11 @@ sys.exit(1)
             gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             RB_FORCE_MERGED="false"
-            PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
-            PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
-				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
+            _rb_fm_json="$(_fetch_pr_json "${RB_PR}")"
+            PR_STATE="$(_jq_field "${_rb_fm_json}" '.state' 'open|closed|merged')"
+            PR_MERGEABLE="$(_jq_field "${_rb_fm_json}" '.mergeable' 'true|false')"
+            _rb_fm_sha="$(_jq_field "${_rb_fm_json}" '.head.sha')"
+				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}"; then
 				  if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
 				    || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
 				    RB_FORCE_MERGED="true"
@@ -2511,7 +2602,7 @@ sys.exit(1)
             elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
               echo "  PR #${RB_PR} is not mergeable (force-merge path). Attempting branch update..."
               if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
-                -X PUT -f expected_head_sha="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.head.sha' || echo "")" \
+                -X PUT -f expected_head_sha="${_rb_fm_sha}" \
                 2>/dev/null; then
                 echo "  PR #${RB_PR} branch updated. Will retry force-merge on next poll cycle."
               else
@@ -2539,8 +2630,10 @@ sys.exit(1)
           else
             echo "  Judge is applying fixes to PR #${RB_PR}..."
             # Re-check PR state before expensive fix+push (race condition safety net)
-            RB_PR_STATE_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
-            RB_PR_MERGED_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null | grep -xE 'true|false' || echo "false")"
+            _rb_recheck_json="$(_fetch_pr_json "${RB_PR}")"
+            RB_PR_STATE_NOW="$(_jq_field "${_rb_recheck_json}" '.state' 'open|closed|merged')"
+            RB_PR_MERGED_NOW="$(_jq_field "${_rb_recheck_json}" '.merged' 'true|false')"
+            [ -n "${RB_PR_MERGED_NOW}" ] || RB_PR_MERGED_NOW="false"
             if [ "${RB_PR_STATE_NOW}" != "open" ] && [ "${RB_PR_MERGED_NOW}" != "true" ]; then
               # PR was closed without merge — skip
               echo "::warning::PR #${RB_PR} is closed (not merged). Skipping fix application."
@@ -2691,9 +2784,11 @@ ${RB_FIX_DESC}
                   ensure_label_exists "ai:ready-to-merge"
                   gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
-                  PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
-                  PR_MERGEABLE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.mergeable' 2>/dev/null | grep -xE 'true|false' || echo "")"
-                  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
+                  _rb_nofix_json="$(_fetch_pr_json "${RB_PR}")"
+                  PR_STATE="$(_jq_field "${_rb_nofix_json}" '.state' 'open|closed|merged')"
+                  PR_MERGEABLE="$(_jq_field "${_rb_nofix_json}" '.mergeable' 'true|false')"
+                  _rb_nofix_sha="$(_jq_field "${_rb_nofix_json}" '.head.sha')"
+                  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}"; then
                     if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
                       || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
                       tg_notify "Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
