@@ -92,12 +92,24 @@ jobs:
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
           mkdir -p scripts
-          for f in setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh; do
-            if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+          # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _gh_api_fetch() {
+            local outfile="$1"; shift
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else return 1; fi
+            done; return 1
+          }
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh; do
+            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"
             fi
             chmod +x "scripts/${f}"
           done
@@ -115,8 +127,8 @@ jobs:
           # Write to a temp file first so the redirect doesn't clobber the
           # local copy when the gh api call fails (the file doesn't exist on
           # the stable tag yet).
-          if gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}" > "scripts/codex_model_catalog.json.tmp" 2>/dev/null; then
+          if _gh_api_fetch "scripts/codex_model_catalog.json.tmp" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}"; then
             mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
           else
             rm -f "scripts/codex_model_catalog.json.tmp"
@@ -127,11 +139,11 @@ jobs:
           # caller repo ships its own scripts/ directory)
           for f in unattended_llm_system_instructions.md codex_system_instructions.md; do
             if [ ! -f "${f}" ]; then
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=${script_ref}" > "${f}" 2>/dev/null; then
+              if ! _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/${f}?ref=main" > "${f}"
+                _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/${f}?ref=main"
               fi
             fi
           done
@@ -327,25 +339,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Retry wrapper for gh api calls to handle transient 5xx errors.
+          # Retry wrapper for gh api calls — rate-limit-aware.
+          # On rate-limit (403/429), sleeps 30s and retries.
+          # On other failures, uses exponential backoff.
           # Usage: gh_retry <output_file> [gh api args...]
-          # For --paginate endpoints that need jq post-processing, pipe the
-          # output through jq after calling this function.
           gh_retry() {
             local outfile="$1"; shift
-            local attempt max_attempts=4 delay=2
+            local attempt max_attempts=5 delay=2
             for attempt in $(seq 1 $max_attempts); do
               if gh "$@" > "$outfile" 2>/tmp/gh_retry_stderr; then
                 return 0
               fi
-              cat /tmp/gh_retry_stderr >&2
-              if [ "$attempt" -lt "$max_attempts" ]; then
-                echo "gh call failed (attempt ${attempt}/${max_attempts}), retrying in ${delay}s..." >&2
-                sleep "$delay"
-                delay=$((delay * 2))
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/gh_retry_stderr 2>/dev/null; then
+                echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), sleeping 30s…" >&2
+                sleep 30
+              else
+                cat /tmp/gh_retry_stderr >&2
+                if [ "$attempt" -lt "$max_attempts" ]; then
+                  echo "gh call failed (attempt ${attempt}/${max_attempts}), retrying in ${delay}s..." >&2
+                  sleep "$delay"
+                  delay=$((delay * 2))
+                fi
               fi
             done
-            echo "gh call failed after ${max_attempts} attempts" >&2
+            echo "::error::gh call failed after ${max_attempts} attempts" >&2
             return 1
           }
 
@@ -510,6 +527,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
           PR_BODY=$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")
 
@@ -2423,6 +2441,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           if [ ! -s "${EDITOR_SUMMARY_FILE}" ]; then
             cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
@@ -2515,14 +2534,26 @@ jobs:
           else
             script_ref="stable"
           fi
-          for f in git_ref_health_check.sh tg_helpers.sh label_helpers.sh; do
+          # Rate-limit-aware fetch
+          _gh_api_fetch() {
+            local outfile="$1"; shift
+            local attempt=1
+            while [ "${attempt}" -le 4 ]; do
+              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else return 1; fi
+            done; return 1
+          }
+          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh; do
             if [ ! -f "scripts/${f}" ]; then
               mkdir -p scripts
-              if ! gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}" > "scripts/${f}" 2>/dev/null; then
+              if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                gh api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/scripts/${f}?ref=main" > "scripts/${f}"
+                _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/scripts/${f}?ref=main"
               fi
               chmod +x "scripts/${f}"
             fi
@@ -2673,6 +2704,7 @@ jobs:
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source scripts/tg_helpers.sh
+          source scripts/gh_helpers.sh 2>/dev/null || true
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           ISSUE_NUM="$(gh api graphql \
@@ -2699,6 +2731,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           if [ -f scripts/label_helpers.sh ]; then
             source scripts/label_helpers.sh
           else
@@ -2767,6 +2800,7 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           if [ -f scripts/label_helpers.sh ] && source scripts/label_helpers.sh 2>/dev/null; then
             :
           else
@@ -3222,7 +3256,7 @@ jobs:
           - Replaces: ${FIRST_ISSUE:+#${FIRST_ISSUE} }(PR #${PR_NUMBER} closed — approach rework)
           - Type: review-blocked-reissue"
 
-                NEW_URL="$(gh issue create \
+                NEW_URL="$(gh_retry gh issue create \
                   --repo "${REPOSITORY}" \
                   --title "${NEW_ISSUE_TITLE}" \
                   --body "${FULL_NEW_BODY}")"
@@ -3248,6 +3282,7 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           if [ -f scripts/label_helpers.sh ] && source scripts/label_helpers.sh 2>/dev/null; then
             :
           else
@@ -3319,6 +3354,7 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           BODY="$(cat <<EOF
           **AI review/autofix blocked — needs human intervention**
@@ -3345,6 +3381,7 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             echo "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable)."
@@ -3398,6 +3435,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           dispatched=false
 
@@ -3458,6 +3496,7 @@ jobs:
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source scripts/tg_helpers.sh
+          source scripts/gh_helpers.sh 2>/dev/null || true
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           ISSUE_NUM="$(gh api graphql \
@@ -3490,6 +3529,7 @@ jobs:
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source scripts/tg_helpers.sh
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -3537,6 +3577,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          source scripts/gh_helpers.sh 2>/dev/null || true
           pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
           if [ "${pr_state}" != "open" ]; then
             echo "PR #${PR_NUMBER} is ${pr_state} — skipping failure alerts."
@@ -3550,13 +3591,15 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Do not source scripts/label_helpers.sh in this failure path: the
           # workflow can fail before support scripts are fetched.
-          gh label create "ai:review-blocked" --repo "${REPOSITORY}" \
+          gh_retry gh label create "ai:review-blocked" --repo "${REPOSITORY}" \
             --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
             2>/dev/null || true
 
-          ISSUE_NUMBERS="$(gh api graphql \
+          ISSUE_NUMBERS="$(gh_retry gh api graphql \
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
             -F number="${PR_NUMBER}" \
@@ -3565,7 +3608,7 @@ jobs:
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
-            PR_DATA="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
@@ -3578,8 +3621,8 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number} (workflow failure)"
-            gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-            gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:review-blocked' || true
+            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
+            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:review-blocked' || true
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (workflow failure)
@@ -3588,6 +3631,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           BODY="$(cat <<EOF
@@ -3601,7 +3646,7 @@ jobs:
           EOF
           )"
 
-          gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+          gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
 
       - name: Telegram failure
         if: (failure() || cancelled()) && env.PR_CLOSED != 'true'
@@ -3612,10 +3657,12 @@ jobs:
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source scripts/tg_helpers.sh
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ISSUE_NUM="$(gh api graphql \
+          ISSUE_NUM="$(gh_retry gh api graphql \
             -f owner="${{ github.repository_owner }}" \
             -f name="${{ github.event.repository.name }}" \
             -F number="${PR_NUMBER}" \

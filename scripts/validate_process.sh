@@ -78,6 +78,11 @@ CREATED_FIX_ISSUES_JSON='[]'
 # ---------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------
+# shellcheck source=gh_helpers.sh
+if [ -f "scripts/gh_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/gh_helpers.sh
+fi
 # shellcheck source=tg_helpers.sh
 if [ -f "scripts/tg_helpers.sh" ]; then
   # shellcheck disable=SC1091
@@ -113,22 +118,11 @@ tg_notify()
   fi
 }
 
-gh_retry()
-{
-  local max_attempts=5
-  local attempt=1
-  while [ "${attempt}" -le "${max_attempts}" ]; do
-    if "$@" 2>/dev/null; then
-      return 0
-    fi
-    local wait_secs=$((2 ** (attempt - 1)))
-    echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s..."
-    sleep "${wait_secs}"
-    attempt=$((attempt + 1))
-  done
-  echo "::error::gh command failed after ${max_attempts} attempts: $*"
-  return 1
-}
+# gh_retry is provided by scripts/gh_helpers.sh (rate-limit-aware).
+# Fallback definition in case gh_helpers.sh was not sourced.
+if ! type gh_retry >/dev/null 2>&1; then
+  gh_retry() { "$@"; }
+fi
 
 is_tracking_run()
 {

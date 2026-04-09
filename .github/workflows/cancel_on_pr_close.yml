@@ -23,6 +23,22 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Rate-limit-aware gh retry
+          _gh_retry() {
+            local attempt=1
+            while [ "${attempt}" -le 5 ]; do
+              if "$@" 2>/tmp/_gh_rl_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::Rate limit hit (attempt ${attempt}/5), sleeping 30s…" >&2
+                sleep 30; attempt=$((attempt + 1))
+              else
+                cat /tmp/_gh_rl_err >&2 2>/dev/null; local w=$(( 2 ** (attempt - 1) ))
+                echo "::warning::gh failed (attempt ${attempt}/5), retrying in ${w}s…" >&2
+                sleep "${w}"; attempt=$((attempt + 1))
+              fi
+            done; return 1
+          }
+
           echo "Processing PR #${PR_NUMBER}" \
             "for ${REPOSITORY}" \
             "(head ref: ${PR_HEAD_REF})"
@@ -31,7 +47,7 @@ jobs:
             [.[].workflow_runs // []]
             | flatten}'
           queued_runs_json="$(
-            gh api \
+            _gh_retry gh api \
               --method GET \
               "repos/${REPOSITORY}/actions/runs" \
               --paginate \
@@ -40,7 +56,7 @@ jobs:
             | jq -s "${RUNS_JQ}"
           )"
           in_progress_runs_json="$(
-            gh api \
+            _gh_retry gh api \
               --method GET \
               "repos/${REPOSITORY}/actions/runs" \
               --paginate \
@@ -95,7 +111,7 @@ jobs:
             cancel_url="repos/${REPOSITORY}"
             cancel_url+="/actions/runs"
             cancel_url+="/${run_id}/cancel"
-            if gh api -X POST \
+            if _gh_retry gh api -X POST \
               "${cancel_url}" \
               >/dev/null 2>&1; then
               echo "Canceled run ${run_id}."
