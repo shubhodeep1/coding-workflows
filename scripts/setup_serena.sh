@@ -59,6 +59,7 @@ fi
 
 SERENA_VERSION="${SERENA_VERSION:-main}"
 SERENA_DEBUG_LOG="${TMPDIR:-/tmp}/serena_debug.log"
+CONTEXT7_CONFIG_TOUCHED="false"
 echo "Setting up Serena MCP server (version=${SERENA_VERSION}, mode=${SERENA_MODE}, context=${SERENA_CONTEXT})"
 
 # ── Helper: warn and exit cleanly ────────────────────────────────────────────
@@ -73,11 +74,11 @@ warn_and_exit() {
 	fi
 	# Remove Serena MCP config so Codex can start without Serena when setup fails.
 	CODEX_CFG="${HOME}/.codex/config.toml"
-	if [ -f "${CODEX_CFG}" ] && grep -q '^\[mcp_servers\.serena' "${CODEX_CFG}"; then
+	if [ -f "${CODEX_CFG}" ] && grep -Eq '^\[mcp_servers\.serena(\]|[.])' "${CODEX_CFG}"; then
 		remove_mcp_server_blocks "serena" "${CODEX_CFG}"
 		echo "Removed Serena MCP server from ${CODEX_CFG} to allow Codex to start without it."
 	fi
-	if [ -f "${CODEX_CFG}" ] && grep -q '^\[mcp_servers\.context7' "${CODEX_CFG}"; then
+	if [ "${CONTEXT7_CONFIG_TOUCHED:-false}" = "true" ] && [ -f "${CODEX_CFG}" ] && grep -Eq '^\[mcp_servers\.context7(\]|[.])' "${CODEX_CFG}"; then
 		remove_mcp_server_blocks "context7" "${CODEX_CFG}"
 		echo "Removed Context7 MCP server from ${CODEX_CFG}."
 	fi
@@ -509,7 +510,6 @@ fi
 
 # Keep config idempotent across re-runs and toggle changes.
 remove_mcp_server_blocks "serena" "${CODEX_CONFIG}"
-remove_mcp_server_blocks "context7" "${CODEX_CONFIG}"
 
 # Resolve the actual serena binary from the uvx cache.
 # The cache was warmed in step 2, so the binary should be available.
@@ -555,6 +555,9 @@ $(printf '%b' "${ENV_BLOCK}")
 MCP_EOF
 
 echo "Serena MCP server appended to ${CODEX_CONFIG}"
+
+CONTEXT7_CONFIG_TOUCHED="true"
+remove_mcp_server_blocks "context7" "${CODEX_CONFIG}"
 
 if [ "${CONTEXT7_DISABLED:-false}" != "true" ]; then
 	cat >> "${CODEX_CONFIG}" <<CONTEXT7_MCP_EOF
