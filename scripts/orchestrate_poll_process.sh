@@ -125,6 +125,51 @@ assemble_judge_static_context() {
   } > "${out_file}"
 }
 
+render_mode_prompt_with_serena() {
+  local mode_prompt_file="$1"
+  local output_file="$2"
+  local canonical_file="${3:-prompts/serena-efficiency-block.txt}"
+  local read_only_block
+  local read_write_block
+
+  if [ ! -s "${mode_prompt_file}" ]; then
+    echo "::error::Mode prompt file missing or empty: ${mode_prompt_file}" >&2
+    return 1
+  fi
+  if [ ! -s "${canonical_file}" ]; then
+    echo "::error::Canonical Serena fragment missing or empty: ${canonical_file}" >&2
+    return 1
+  fi
+
+  read_only_block="$(awk '/^<<<SERENA_EFFICIENCY_READ_ONLY_START>>>$/{flag=1; next} /^<<<SERENA_EFFICIENCY_READ_ONLY_END>>>$/{flag=0} flag{print}' "${canonical_file}")"
+  read_write_block="$(awk '/^<<<SERENA_EFFICIENCY_READ_WRITE_START>>>$/{flag=1; next} /^<<<SERENA_EFFICIENCY_READ_WRITE_END>>>$/{flag=0} flag{print}' "${canonical_file}")"
+
+  if [ -z "${read_only_block}" ] || [ -z "${read_write_block}" ]; then
+    echo "::error::Canonical Serena fragment is malformed: ${canonical_file}" >&2
+    return 1
+  fi
+
+  : > "${output_file}"
+  while IFS= read -r line || [ -n "${line}" ]; do
+    case "${line}" in
+      '{{SERENA_EFFICIENCY:READ_ONLY}}')
+        printf '%s\n' "${read_only_block}" >> "${output_file}"
+        ;;
+      '{{SERENA_EFFICIENCY:READ_WRITE}}')
+        printf '%s\n' "${read_write_block}" >> "${output_file}"
+        ;;
+      *)
+        printf '%s\n' "${line}" >> "${output_file}"
+        ;;
+    esac
+  done < "${mode_prompt_file}"
+
+  if grep -q '{{SERENA_EFFICIENCY:' "${output_file}"; then
+    echo "::error::Unresolved Serena include marker in ${mode_prompt_file}" >&2
+    return 1
+  fi
+}
+
 # ---------------------------------------------------------------
 # Helper: Check whether all check-runs on a PR's head commit have
 # completed.  Returns 0 when every check-run has status "completed"
@@ -1891,6 +1936,9 @@ json.dump(result, sys.stdout)
         assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
       fi
 
+      RB_JUDGE_MODE_PROMPT_FILE="${RUNTIME_DIR}/mode-judge-review-blocked.rendered.${rb_issue}.txt"
+      render_mode_prompt_with_serena "prompts/mode-judge-review-blocked.txt" "${RB_JUDGE_MODE_PROMPT_FILE}"
+
       {
         cat "${RUNTIME_DIR}/judge_static.txt"
         echo
@@ -1898,7 +1946,7 @@ json.dump(result, sys.stdout)
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        cat prompts/mode-judge-review-blocked.txt
+        cat "${RB_JUDGE_MODE_PROMPT_FILE}"
         echo
         echo "=== ISSUE #${rb_issue} (original requirement) ==="
         echo
@@ -2698,6 +2746,9 @@ ${PR_DIFF}
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
 
   # Build judge prompt
+  JUDGE_MODE_PROMPT_FILE="${RUNTIME_DIR}/mode-judge.rendered.txt"
+  render_mode_prompt_with_serena "prompts/mode-judge.txt" "${JUDGE_MODE_PROMPT_FILE}"
+
   {
     cat "${RUNTIME_DIR}/judge_static.txt"
     echo
@@ -2705,7 +2756,7 @@ ${PR_DIFF}
     echo
     echo "=== JUDGE TASK ==="
     echo
-    cat prompts/mode-judge.txt
+    cat "${JUDGE_MODE_PROMPT_FILE}"
     echo
     echo "=== PROJECT SPEC ==="
     echo

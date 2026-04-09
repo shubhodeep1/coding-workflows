@@ -83,6 +83,51 @@ export TEST_API_KEY="${TEST_API_KEY:-${VALIDATION_TEST_API_KEY}}"
 
 CREATED_FIX_ISSUES_JSON='[]'
 
+render_mode_prompt_with_serena() {
+  local mode_prompt_file="$1"
+  local output_file="$2"
+  local canonical_file="${3:-prompts/serena-efficiency-block.txt}"
+  local read_only_block
+  local read_write_block
+
+  if [ ! -s "${mode_prompt_file}" ]; then
+    echo "Mode prompt file missing or empty: ${mode_prompt_file}" >&2
+    return 1
+  fi
+  if [ ! -s "${canonical_file}" ]; then
+    echo "Canonical Serena fragment missing or empty: ${canonical_file}" >&2
+    return 1
+  fi
+
+  read_only_block="$(awk '/^<<<SERENA_EFFICIENCY_READ_ONLY_START>>>$/{flag=1; next} /^<<<SERENA_EFFICIENCY_READ_ONLY_END>>>$/{flag=0} flag{print}' "${canonical_file}")"
+  read_write_block="$(awk '/^<<<SERENA_EFFICIENCY_READ_WRITE_START>>>$/{flag=1; next} /^<<<SERENA_EFFICIENCY_READ_WRITE_END>>>$/{flag=0} flag{print}' "${canonical_file}")"
+
+  if [ -z "${read_only_block}" ] || [ -z "${read_write_block}" ]; then
+    echo "Canonical Serena fragment is malformed: ${canonical_file}" >&2
+    return 1
+  fi
+
+  : > "${output_file}"
+  while IFS= read -r line || [ -n "${line}" ]; do
+    case "${line}" in
+      '{{SERENA_EFFICIENCY:READ_ONLY}}')
+        printf '%s\n' "${read_only_block}" >> "${output_file}"
+        ;;
+      '{{SERENA_EFFICIENCY:READ_WRITE}}')
+        printf '%s\n' "${read_write_block}" >> "${output_file}"
+        ;;
+      *)
+        printf '%s\n' "${line}" >> "${output_file}"
+        ;;
+    esac
+  done < "${mode_prompt_file}"
+
+  if grep -q '{{SERENA_EFFICIENCY:' "${output_file}"; then
+    echo "Unresolved Serena include marker in ${mode_prompt_file}" >&2
+    return 1
+  fi
+}
+
 
 # ---------------------------------------------------------------
 # Helpers
@@ -508,13 +553,16 @@ if command -v git >/dev/null 2>&1; then
 fi
 
 {
+  VALIDATE_GENERATE_MODE_PROMPT_FILE="${RUNTIME_DIR}/mode-validate-generate.rendered.txt"
+  render_mode_prompt_with_serena "prompts/mode-validate-generate.txt" "${VALIDATE_GENERATE_MODE_PROMPT_FILE}"
+
   cat "${STATIC_CONTEXT_FILE}"
   echo
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
   echo
   echo "=== IMPLEMENTATION TASK ==="
   echo
-  cat prompts/mode-validate-generate.txt
+  cat "${VALIDATE_GENERATE_MODE_PROMPT_FILE}"
   echo
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
@@ -781,13 +829,16 @@ if [ -d validation/logs ]; then
 fi
 
 {
+  VALIDATE_DIAGNOSE_MODE_PROMPT_FILE="${RUNTIME_DIR}/mode-validate-diagnose.rendered.txt"
+  render_mode_prompt_with_serena "prompts/mode-validate-diagnose.txt" "${VALIDATE_DIAGNOSE_MODE_PROMPT_FILE}"
+
   cat "${STATIC_CONTEXT_FILE}"
   echo
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
   echo
   echo "=== DIAGNOSIS TASK ==="
   echo
-  cat prompts/mode-validate-diagnose.txt
+  cat "${VALIDATE_DIAGNOSE_MODE_PROMPT_FILE}"
   echo
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"

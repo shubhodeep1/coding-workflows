@@ -182,6 +182,14 @@ jobs:
                 "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=main"
             fi
           fi
+          if [ ! -f "prompts/serena-efficiency-block.txt" ]; then
+            if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
+              echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            fi
+          fi
 
           # Keep canonical static instructions available in caller repos where
           # these files may not exist yet.
@@ -381,13 +389,61 @@ jobs:
         run: |
           set -euo pipefail
 
+          render_mode_prompt_with_serena() {
+            local mode_prompt_file="$1"
+            local output_file="$2"
+            local canonical_file="${3:-prompts/serena-efficiency-block.txt}"
+            local read_only_block
+            local read_write_block
+
+            if [ ! -s "${mode_prompt_file}" ]; then
+              echo "::error::Mode prompt file missing or empty: ${mode_prompt_file}" >&2
+              return 1
+            fi
+            if [ ! -s "${canonical_file}" ]; then
+              echo "::error::Canonical Serena fragment missing or empty: ${canonical_file}" >&2
+              return 1
+            fi
+
+            read_only_block="$(awk '/^<<<SERENA_EFFICIENCY_READ_ONLY_START>>>$/{flag=1; next} /^<<<SERENA_EFFICIENCY_READ_ONLY_END>>>$/{flag=0} flag{print}' "${canonical_file}")"
+            read_write_block="$(awk '/^<<<SERENA_EFFICIENCY_READ_WRITE_START>>>$/{flag=1; next} /^<<<SERENA_EFFICIENCY_READ_WRITE_END>>>$/{flag=0} flag{print}' "${canonical_file}")"
+
+            if [ -z "${read_only_block}" ] || [ -z "${read_write_block}" ]; then
+              echo "::error::Canonical Serena fragment is malformed: ${canonical_file}" >&2
+              return 1
+            fi
+
+            : > "${output_file}"
+            while IFS= read -r line || [ -n "${line}" ]; do
+              case "${line}" in
+                '{{SERENA_EFFICIENCY:READ_ONLY}}')
+                  printf '%s\n' "${read_only_block}" >> "${output_file}"
+                  ;;
+                '{{SERENA_EFFICIENCY:READ_WRITE}}')
+                  printf '%s\n' "${read_write_block}" >> "${output_file}"
+                  ;;
+                *)
+                  printf '%s\n' "${line}" >> "${output_file}"
+                  ;;
+              esac
+            done < "${mode_prompt_file}"
+
+            if grep -q '{{SERENA_EFFICIENCY:' "${output_file}"; then
+              echo "::error::Unresolved Serena include marker in ${mode_prompt_file}" >&2
+              return 1
+            fi
+          }
+
+          CLARIFY_RESPOND_MODE_PROMPT_FILE="${RUNTIME_DIR}/mode-clarify-respond.rendered.txt"
+          render_mode_prompt_with_serena "prompts/mode-clarify-respond.txt" "${CLARIFY_RESPOND_MODE_PROMPT_FILE}"
+
           # Keep static context first for cache reuse, then append run-specific
           # data so issue/comment changes do not invalidate the cached prefix.
           {
             cat ./pre_assembled_static.txt
             echo
             echo "=== CLARIFY RESPOND TASK ==="
-            cat prompts/mode-clarify-respond.txt
+            cat "${CLARIFY_RESPOND_MODE_PROMPT_FILE}"
             echo
             echo "=== MEMORY CONTEXT ==="
             cat "${RUNTIME_DIR}/memory_context.txt"

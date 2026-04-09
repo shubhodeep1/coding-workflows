@@ -1,0 +1,20 @@
+This file is the canonical source of Serena efficiency guidance for mode prompts.
+
+Markers used by mode prompt templates:
+- `{{SERENA_EFFICIENCY:READ_ONLY}}`
+- `{{SERENA_EFFICIENCY:READ_WRITE}}`
+
+<<<SERENA_EFFICIENCY_READ_ONLY_START>>>
+SERENA MCP EFFICIENCY (MANDATORY):
+- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+- Prefer get_symbols_overview and find_symbol over raw file reads.
+- Never read the same file region twice. Plan reads upfront.
+<<<SERENA_EFFICIENCY_READ_ONLY_END>>>
+
+<<<SERENA_EFFICIENCY_READ_WRITE_START>>>
+SERENA MCP EFFICIENCY (MANDATORY):
+- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+- Skip straight to activate_project and then use tools directly.
+- Prefer get_symbols_overview and find_symbol over raw file reads.
+- Never read the same file region twice. Plan reads upfront.
+<<<SERENA_EFFICIENCY_READ_WRITE_END>>>

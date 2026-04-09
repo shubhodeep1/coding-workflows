@@ -147,8 +147,5 @@ JSON schema:
   "blockers": ["string"]
 }
 
-SERENA MCP EFFICIENCY (MANDATORY):
-- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
-- Skip straight to activate_project and then use tools directly.
-- Prefer get_symbols_overview and find_symbol over raw file reads.
-- Never read the same file region twice. Plan reads upfront.
+{{SERENA_EFFICIENCY:READ_WRITE}}
+- If Serena tools are unavailable or error, fall back to normal file reads.

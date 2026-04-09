@@ -811,7 +811,7 @@ jobs:
           # 5d: Validate prompt files exist and are non-empty
           echo ""
           echo "── Prompt files validation ──"
-          for pf in prompts/mode-judge.txt prompts/mode-judge-review-blocked.txt; do
+          for pf in prompts/mode-judge.txt prompts/mode-judge-review-blocked.txt prompts/serena-efficiency-block.txt; do
             if [ ! -s "${pf}" ]; then
               echo "::error::Prompt file ${pf} is missing or empty"
               exit 1

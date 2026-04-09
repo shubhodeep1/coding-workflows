@@ -168,9 +168,20 @@ jobs:
           # Fetch judge prompt for review-blocked judge feature
           mkdir -p prompts
           if [ ! -f prompts/mode-judge-review-blocked.txt ]; then
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=${script_ref}" \
-              > prompts/mode-judge-review-blocked.txt 2>/dev/null || true
+            if ! _gh_api_fetch "prompts/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=${script_ref}"; then
+              echo "::warning::mode-judge-review-blocked.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=main"
+            fi
+          fi
+          if [ ! -f prompts/serena-efficiency-block.txt ]; then
+            if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
+              echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            fi
           fi
 
       - name: Validate PR number input
@@ -2874,6 +2885,51 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+
+          render_mode_prompt_with_serena() {
+            local mode_prompt_file="$1"
+            local output_file="$2"
+            local canonical_file="${3:-prompts/serena-efficiency-block.txt}"
+            local read_only_block
+            local read_write_block
+
+            if [ ! -s "${mode_prompt_file}" ]; then
+              echo "::error::Mode prompt file missing or empty: ${mode_prompt_file}" >&2
+              return 1
+            fi
+            if [ ! -s "${canonical_file}" ]; then
+              echo "::error::Canonical Serena fragment missing or empty: ${canonical_file}" >&2
+              return 1
+            fi
+
+            read_only_block="$(awk '/^<<<SERENA_EFFICIENCY_READ_ONLY_START>>>$/{flag=1; next} /^<<<SERENA_EFFICIENCY_READ_ONLY_END>>>$/{flag=0} flag{print}' "${canonical_file}")"
+            read_write_block="$(awk '/^<<<SERENA_EFFICIENCY_READ_WRITE_START>>>$/{flag=1; next} /^<<<SERENA_EFFICIENCY_READ_WRITE_END>>>$/{flag=0} flag{print}' "${canonical_file}")"
+
+            if [ -z "${read_only_block}" ] || [ -z "${read_write_block}" ]; then
+              echo "::error::Canonical Serena fragment is malformed: ${canonical_file}" >&2
+              return 1
+            fi
+
+            : > "${output_file}"
+            while IFS= read -r line || [ -n "${line}" ]; do
+              case "${line}" in
+                '{{SERENA_EFFICIENCY:READ_ONLY}}')
+                  printf '%s\n' "${read_only_block}" >> "${output_file}"
+                  ;;
+                '{{SERENA_EFFICIENCY:READ_WRITE}}')
+                  printf '%s\n' "${read_write_block}" >> "${output_file}"
+                  ;;
+                *)
+                  printf '%s\n' "${line}" >> "${output_file}"
+                  ;;
+              esac
+            done < "${mode_prompt_file}"
+
+            if grep -q '{{SERENA_EFFICIENCY:' "${output_file}"; then
+              echo "::error::Unresolved Serena include marker in ${mode_prompt_file}" >&2
+              return 1
+            fi
+          }
           if [ -f scripts/label_helpers.sh ] && source scripts/label_helpers.sh 2>/dev/null; then
             :
           else
@@ -3001,6 +3057,8 @@ jobs:
           # -----------------------------------------------------------
           RB_JUDGE_PROMPT="${RUNTIME_DIR}/rb_judge_prompt.txt"
           RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
+          RB_JUDGE_MODE_PROMPT_FILE="${RUNTIME_DIR}/mode-judge-review-blocked.rendered.txt"
+          render_mode_prompt_with_serena "prompts/mode-judge-review-blocked.txt" "${RB_JUDGE_MODE_PROMPT_FILE}"
 
           {
             if [ -f ./pre_assembled_static.txt ]; then
@@ -3011,11 +3069,7 @@ jobs:
             echo
             echo "=== REVIEW-BLOCKED JUDGE TASK ==="
             echo
-            if [ -f prompts/mode-judge-review-blocked.txt ]; then
-              cat prompts/mode-judge-review-blocked.txt
-            else
-              echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."
-            fi
+            cat "${RB_JUDGE_MODE_PROMPT_FILE}"
             echo
             if [ -n "${FIRST_ISSUE}" ]; then
               echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
