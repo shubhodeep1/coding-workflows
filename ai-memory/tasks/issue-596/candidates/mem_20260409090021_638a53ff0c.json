@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` clarification questions were issued in this cycle.\n- `/answer [auto-answered-by-clarify]` is interpreted as: proceed using the issue description as the full requirement set.\n\nConflict detected:\n- The issue describes old behavior in `.github/workflows/plan.yml` (`jq ... || echo \"false\"` fallback and disabled-memory skip regression), but current `Check and claim /answer command` logic already appears to implement the requested fail-closed + disabled-memory behavior.\n- This indicates a likely stale issue description or already-applied fix. Implementation should begin by re-verifying current head behavior before editing.\n\nImplementation plan:\n\n1. Files likely to change\n- `.github/workflows/plan.yml` (only if verification finds drift from required behavior in the claim parsing block).\n- No other file is required for the scoped fix.\n\n2. Functions/modules to implement\n- Update/confirm the `Check and claim /answer command` step logic in `.github/workflows/plan.yml`:\n- Keep `memory_processed_command_claim` call unchanged.\n- Normalize/evaluate `AI_MEMORY_ENABLED`.\n- If memory is enabled:\n- Empty claim output: emit `::error::` and `exit 1`.\n- Malformed claim output (no boolean at `.operation_result.claimed // .claimed`): emit `::error::` and `exit 1`.\n- Parse boolean strictly and assign `CLAIMED`.\n- If memory is disabled:\n- Force `CLAIMED=true` (do not skip valid `/answer` runs).\n- Preserve duplicate behavior: when `CLAIMED != true`, set `SKIP_PLAN=true` and exit as duplicate.\n\n3. Data structures affected\n- Claim JSON contract: `.operation_result.claimed` or `.claimed` must be a JSON boolean.\n- Env-state flags: `AI_MEMORY_ENABLED`, `SKIP_PLAN`, `PROCESSED_ANSWER_CLAIMED`.\n\n4. API/interface changes\n- No external API/interface changes.\n- Behavioral contract changes/confirmation:\n- Memory disabled mode must be backward compatible (`/answer` continues).\n- Memory enabled mode must be fail-closed on empty/malformed claim output.\n\n5. Potential risks and edge cases\n- Treating non-boolean values (`\"true\"`, `1`, `null`, missing key) as valid would violate fail policy.\n- Regression risk if duplicate-run gating changes and blocks legitimate runs.\n- Downstream steps gated by `PROCESSED_ANSWER_CLAIMED` must remain unchanged.\n- Out-of-scope but notable: similar claim parsing in `.github/workflows/implement.yml` may still be more permissive.\n\n6. Testing considerations\n- Validate these cases in workflow execution:\n- `AI_MEMORY_ENABLED=false` + empty claim output -> planning proceeds (no skip).\n- Memory enabled + valid `claimed=true` -> planning proceeds.\n- Memory enabled + valid `claimed=false` -> duplicate skip path (`SKIP_PLAN=true`).\n- Memory enabled + empty claim output -> hard failure with `::error::`.\n- Memory enabled + malformed/missing boolean claim output -> hard failure with `::error::`.\n- Confirm no regression in normal successful plan flow and duplicate `/answer` handling.\n\nExecution note:\n- If verification confirms current code already satisfies all acceptance criteria, implementation should be treated as no-op and documented explicitly in the PR/issue with evidence.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8a7b6738523991368a7abd31815e56f3c2f100d97caabd40703d18741ee4c1bc",
+  "lineage": {
+    "issue_number": 596,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24181471370",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24181471370",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/596"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409090021_638a53ff0c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 596,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24181471370"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #596",
+  "timestamps": {
+    "created_at": "2026-04-09T09:00:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
