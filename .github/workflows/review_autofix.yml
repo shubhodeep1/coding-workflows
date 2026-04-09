@@ -1465,9 +1465,12 @@ jobs:
             exit 0
           fi
 
-          grep "File:" "${PREVIOUS_REVIEWS_DIR}"/review_*.txt |
-          sed 's/.*File: //' |
-          sort | uniq -c > "${REVIEWER_FILE_FREQUENCY_FILE}"
+          if ! grep "File:" "${PREVIOUS_REVIEWS_DIR}"/review_*.txt |
+             sed 's/.*File: //' |
+             sort | uniq -c > "${REVIEWER_FILE_FREQUENCY_FILE}"; then
+            echo "No 'File:' markers found in reviewer outputs — reviewers may have found no file-level issues."
+            : > "${REVIEWER_FILE_FREQUENCY_FILE}"
+          fi
 
           {
             echo "High confidence files (mentioned by >=2 reviewers):"
@@ -3515,6 +3518,17 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${PR_NUMBER}" "${MSG}"
+
+      - name: Check PR state before failure alerts
+        if: (failure() || cancelled()) && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+          if [ "${pr_state}" != "open" ]; then
+            echo "PR #${PR_NUMBER} is ${pr_state} — skipping failure alerts."
+            echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Mark linked issues review-blocked (workflow failure)
         if: (failure() || cancelled()) && env.PR_CLOSED != 'true'
