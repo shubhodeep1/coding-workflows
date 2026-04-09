@@ -479,11 +479,48 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "TRACKING_ISSUE_NUMBER=${TRACKING_ISSUE_NUMBER}" >> "$GITHUB_ENV"
 
+      - name: Create integration branch
+        id: integration_branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+        run: |
+          set -euo pipefail
+
+          DEFAULT_BRANCH="$(gh api "repos/${{ github.repository }}" --jq '.default_branch')"
+          INTEGRATION_BRANCH="orchestrator/project-${TRACKING_ISSUE_NUMBER}"
+          INTEGRATION_BRANCH_REF="$(printf '%s' "${INTEGRATION_BRANCH}" | jq -sRr @uri)"
+
+          if gh api "repos/${{ github.repository }}/git/ref/heads/${INTEGRATION_BRANCH_REF}" >/dev/null 2>&1; then
+            echo "Integration branch already exists: ${INTEGRATION_BRANCH}"
+          else
+            BASE_SHA="$(gh api "repos/${{ github.repository }}/git/ref/heads/${DEFAULT_BRANCH}" --jq '.object.sha')"
+            gh api "repos/${{ github.repository }}/git/refs" \
+              -f ref="refs/heads/${INTEGRATION_BRANCH}" \
+              -f sha="${BASE_SHA}" >/dev/null
+            echo "Created integration branch ${INTEGRATION_BRANCH} from ${DEFAULT_BRANCH}@${BASE_SHA}"
+          fi
+
+          python3 scripts/orchestrate_lib.py build-tracking-body \
+            --input-file "${DECOMPOSITION_FILE}" \
+            --integration-branch "${INTEGRATION_BRANCH}" > "${TRACKING_BODY_FILE}"
+
+          gh issue edit "${TRACKING_ISSUE_NUMBER}" \
+            --repo "${{ github.repository }}" \
+            --body-file "${TRACKING_BODY_FILE}" >/dev/null
+
+          {
+            echo "integration_branch=${INTEGRATION_BRANCH}"
+            echo "default_branch=${DEFAULT_BRANCH}"
+          } >> "$GITHUB_OUTPUT"
+          echo "INTEGRATION_BRANCH=${INTEGRATION_BRANCH}" >> "$GITHUB_ENV"
+
       - name: Create Wave 1 issues only
         id: create_issues
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+          INTEGRATION_BRANCH: ${{ steps.integration_branch.outputs.integration_branch }}
         run: |
           set -euo pipefail
 
@@ -530,6 +567,7 @@ jobs:
           ---
           **Orchestrator metadata** (do not edit)
           - Tracking issue: #${TRACKING_ISSUE_NUMBER}
+          - Integration branch: ${INTEGRATION_BRANCH}
           - Local ID: \`${LOCAL_ID}\`
           - Priority: ${PRIORITY}
           - Managed by: AI Orchestrator
@@ -566,6 +604,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+          INTEGRATION_BRANCH: ${{ steps.integration_branch.outputs.integration_branch }}
         run: |
           set -euo pipefail
 
@@ -589,7 +628,7 @@ jobs:
 
           validate_decomposition(data)
           waves = compute_waves(data)
-          state = build_tracking_state(data, waves, issue_map)
+          state = build_tracking_state(data, waves, issue_map, integration_branch='${INTEGRATION_BRANCH}')
           state['tracking_issue'] = int('${TRACKING_ISSUE_NUMBER}')
 
           with open('${STATE_FILE}', 'w') as f:

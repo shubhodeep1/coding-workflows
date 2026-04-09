@@ -270,6 +270,22 @@ jobs:
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+          PR_BASE_BRANCH="${{ github.event.repository.default_branch }}"
+          INTEGRATION_BRANCH_RAW="$(printf '%s\n' "${ISSUE_BODY}" | sed -n 's/^- Integration branch: //p' | head -n 1 | tr -d '\r')"
+
+          if [ -n "${INTEGRATION_BRANCH_RAW}" ]; then
+            if printf '%s' "${INTEGRATION_BRANCH_RAW}" | grep -Eq '^[A-Za-z0-9._/-]+$'; then
+              INTEGRATION_BRANCH_REF="$(printf '%s' "${INTEGRATION_BRANCH_RAW}" | jq -sRr @uri)"
+              if gh api "repos/${{ github.repository }}/git/ref/heads/${INTEGRATION_BRANCH_REF}" >/dev/null 2>&1; then
+                PR_BASE_BRANCH="${INTEGRATION_BRANCH_RAW}"
+              else
+                echo "::warning::Ignoring integration branch from metadata because it does not exist: ${INTEGRATION_BRANCH_RAW}"
+              fi
+            else
+              echo "::warning::Ignoring integration branch from metadata because format is invalid: ${INTEGRATION_BRANCH_RAW}"
+            fi
+          fi
+
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
 
           # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
@@ -278,6 +294,7 @@ jobs:
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
+            echo "PR_BASE_BRANCH=${PR_BASE_BRANCH}"
             echo 'ISSUE_TITLE<<EOF'
             echo "${ISSUE_TITLE}"
             echo 'EOF'
@@ -1068,7 +1085,7 @@ jobs:
 
           if ! gh pr create \
             --repo "${{ github.repository }}" \
-            --base "${{ github.event.repository.default_branch }}" \
+            --base "${PR_BASE_BRANCH}" \
             --head "${TARGET_BRANCH}" \
             --title "AI implementation for issue #${ISSUE_NUMBER}" \
             --body "Automated implementation. Closes ${ISSUE_URL}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
