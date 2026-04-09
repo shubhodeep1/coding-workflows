@@ -219,14 +219,27 @@ jobs:
           # scripts cause silent MCP failures.
           mkdir -p scripts
           # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
           _gh_api_fetch() {
             local outfile="$1"; shift
             local attempt=1
-            while [ "${attempt}" -le 4 ]; do
+            while [ "${attempt}" -le 5 ]; do
               if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
-                sleep 30; attempt=$((attempt + 1))
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait; attempt=$((attempt + 1))
               else return 1; fi
             done; return 1
           }
@@ -1165,14 +1178,27 @@ jobs:
 
           mkdir -p scripts
           # Rate-limit-aware fetch
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
           _gh_api_fetch() {
             local outfile="$1"; shift
             local attempt=1
-            while [ "${attempt}" -le 4 ]; do
+            while [ "${attempt}" -le 5 ]; do
               if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
-                sleep 30; attempt=$((attempt + 1))
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait; attempt=$((attempt + 1))
               else return 1; fi
             done; return 1
           }
@@ -1532,14 +1558,27 @@ jobs:
             fi
             mkdir -p scripts
             # Rate-limit-aware fetch
+            _rl_wait() {
+              local _reset_ts _wait_secs
+              _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+              if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+                _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+                [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+                [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+              else
+                _wait_secs=30
+              fi
+              echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+              sleep "${_wait_secs}"
+            }
             _gh_api_fetch() {
               local outfile="$1"; shift
               local attempt=1
-              while [ "${attempt}" -le 4 ]; do
+              while [ "${attempt}" -le 5 ]; do
                 if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
                 if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                  echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
-                  sleep 30; attempt=$((attempt + 1))
+                  echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
+                  _rl_wait; attempt=$((attempt + 1))
                 else return 1; fi
               done; return 1
             }
