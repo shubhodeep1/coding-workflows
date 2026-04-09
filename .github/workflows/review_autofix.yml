@@ -276,7 +276,7 @@ jobs:
             exit 1
           fi
 
-          # Pre-assemble all static system instructions into one file so the LLM
+          # Pre-assemble static system instructions into one file so the LLM
           # provider can cache this stable prefix across runs. Dynamic per-PR
           # content (diffs, reviewer output, etc.) is kept separate and read after.
           {
@@ -284,9 +284,11 @@ jobs:
             cat unattended_llm_system_instructions.md
             echo
             if [ -f codex_system_instructions.md ]; then
-              echo "=== CODEX SYSTEM INSTRUCTIONS ==="
-              echo "(Repository code-style, MongoDB, backward-compatibility, and safety rules.)"
-              cat codex_system_instructions.md
+              echo "=== CODEX SYSTEM INSTRUCTIONS (editor-trimmed) ==="
+              # Keep only Serena tooling section and code style section.
+              awk '/^## Serena \(MCP\) Semantic Tooling/{flag=1} /^## 0\./{flag=0} flag{print}' codex_system_instructions.md
+              echo
+              awk '/^## 9\. Code Style/{flag=1} /^## 10\./{flag=0} flag{print}' codex_system_instructions.md
               echo
             fi
             if [ -f agents.md ]; then
@@ -295,8 +297,9 @@ jobs:
               echo
             fi
             if [ -f README.md ]; then
-              echo "=== README.MD ==="
-              cat README.md
+              echo "=== README.MD (trimmed) ==="
+              # Keep overview/variables; exclude wrapper and automation docs.
+              awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
               echo
             fi
           } > ./pre_assembled_static.txt
@@ -1235,13 +1238,7 @@ jobs:
           __REVIEWER_PROMPT__
 
           {
-            echo "SYSTEM INSTRUCTIONS (MANDATORY):"
-            echo "Read ./pre_assembled_static.txt FIRST (in the repository root, NOT under"
-            echo "/tmp or the runtime directory) — it contains the unattended system"
-            echo "instructions, codex system instructions (code-style/safety/MongoDB rules),"
-            echo "agents.md, and README.md pre-assembled into one file (constant across runs,"
-            echo "cached by the LLM provider). Follow these before any review work."
-            echo "Example command: cat ./pre_assembled_static.txt"
+            cat ./pre_assembled_static.txt
             echo
             echo "=== MEMORY CONTEXT (REVIEWER) ==="
             if [ -s "${MEMORY_CONTEXT_FILE}" ]; then
@@ -1926,13 +1923,7 @@ jobs:
 
           prompt_tmp="$(mktemp)"
           {
-            echo "SYSTEM INSTRUCTIONS (MANDATORY):"
-            echo "Read ./pre_assembled_static.txt FIRST (in the repository root, NOT under"
-            echo "/tmp or the runtime directory) — it contains the unattended system"
-            echo "instructions, codex system instructions (code-style/safety/MongoDB rules),"
-            echo "agents.md, and README.md pre-assembled into one file (constant across runs,"
-            echo "cached by the LLM provider). Follow these before any editing work."
-            echo "Example command: cat ./pre_assembled_static.txt"
+            cat ./pre_assembled_static.txt
             echo
             echo "${PROMPT_ARTIFACT_PATH_HINT}"
             echo

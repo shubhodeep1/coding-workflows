@@ -547,20 +547,27 @@ jobs:
           # for subsequent requests. Bundling everything into one file defeats
           # prefix caching because the dynamic issue context changes every run.
           {
-            echo "=== SYSTEM INSTRUCTIONS ==="
-            cat codex_system_instructions.md
+            echo "=== SYSTEM INSTRUCTIONS (planning-trimmed) ==="
+            # Include Serena + sections 0-6 + FINAL REMINDER; skip section 7+.
+            awk '/^## 7\./{exit} {print}' codex_system_instructions.md
             echo
-            echo "=== AI PIPELINE ==="
-            cat ai_pipeline.md
+            awk '/^## FINAL REMINDER$/,0{print}' codex_system_instructions.md
             echo
+
+            echo "=== AI PIPELINE (planning-trimmed) ==="
+            # Keep shared runtime + clarify/planning context; stop before phase 3.
+            awk '/^## Phase 3/{exit} {print}' ai_pipeline.md
+            echo
+
             if [ -f agents.md ]; then
               echo "=== AGENTS.MD ==="
               cat agents.md
               echo
             fi
             if [ -f README.md ]; then
-              echo "=== README.MD ==="
-              cat README.md
+              echo "=== README.MD (trimmed) ==="
+              # Keep overview/variables; exclude wrapper/automation docs.
+              awk '/^### 2\. Create wrapper workflows/{exit} {print}' README.md
               echo
             fi
           } > ./pre_assembled_static.txt

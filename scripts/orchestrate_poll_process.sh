@@ -1187,6 +1187,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>/dev/null; then
 
       if [ -s "${STATE_FILE}" ] && jq -e '.schema_version' "${STATE_FILE}" >/dev/null 2>&1; then
+        STATE_JSON="$(cat "${STATE_FILE}")"
         # Post the reconstructed state so future poll cycles find it
         post_state_comment
         echo "  State reconstructed and posted for tracking issue #${TRACKING_NUM}."
@@ -2495,12 +2496,18 @@ Manual intervention required." >/dev/null
 
   # Setup Codex config for judge
   mkdir -p ~/.codex
+  JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
+  EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="${MODEL_REASONING_EFFORT_JUDGE}"
+  if [ "${JUDGE_INVOCATION_CYCLE}" -gt 3 ] && [ "${MODEL_REASONING_EFFORT_JUDGE}" = "xhigh" ]; then
+    EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="high"
+  fi
+  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE}"
   CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
   {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR}\""
-    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE}\""
+    echo "model_reasoning_effort = \"${EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE}\""
     if [ -f "${CATALOG_PATH}" ]; then
       echo "model_catalog_json = \"${CATALOG_PATH}\""
     fi
