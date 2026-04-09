@@ -1493,10 +1493,10 @@ STALL_EOF
       # Find linked PR and push empty commit to trigger synchronize event.
       echo "  Re-triggering review for issue #${issue_num}..."
       local pr_num
-      pr_num="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+      pr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
         --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-        2>/dev/null || echo "")"
-      if [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
+        || echo "")"
+      if [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
         local head_ref
         head_ref="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' || echo "")"
         if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
@@ -2037,10 +2037,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
           PRIOR_WAVE_REMEDIATED="true"
         elif echo "${PW_LABELS}" | jq -e 'index("ai:ready-to-merge")' >/dev/null 2>&1; then
           echo "  [backward-scan] #${pw_inum} is ai:ready-to-merge. Attempting auto-merge..."
-          PW_PR="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/timeline" \
+          PW_PR="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/timeline" \
             --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-            2>/dev/null || echo "")"
-          if [ -n "${PW_PR}" ] && [ "${PW_PR}" != "null" ]; then
+            || echo "")"
+          if [[ "${PW_PR}" =~ ^[0-9]+$ ]]; then
             _pw_pr_json="$(_fetch_pr_json "${PW_PR}")"
             PW_PR_STATE="$(_jq_field "${_pw_pr_json}" '.state' 'open|closed|merged')"
             PW_PR_MERGEABLE="$(_jq_field "${_pw_pr_json}" '.mergeable' 'true|false')"
@@ -2225,10 +2225,10 @@ json.dump(result, sys.stdout)
   echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "ready-to-merge") | .github_issue' | while read -r rtm_issue; do
     [ -n "${rtm_issue}" ] && [ "${rtm_issue}" != "null" ] || continue
     echo "  Issue #${rtm_issue} is ready-to-merge, finding linked PR..."
-    RTM_PR="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rtm_issue}/timeline" \
+    RTM_PR="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rtm_issue}/timeline" \
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-      2>/dev/null || echo "")"
-    if [ -n "${RTM_PR}" ] && [ "${RTM_PR}" != "null" ]; then
+      || echo "")"
+    if [[ "${RTM_PR}" =~ ^[0-9]+$ ]]; then
       _rtm_pr_json="$(_fetch_pr_json "${RTM_PR}")"
       PR_STATE="$(_jq_field "${_rtm_pr_json}" '.state' 'open|closed|merged')"
       PR_MERGEABLE="$(_jq_field "${_rtm_pr_json}" '.mergeable' 'true|false')"
@@ -2293,10 +2293,10 @@ json.dump(result, sys.stdout)
   # ---------------------------------------------------------------
   echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "in_progress") | .github_issue' | while read -r ip_issue; do
     [ -n "${ip_issue}" ] && [ "${ip_issue}" != "null" ] || continue
-    IP_PR="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${ip_issue}/timeline" \
+    IP_PR="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ip_issue}/timeline" \
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-      2>/dev/null || echo "")"
-    if [ -z "${IP_PR}" ] || [ "${IP_PR}" = "null" ]; then
+      || echo "")"
+    if ! [[ "${IP_PR}" =~ ^[0-9]+$ ]]; then
       continue
     fi
     _ip_pr_json="$(_fetch_pr_json "${IP_PR}")"
@@ -2383,10 +2383,10 @@ json.dump(result, sys.stdout)
       echo "  Retry count for #${rb_issue}: ${RETRY_COUNT}/${MAX_REVIEW_BLOCKED_RETRIES}"
 
       # Find linked PR
-      RB_PR="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/timeline" \
+      RB_PR="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/timeline" \
         --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-        2>/dev/null || echo "")"
-      if [ -z "${RB_PR}" ] || [ "${RB_PR}" = "null" ]; then
+        || echo "")"
+      if ! [[ "${RB_PR}" =~ ^[0-9]+$ ]]; then
         echo "  No linked PR found for issue #${rb_issue}, skipping."
         continue
       fi
@@ -3480,10 +3480,10 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
         echo "Reverting ${REVERT_COUNT} PR(s)..."
         echo "${JUDGE_JSON}" | jq -r '.issues_to_revert[]' | while read -r revert_issue; do
           # Find PR linked to this issue
-          PR_TO_REVERT="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${revert_issue}/timeline" \
+          PR_TO_REVERT="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${revert_issue}/timeline" \
             --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-            2>/dev/null || echo "")"
-          if [ -n "${PR_TO_REVERT}" ] && [ "${PR_TO_REVERT}" != "null" ]; then
+            || echo "")"
+          if [[ "${PR_TO_REVERT}" =~ ^[0-9]+$ ]]; then
             echo "  Reverting PR #${PR_TO_REVERT} (issue #${revert_issue})..."
             # Create revert PR via gh
             gh api "repos/${GITHUB_REPOSITORY}/pulls" \
