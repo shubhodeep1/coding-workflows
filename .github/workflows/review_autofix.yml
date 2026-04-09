@@ -557,7 +557,7 @@ jobs:
             # Use only 2 fast models for smoke tests
             {
               echo 'REVIEWER_MODELS<<SMOKE_EOF'
-              echo 'deepseek/deepseek-v3.2'
+              echo 'google/gemini-3-flash-preview'
               echo 'stepfun/step-3.5-flash'
               echo 'SMOKE_EOF'
             } >> "$GITHUB_ENV"
