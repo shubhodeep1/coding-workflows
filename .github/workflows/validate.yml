@@ -128,19 +128,21 @@ jobs:
             fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"
             chmod +x "scripts/${f}"
           done
+
+          # Source rate-limit helpers as soon as gh_helpers.sh is available.
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry_to_file >/dev/null 2>&1 || gh_retry_to_file() { local _outfile="$1"; shift; "$@" > "${_outfile}"; }
+
           # Fetch AI memory schema files so consumer repos that lack
           # schemas on their default branch can bootstrap the ai-memory
           # branch (schemas are validated during memory operations).
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+              gh_retry_to_file "ai-memory/schemas/${sf}" gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" 2>/dev/null || true
             fi
           done
-
-          # Source rate-limit helpers now that gh_helpers.sh is available
-          source scripts/gh_helpers.sh 2>/dev/null || true
 
           if gh_retry_to_file "scripts/codex_model_catalog.json.tmp" gh api -H 'Accept: application/vnd.github.raw+json' \
             "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}" 2>/dev/null; then

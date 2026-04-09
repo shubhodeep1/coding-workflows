@@ -42,6 +42,10 @@ VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-test-user}"
 VALIDATION_TEST_PASSWORD="${VALIDATION_TEST_PASSWORD:-test-password}"
 VALIDATION_TEST_API_KEY="${VALIDATION_TEST_API_KEY:-test-api-key}"
 VALIDATION_CYCLE="${VALIDATION_CYCLE:-1}"
+EFFECTIVE_MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT}"
+if [ "${VALIDATION_CYCLE}" -gt 3 ] && [ "${MODEL_REASONING_EFFORT}" = "xhigh" ]; then
+  EFFECTIVE_MODEL_REASONING_EFFORT="high"
+fi
 
 PROJECT_SPEC_FILE="${RUNTIME_DIR}/project_spec.txt"
 STATIC_CONTEXT_FILE="${RUNTIME_DIR}/validate_static.txt"
@@ -372,7 +376,7 @@ CATALOG_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_model_catalog.
   echo 'web_search = "live"'
   echo 'model_provider = "openrouter"'
   echo "model = \"${MODEL_EDITOR}\""
-  echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\""
+  echo "model_reasoning_effort = \"${EFFECTIVE_MODEL_REASONING_EFFORT}\""
   if [ -f "${CATALOG_PATH}" ]; then
     echo "model_catalog_json = \"${CATALOG_PATH}\""
   else
