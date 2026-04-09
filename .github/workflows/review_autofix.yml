@@ -3570,7 +3570,7 @@ jobs:
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "CRITICAL"
 
       - name: Check PR state before failure alerts
         if: (failure() || cancelled()) && env.PR_CLOSED != 'true'
