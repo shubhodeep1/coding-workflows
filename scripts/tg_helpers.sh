@@ -24,12 +24,70 @@ _tg_chat_id()
 }
 
 # ---------------------------------------------------------------
+# Alert level support
+# Levels: DEBUG < WARNING < ERROR < CRITICAL
+# ALERT_MSG_LEVEL env var controls minimum level sent (default: DEBUG).
+# New alerts default to CRITICAL until explicitly recategorised.
+# ---------------------------------------------------------------
+
+_tg_level_num()
+{
+	case "$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')" in
+		DEBUG)    printf '0' ;;
+		WARNING)  printf '1' ;;
+		ERROR)    printf '2' ;;
+		CRITICAL) printf '3' ;;
+		*)        printf '0' ;;
+	esac
+}
+
+_tg_level_icon()
+{
+	case "$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')" in
+		DEBUG)    printf '🔍' ;;
+		WARNING)  printf '⚠️' ;;
+		ERROR)    printf '❌' ;;
+		CRITICAL) printf '🚨' ;;
+		*)        printf '🚨' ;;
+	esac
+}
+
+# _tg_should_send — returns 0 (true) if the message level meets the threshold.
+_tg_should_send()
+{
+	local msg_level="$1"
+	local threshold="${ALERT_MSG_LEVEL:-DEBUG}"
+	local msg_num threshold_num
+	msg_num=$(_tg_level_num "${msg_level}")
+	threshold_num=$(_tg_level_num "${threshold}")
+	[ "${msg_num}" -ge "${threshold_num}" ]
+}
+
+# _tg_prepend_level — prepend "ICON LEVEL: " to a message.
+_tg_prepend_level()
+{
+	local level="$1" msg="$2"
+	local icon level_upper
+	icon=$(_tg_level_icon "${level}")
+	level_upper=$(printf '%s' "${level}" | tr '[:lower:]' '[:upper:]')
+	printf '%s %s: %s' "${icon}" "${level_upper}" "${msg}"
+}
+
+# ---------------------------------------------------------------
 # tg_send_msg — Send a Telegram message, echo the message_id.
-# Usage: msg_id=$(tg_send_msg "Hello world")
+# Usage: msg_id=$(tg_send_msg "Hello world" "ERROR")
+# Level defaults to CRITICAL so new/untagged alerts are always sent.
 # ---------------------------------------------------------------
 tg_send_msg()
 {
 	local msg="$1"
+	local level="${2:-CRITICAL}"
+	# Filter by ALERT_MSG_LEVEL threshold
+	if ! _tg_should_send "${level}"; then
+		return 0
+	fi
+	# Prepend level prefix
+	msg="$(_tg_prepend_level "${level}" "${msg}")"
 	local chat_id
 	chat_id="$(_tg_chat_id)"
 	if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${chat_id}" ]; then
@@ -128,13 +186,13 @@ tg_store_msg_id()
 # ---------------------------------------------------------------
 # tg_send_tracked — Send a Telegram message and track its ID.
 # Drop-in replacement for fire-and-forget tg_notify() calls.
-# Usage: tg_send_tracked 42 "message text"
+# Usage: tg_send_tracked 42 "message text" "ERROR"
 # ---------------------------------------------------------------
 tg_send_tracked()
 {
-	local issue_num="$1" msg="$2"
+	local issue_num="$1" msg="$2" level="${3:-CRITICAL}"
 	local msg_id
-	msg_id=$(tg_send_msg "${msg}")
+	msg_id=$(tg_send_msg "${msg}" "${level}")
 	tg_store_msg_id "${issue_num}" "${msg_id}"
 }
 
@@ -197,13 +255,13 @@ tg_store_phase_msg_id()
 
 # ---------------------------------------------------------------
 # tg_send_phase_tracked — Send a TG message and track with phase.
-# Usage: tg_send_phase_tracked 42 clarify "message text"
+# Usage: tg_send_phase_tracked 42 clarify "message text" "WARNING"
 # ---------------------------------------------------------------
 tg_send_phase_tracked()
 {
-	local issue_num="$1" phase="$2" msg="$3"
+	local issue_num="$1" phase="$2" msg="$3" level="${4:-CRITICAL}"
 	local msg_id
-	msg_id=$(tg_send_msg "${msg}")
+	msg_id=$(tg_send_msg "${msg}" "${level}")
 	tg_store_phase_msg_id "${issue_num}" "${phase}" "${msg_id}"
 }
 
