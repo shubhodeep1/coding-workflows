@@ -1775,7 +1775,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
 
-      if [ ! -f "${RUNTIME_DIR}/judge_static.txt" ]; then
+      if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
         assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
       fi
 
