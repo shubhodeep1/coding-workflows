@@ -61,6 +61,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `MAX_RECOVERY_ATTEMPTS` | No | `3` | orchestrate_poll | Maximum project-level recovery cycles when the judge declares failure. Replaces the previous single-shot `recovery_attempted` boolean with a configurable counter. |
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | No | `2` | orchestrate_poll | Maximum times the poller transitions a validation-failed project back to the judge for re-evaluation before marking it as terminally failed. Set to `0` to disable (immediate terminal failure on first validation failure, matching pre-recovery behavior). |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
+| `ALERT_MSG_LEVEL` | No | `DEBUG` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status, update_workflows, test-and-mark-stable | Minimum Telegram alert level to send. Alerts below this threshold are suppressed. Valid values: `DEBUG`, `WARNING`, `ERROR`, `CRITICAL`. Each alert is prefixed with an icon and level (e.g. `🔍 DEBUG:`, `⚠️ WARNING:`, `❌ ERROR:`, `🚨 CRITICAL:`). New alerts default to `CRITICAL` until explicitly recategorised. |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Version/branch of the Serena MCP server |
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Languages for Serena symbol analysis |
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Disable the Serena MCP server |
@@ -71,22 +72,21 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `EDITOR_MAX_WALL` | No | `3300` | review_autofix, implement | Maximum wall-clock seconds per editor attempt. Budget-aware: auto-capped to remaining job time minus a 2-min buffer. |
 | `EDITOR_MIN_ATTEMPT_SECS` | No | `300` | review_autofix | Minimum remaining job budget (seconds) required to start an editor attempt. Prevents futile retries near the job deadline. |
 
-**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). **E2E smoke test override:** when an issue title contains `[E2E Smoke Test]`, all phases (clarify, plan, implement, review/edit) automatically switch to `low` reasoning effort to reduce cost and latency during release validation.
+**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. **E2E smoke test override:** when an issue title contains `[E2E Smoke Test]`, all phases (clarify, plan, implement, review/edit) automatically switch to `low` reasoning effort to reduce cost and latency during release validation.
 
 | Variable | Default | Used By | Description |
 |---|---|---|---|
 | `THINKING_LEVEL_CLARIFY` | `medium` | clarify | Reasoning effort for the clarification phase |
 | `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
-| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
+| `THINKING_LEVEL_IMPLEMENT` | `high` | implement | Reasoning effort for the implementation phase |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
 | `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | orchestrate | Reasoning effort for project decomposition |
-| `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation |
-| `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
-| `THINKING_LEVEL_VALIDATE` | `xhigh` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
-| `THINKING_LEVEL_CONFLICT_RESOLVER` | `xhigh` | orchestrate_poll | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
-
+| `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation (`xhigh` for cycles 1-3, automatically `high` from cycle 4 onward) |
+| `THINKING_LEVEL_CLARIFY_RESPOND` | `low` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
+| `THINKING_LEVEL_VALIDATE` | `high` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
+| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | orchestrate_poll | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 
 | Variable | Default | Used By | Description |
@@ -332,14 +332,11 @@ jobs:
 > **Standalone PR conflict sweep** — After processing orchestrator-managed
 > tracking issues, the poller scans all open PRs on `ai/issue-*` branches for
 > merge conflicts. When a conflict is detected it attempts a GitHub API branch
-> update; if that fails (real conflicts), the poller runs a dedicated Codex
-> conflict resolution instance (using `WORKFLOW_EDITOR_MODEL` at
-> `THINKING_LEVEL_CONFLICT_RESOLVER` reasoning effort) to resolve the
-> conflicts directly, commits the result, and pushes. This produces a clean
-> merge ref so the subsequent autofix run triggers normally. If Codex
-> resolution fails, it falls back to pushing an empty commit to force a
-> `synchronize` event. This ensures standalone (non-orchestrator) AI PRs are
-> not permanently blocked by merge conflicts.
+> update; if that fails (real conflicts), the poller dispatches the review
+> workflow via `workflow_dispatch` so its built-in Codex conflict resolver can
+> handle resolution on a dedicated runner with a clean environment. This
+> ensures standalone (non-orchestrator) AI PRs are not permanently blocked by
+> merge conflicts.
 
 **`.github/workflows/ai-validate.yml`** — Runs runtime validation (generate harness -> execute -> structured artifacts)
 ```yaml
@@ -509,7 +506,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `AI_MEMORY_TOKEN_BUDGET_<ROLE>` | _(from profile)_ | Per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`) |
 | `THINKING_LEVEL_CLARIFY` | `medium` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
 | `THINKING_LEVEL_PLAN` | `xhigh` | Reasoning effort for planning |
-| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | Reasoning effort for implementation |
+| `THINKING_LEVEL_IMPLEMENT` | `high` | Reasoning effort for implementation |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | Reasoning effort for reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | Reasoning effort for editor model (applying fixes) |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
@@ -520,7 +517,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `TOKEN_WARN_THRESHOLD_IMPLEMENT` | `200000` | Token warning threshold for implementation |
 | `WORKFLOW_ORCHESTRATE_MODEL` | (falls back to `WORKFLOW_EDITOR_MODEL`) | Model override for orchestrator/judge |
 | `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | Reasoning effort for project decomposition |
-| `THINKING_LEVEL_JUDGE` | `xhigh` | Reasoning effort for judge evaluation |
+| `THINKING_LEVEL_JUDGE` | `xhigh` | Reasoning effort for judge evaluation (`xhigh` for cycles 1-3, automatically `high` from cycle 4 onward) |
 | `ORCHESTRATE_POLL_INTERVAL` | `5` | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
 | `ORCHESTRATE_POLL_CALLER_WORKFLOW` | `ai-orchestrate-poll.yml` | Caller workflow filename for self-retrigger; empty string disables |
 | `EDITOR_IDLE_TIMEOUT` | `1200` | Editor watchdog idle timeout (seconds); killed if no output and no active network connections |
@@ -529,7 +526,9 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | Tool call budget for decomposer |
 | `TOOL_CALL_BUDGET_JUDGE` | `60` | Tool call budget for judge (needs deep repo inspection) |
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |
-| `THINKING_LEVEL_CLARIFY_RESPOND` | `medium` | Reasoning effort for auto-answering clarification questions |
+| `THINKING_LEVEL_CLARIFY_RESPOND` | `low` | Reasoning effort for auto-answering clarification questions |
+| `THINKING_LEVEL_VALIDATE` | `high` | Reasoning effort for runtime validation harness generation and diagnosis |
+| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
 
@@ -545,7 +544,7 @@ workflow_dispatch (project description)
     → Creates tracking issue + child issues
     → Wave 1 issues enter pipeline (clarify → auto-answer → plan → implement → review → merge)
     → Poller (scheduled): monitors progress, dispatches next waves
-    → Judge (LLM, xhigh thinking, full repo checkout): evaluates after each wave
+    → Judge (LLM, adaptive thinking: `xhigh` cycles 1-3 then `high`, full repo checkout): evaluates after each wave
         → complete: close tracking issue
         → in_progress: create fix-up issues (added to current wave for tracking), advance to next wave
         → failed: auto-recovery (revert + re-plan, retry once), then stop
@@ -570,15 +569,16 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 1. **Decomposition:** The LLM reads your repo, breaks the project into scoped issues with a dependency graph, and creates a tracking issue (labeled `ai:orchestrator-tracking`).
 2. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically. If clarification questions are raised, the `orchestrate_clarify_respond` workflow answers them automatically using an LLM, so the pipeline runs fully unattended.
 3. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. If a PR has merge conflicts (e.g. `main` advanced since the PR was created), the poller automatically updates the PR branch via the GitHub API before retrying the merge. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
-4. **In-progress conflict resolution:** When the base branch advances and creates merge conflicts on in-progress PRs (still going through the review/autofix cycle), the poller detects the conflict (`mergeable == false`) and runs a dedicated Codex conflict resolution instance directly (using `WORKFLOW_EDITOR_MODEL` at `THINKING_LEVEL_CONFLICT_RESOLVER` reasoning effort). The resolved files are committed and pushed, producing a clean merge ref so the subsequent autofix run triggers normally. If Codex resolution fails, it falls back to pushing an empty commit. The review workflow also retains its own built-in Codex conflict resolver as a second line of defense.
+4. **In-progress conflict resolution:** When the base branch advances and creates merge conflicts on in-progress PRs (still going through the review/autofix cycle), the poller detects the conflict (`mergeable == false`). It first tries a GitHub API branch update; if that fails (real conflicts), it dispatches the review workflow via `workflow_dispatch`. The review workflow's built-in Codex conflict resolver then handles the resolution on a dedicated runner with a clean environment.
 5. **Polling:** Every 5 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
-6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with `xhigh` thinking. Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
+6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with adaptive thinking (`xhigh` for cycles 1-3, then `high`). Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
 7. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
 8. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge makes autonomous architectural and security trade-off decisions — it does not defer to humans. It can: (a) merge the PR as-is if remaining issues are cosmetic or low-risk, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts.
 9. **Implementation-failed recovery:** When the implementation phase produces no file changes despite an approved plan (e.g. workflow edits stripped without `ALLOW_WORKFLOW_EDITS`, or model failure), the issue is labeled `ai:implementation-failed`. The poller automatically closes the failed issue and creates a replacement with additional guidance, so the pipeline retries without manual intervention.
 10. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted up to `MAX_RECOVERY_ATTEMPTS` (default 3) times; if all attempts fail, the project stops and the operator is notified via Telegram.
 11. **Validation-failure recovery:** When runtime validation fails, the poller transitions the project back to the judge for re-evaluation (labeled `ai:validation-recovery`) up to `MAX_VALIDATION_RECOVERY_ATTEMPTS` (default 2) times. The judge sees the failure diagnosis in tracking issue comments and can issue fix-up work before re-validating. After exhausting the recovery budget, the project goes to terminal `ai:validation-failed`.
-12. **Stall detection and self-healing:** Every poll cycle, the poller tracks how long each issue has been in its current pipeline phase. Stall thresholds are **adaptive per phase**: lightweight phases (clarification, planning, approval, merge) default to 60 minutes, while heavy phases (implementation, review/autofix) default to 120 minutes. Each threshold is independently configurable via `STALL_THRESHOLD_<PHASE>_MINUTES` env vars, with `STALL_THRESHOLD_MINUTES` as the global fallback. When an issue exceeds its phase threshold, the poller attempts phase-specific auto-recovery: posting `/answer` for stuck clarification, `/approved` for stuck approval, pushing empty commits to re-trigger review, or closing and re-issuing as a last resort. Recovery actions escalate with each attempt. After `MAX_STALL_RECOVERIES_PER_ISSUE` (default 5) attempts, the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion and decides whether to reissue, accept, or fail. All stall recoveries trigger Telegram notifications.
+12. **Stall detection and self-healing:** Every poll cycle, the poller tracks how long each issue has been in its current pipeline phase. Stall thresholds are **adaptive per phase**: lightweight phases (clarification, planning, approval, merge) default to 60 minutes, while heavy phases (implementation, review/autofix) default to 120 minutes. Each threshold is independently configurable via `STALL_THRESHOLD_<PHASE>_MINUTES` env vars, with `STALL_THRESHOLD_MINUTES` as the global fallback. When an issue exceeds its phase threshold, the poller attempts phase-specific auto-recovery: posting `/answer` for stuck clarification, `/approved` for stuck approval, pushing empty commits to re-trigger review, or closing and re-issuing as a last resort. Recovery actions escalate with each attempt. After `MAX_STALL_RECOVERIES_PER_ISSUE` (default 5) attempts, the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion and decides whether to reissue, accept, or fail. All stall recoveries trigger Telegram notifications. Additionally, all orchestrator-created issues (Wave 1, deferred waves, reissues, and judge fix-ups) now receive the `ai:clarification` label at creation time, ensuring they enter the pipeline immediately without relying solely on the `issues.opened` event trigger.
+12a. **Missing state recovery:** If the orchestrate.yml workflow creates issues but fails before posting the initial state comment (e.g. due to a transient API error or timeout), the poller automatically reconstructs the state. It parses the tracking issue body to extract the wave structure and dependency graph, searches for child issues that reference the tracking issue, and builds a new state object. The reconstructed state is posted as a comment so subsequent poll cycles operate normally. This prevents projects from being permanently stuck when the initial orchestration run fails mid-execution.
 13. **Validation gate:** When the judge says "complete" and `ENABLE_VALIDATION=true`, the poller dispatches `ai-validate.yml`, marks the tracking issue `ai:validating`, and only closes after `ai:validated` is reported. See [Runtime Validation Phase](#runtime-validation-phase) for the full lifecycle and operational guidance.
 14. **Completion:** When validation is disabled, completion remains judge-driven and immediate.
 

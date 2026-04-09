@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -567,6 +568,142 @@ def get_impl_noop_count(
 
 
 # ---------------------------------------------------------------------------
+# State reconstruction (recovery from missing initial state)
+# ---------------------------------------------------------------------------
+
+def parse_tracking_body(body: str) -> dict[str, Any]:
+	"""Parse a tracking issue markdown body to extract wave structure.
+
+	Returns a dict with keys:
+		project_title, waves (list of lists of {id, title, priority}),
+		dependency_edges (list of {from, to}).
+	"""
+	result: dict[str, Any] = {
+		"project_title": "",
+		"waves": [],
+		"dependency_edges": [],
+	}
+
+	title_match = re.search(r"^## Project:\s*(.+)$", body, re.MULTILINE)
+	if title_match:
+		result["project_title"] = title_match.group(1).strip()
+
+	# Split on wave headers and parse each section
+	wave_sections = re.split(r"### Wave \d+", body)
+	for section in wave_sections[1:]:  # skip preamble before Wave 1
+		issues: list[dict[str, Any]] = []
+		for match in re.finditer(
+			r"-\s*\[[ x]\]\s*\*\*([^*]+)\*\*:\s*(.+?)\s*\(priority\s+(\d+)\)",
+			section,
+		):
+			issues.append({
+				"id": match.group(1).strip(),
+				"title": match.group(2).strip(),
+				"priority": int(match.group(3)),
+			})
+		if issues:
+			result["waves"].append(issues)
+
+	# Parse dependency edges from the ### Dependencies section
+	dep_parts = body.split("### Dependencies")
+	if len(dep_parts) > 1:
+		# Only parse until the next --- or ### to avoid false matches
+		dep_section = re.split(r"\n---|\n###", dep_parts[1])[0]
+		for match in re.finditer(r"`([^`]+)`\s*->\s*`([^`]+)`", dep_section):
+			result["dependency_edges"].append({
+				"from": match.group(1).strip(),
+				"to": match.group(2).strip(),
+			})
+
+	return result
+
+
+def rebuild_tracking_state(
+	body: str,
+	issue_number_map: dict[str, int],
+	tracking_issue: int,
+) -> dict[str, Any]:
+	"""Rebuild orchestrator state from a tracking issue body and discovered issues.
+
+	Used when the orchestrate.yml workflow created issues but failed before
+	posting the initial state comment.  The poller calls this to recover
+	automatically instead of leaving the project stuck.
+
+	Args:
+		body: Markdown body of the tracking issue.
+		issue_number_map: Map of local_id -> GitHub issue number, built by
+			searching for child issues that reference the tracking issue.
+		tracking_issue: The tracking issue number.
+
+	Returns:
+		Reconstructed state dict suitable for JSON serialisation.
+	"""
+	parsed = parse_tracking_body(body)
+	now_ts = int(time.time())
+
+	all_ids: set[str] = set()
+	wave_list: list[dict[str, Any]] = []
+	for wave_idx, wave_issues in enumerate(parsed["waves"]):
+		entries: list[dict[str, Any]] = []
+		for issue in wave_issues:
+			all_ids.add(issue["id"])
+			gh_num = issue_number_map.get(issue["id"])
+			entry: dict[str, Any] = {
+				"id": issue["id"],
+				"github_issue": gh_num,
+				"status": "pending" if gh_num is not None else "not_created",
+			}
+			if gh_num is not None:
+				entry["last_seen_phase"] = ""
+				entry["status_since_ts"] = now_ts
+				entry["stall_recovery_count"] = 0
+			entries.append(entry)
+		wave_list.append({
+			"wave": wave_idx + 1,
+			"issues": entries,
+		})
+
+	total_issues = sum(len(w) for w in parsed["waves"])
+
+	# Build pending_issue_defs for issues not yet created.
+	# We reconstruct a minimal body from the title since the original
+	# decomposition body is unavailable.  The clarify/plan phases will
+	# fill in details from the repo context.
+	pending_issue_defs: dict[str, dict[str, Any]] = {}
+	for wave_issues in parsed["waves"]:
+		for issue in wave_issues:
+			if issue["id"] not in issue_number_map:
+				pending_issue_defs[issue["id"]] = {
+					"title": issue["title"],
+					"body": (
+						f"Implement: {issue['title']}\n\n"
+						f"This issue is part of the project tracked in #{tracking_issue}.\n"
+						f"See the tracking issue for full project context and dependency information."
+					),
+					"priority": issue["priority"],
+				}
+
+	return {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": parsed["project_title"],
+		"total_issues": total_issues,
+		"total_waves": len(parsed["waves"]),
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": wave_list,
+		"dependency_edges": parsed["dependency_edges"],
+		"issue_number_map": {k: v for k, v in issue_number_map.items()},
+		"pending_issue_defs": pending_issue_defs,
+		"tracking_issue": tracking_issue,
+		"state_rebuilt": True,
+	}
+
+
+# ---------------------------------------------------------------------------
 # CLI commands
 # ---------------------------------------------------------------------------
 
@@ -713,6 +850,21 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_rebuild_state(args: argparse.Namespace) -> int:
+	"""Rebuild state from tracking issue body + discovered issue map."""
+	body_path = Path(args.body_file).resolve()
+	with body_path.open("r", encoding="utf-8") as f:
+		body = f.read()
+
+	issue_map_raw: dict[str, Any] = json.loads(args.issue_map_json)
+	issue_map = {k: int(v) for k, v in issue_map_raw.items()}
+	tracking_issue = int(args.tracking_issue)
+
+	state = rebuild_tracking_state(body, issue_map, tracking_issue)
+	_print_json(state)
+	return 0
+
+
 def cmd_check_stalls(args: argparse.Namespace) -> int:
 	"""Detect stalled issues and return recommended recovery actions."""
 	path = Path(args.state_file).resolve()
@@ -784,6 +936,12 @@ def build_parser() -> argparse.ArgumentParser:
 	p_check.add_argument("--state-file", required=True)
 	p_check.add_argument("--labels-json", required=True, help='JSON: {"issue_num": ["label1", ...]}')
 	p_check.set_defaults(func=cmd_check_wave_status)
+
+	p_rebuild = subparsers.add_parser("rebuild-state", help="Rebuild state from tracking body + issue map")
+	p_rebuild.add_argument("--body-file", required=True, help="Path to tracking issue body text file")
+	p_rebuild.add_argument("--issue-map-json", required=True, help='JSON: {"local_id": github_number, ...}')
+	p_rebuild.add_argument("--tracking-issue", required=True, help="Tracking issue number")
+	p_rebuild.set_defaults(func=cmd_rebuild_state)
 
 	p_stalls = subparsers.add_parser("check-stalls", help="Detect stalled issues in current wave")
 	p_stalls.add_argument("--state-file", required=True)

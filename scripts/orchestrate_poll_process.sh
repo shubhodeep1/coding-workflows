@@ -15,6 +15,11 @@ set -euo pipefail
 # ---------------------------------------------------------------
 # Helper: Telegram (tracked via tg_helpers.sh)
 # ---------------------------------------------------------------
+# shellcheck source=gh_helpers.sh
+if [ -f "scripts/gh_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/gh_helpers.sh
+fi
 # shellcheck source=tg_helpers.sh
 if [ -f "scripts/tg_helpers.sh" ]; then
   # shellcheck disable=SC1091
@@ -35,8 +40,9 @@ _gh_url() {
 # Automatically appends tracking issue link and Actions run link.
 tg_notify() {
   local msg="$1"
+  local level="${2:-CRITICAL}"
   local tracking_url run_url
-  
+
   if [ -n "${TRACKING_NUM:-}" ] && [ "${TRACKING_NUM}" != "0" ]; then
     tracking_url="$(_gh_url "issues/${TRACKING_NUM}")"
     if [ -n "${tracking_url}" ]; then
@@ -50,31 +56,21 @@ tg_notify() {
     fi
   fi
   if [ -n "${TRACKING_NUM:-}" ]; then
-    tg_send_tracked "${TRACKING_NUM}" "${msg}"
+    tg_send_tracked "${TRACKING_NUM}" "${msg}" "${level}"
   else
     # Fallback: untracked send (no issue context yet)
-    tg_send_msg "${msg}" >/dev/null
+    tg_send_msg "${msg}" "${level}" >/dev/null
   fi
 }
 
 # ---------------------------------------------------------------
 # Helper: GitHub API with retry
 # ---------------------------------------------------------------
-gh_retry() {
-  local max_attempts=5
-  local attempt=1
-  while [ "${attempt}" -le "${max_attempts}" ]; do
-    if "$@" 2>/dev/null; then
-      return 0
-    fi
-    local wait_secs=$(( 2 ** (attempt - 1) ))
-    echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s..." >&2
-    sleep "${wait_secs}"
-    attempt=$(( attempt + 1 ))
-  done
-  echo "::error::gh command failed after ${max_attempts} attempts: $*" >&2
-  return 1
-}
+# gh_retry is provided by scripts/gh_helpers.sh (rate-limit-aware).
+# Fallback definition in case gh_helpers.sh was not sourced.
+if ! type gh_retry >/dev/null 2>&1; then
+  gh_retry() { "$@"; }
+fi
 
 is_truthy() {
   local value
@@ -357,7 +353,7 @@ dispatch_validation_if_needed() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     post_tracking_comment "## 🧪 Runtime validation dispatched\n\n- Cycle: ${validation_cycle}\n- Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`"
-    tg_notify "🧪 Validation dispatched for project #${TRACKING_NUM} (cycle ${validation_cycle})."
+    tg_notify "Validation dispatched for project #${TRACKING_NUM} (cycle ${validation_cycle})." "DEBUG"
     return 0
   fi
 
@@ -388,7 +384,7 @@ mark_validation_failed() {
     post_state_comment
     set_tracking_phase_label "ai:validation-recovery"
     post_tracking_comment "## 🔄 Validation failed — recovery attempt $((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}\n\n${reason}\n\nTransitioning back to judge for re-evaluation."
-    tg_notify "🔄 Validation recovery ($((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}) for #${TRACKING_NUM}: transitioning back to judge."
+    tg_notify "Validation recovery ($((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}) for #${TRACKING_NUM}: transitioning back to judge." "WARNING"
     return 0
   fi
 
@@ -398,7 +394,7 @@ mark_validation_failed() {
   post_state_comment
   set_tracking_phase_label "ai:validation-failed"
   post_tracking_comment "## ❌ Runtime validation failed\n\n${reason}\n\nValidation recovery exhausted (${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Manual intervention required."
-  tg_notify "❌ Project #${TRACKING_NUM} validation failed after ${val_recovery_count} recovery attempt(s). Manual intervention required."
+  tg_notify "Project #${TRACKING_NUM} validation failed after ${val_recovery_count} recovery attempt(s). Manual intervention required." "CRITICAL"
   tg_cleanup_msgs "${TRACKING_NUM}"
 }
 
@@ -410,12 +406,12 @@ mark_validation_complete() {
   set_tracking_phase_label "ai:validated"
   post_tracking_comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle}). Issue kept open for manual review."
   tg_cleanup_msgs "${TRACKING_NUM}"
-  MSG="✅ Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
+  MSG="Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
   MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
   if [ -n "${GITHUB_RUN_ID:-}" ]; then
     MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
   fi
-  tg_send_msg "${MSG}" >/dev/null
+  tg_send_msg "${MSG}" "DEBUG" >/dev/null
 }
 
 extract_fix_issues_from_comment() {
@@ -762,7 +758,7 @@ Re-triggering the clarification phase. If the issue description is
 sufficient, proceed directly to planning and implementation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: re-triggered pipeline for issue #${issue_num} (stuck ${stall_minutes}m with no labels, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+      tg_notify "Stall recovery: re-triggered pipeline for issue #${issue_num} (stuck ${stall_minutes}m with no labels, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       ;;
 
     auto_respond_clarify)
@@ -796,7 +792,7 @@ implementation._"
 
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="${answer_body}" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: auto-responded to clarification on issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+      tg_notify "Stall recovery: auto-responded to clarification on issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       ;;
 
     retrigger_plan)
@@ -810,7 +806,7 @@ _Orchestrator stall recovery: planning phase stalled. Re-triggering
 plan generation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: re-triggered planning for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+      tg_notify "Stall recovery: re-triggered planning for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       ;;
 
     auto_approve)
@@ -826,7 +822,7 @@ STALL_EOF
           --remove-label 'ai:awaiting-approval' --add-label 'ai:closed' 2>/dev/null || true
         gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
           -c "Closing: implementation produced no changes ${noop_cnt} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
-        tg_notify "⏹️ Stall recovery: issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+        tg_notify "Stall recovery: issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
         return 0
       fi
       echo "  Auto-approving plan for issue #${issue_num}..."
@@ -838,7 +834,7 @@ _Orchestrator stall recovery: auto-approving plan. This is an
 orchestrator-managed issue that does not require human approval._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: auto-approved plan for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+      tg_notify "Stall recovery: auto-approved plan for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       ;;
 
     retrigger_implement)
@@ -852,7 +848,7 @@ STALL_EOF
           --remove-label 'ai:implementing' --add-label 'ai:closed' 2>/dev/null || true
         gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
           -c "Closing: implementation produced no changes ${noop_cnt_impl} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
-        tg_notify "⏹️ Stall recovery: issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt_impl}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+        tg_notify "Stall recovery: issue #${issue_num} (${local_id}) hit impl no-op cap (${noop_cnt_impl}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
         return 0
       fi
       echo "  Re-triggering implementation for issue #${issue_num}..."
@@ -865,7 +861,7 @@ Re-triggering implementation. If a previous attempt crashed or timed
 out, start fresh from the approved plan._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-      tg_notify "🔄 Stall recovery: re-triggered implementation for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+      tg_notify "Stall recovery: re-triggered implementation for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       ;;
 
     retrigger_review)
@@ -887,7 +883,7 @@ STALL_EOF
             git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
             if git push origin "HEAD:${head_ref}" 2>/dev/null; then
               echo "  Pushed empty commit to PR #${pr_num} to re-trigger review."
-              tg_notify "🔄 Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+              tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
             else
               echo "::warning::Could not push to re-trigger review for PR #${pr_num}."
             fi
@@ -909,7 +905,7 @@ _Orchestrator stall recovery: issue is marked done but no PR was found.
 Re-triggering implementation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
-        tg_notify "🔄 Stall recovery: re-triggered implement for issue #${issue_num} (ai:done but no PR, stuck ${stall_minutes}m)."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+        tg_notify "Stall recovery: re-triggered implement for issue #${issue_num} (ai:done but no PR, stuck ${stall_minutes}m)."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       fi
       ;;
 
@@ -917,7 +913,7 @@ STALL_EOF
       # Stuck at ai:ready-to-merge — retry the merge. The main merge logic
       # already handles this each poll cycle, so just log for diagnostics.
       echo "  Issue #${issue_num} stuck at ready-to-merge. Main merge loop will retry."
-      tg_notify "🔄 Stall recovery: issue #${issue_num} stuck at ready-to-merge for ${stall_minutes}m (attempt $((recovery_count + 1))). Merge loop will retry."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+      tg_notify "Stall recovery: issue #${issue_num} stuck at ready-to-merge for ${stall_minutes}m (attempt $((recovery_count + 1))). Merge loop will retry."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       ;;
 
     close_and_reissue)
@@ -960,9 +956,11 @@ REISSUE_EOF
 )"
 
       local new_url new_url_clean new_num
+      ensure_label_exists "ai:clarification"
       new_url="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
-        --body "${new_body}" 2>/dev/null || echo "")"
+        --body "${new_body}" \
+        --label "ai:clarification" 2>/dev/null || echo "")"
       if [ -n "${new_url}" ]; then
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
@@ -977,7 +975,7 @@ REISSUE_EOF
             "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         fi
 
-        tg_notify "🔄 Stall recovery: closed stalled issue #${issue_num} and re-issued as #${new_num} (phase: ${phase}, stuck ${stall_minutes}m)."$'\n'"Old issue: $(_gh_url "issues/${issue_num}")"$'\n'"New issue: $(_gh_url "issues/${new_num}")"
+        tg_notify "Stall recovery: closed stalled issue #${issue_num} and re-issued as #${new_num} (phase: ${phase}, stuck ${stall_minutes}m)."$'\n'"Old issue: $(_gh_url "issues/${issue_num}")"$'\n'"New issue: $(_gh_url "issues/${new_num}")" "WARNING"
       else
         echo "::warning::Could not create replacement issue for stalled #${issue_num}."
       fi
@@ -1007,7 +1005,7 @@ REISSUE_EOF
 
 The judge will evaluate this gap when the wave completes and decide whether to reissue, accept, or adjust the project."
 
-      tg_notify "⏭️ Issue #${issue_num} skipped after ${recovery_count} stall recovery attempts (${stall_minutes}m in '${phase}'). Judge will handle at wave completion."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"
+      tg_notify "Issue #${issue_num} skipped after ${recovery_count} stall recovery attempts (${stall_minutes}m in '${phase}'). Judge will handle at wave completion."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       ;;
 
     *)
@@ -1017,305 +1015,79 @@ The judge will evaluate this gap when the wave completes and decide whether to r
 }
 
 # ---------------------------------------------------------------
-# Helper: Resolve merge conflicts on a PR branch using Codex
+# Helper: Check if an active autofix run already exists for a PR branch
 # ---------------------------------------------------------------
-# Runs a dedicated Codex instance (same model as the editor, xhigh
-# reasoning) to resolve merge conflict markers, commits the result,
-# pushes, and dispatches the review workflow.
+# Queries the GitHub Actions API for in_progress or queued runs of
+# review/autofix workflows on the given branch.  A new dispatch would
+# cancel the existing run (cancel-in-progress concurrency) and trigger
+# a spurious "cancelled/timed out" Telegram alert.
 #
-# Previously the orchestrator pushed an empty commit to force a
-# synchronize event, expecting the review_autofix workflow's conflict
-# resolver to handle it.  But when the PR has real conflicts the merge
-# ref (refs/pull/N/merge) is unbuildable, causing GitHub to silently
-# skip the reusable workflow — stalling the pipeline.  By resolving
-# conflicts directly here, the push produces a clean merge ref so the
-# subsequent autofix run triggers normally.
-#
-# Usage: _resolve_merge_conflicts_with_codex <pr_number> <head_ref> <base_branch> [issue_number]
-# Returns 0 on success (conflicts resolved + pushed), 1 on failure.
-# Leaves the repo on a detached HEAD regardless of outcome.
-_resolve_merge_conflicts_with_codex()
+# Usage: _has_active_autofix_run <pr_number> <head_ref>
+# Returns 0 if an active run exists (skip dispatch), 1 otherwise.
+_has_active_autofix_run()
 {
 	local pr_number="$1"
 	local head_ref="$2"
-	local base_branch="$3"
-	local issue_number="${4:-}"
+	local log_prefix="[conflict-dispatch] PR #${pr_number}"
 
-	local log_prefix="[conflict-resolver]"
-	if [ -n "${issue_number}" ]; then
-		log_prefix="[conflict-resolver] PR #${pr_number} (issue #${issue_number})"
-	else
-		log_prefix="[conflict-resolver] PR #${pr_number}"
-	fi
-
-	echo "  ${log_prefix} Starting Codex-based merge conflict resolution..."
-
-	# --- Clean working tree before checkout ---
-	# The orchestrator downloads scripts/, prompts/, .serena/, .github/ai/,
-	# codex_system_instructions.md etc. into the working tree.  These untracked
-	# files cause "git checkout" to fail when the target branch tracks files in
-	# the same paths.  Save artifacts needed by the Codex resolver, then clean.
-	local _cr_backup
-	_cr_backup="$(mktemp -d)"
-	for _cr_dir in .serena scripts prompts .github/ai; do
-		if [ -d "${_cr_dir}" ]; then
-			mkdir -p "${_cr_backup}/${_cr_dir}"
-			cp -a "${_cr_dir}/." "${_cr_backup}/${_cr_dir}/"
+	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
+		local active
+		active="$(gh run list --repo "${GITHUB_REPOSITORY}" \
+			--workflow "${wf_candidate}" \
+			--branch "${head_ref}" \
+			--limit 5 \
+			--json status \
+			--jq '[.[] | select(.status == "in_progress" or .status == "queued")] | length' \
+			2>/dev/null || echo "0")"
+		if [ "${active}" -gt 0 ]; then
+			echo "  ${log_prefix} Active autofix run found (workflow=${wf_candidate}, count=${active}). Skipping dispatch."
+			return 0
 		fi
 	done
-	for _cr_file in codex_system_instructions.md ai_pipeline.md; do
-		if [ -f "${_cr_file}" ]; then
-			cp "${_cr_file}" "${_cr_backup}/"
+
+	return 1
+}
+
+# Helper: Dispatch review workflow for merge conflict resolution
+# ---------------------------------------------------------------
+# Instead of resolving conflicts locally with Codex, dispatch the
+# review_autofix workflow via workflow_dispatch.  The review workflow
+# has its own Codex-based conflict resolver that runs on a dedicated
+# runner with a clean checkout — more reliable than the shared
+# orchestrator environment.
+#
+# workflow_dispatch resolves from the target ref (the PR branch),
+# which always exists, bypassing the unbuildable merge-ref problem
+# that affects pull_request synchronize events.
+#
+# Usage: _dispatch_review_for_conflicts <pr_number> <head_ref>
+# Returns: 0 = dispatched, 1 = dispatch failed, 2 = skipped (active run exists).
+_dispatch_review_for_conflicts()
+{
+	local pr_number="$1"
+	local head_ref="$2"
+	local log_prefix="[conflict-dispatch] PR #${pr_number}"
+
+	# Guard: skip dispatch if an autofix run is already active for this PR.
+	# A new dispatch would cancel the running job (cancel-in-progress
+	# concurrency) and fire a spurious "cancelled/timed out" alert.
+	if _has_active_autofix_run "${pr_number}" "${head_ref}"; then
+		return 2
+	fi
+
+	echo "  ${log_prefix} Dispatching review workflow for conflict resolution..."
+
+	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
+		if gh workflow run "${wf_candidate}" \
+			--repo "${GITHUB_REPOSITORY}" \
+			--ref "${head_ref}" \
+			-f pr_number="${pr_number}" 2>/dev/null; then
+			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref}."
+			return 0
 		fi
 	done
-	git reset --hard HEAD 2>/dev/null || true
-	git clean -fd 2>/dev/null || true
 
-	# --- Fetch and checkout the PR branch ---
-	if ! git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
-		echo "::warning::${log_prefix} Could not fetch head ref ${head_ref}; skipping."
-		rm -rf "${_cr_backup}"
-		return 1
-	fi
-	if ! git fetch origin "${base_branch}:refs/remotes/origin/${base_branch}" 2>/dev/null; then
-		echo "::warning::${log_prefix} Could not fetch base branch ${base_branch}; skipping."
-		rm -rf "${_cr_backup}"
-		return 1
-	fi
-	if ! git checkout "origin/${head_ref}" 2>&1; then
-		echo "::warning::${log_prefix} Could not checkout ${head_ref}; skipping."
-		rm -rf "${_cr_backup}"
-		return 1
-	fi
-
-	# Restore artifacts the Codex resolver needs (config, Serena, prompts)
-	for _cr_dir in .serena scripts prompts .github/ai; do
-		if [ -d "${_cr_backup}/${_cr_dir}" ]; then
-			mkdir -p "${_cr_dir}"
-			cp -a "${_cr_backup}/${_cr_dir}/." "${_cr_dir}/"
-		fi
-	done
-	for _cr_file in codex_system_instructions.md ai_pipeline.md; do
-		if [ -f "${_cr_backup}/${_cr_file}" ]; then
-			cp "${_cr_backup}/${_cr_file}" .
-		fi
-	done
-	rm -rf "${_cr_backup}"
-
-	git config user.name "codex-bot"
-	git config user.email "codex@users.noreply.github.com"
-
-	# Repair any ref corruption before merge (matches review_autofix.yml)
-	if [ -f scripts/git_ref_health_check.sh ]; then
-		bash scripts/git_ref_health_check.sh repair 2>/dev/null || true
-	fi
-
-	# --- Start merge to introduce conflict markers ---
-	git merge --no-commit --no-ff "origin/${base_branch}" 2>/dev/null || true
-
-	if [ -z "$(git ls-files --unmerged 2>/dev/null)" ]; then
-		# Clean merge — no actual conflicts.  Commit and push.
-		if git commit -m "[orchestrator-merge] update branch with ${base_branch}" 2>/dev/null; then
-			if git push origin "HEAD:${head_ref}" 2>/dev/null; then
-				echo "  ${log_prefix} Clean merge committed and pushed."
-				git checkout --detach HEAD 2>/dev/null || true
-				return 0
-			fi
-		fi
-		# Merge was already up-to-date or push failed
-		if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
-			git merge --abort 2>/dev/null || true
-		fi
-		git checkout --detach HEAD 2>/dev/null || true
-		echo "::warning::${log_prefix} Clean merge push failed."
-		return 1
-	fi
-
-	echo "  ${log_prefix} Conflict markers present. Running Codex to resolve..."
-
-	# --- Setup Codex config for the conflict resolver model ---
-	# Preserve the Serena MCP section (appended by setup_serena.sh earlier)
-	# before rewriting the base config — the old `>` clobber destroyed it.
-	mkdir -p ~/.codex
-	local _mcp_section=""
-	if [ -f ~/.codex/config.toml ]; then
-		_mcp_section="$(sed -n '/^\[mcp_servers/,$ p' ~/.codex/config.toml)"
-	fi
-	local catalog_path
-	catalog_path="$(pwd)/scripts/codex_model_catalog.json"
-	{
-		echo 'web_search = "disabled"'
-		echo 'model_provider = "openrouter"'
-		echo "model = \"${MODEL_CONFLICT_RESOLVER:-${MODEL_EDITOR}}\""
-		echo "model_reasoning_effort = \"${CONFLICT_RESOLVER_REASONING_EFFORT:-xhigh}\""
-		if [ -f "${catalog_path}" ]; then
-			echo "model_catalog_json = \"${catalog_path}\""
-		fi
-		echo
-		echo '[model_providers.openrouter]'
-		echo 'name = "OpenRouter"'
-		echo 'base_url = "https://openrouter.ai/api/v1"'
-		echo 'env_key = "OPENROUTER_API_KEY"'
-		echo 'wire_api = "responses"'
-		echo 'stream_idle_timeout_ms = 600000'
-		echo 'stream_max_retries = 5'
-		echo 'request_max_retries = 3'
-		echo
-		echo '[sandbox_workspace_write]'
-		echo 'network_access = true'
-	} > ~/.codex/config.toml
-	# Re-append Serena MCP config so the resolver has semantic tools
-	if [ -n "${_mcp_section}" ]; then
-		printf '\n%s\n' "${_mcp_section}" >> ~/.codex/config.toml
-	fi
-
-	# --- Build conflict resolver prompt ---
-	local prompt_file
-	prompt_file="$(mktemp)"
-	cat > "${prompt_file}" <<'__CONFLICT_RESOLVER_PROMPT__'
-Repository task: Resolve merge conflicts.
-
-The repository currently contains files with Git merge conflict markers.
-
-Conflict markers appear in this format:
-<<<<<<< HEAD
-code
-=======
-other code
->>>>>>> branch
-
-Your task:
-Resolve merge conflicts safely.
-
-Rules:
-- Only resolve conflicts.
-- Do not introduce new functionality.
-- Do not refactor unrelated code.
-- Do not modify files that do not contain conflict markers.
-- Prefer preserving behavior from both sides when possible.
-- If both sides are incompatible, choose the version consistent with surrounding code.
-- Remove all conflict markers.
-- Ensure the final code compiles logically.
-- You may read repository files as needed.
-- You may modify repository files directly.
-- Do not generate patches.
-- Do not generate scripts.
-- Do not modify GitHub workflow files except when resolving merge conflicts.
-- Do not access the network.
-
-Final output must be plain text.
-
-Output sections:
-Conflicts resolved:
-- list files where conflicts were resolved
-
-Notes:
-- brief explanation if any resolution required choosing one side
-__CONFLICT_RESOLVER_PROMPT__
-
-	# --- Run Codex to resolve conflicts ---
-	local resolver_success=false
-	local attempt=1
-	local tmp_output
-	while [ "${attempt}" -le 3 ]; do
-		tmp_output="$(mktemp)"
-		if codex exec \
-			--model "${MODEL_CONFLICT_RESOLVER:-${MODEL_EDITOR}}" \
-			--full-auto \
-			"$(cat "${prompt_file}")" > "${tmp_output}" 2>&1; then
-			if [ -s "${tmp_output}" ]; then
-				echo "  ${log_prefix} Codex resolver succeeded on attempt ${attempt}."
-				resolver_success=true
-				rm -f "${tmp_output}"
-				break
-			fi
-		fi
-		rm -f "${tmp_output}"
-		if [ "${attempt}" -eq 3 ]; then
-			echo "::warning::${log_prefix} Codex conflict resolver failed after 3 attempts."
-		fi
-		attempt=$((attempt + 1))
-		sleep 2
-	done
-	rm -f "${prompt_file}"
-
-	if [ "${resolver_success}" != "true" ]; then
-		# Abort merge and fall back to empty-commit re-trigger
-		git merge --abort 2>/dev/null || true
-		git reset --hard HEAD 2>/dev/null || true
-		echo "  ${log_prefix} Falling back to empty-commit re-trigger."
-		git commit --allow-empty \
-			-m "[orchestrator] re-trigger review for conflict resolution (PR #${pr_number})" \
-			2>/dev/null || true
-		if git push origin "HEAD:${head_ref}" 2>/dev/null; then
-			echo "  ${log_prefix} Pushed empty commit as fallback re-trigger."
-		else
-			echo "::warning::${log_prefix} Could not push fallback empty commit."
-		fi
-		git checkout --detach HEAD 2>/dev/null || true
-		return 1
-	fi
-
-	# --- Clean up workflow artifacts so they are not committed to caller repos ---
-	if [[ "${GITHUB_REPOSITORY}" != *"/coding-workflows" ]]; then
-		rm -f ./pre_assembled_static.txt
-		rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-		rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
-			scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
-			scripts/codex_model_catalog.json scripts/orchestrate_poll_process.sh scripts/orchestrate_lib.py
-		rm -rf .serena prompts
-		rm -f .github/ai/orchestrate_schema.v1.json
-	fi
-
-	# --- Commit and push resolved files ---
-	if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-		git rm -r --cached node_modules 2>/dev/null || true
-		if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-			git add -u -- ':!node_modules' ':!.serena' 2>/dev/null || true
-			git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' | xargs -0 -r git add -- 2>/dev/null || true
-		else
-			git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' 2>/dev/null || true
-			git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add -- 2>/dev/null || true
-		fi
-		if git commit -m "[ai-merge-resolve] resolve merge conflicts (orchestrator)" 2>/dev/null; then
-			if git push origin "HEAD:${head_ref}" 2>/dev/null; then
-				echo "  ${log_prefix} Conflicts resolved, committed, and pushed."
-
-				# Dispatch review workflow via workflow_dispatch as a reliable
-				# re-trigger — the synchronize event from the push also fires,
-				# but workflow_dispatch resolves from the target ref (always
-				# exists) rather than the merge ref (may lag).
-				local dispatched=false
-				for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
-					if gh workflow run "${wf_candidate}" \
-						--repo "${GITHUB_REPOSITORY}" \
-						--ref "${head_ref}" \
-						-f pr_number="${pr_number}" 2>/dev/null; then
-						echo "  ${log_prefix} Dispatched ${wf_candidate} for next review cycle."
-						dispatched=true
-						break
-					fi
-				done
-				if [ "${dispatched}" = "false" ]; then
-					echo "  ${log_prefix} workflow_dispatch fallback failed; synchronize event will trigger review."
-				fi
-
-				git checkout --detach HEAD 2>/dev/null || true
-				return 0
-			else
-				echo "::warning::${log_prefix} Push failed after conflict resolution."
-			fi
-		else
-			echo "::warning::${log_prefix} Commit failed after conflict resolution."
-		fi
-	else
-		echo "  ${log_prefix} No changes after conflict resolution (conflicts may still exist)."
-	fi
-
-	# Cleanup on failure
-	git merge --abort 2>/dev/null || true
-	git reset --hard HEAD 2>/dev/null || true
-	git checkout --detach HEAD 2>/dev/null || true
+	echo "::warning::${log_prefix} Could not dispatch review workflow via workflow_dispatch."
 	return 1
 }
 
@@ -1369,8 +1141,60 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   ' 2>/dev/null || echo "")"
 
   if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then
-    echo "::warning::No state found for tracking issue #${TRACKING_NUM}, skipping."
-    continue
+    echo "::warning::No state found for tracking issue #${TRACKING_NUM}. Attempting state reconstruction..."
+
+    # ---------------------------------------------------------------
+    # State reconstruction: the orchestrate.yml workflow created the
+    # tracking issue and child issues but failed before posting the
+    # initial state comment.  Recover by parsing the tracking body
+    # and searching for child issues that reference this tracker.
+    # ---------------------------------------------------------------
+    TRACKING_BODY="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' 2>/dev/null || echo "")"
+    if [ -z "${TRACKING_BODY}" ]; then
+      echo "::warning::Could not fetch body for tracking issue #${TRACKING_NUM}, skipping."
+      continue
+    fi
+
+    # Search for child issues whose body contains the tracking reference
+    CHILD_ISSUES="$(gh api "search/issues" \
+      -f q="repo:${GITHUB_REPOSITORY} \"Tracking issue: #${TRACKING_NUM}\" in:body" \
+      --jq '.items // []' 2>/dev/null || echo '[]')"
+
+    # Build issue_number_map from child issue bodies: extract Local ID metadata
+    ISSUE_MAP_JSON="$(echo "${CHILD_ISSUES}" | jq '
+      reduce .[] as $issue ({};
+        ($issue.body | capture("Local ID: `(?<id>[^`]+)`") // null) as $cap |
+        if $cap != null then
+          . + {($cap.id): $issue.number}
+        else . end
+      )
+    ' 2>/dev/null || echo '{}')"
+
+    echo "  Discovered issue map: ${ISSUE_MAP_JSON}"
+
+    # Write tracking body to temp file for the Python helper
+    REBUILD_BODY_FILE="${RUNTIME_DIR}/rebuild_body_${TRACKING_NUM}.txt"
+    printf '%s\n' "${TRACKING_BODY}" > "${REBUILD_BODY_FILE}"
+
+    if python3 scripts/orchestrate_lib.py rebuild-state \
+      --body-file "${REBUILD_BODY_FILE}" \
+      --issue-map-json "${ISSUE_MAP_JSON}" \
+      --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>/dev/null; then
+
+      if [ -s "${STATE_FILE}" ] && jq -e '.schema_version' "${STATE_FILE}" >/dev/null 2>&1; then
+        STATE_JSON="$(cat "${STATE_FILE}")"
+        # Post the reconstructed state so future poll cycles find it
+        post_state_comment
+        echo "  State reconstructed and posted for tracking issue #${TRACKING_NUM}."
+        tg_notify "Auto-recovery: rebuilt missing orchestrator state for tracking issue #${TRACKING_NUM}." "DEBUG"
+      else
+        echo "::warning::State reconstruction produced invalid output for #${TRACKING_NUM}, skipping."
+        continue
+      fi
+    else
+      echo "::warning::State reconstruction failed for tracking issue #${TRACKING_NUM}, skipping."
+      continue
+    fi
   fi
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
@@ -1464,7 +1288,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       continue
     fi
 
-    tg_notify "🔁 Attempting to re-dispatch validation for project #${TRACKING_NUM} (cycle ${NEXT_VALIDATION_CYCLE}) after fix-up issues merged."
+    tg_notify "Attempting to re-dispatch validation for project #${TRACKING_NUM} (cycle ${NEXT_VALIDATION_CYCLE}) after fix-up issues merged." "DEBUG"
 
     jq --argjson cycle "${NEXT_VALIDATION_CYCLE}" \
       '.status = "validating" |
@@ -1506,7 +1330,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       post_state_comment
       set_tracking_phase_label "ai:validating"
       post_tracking_comment "## 🔁 Validation reset via /revalidate\n\nAll validation counters cleared. Re-dispatching validation (cycle 1)."
-      tg_notify "🔁 /revalidate: project #${TRACKING_NUM} reset from validation-failed. Dispatching validation cycle 1."
+      tg_notify "/revalidate: project #${TRACKING_NUM} reset from validation-failed. Dispatching validation cycle 1." "DEBUG"
       if ! dispatch_validation_if_needed 1; then
         mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after /revalidate reset."
       fi
@@ -1739,15 +1563,18 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
           2>/dev/null; then
           echo "  PR #${RTM_PR} branch updated via API. The synchronize event will re-trigger review (including conflict resolution)."
         else
-          echo "  API branch update failed for PR #${RTM_PR}. Running Codex conflict resolution..."
+          echo "  API branch update failed for PR #${RTM_PR}. Dispatching review workflow for conflict resolution..."
 
           RTM_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
           if [ -n "${RTM_HEAD_REF}" ] && [ "${RTM_HEAD_REF}" != "null" ]; then
-            DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
-            if _resolve_merge_conflicts_with_codex "${RTM_PR}" "${RTM_HEAD_REF}" "${DEFAULT_BRANCH}" "${rtm_issue}"; then
-              tg_notify "✅ PR #${RTM_PR} (issue #${rtm_issue}) merge conflicts resolved by orchestrator Codex."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")"
+            _dispatch_rc=0
+            _dispatch_review_for_conflicts "${RTM_PR}" "${RTM_HEAD_REF}" || _dispatch_rc=$?
+            if [ "${_dispatch_rc}" -eq 0 ]; then
+              tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has merge conflicts. Review workflow dispatched for resolution."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
+            elif [ "${_dispatch_rc}" -eq 2 ]; then
+              echo "  PR #${RTM_PR}: autofix already in progress, skipping dispatch."
             else
-              tg_notify "⚠️ PR #${RTM_PR} (issue #${rtm_issue}) merge conflict resolution failed. Review workflow re-triggered as fallback."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")"
+              tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
             fi
           else
             echo "::warning::Could not determine head ref for PR #${RTM_PR}."
@@ -1771,11 +1598,10 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
   # branch moves, so the review workflow is never re-triggered.
   #
   # This block detects in-progress issues whose linked PRs have become
-  # unmergeable and runs a dedicated Codex conflict resolution instance
-  # to resolve conflicts directly, then pushes.  The resolved push
-  # produces a clean merge ref so the subsequent autofix run triggers
-  # normally.  If Codex resolution fails, falls back to an empty-commit
-  # push.
+  # unmergeable.  First tries the GitHub API update-branch endpoint
+  # (handles clean merges).  If that fails (real conflicts), dispatches
+  # the review workflow via workflow_dispatch so it can resolve
+  # conflicts on a dedicated runner with a clean environment.
   # ---------------------------------------------------------------
   echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "in_progress") | .github_issue' | while read -r ip_issue; do
     [ -n "${ip_issue}" ] && [ "${ip_issue}" != "null" ] || continue
@@ -1798,18 +1624,21 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
       -X PUT -f expected_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.sha' 2>/dev/null)" \
       2>/dev/null; then
       echo "  PR #${IP_PR} branch updated via API. Synchronize event will re-trigger review."
-      tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) had merge conflicts. Branch updated via API to re-trigger review."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
+      tg_notify "PR #${IP_PR} (issue #${ip_issue}) had merge conflicts. Branch updated via API to re-trigger review."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")" "WARNING"
       continue
     fi
 
-    # API update failed — real conflicts exist.  Resolve with Codex.
+    # API update failed — real conflicts exist.  Dispatch review workflow.
     IP_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}" --jq '.head.ref' 2>/dev/null || echo "")"
     if [ -n "${IP_HEAD_REF}" ] && [ "${IP_HEAD_REF}" != "null" ]; then
-      DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
-      if _resolve_merge_conflicts_with_codex "${IP_PR}" "${IP_HEAD_REF}" "${DEFAULT_BRANCH}" "${ip_issue}"; then
-        tg_notify "✅ PR #${IP_PR} (issue #${ip_issue}) merge conflicts resolved by orchestrator Codex."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
+      _dispatch_rc=0
+      _dispatch_review_for_conflicts "${IP_PR}" "${IP_HEAD_REF}" || _dispatch_rc=$?
+      if [ "${_dispatch_rc}" -eq 0 ]; then
+        tg_notify "PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Review workflow dispatched for resolution."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")" "WARNING"
+      elif [ "${_dispatch_rc}" -eq 2 ]; then
+        echo "  PR #${IP_PR}: autofix already in progress, skipping dispatch."
       else
-        tg_notify "⚠️ PR #${IP_PR} (issue #${ip_issue}) merge conflict resolution failed. Review workflow re-triggered as fallback."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")"
+        tg_notify "PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")" "WARNING"
       fi
     else
       echo "::warning::Could not determine head ref for in-progress PR #${IP_PR}."
@@ -1984,7 +1813,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
         echo "::warning::Review-blocked judge failed for issue #${rb_issue}"
-        tg_notify "⚠️ Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+        tg_notify "Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
         continue
       fi
 
@@ -2080,15 +1909,17 @@ sys.exit(1)
               2>/dev/null; then
               echo "  PR #${RB_PR} branch updated. Synchronize event will re-trigger review + conflict resolution."
             else
-              echo "  API branch update failed for review-blocked PR #${RB_PR}. Running Codex conflict resolution..."
+              echo "  API branch update failed for review-blocked PR #${RB_PR}. Dispatching review workflow for conflict resolution..."
               RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
               if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
-                RB_BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
-                : "${RB_BASE_REF:=${DEFAULT_BRANCH:-main}}"
-                if _resolve_merge_conflicts_with_codex "${RB_PR}" "${RB_HEAD_REF}" "${RB_BASE_REF}" "${rb_issue}"; then
-                  tg_notify "✅ Review-blocked PR #${RB_PR} (issue #${rb_issue}) merge conflicts resolved by orchestrator Codex."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+                _dispatch_rc=0
+                _dispatch_review_for_conflicts "${RB_PR}" "${RB_HEAD_REF}" || _dispatch_rc=$?
+                if [ "${_dispatch_rc}" -eq 0 ]; then
+                  tg_notify "Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts. Review workflow dispatched for resolution."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+                elif [ "${_dispatch_rc}" -eq 2 ]; then
+                  echo "  PR #${RB_PR}: autofix already in progress, skipping dispatch."
                 else
-                  tg_notify "⚠️ Review-blocked PR #${RB_PR} (issue #${rb_issue}) merge conflict resolution failed."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+                  tg_notify "Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
                 fi
               else
                 echo "::warning::Could not determine head ref for review-blocked PR #${RB_PR}."
@@ -2100,7 +1931,7 @@ sys.exit(1)
 
           REVIEW_BLOCKED_STATE_CHANGED=true
           if [ "${RB_MERGED}" = "true" ]; then
-            tg_notify "✅ Orchestrator judge merged review-blocked PR #${RB_PR} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+            tg_notify "Orchestrator judge merged review-blocked PR #${RB_PR} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
           fi
           ;;
 
@@ -2127,15 +1958,17 @@ sys.exit(1)
                 2>/dev/null; then
                 echo "  PR #${RB_PR} branch updated. Will retry force-merge on next poll cycle."
               else
-                echo "  API branch update failed for force-merge PR #${RB_PR}. Running Codex conflict resolution..."
+                echo "  API branch update failed for force-merge PR #${RB_PR}. Dispatching review workflow for conflict resolution..."
                 RB_HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
                 if [ -n "${RB_HEAD_REF}" ] && [ "${RB_HEAD_REF}" != "null" ]; then
-                  RB_BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
-                  : "${RB_BASE_REF:=${DEFAULT_BRANCH:-main}}"
-                  if _resolve_merge_conflicts_with_codex "${RB_PR}" "${RB_HEAD_REF}" "${RB_BASE_REF}" "${rb_issue}"; then
-                    echo "  PR #${RB_PR} conflicts resolved. Will retry force-merge on next poll cycle."
+                  _dispatch_rc=0
+                  _dispatch_review_for_conflicts "${RB_PR}" "${RB_HEAD_REF}" || _dispatch_rc=$?
+                  if [ "${_dispatch_rc}" -eq 0 ]; then
+                    echo "  PR #${RB_PR} review workflow dispatched. Will retry force-merge on next poll cycle."
+                  elif [ "${_dispatch_rc}" -eq 2 ]; then
+                    echo "  PR #${RB_PR}: autofix already in progress, skipping dispatch. Will retry force-merge on next poll cycle."
                   else
-                    tg_notify "⚠️ Force-merge PR #${RB_PR} (issue #${rb_issue}) merge conflict resolution failed."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+                    tg_notify "Force-merge PR #${RB_PR} (issue #${rb_issue}) has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
                   fi
                 else
                   echo "::warning::Could not determine head ref for force-merge PR #${RB_PR}."
@@ -2144,7 +1977,7 @@ sys.exit(1)
             fi
             REVIEW_BLOCKED_STATE_CHANGED=true
             if [ "${RB_FORCE_MERGED}" = "true" ]; then
-              tg_notify "✅ Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+              tg_notify "Orchestrator force-merged review-blocked PR #${RB_PR} (retries exhausted, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
             fi
           else
             echo "  Judge is applying fixes to PR #${RB_PR}..."
@@ -2256,6 +2089,8 @@ ${RB_FIX_DESC}" || true
                       --title "[orchestrator-fix] follow-up fixes for #${rb_issue}" \
                       --body "Follow-up fixes for issues identified during review of PR #${RB_PR} (already merged).
 
+Closes #${rb_issue}
+
 **Original issue:** #${rb_issue}
 **Original PR:** #${RB_PR}
 
@@ -2267,7 +2102,7 @@ ${RB_FIX_DESC}
                       echo "  Created follow-up PR: ${FOLLOWUP_PR_URL}"
                       gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                         --remove-label 'ai:review-blocked' 2>/dev/null || true
-                      tg_notify "🔧 Orchestrator judge created follow-up PR for merged PR #${RB_PR} (issue #${rb_issue}): ${FOLLOWUP_PR_URL}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+                      tg_notify "Orchestrator judge created follow-up PR for merged PR #${RB_PR} (issue #${rb_issue}): ${FOLLOWUP_PR_URL}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                     else
                       echo "::warning::Failed to create follow-up PR for merged PR #${RB_PR}."
                     fi
@@ -2282,7 +2117,7 @@ ${RB_FIX_DESC}
                     # which re-runs review_autofix with a reset autofix counter.
                     gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                       --remove-label 'ai:review-blocked' 2>/dev/null || true
-                    tg_notify "🔧 Orchestrator judge pushed fix for review-blocked PR #${RB_PR} (issue #${rb_issue}, retry $((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+                    tg_notify "Orchestrator judge pushed fix for review-blocked PR #${RB_PR} (issue #${rb_issue}, retry $((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                   else
                     echo "::warning::Failed to push orchestrator fix for PR #${RB_PR}."
                   fi
@@ -2293,7 +2128,7 @@ ${RB_FIX_DESC}
                   echo "  No follow-up needed — merged PR has no outstanding fixes."
                   gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' 2>/dev/null || true
-                  tg_notify "✅ Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+                  tg_notify "Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                 else
                   echo "  Treating as merge decision."
                   ensure_label_exists "ai:ready-to-merge"
@@ -2304,7 +2139,7 @@ ${RB_FIX_DESC}
                   if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}"; then
                     if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
                       || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
-                      tg_notify "✅ Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+                      tg_notify "Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                     else
                       echo "::warning::Could not merge PR #${RB_PR} in no-fix merge path."
                     fi
@@ -2352,10 +2187,12 @@ ${RB_FIX_DESC}
 - Type: review-blocked-reissue
 - Managed by: AI Orchestrator"
 
+            ensure_label_exists "ai:clarification"
             NEW_URL="$(gh issue create \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${NEW_ISSUE_TITLE}" \
-              --body "${FULL_NEW_BODY}")"
+              --body "${FULL_NEW_BODY}" \
+              --label "ai:clarification")"
             NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
             NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
             echo "  Created replacement issue #${NEW_NUM}: ${NEW_ISSUE_TITLE}"
@@ -2370,10 +2207,10 @@ ${RB_FIX_DESC}
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
             fi
 
-            tg_notify "🔄 Orchestrator closed PR #${RB_PR} and reissued as #${NEW_NUM} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"New issue: $(_gh_url "issues/${NEW_NUM}")"$'\n'"Old issue: $(_gh_url "issues/${rb_issue}")"
+            tg_notify "Orchestrator closed PR #${RB_PR} and reissued as #${NEW_NUM} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"New issue: $(_gh_url "issues/${NEW_NUM}")"$'\n'"Old issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
           else
             echo "::warning::Judge chose close_and_reissue but provided no new issue details."
-            tg_notify "⚠️ Orchestrator closed PR #${RB_PR} (issue #${rb_issue}) but could not create replacement issue."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")"
+            tg_notify "Orchestrator closed PR #${RB_PR} (issue #${rb_issue}) but could not create replacement issue."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
           fi
 
           REVIEW_BLOCKED_STATE_CHANGED=true
@@ -2459,7 +2296,7 @@ ${RB_FIX_DESC}
         --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
       gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
         -c "Closing: implementation produced no changes ${OBSERVED_NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
-      tg_notify "⏹️ Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${OBSERVED_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")"
+      tg_notify "Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${OBSERVED_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
       IMPL_FAILED_STATE_CHANGED=true
       continue
     fi
@@ -2496,9 +2333,11 @@ ${IF_BODY}
 REISSUE_EOF
 )"
 
+    ensure_label_exists "ai:clarification"
     NEW_ISSUE_URL="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
       --title "${IF_TITLE}" \
-      --body "${NEW_BODY}" 2>/dev/null || echo "")"
+      --body "${NEW_BODY}" \
+      --label "ai:clarification" 2>/dev/null || echo "")"
     if [ -n "${NEW_ISSUE_URL}" ]; then
       NEW_ISSUE_URL_CLEAN="$(printf '%s\n' "${NEW_ISSUE_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
       NEW_ISSUE_NUM="$(basename "${NEW_ISSUE_URL_CLEAN%%[?#]*}")"
@@ -2512,7 +2351,7 @@ REISSUE_EOF
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
 
-      tg_notify "🔄 Re-issued implementation-failed issue #${if_issue} as #${NEW_ISSUE_NUM}: ${IF_TITLE}"$'\n'"Old issue: $(_gh_url "issues/${if_issue}")"$'\n'"New issue: $(_gh_url "issues/${NEW_ISSUE_NUM}")"
+      tg_notify "Re-issued implementation-failed issue #${if_issue} as #${NEW_ISSUE_NUM}: ${IF_TITLE}"$'\n'"Old issue: $(_gh_url "issues/${if_issue}")"$'\n'"New issue: $(_gh_url "issues/${NEW_ISSUE_NUM}")" "WARNING"
       IMPL_FAILED_STATE_CHANGED=true
     else
       echo "::warning::Could not create replacement issue for #${if_issue}."
@@ -2640,7 +2479,7 @@ with open('${STATE_FILE}', 'w') as f:
 
 Judge has run ${JUDGE_CYCLE} cycle(s) without reaching completion. MAX_JUDGE_CYCLES=${MAX_JUDGE}.
 Manual intervention required." >/dev/null
-    tg_notify "❌ Project #${TRACKING_NUM} FAILED: judge cycle limit (${MAX_JUDGE}) exceeded."
+    tg_notify "Project #${TRACKING_NUM} FAILED: judge cycle limit (${MAX_JUDGE}) exceeded." "CRITICAL"
     tg_cleanup_msgs "${TRACKING_NUM}"
     continue
   fi
@@ -2652,12 +2491,18 @@ Manual intervention required." >/dev/null
 
   # Setup Codex config for judge
   mkdir -p ~/.codex
+  JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
+  EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="${MODEL_REASONING_EFFORT_JUDGE}"
+  if [ "${JUDGE_INVOCATION_CYCLE}" -gt 3 ] && [ "${MODEL_REASONING_EFFORT_JUDGE}" = "xhigh" ]; then
+    EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="high"
+  fi
+  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE}"
   CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
   {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR}\""
-    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE}\""
+    echo "model_reasoning_effort = \"${EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE}\""
     if [ -f "${CATALOG_PATH}" ]; then
       echo "model_catalog_json = \"${CATALOG_PATH}\""
     fi
@@ -2789,7 +2634,7 @@ ${PR_DIFF}
 
   if [ "${JUDGE_SUCCESS}" != "true" ]; then
     echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
-    tg_notify "❌ Orchestrator Judge failed for #${TRACKING_NUM}. Manual review needed."
+    tg_notify "Orchestrator Judge failed for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
     continue
   fi
 
@@ -2835,7 +2680,7 @@ sys.exit(1)
 
   if [ -z "${JUDGE_JSON}" ]; then
     echo "::error::Could not parse judge output for #${TRACKING_NUM}"
-    tg_notify "❌ Orchestrator Judge output unparseable for #${TRACKING_NUM}. Manual review needed."
+    tg_notify "Orchestrator Judge output unparseable for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
     continue
   fi
 
@@ -2850,7 +2695,7 @@ sys.exit(1)
   echo "New issues: ${NEW_ISSUES_COUNT}, Reverts: ${REVERT_COUNT}"
 
   # Notify operator after every judge evaluation
-  tg_notify "🔍 Judge evaluated #${TRACKING_NUM} (cycle $((JUDGE_CYCLE + 1))): ${JUDGE_STATUS}. ${JUDGE_JUSTIFICATION}"
+  tg_notify "Judge evaluated #${TRACKING_NUM} (cycle $((JUDGE_CYCLE + 1))): ${JUDGE_STATUS}. ${JUDGE_JUSTIFICATION}" "DEBUG"
 
   # Post judge assessment to tracking issue
   JUDGE_COMMENT="## Judge Evaluation — Cycle $((JUDGE_CYCLE + 1))
@@ -2890,12 +2735,12 @@ PRs to revert: ${REVERT_COUNT}"
         post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s). Issue kept open for manual review."
 
         tg_cleanup_msgs "${TRACKING_NUM}"
-        MSG="✅ Project #${TRACKING_NUM} completed! All waves merged and judge approved."
+        MSG="Project #${TRACKING_NUM} completed! All waves merged and judge approved."
         MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
         if [ -n "${GITHUB_RUN_ID:-}" ]; then
           MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
         fi
-        tg_send_msg "${MSG}" >/dev/null
+        tg_send_msg "${MSG}" "DEBUG" >/dev/null
         continue
       fi
 
@@ -2947,7 +2792,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 
 **Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null
 
-        tg_notify "❌ Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Manual intervention needed."
+        tg_notify "Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Manual intervention needed." "CRITICAL"
         tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
@@ -3031,10 +2876,12 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Type: judge-fix-up (cycle $((JUDGE_CYCLE + 1)))
 - Managed by: AI Orchestrator"
 
+          ensure_label_exists "ai:clarification"
           FIX_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${FIX_TITLE}" \
-            --body "${FULL_FIX_BODY}")"
+            --body "${FULL_FIX_BODY}" \
+            --label "ai:clarification")"
           echo "  Created fix-up: ${FIX_URL}"
 
           # Record in state so subsequent cycles/iterations won't recreate,
@@ -3055,7 +2902,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 
       post_state_comment
 
-      tg_notify "🔄 Orchestrator auto-recovery ($((RECOVERY_COUNT + 1))/${MAX_RECOVERY_ATTEMPTS}) started for #${TRACKING_NUM}: ${NEW_ISSUES_COUNT} fix-up issues, ${REVERT_COUNT} reverts."
+      tg_notify "Orchestrator auto-recovery ($((RECOVERY_COUNT + 1))/${MAX_RECOVERY_ATTEMPTS}) started for #${TRACKING_NUM}: ${NEW_ISSUES_COUNT} fix-up issues, ${REVERT_COUNT} reverts." "WARNING"
       ;;
 
     in_progress)
@@ -3096,10 +2943,12 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Type: judge-addition (cycle $((JUDGE_CYCLE + 1)))
 - Managed by: AI Orchestrator"
 
+          ensure_label_exists "ai:clarification"
           NEW_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${NEW_TITLE}" \
-            --body "${FULL_NEW_BODY}")"
+            --body "${FULL_NEW_BODY}" \
+            --label "ai:clarification")"
           echo "  Created: ${NEW_URL}"
 
           # Record in state so subsequent cycles/iterations won't recreate,
@@ -3175,10 +3024,12 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Priority: ${DEF_PRIORITY}
 - Managed by: AI Orchestrator"
 
+          ensure_label_exists "ai:clarification"
           NEW_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${DEF_TITLE}" \
-            --body "${FULL_BODY}")"
+            --body "${FULL_BODY}" \
+            --label "ai:clarification")"
 
           NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
           NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
@@ -3298,12 +3149,16 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		continue
 	fi
 
-	# Stage 2: Resolve conflicts with Codex and push.
-	if _resolve_merge_conflicts_with_codex "${S_PR}" "${S_HEAD}" "${DEFAULT_BRANCH}"; then
+	# Stage 2: Dispatch review workflow for conflict resolution.
+	_dispatch_rc=0
+	_dispatch_review_for_conflicts "${S_PR}" "${S_HEAD}" || _dispatch_rc=$?
+	if [ "${_dispatch_rc}" -eq 0 ]; then
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
-		tg_send_msg "✅ Standalone PR #${S_PR} merge conflicts resolved by orchestrator Codex."$'\n'"PR: $(_gh_url "pull/${S_PR}")" >/dev/null 2>&1 || true
+		tg_send_msg "Standalone PR #${S_PR} has merge conflicts. Review workflow dispatched for resolution."$'\n'"PR: $(_gh_url "pull/${S_PR}")" "WARNING" >/dev/null 2>&1 || true
+	elif [ "${_dispatch_rc}" -eq 2 ]; then
+		echo "  PR #${S_PR}: autofix already in progress, skipping dispatch."
 	else
-		tg_send_msg "⚠️ Standalone PR #${S_PR} merge conflict resolution failed. Review workflow re-triggered as fallback."$'\n'"PR: $(_gh_url "pull/${S_PR}")" >/dev/null 2>&1 || true
+		tg_send_msg "Standalone PR #${S_PR} has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${S_PR}")" "WARNING" >/dev/null 2>&1 || true
 	fi
 done
 
