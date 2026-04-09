@@ -5,13 +5,24 @@
   "entry_id": "processed_command_568_4211552640_approved",
   "issue_number": 568,
   "metadata": {
+    "branch": "ai/issue-568",
+    "changed_files": [
+      "scripts/ai_memory.py",
+      "scripts/ai_memory_lib.py",
+      "tests/e2e_smoke_canary.txt"
+    ],
+    "issue_number": 568,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/568",
+    "pr_number": 569,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/569",
+    "run_attempt": "1",
+    "run_id": "24173264522",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24173264522"
   },
   "run_attempt": 1,
   "run_id": "24173264522",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-09T04:59:47Z",
+  "status": "completed",
+  "timestamp": "2026-04-09T05:00:49Z",
   "workflow": "implement"
 }
