@@ -1322,7 +1322,7 @@ recover_stalled_issue() {
   echo "  [stall-recovery] Issue #${issue_num} stuck in '${phase}' for ${stall_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
 
   # ---- Guard: skip recovery if a *fresh* workflow is actively processing this issue ----
-  if [ "${action}" != "skip" ] && issue_has_active_workflow "${issue_num}"; then
+  if issue_has_active_workflow "${issue_num}"; then
     echo "  [stall-recovery] Issue #${issue_num} has a recent active workflow run — skipping recovery (workflow is slow, not stalled)."
     return 1  # Signal: no action taken (caller should not increment counter)
   fi
