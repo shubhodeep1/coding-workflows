@@ -346,9 +346,9 @@ jobs:
 
             if ! CLAIMED="$(printf '%s' "${CLAIM_RESULT}" | jq -r '
               if (if (.operation_result | type) == "object" then (.operation_result | has("claimed")) else false end) then
-                .operation_result.claimed
+                (.operation_result.claimed | select(type == "boolean"))
               elif has("claimed") then
-                .claimed
+                (.claimed | select(type == "boolean"))
               else
                 null
               end
