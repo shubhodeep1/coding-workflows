@@ -29,7 +29,7 @@ if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
 fi
 
 MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.3-codex}"
-MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-xhigh}"
+MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-high}"
 VALIDATION_TIMEOUT="${VALIDATION_TIMEOUT:-15}"
 if ! [[ "${VALIDATION_TIMEOUT}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_TIMEOUT}" -le 0 ]; then
   echo "VALIDATION_TIMEOUT must be a positive integer (got: ${VALIDATION_TIMEOUT})" >&2

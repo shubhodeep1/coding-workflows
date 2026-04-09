@@ -1019,8 +1019,8 @@ The judge will evaluate this gap when the wave completes and decide whether to r
 # ---------------------------------------------------------------
 # Helper: Resolve merge conflicts on a PR branch using Codex
 # ---------------------------------------------------------------
-# Runs a dedicated Codex instance (same model as the editor, xhigh
-# reasoning) to resolve merge conflict markers, commits the result,
+# Runs a dedicated Codex instance (same model as the editor,
+# conflict-resolver reasoning) to resolve merge conflict markers, commits the result,
 # pushes, and dispatches the review workflow.
 #
 # Previously the orchestrator pushed an empty commit to force a
@@ -1147,7 +1147,7 @@ _resolve_merge_conflicts_with_codex()
 		echo 'web_search = "disabled"'
 		echo 'model_provider = "openrouter"'
 		echo "model = \"${MODEL_CONFLICT_RESOLVER:-${MODEL_EDITOR}}\""
-		echo "model_reasoning_effort = \"${CONFLICT_RESOLVER_REASONING_EFFORT:-xhigh}\""
+		echo "model_reasoning_effort = \"${CONFLICT_RESOLVER_REASONING_EFFORT:-medium}\""
 		if [ -f "${catalog_path}" ]; then
 			echo "model_catalog_json = \"${catalog_path}\""
 		fi
@@ -2654,12 +2654,18 @@ Manual intervention required." >/dev/null
 
   # Setup Codex config for judge
   mkdir -p ~/.codex
+  JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
+  EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="${MODEL_REASONING_EFFORT_JUDGE}"
+  if [ "${JUDGE_INVOCATION_CYCLE}" -gt 3 ]; then
+    EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="high"
+  fi
+  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE}"
   CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
   {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR}\""
-    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE}\""
+    echo "model_reasoning_effort = \"${EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE}\""
     if [ -f "${CATALOG_PATH}" ]; then
       echo "model_catalog_json = \"${CATALOG_PATH}\""
     fi

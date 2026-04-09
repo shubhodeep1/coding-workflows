@@ -15,6 +15,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 
 
+def test_judge_reasoning_effort_logic_is_adaptive_after_cycle_three():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))' in script
+	assert 'if [ "${JUDGE_INVOCATION_CYCLE}" -gt 3 ]; then' in script
+	assert 'EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="high"' in script
+	assert 'EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE' in script
+
+
 def _base_state(status: str = "in_progress") -> dict:
 	return {
 		"schema_version": "orchestrate_state.v1",
@@ -364,7 +372,7 @@ print(json.dumps(parsed))
 				"OPENROUTER_API_KEY": "test-openrouter",
 				"GITHUB_REPOSITORY": "owner/repo",
 				"MODEL_EDITOR": "openai/gpt-5.3-codex",
-				"MODEL_REASONING_EFFORT_JUDGE": "high",
+				"MODEL_REASONING_EFFORT_JUDGE": "xhigh",
 				"TG_BOT_SECRET": "",
 				"TG_ADMIN_CHAT_ID": "",
 				"TOOL_CALL_BUDGET_JUDGE": "60",
