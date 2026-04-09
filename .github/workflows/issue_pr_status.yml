@@ -138,9 +138,8 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
-            gh_retry gh issue edit "${issue_number}" -R "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-            if ! gh_retry gh issue edit "${issue_number}" -R "${REPOSITORY}" --add-label "${FINAL_LABEL}"; then
-              echo "::warning::Failed to add label '${FINAL_LABEL}' to issue #${issue_number}."
+            if ! gh_retry gh issue edit "${issue_number}" -R "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label "${FINAL_LABEL}"; then
+              echo "::warning::Failed to update labels on issue #${issue_number}."
             fi
           done <<< "${ISSUE_NUMBERS}"
 
