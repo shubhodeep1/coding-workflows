@@ -170,6 +170,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Configure git auth for memory helper clones
+        if: env.SKIP_IMPLEMENT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
