@@ -308,7 +308,8 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 			if pr.get('mergeable') is False:
 				print('conflict', file=sys.stderr)
 				sys.exit(1)
-			pr['state'] = 'merged'
+			pr['state'] = 'closed'
+			pr['merged'] = True
 			store.setdefault('merged_prs', []).append(pr_num)
 			save()
 			sys.exit(0)
@@ -431,6 +432,11 @@ if args[0] == 'api':
 			sys.exit(0)
 		if jq == '.state':
 			print(pr.get('state', 'open'))
+		elif jq == '.merged':
+			merged = pr.get('merged')
+			if merged is None:
+				merged = pr.get('state') == 'merged'
+			print('true' if merged else 'false')
 		elif jq == '.mergeable_state // ""':
 			print(pr.get('mergeable_state', ''))
 		elif jq == '.mergeable':
@@ -728,6 +734,34 @@ def test_final_merge_waits_for_required_checks_before_merging():
 	assert result["latest_state"]["final_merge_status"] == "pending"
 	assert result["latest_state"]["final_merge_pr"] == 352
 	assert result.get("merged_prs", []) == []
+
+
+def test_final_merge_treats_closed_merged_pr_as_success():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_status"] = "conflict"
+	prs = [
+		{
+			"number": 353,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 353
+	assert result["latest_state"]["final_merge_status"] == "merged"
 
 
 def test_standalone_conflict_sweep_skips_integration_base_prs():

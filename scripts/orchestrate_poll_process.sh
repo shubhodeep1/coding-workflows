@@ -411,7 +411,7 @@ finalize_integration_merge_if_needed() {
       --base "${default_branch}" \
       --head "${integration_branch}" \
       --title "feat: ${project_title}" \
-      --body "Squash merge of orchestrator project #${TRACKING_NUM}.\n\nCloses #${TRACKING_NUM}" 2>/dev/null || true)"
+      --body "Squash merge of orchestrator project #${TRACKING_NUM}.\n\nRefs #${TRACKING_NUM}" 2>/dev/null || true)"
     final_pr="$(printf '%s\n' "${final_pr_url}" | grep -oE '/pull/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
   fi
 
@@ -426,8 +426,17 @@ finalize_integration_merge_if_needed() {
 
   local pr_state
   local pr_mergeable
+  local pr_merged
   pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
   pr_mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' 2>/dev/null || echo "")"
+  pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged' 2>/dev/null || echo "")"
+
+  if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
+    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    return 0
+  fi
 
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "false" ]; then
     jq --argjson final_pr "${final_pr}" \
@@ -457,7 +466,17 @@ finalize_integration_merge_if_needed() {
     return 0
   fi
 
+  pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
   pr_mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' 2>/dev/null || echo "")"
+  pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged' 2>/dev/null || echo "")"
+
+  if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
+    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    return 0
+  fi
+
   if [ "${pr_mergeable}" = "false" ]; then
     jq --argjson final_pr "${final_pr}" \
       '.status = "merge_conflict" | .final_merge_pr = $final_pr | .final_merge_status = "conflict"' \
@@ -468,7 +487,7 @@ finalize_integration_merge_if_needed() {
     return 1
   fi
 
-  if [ "${pr_mergeable}" != "true" ]; then
+  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" != "true" ]; then
     echo "  [final-merge] PR #${final_pr} mergeability is '${pr_mergeable:-unknown}' after merge attempt. Will retry next poll."
     return 1
   fi
