@@ -161,18 +161,27 @@ _pr_checks_completed()
 	local pr_number="$1"
 	local head_sha="${2:-}"
 	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
-		head_sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" \
-			--jq '.head.sha' 2>/dev/null || echo "")"
+		local pr_json
+		pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" 2>/dev/null || echo "")"
+		head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
 	fi
 	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
 		echo "  [check-runs] Could not resolve head SHA for PR #${pr_number}. Skipping merge."
 		return 1
 	fi
 
+	local check_runs_json
+	check_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" 2>/dev/null || echo "")"
+
 	local incomplete
-	incomplete="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" \
-		--jq '[.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length' 2>/dev/null || echo "")"
-	if [ -z "${incomplete}" ] || [ "${incomplete}" = "null" ]; then
+	incomplete="$(printf '%s' "${check_runs_json}" | jq -r '
+		if (type == "object" and (.check_runs | type == "array")) then
+			[.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
+		else
+			empty
+		end
+	' 2>/dev/null | tail -n1)"
+	if ! [[ "${incomplete}" =~ ^[0-9]+$ ]]; then
 		echo "  [check-runs] Could not query check-runs for PR #${pr_number} (SHA ${head_sha:0:7}). Skipping merge."
 		return 1
 	fi
@@ -1059,9 +1068,22 @@ STALL_EOF
         local pr_num
         local pr_lookup_ok="false"
         local head_ref
-        pr_num="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' 2>/dev/null)" && pr_lookup_ok="true" || pr_num=""
-        if [ "${pr_lookup_ok}" = "true" ] && [ -n "${pr_num}" ] && [ "${pr_num}" != "null" ]; then
-          head_ref="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' 2>/dev/null || echo "")"
+        local timeline_json
+        local pr_json
+        timeline_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null || echo "")"
+        pr_num="$(printf '%s' "${timeline_json}" | jq -r '
+          if (type == "array") then
+            [.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last // empty
+          else
+            empty
+          end
+        ' 2>/dev/null | tail -n1)"
+        if printf '%s' "${timeline_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+          pr_lookup_ok="true"
+        fi
+        if [ "${pr_lookup_ok}" = "true" ] && [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
+          pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" 2>/dev/null || echo "")"
+          head_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
           if [ -n "${head_ref}" ] && git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && git checkout "origin/${head_ref}" 2>/dev/null; then
             git config user.name "codex-bot"
             git config user.email "codex@users.noreply.github.com"
@@ -1082,12 +1104,22 @@ STALL_EOF
         ;;
       attempt_merge)
         local merge_pr
-        merge_pr="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' 2>/dev/null || echo "")"
-        if [ -n "${merge_pr}" ] && [ "${merge_pr}" != "null" ]; then
+        local merge_timeline_json
+        merge_timeline_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null || echo "")"
+        merge_pr="$(printf '%s' "${merge_timeline_json}" | jq -r '
+          if (type == "array") then
+            [.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last // empty
+          else
+            empty
+          end
+        ' 2>/dev/null | tail -n1)"
+        if [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
+          local merge_pr_json
           local merge_state
           local merge_mergeable
-          merge_state="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" --jq '.state' 2>/dev/null || echo "")"
-          merge_mergeable="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" --jq '.mergeable' 2>/dev/null || echo "")"
+          merge_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" 2>/dev/null || echo "")"
+          merge_state="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .state?) then .state else empty end' 2>/dev/null | tail -n1)"
+          merge_mergeable="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and (.mergeable == true or .mergeable == false)) then .mergeable else empty end' 2>/dev/null | tail -n1)"
           if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && _pr_checks_completed "${merge_pr}"; then
             gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1 \
               || gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash >/dev/null 2>&1 \
