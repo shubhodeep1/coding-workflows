@@ -16,7 +16,7 @@ This repository contains reusable `workflow_call` workflows that power the full 
 8. **Validate** — Runtime harness generation + local Docker smoke validation with machine-readable results
 9. **Update Workflows** — Automatically updates workflow wrappers in consumer repos when upstream templates change
 
-Core workflows persist and retrieve AI memory through the dedicated `ai-memory` branch (default branch/root: `AI_MEMORY_BRANCH=ai-memory`, `AI_MEMORY_ROOT=ai-memory`). Memory retrieval happens before model execution and memory records are persisted after runs; the system is fail-open, and `AI_MEMORY_ENABLED=true` is the default global kill switch.
+Core workflows persist and retrieve AI memory through the dedicated `ai-memory` branch (default branch/root: `AI_MEMORY_BRANCH=ai-memory`, `AI_MEMORY_ROOT=ai-memory`). Memory retrieval happens before model execution and memory records are persisted after runs; retrieval/recording paths are fail-open, while some lineage/finalization operations may still fail the workflow if memory tooling errors. `AI_MEMORY_ENABLED=true` is the default global kill switch.
 
 ## Quickstart
 
@@ -65,11 +65,11 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `AI_MEMORY_BRANCH` | No | `ai-memory` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Branch where workflows persist and retrieve AI memory records |
 | `AI_MEMORY_ROOT` | No | `ai-memory` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Root directory used for memory records within the memory branch |
 | `AI_MEMORY_PUSH_RETRIES` | No | `5` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Retry count for memory branch push operations |
-| `AI_MEMORY_RETRIEVAL_PROFILES` | No | `ai-memory/config/retrieval_profiles.v1.json` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Retrieval profile configuration path |
+| `AI_MEMORY_RETRIEVAL_PROFILES` | No | `ai-memory/config/retrieval_profiles.v1.json` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_clarify_respond | Retrieval profile configuration path |
 | `AI_MEMORY_ENABLED` | No | `true` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Global memory kill switch; when `false`, workflows skip memory retrieval/persistence and continue normally |
-| `AI_MEMORY_KEYWORD_MODEL` | No | `openai/gpt-5-mini` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Model used for memory retrieval keyword extraction |
-| `AI_MEMORY_KEYWORD_BASE_URL` | No | `https://openrouter.ai/api/v1` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | API base URL for memory keyword extraction |
-| `AI_MEMORY_TOKEN_BUDGET_<ROLE>` | No | _(from profile)_ | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`) |
+| `AI_MEMORY_KEYWORD_MODEL` | No | `openai/gpt-5-mini` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_clarify_respond | Model used for memory retrieval keyword extraction |
+| `AI_MEMORY_KEYWORD_BASE_URL` | No | `https://openrouter.ai/api/v1` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_clarify_respond | API base URL for memory keyword extraction |
+| `AI_MEMORY_TOKEN_BUDGET_<ROLE>` | No | _(from profile)_ | clarify, plan, implement, review_autofix, orchestrate, orchestrate_clarify_respond | Per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`) |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
 | `ALERT_MSG_LEVEL` | No | `DEBUG` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status, update_workflows, test-and-mark-stable | Minimum Telegram alert level to send. Alerts below this threshold are suppressed. Valid values: `DEBUG`, `WARNING`, `ERROR`, `CRITICAL`. Each alert is prefixed with an icon and level (e.g. `🔍 DEBUG:`, `⚠️ WARNING:`, `❌ ERROR:`, `🚨 CRITICAL:`). New alerts default to `CRITICAL` until explicitly recategorised. |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Version/branch of the Serena MCP server |
