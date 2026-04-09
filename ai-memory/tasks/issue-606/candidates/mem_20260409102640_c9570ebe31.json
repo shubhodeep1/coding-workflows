@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- No clarification Q-IDs were issued in Clarify.\n- `/answer [auto-answered-by-clarify]` indicates no unresolved decision points, so planning can proceed.\n\nImplementation plan\n\n1. Files likely to change\n- `README.md` (only file expected for this issue).\n- Target sections:\n  - `## Overview` (or adjacent narrative section) to explicitly state memory persistence/retrieval behavior.\n  - Quickstart `#### Secrets` table.\n  - Quickstart `#### Variables` table.\n  - `## Required Secrets` table.\n  - `## Required Variables` table.\n\n2. Functions/modules to implement (docs modules)\n- Add/update a concise \u201cmemory system behavior\u201d description stating workflows persist and retrieve AI memory via the dedicated `ai-memory` branch.\n- Update secret descriptions for `OPENROUTER_API_KEY` to include both:\n  - general LLM access\n  - memory retrieval keyword-extraction usage.\n- Ensure memory env-var docs are complete and aligned with runtime behavior, especially:\n  - `AI_MEMORY_ENABLED` (default `true`, kill switch semantics)\n  - `AI_MEMORY_BRANCH` (default `ai-memory`)\n  - `AI_MEMORY_ROOT` (default `ai-memory`)\n  - `AI_MEMORY_RETRIEVAL_PROFILES`\n  - `AI_MEMORY_PUSH_RETRIES` (currently used in runtime, must be documented)\n  - `AI_MEMORY_KEYWORD_MODEL`\n  - `AI_MEMORY_KEYWORD_BASE_URL`\n  - `AI_MEMORY_TOKEN_BUDGET_<ROLE>`.\n\n3. Data structures affected\n- Markdown tables in `README.md`:\n  - Secret rows (`OPENROUTER_API_KEY`) in both secret tables.\n  - Variable rows for AI memory controls in both variable tables.\n- Narrative text blocks describing memory architecture/flow (branch + retrieval/persistence behavior).\n\n4. API or interface changes\n- No runtime/API changes; documentation-only.\n- No renames/removals of existing variable names or workflow identifiers.\n- Docs will reflect existing implemented behavior only.\n\n5. Potential risks or edge cases\n- Duplicate tables can drift: both secret tables and both variable tables must be kept consistent.\n- Overstating behavior: wording must match actual implementation (memory is fail-open and gated by `AI_MEMORY_ENABLED`).\n- Missing env var documentation risk: `AI_MEMORY_PUSH_RETRIES` is implemented but currently undocumented in README.\n- Backward-compatibility risk in docs: avoid introducing alternate names/aliases that don\u2019t exist in code.\n\n6. Testing/verification considerations\n- Validate README consistency checks:\n  - All memory env vars used by runtime are documented in README.\n  - `OPENROUTER_API_KEY` wording updated in every relevant table occurrence.\n  - `AI_MEMORY_ENABLED` remains documented with default `true`.\n- Cross-check docs against representative implementation points:\n  - `scripts/ai_memory.py` defaults and env parsing.\n  - `scripts/memory_helpers.sh` enable/disable gating and fail-open behavior.\n  - workflow usage of memory helpers in core pipelines (`clarify/plan/implement/review_autofix/orchestrate/...`).\n- Confirm markdown table formatting remains intact and existing README style/structure is preserved.\n\nConflict detection\n- No blocking issue-vs-code conflicts found.\n- Factual documentation gaps identified (to be fixed by this plan):\n  - `AI_MEMORY_PUSH_RETRIES` is implemented but not documented in `README.md`.\n  - `OPENROUTER_API_KEY` descriptions currently mention LLM access but not memory keyword extraction.\n  - Memory branch persistence/retrieval behavior is only partially explicit in README narrative.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2351c483df5b3c283632b94495df9fd5386e52e1dedf0f27ea910b9e0d4b00a4",
+  "lineage": {
+    "issue_number": 606,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24185144938",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24185144938",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/606"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409102640_c9570ebe31",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 606,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24185144938"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #606",
+  "timestamps": {
+    "created_at": "2026-04-09T10:26:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
