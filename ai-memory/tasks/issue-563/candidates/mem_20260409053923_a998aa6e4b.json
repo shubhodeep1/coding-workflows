@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No Q<ID> clarification questions were issued in this issue thread.\n- Interpreted answer: `/answer [auto-answered-by-clarify]` means clarification is complete and planning can proceed.\n\nImplementation plan:\n\n1. Files likely to change\n- `prompts/mode-plan.txt` (only file in scope)\n\n2. Functions/modules to implement\n- Add a new read-only guidance block titled `SERENA MCP EFFICIENCY (MANDATORY)`.\n- Place it after the existing planning rules block and before the output contract sentence (`Output must be plain text suitable for posting as an issue comment.`).\n\n3. Data structures affected\n- No runtime code/data structures.\n- Prompt instruction structure changes only (new section + bullet rules).\n\n4. API/interface changes\n- No external API/interface change.\n- Behavioral prompt contract change for planning mode:\n  - Skip onboarding/initial Serena bootstrapping calls.\n  - Prefer `get_symbols_overview` + `find_symbol` for targeted reads.\n  - Use `find_referencing_symbols` for impact analysis.\n  - Use `search_for_pattern` instead of shell grep when Serena is available.\n  - Do not read the same file region twice.\n  - Explicit fallback to normal reads if Serena is unavailable/errors.\n- Keep section read-only (no edit-tool instructions such as `replace_symbol_body`, `insert_after_symbol`, etc.).\n\n5. Potential risks and edge cases\n- Risk: accidentally adding edit-tool guidance, which violates scope.\n- Risk: inserting section in wrong location due to wording mismatch.\n- Risk: unintended prompt restructuring outside the new section.\n\nConflict detected:\n- Issue text says \u201cbefore output-contract text,\u201d but `prompts/mode-plan.txt` appears to use a plain output sentence rather than an explicit \u201cOutput Contract\u201d heading. Implementation should treat that final output sentence as the insertion boundary.\n\n6. Testing considerations\n- Diff check: only `prompts/mode-plan.txt` changed.\n- Content check: section header `SERENA MCP EFFICIENCY (MANDATORY)` exists.\n- Content check: all required read-oriented bullets are present.\n- Negative check: no edit-tool instructions in the new section.\n- Placement check: section is between planning rules and output sentence.\n- Regression check: no unrelated structural/text changes elsewhere in the prompt.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "110984588198f20e150767f6149757e0ea62c0aaf47c2c21ba58c8c046369fba",
+  "lineage": {
+    "issue_number": 563,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24174373884",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24174373884",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/563"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260409053923_a998aa6e4b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 563,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24174373884"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #563",
+  "timestamps": {
+    "created_at": "2026-04-09T05:39:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
