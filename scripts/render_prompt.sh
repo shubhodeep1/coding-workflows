@@ -43,7 +43,9 @@ found_read_write=false
 unresolved_placeholder=false
 
 while IFS= read -r line || [ -n "${line}" ]; do
-	case "${line}" in
+	trimmed_line="${line#"${line%%[![:space:]]*}"}"
+	trimmed_line="${trimmed_line%"${trimmed_line##*[![:space:]]}"}"
+	case "${trimmed_line}" in
 		'{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}')
 			printf '%s\n' "${read_only_block}"
 			found_read_only=true
