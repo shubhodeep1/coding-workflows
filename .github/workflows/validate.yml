@@ -128,6 +128,16 @@ jobs:
             done
 
             rm -f "${tmp_path}"
+
+            if [ "${script_ref}" = "stable" ]; then
+              if gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${repo_path}?ref=main" > "${tmp_path}" 2>/dev/null; then
+                mv "${tmp_path}" "${target_path}"
+                echo "Using main fallback for ${target_path} (not found on ${script_ref}: ${repo_path})"
+                return 0
+              fi
+            fi
+
             if [ -f "${target_path}" ]; then
               echo "Using local fallback for ${target_path} (not found on ${script_ref}: ${repo_path})"
               return 0
