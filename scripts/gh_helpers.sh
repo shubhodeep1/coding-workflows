@@ -159,7 +159,7 @@ curl_gh_api()
 		local body_content
 		body_content=$(cat "${body_file}" 2>/dev/null || true)
 
-		if [ "${http_code}" = "429" ] || _is_gh_rate_limit "${body_content}"; then
+		if [ "${http_code}" = "429" ] || { [ "${http_code}" = "403" ] && _is_gh_rate_limit "${body_content}"; }; then
 			echo "::warning::GitHub API rate limit (HTTP ${http_code}, attempt ${attempt}/${max_attempts}), sleeping 30s…" >&2
 			sleep 30
 		else
