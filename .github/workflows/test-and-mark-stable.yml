@@ -811,7 +811,7 @@ jobs:
           # 5d: Validate prompt files exist and are non-empty
           echo ""
           echo "── Prompt files validation ──"
-          for pf in prompts/mode-judge.txt prompts/mode-judge-review-blocked.txt; do
+          for pf in prompts/mode-judge.txt prompts/mode-judge-review-blocked.txt prompts/serena-efficiency-block.txt; do
             if [ ! -s "${pf}" ]; then
               echo "::error::Prompt file ${pf} is missing or empty"
               exit 1
@@ -823,6 +823,7 @@ jobs:
           echo ""
           echo "── Shell script syntax ──"
           bash -n scripts/orchestrate_poll_process.sh
+          bash -n scripts/render_prompt.sh
           echo "OK: orchestrate_poll_process.sh"
 
           # 5f: Label contract validation
@@ -1378,6 +1379,27 @@ jobs:
           set -euo pipefail
           for f in scripts/*.sh; do
             bash -n "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+          # Ensure prompt rendering helper works and leaves no unresolved placeholders.
+          modes=(
+            prompts/mode-clarify.txt
+            prompts/mode-plan.txt
+            prompts/mode-orchestrate.txt
+            prompts/mode-clarify-respond.txt
+            prompts/mode-judge.txt
+            prompts/mode-validate-diagnose.txt
+            prompts/mode-implement.txt
+            prompts/mode-validate-generate.txt
+            prompts/mode-judge-review-blocked.txt
+          )
+          for mode in "${modes[@]}"; do
+            rendered="$(scripts/render_prompt.sh "${mode}")"
+            if printf '%s' "${rendered}" | grep -q '{{SERENA_EFFICIENCY_BLOCK_'; then
+              echo "FAIL: unresolved Serena placeholder in rendered prompt ${mode}"
+              exit 1
+            fi
+            echo "OK: rendered ${mode}"
           done
 
       - name: ShellCheck static analysis

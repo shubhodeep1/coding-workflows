@@ -226,7 +226,7 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_poll_process.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_poll_process.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py render_prompt.sh; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -250,7 +250,7 @@ jobs:
               fi
             fi
           done
-          for pf in mode-judge.txt mode-judge-review-blocked.txt; do
+          for pf in mode-judge.txt mode-judge-review-blocked.txt serena-efficiency-block.txt; do
             if ! _gh_api_fetch "prompts/${pf}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/prompts/${pf}?ref=${script_ref}"; then
               echo "::warning::${pf} not found on ${script_ref}; falling back to main"

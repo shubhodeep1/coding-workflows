@@ -117,7 +117,7 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py render_prompt.sh; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -167,11 +167,16 @@ jobs:
           done
           # Fetch judge prompt for review-blocked judge feature
           mkdir -p prompts
-          if [ ! -f prompts/mode-judge-review-blocked.txt ]; then
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=${script_ref}" \
-              > prompts/mode-judge-review-blocked.txt 2>/dev/null || true
-          fi
+          for pf in mode-judge-review-blocked.txt serena-efficiency-block.txt; do
+            if [ ! -f "prompts/${pf}" ]; then
+              if ! _gh_api_fetch "prompts/${pf}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/${pf}?ref=${script_ref}"; then
+                echo "::warning::${pf} not found on ${script_ref}; falling back to main"
+                _gh_api_fetch "prompts/${pf}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/prompts/${pf}?ref=main" || true
+              fi
+            fi
+          done
 
       - name: Validate PR number input
         run: |
@@ -3012,7 +3017,7 @@ jobs:
             echo "=== REVIEW-BLOCKED JUDGE TASK ==="
             echo
             if [ -f prompts/mode-judge-review-blocked.txt ]; then
-              cat prompts/mode-judge-review-blocked.txt
+              scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
             else
               echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."
             fi

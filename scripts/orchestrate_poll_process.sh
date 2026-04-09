@@ -2441,7 +2441,7 @@ json.dump(result, sys.stdout)
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        cat prompts/mode-judge-review-blocked.txt
+        scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
         echo
         echo "=== ISSUE #${rb_issue} (original requirement) ==="
         echo
@@ -3248,7 +3248,7 @@ ${PR_DIFF}
     echo
     echo "=== JUDGE TASK ==="
     echo
-    cat prompts/mode-judge.txt
+    scripts/render_prompt.sh prompts/mode-judge.txt
     echo
     echo "=== PROJECT SPEC ==="
     echo

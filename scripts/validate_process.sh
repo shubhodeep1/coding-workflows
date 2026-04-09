@@ -514,7 +514,7 @@ fi
   echo
   echo "=== IMPLEMENTATION TASK ==="
   echo
-  cat prompts/mode-validate-generate.txt
+  scripts/render_prompt.sh prompts/mode-validate-generate.txt
   echo
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
@@ -787,7 +787,7 @@ fi
   echo
   echo "=== DIAGNOSIS TASK ==="
   echo
-  cat prompts/mode-validate-diagnose.txt
+  scripts/render_prompt.sh prompts/mode-validate-diagnose.txt
   echo
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
