@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which codebase should this fix be applied to?**\nChoices:\n- **A** \u2014 Apply it in a different repository/workspace that contains `validation/tests/01_core_smoke.sh` and `validation/app_server.py`; share that path/repo so I can proceed. **(RECOMMENDED)**\n- **B** \u2014 Keep working in the current repository and adapt the task to equivalent files here (please specify exact replacement file paths).\n- **C** \u2014 Do not implement code changes; provide only a patch proposal/diff text for the missing files.\nReply: `Q1: A`\n**Q2: How should I handle the missing required context files (`agents.md`, `/db/contracts/*`) for this task?**\nChoices:\n- **A** \u2014 Treat the provided prompt content as the authoritative AGENTS context, and proceed without `/db/contracts` because this fix is test-output parsing only (no schema/index/model changes). **(RECOMMENDED)**\n- **B** \u2014 Stop until you provide the missing `agents.md` file and relevant `/db/contracts/*` files in this workspace.\n- **C** \u2014 Proceed only after you confirm an alternate location for those files in this repository.\nReply: `Q2: A`",
+  "fingerprint": "6f5442a40eae40e8adee739e64f7bb8feb9be0836c75413619e186d662e421df",
+  "lineage": {
+    "issue_number": 634,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24216210245",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24216210245",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260409222344_70c3142e83",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 634,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24216210245"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #634 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-09T22:23:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
