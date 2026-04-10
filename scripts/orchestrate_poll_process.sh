@@ -2691,7 +2691,7 @@ json.dump(result, sys.stdout)
       # Fetch PR JSON once — reused for state/merged checks and PR_META below.
       _rb_pr_json="$(_fetch_pr_json "${RB_PR}")"
       RB_PR_STATE="$(_jq_field "${_rb_pr_json}" '.state' 'open|closed|merged')"
-      RB_PR_MERGED="$(_jq_field "${_rb_pr_json}" '.merged' 'true|false')"
+      RB_PR_MERGED="$(_jq_field "${_rb_pr_json}" '.merged_at != null' 'true|false')"
       [ -n "${RB_PR_MERGED}" ] || RB_PR_MERGED="false"
       if [ "${RB_PR_STATE}" != "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
         # PR is closed (not merged) — skip entirely
@@ -2966,7 +2966,7 @@ sys.exit(1)
             # Re-check PR state before expensive fix+push (race condition safety net)
             _rb_recheck_json="$(_fetch_pr_json "${RB_PR}")"
             RB_PR_STATE_NOW="$(_jq_field "${_rb_recheck_json}" '.state' 'open|closed|merged')"
-            RB_PR_MERGED_NOW="$(_jq_field "${_rb_recheck_json}" '.merged' 'true|false')"
+            RB_PR_MERGED_NOW="$(_jq_field "${_rb_recheck_json}" '.merged_at != null' 'true|false')"
             [ -n "${RB_PR_MERGED_NOW}" ] || RB_PR_MERGED_NOW="false"
             if [ "${RB_PR_STATE_NOW}" != "open" ] && [ "${RB_PR_MERGED_NOW}" != "true" ]; then
               # PR was closed without merge — skip
