@@ -2651,14 +2651,35 @@ jobs:
           git config user.name  "codex-bot"        2>/dev/null || true
           git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
 
-          # Move workflow-fetched untracked dirs out of the working tree so
-          # they don't collide with files coming from origin/BASE_BRANCH
-          # during the merge.  "git merge" refuses to proceed when untracked
+          # Move untracked content out of the working tree so it doesn't
+          # collide with files coming from origin/BASE_BRANCH during the
+          # merge simulation.  "git merge" refuses to proceed when untracked
           # files would be overwritten by the merge result.
+          #
+          # IMPORTANT: tracked files MUST remain in the working tree so that
+          # the index and working tree agree when git merge is invoked.
+          # Moving tracked files out of the tree causes
+          # "Entry … not uptodate. Cannot merge." errors and prevents
+          # git merge --abort from resetting cleanly afterward.
           MERGE_STASH="$(mktemp -d)"
           for d in scripts .serena prompts ai-memory; do
             if [ -d "${d}" ]; then
-              mv "${d}" "${MERGE_STASH}/${d}"
+              if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
+                # Directory contains tracked files — move only the untracked
+                # files individually so tracked files stay in place and the
+                # index remains consistent with the working tree.
+                # Preserve full relative-path structure to avoid collisions
+                # between files with identical names in different subdirs.
+                while IFS= read -r f; do
+                  [ -n "${f}" ] && [ -e "${f}" ] && {
+                    mkdir -p "${MERGE_STASH}/$(dirname "${f}")"
+                    mv "${f}" "${MERGE_STASH}/${f}"
+                  }
+                done < <(git ls-files --others -- "${d}/")
+              else
+                # Directory is entirely untracked — safe to move as a whole.
+                mv "${d}" "${MERGE_STASH}/${d}"
+              fi
             fi
           done
 
@@ -2696,16 +2717,27 @@ jobs:
             # Only abort if a merge is actually in progress (MERGE_HEAD exists).
             # When the branch is already up-to-date, git merge succeeds immediately
             # without entering merge state, so there is nothing to abort.
+            # Cleanup is best-effort: merge --abort and reset can fail when
+            # the index is in an inconsistent state.  Use || true so cleanup
+            # never hard-fails the job.
             if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
-              git merge --abort
+              git merge --abort || true
             fi
+            git reset --hard HEAD || true
+            git clean -fd || true
             rm -rf "${UNTRACKED_BACKUP}"
             exit 0
           else
             echo "Merge conflict detected"
             echo "MERGE_CONFLICT=true" >> "$GITHUB_ENV"
+            # Conflict path is non-fatal: abort the simulated merge so the
+            # working tree is clean for the conflict-resolver step, then
+            # restore env dirs and exit 0.  The job must not fail here —
+            # human review or the resolver step handles the actual conflict.
+            # Cleanup is best-effort; || true prevents exit 128 from a
+            # failed abort/reset from surfacing as a job failure.
             if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
-              git merge --abort
+              git merge --abort || true
             fi
             # Restore untracked dirs so the conflict resolver's codex exec
             # has its full environment (.serena/, scripts/, prompts/).
