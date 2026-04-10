@@ -1137,6 +1137,7 @@ STALL_EOF
         local new_body
         local new_url
         local new_url_clean
+        local bt='`'
         local new_num
 		orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' || echo "")"
 		orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
@@ -1146,11 +1147,11 @@ ${orig_body}
 
 ---
 
-**⚠️ Re-issued from #${issue_num}** — previous issue stalled in \\`${phase}\\` for ${elapsed_minutes} minutes despite $((recovery_count + 1)) recovery attempt(s).
+**⚠️ Re-issued from #${issue_num}** — previous issue stalled in ${bt}${phase}${bt} for ${elapsed_minutes} minutes despite $((recovery_count + 1)) recovery attempt(s).
 
 **Guidance for AI agents:**
 - This issue was re-created by standalone stall recovery.
-- Previous attempt stalled at phase: \\`${phase}\\`.
+- Previous attempt stalled at phase: ${bt}${phase}${bt}.
 - Proceed through clarify → plan → implement → review.
 REISSUE_EOF
 )"
