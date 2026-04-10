@@ -513,10 +513,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # The consumer repo may not have the ai:orchestrator-tracking label yet.
           # gh issue create --label fails if the label does not exist, so create it
           # idempotently first.
-          gh label create "ai:orchestrator-tracking" \
+          gh_retry gh label create "ai:orchestrator-tracking" \
             --repo "${{ github.repository }}" \
             --color "a2eeef" \
             --description "Orchestrator project tracking issue" \
@@ -524,7 +526,7 @@ jobs:
           # Ensure the ai:clarification label exists so Wave 1 issues can
           # be labelled at creation time (prevents reliance on clarify.yml
           # auto-triggering via issues.opened event).
-          gh label create "ai:clarification" \
+          gh_retry gh label create "ai:clarification" \
             --repo "${{ github.repository }}" \
             --color "f9d0c4" \
             --description "AI clarification required before planning" \
@@ -566,17 +568,19 @@ jobs:
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
-          DEFAULT_BRANCH="$(gh api "repos/${{ github.repository }}" --jq '.default_branch')"
+          DEFAULT_BRANCH="$(gh_retry gh api "repos/${{ github.repository }}" --jq '.default_branch')"
           DEFAULT_BRANCH_REF="$(printf '%s' "${DEFAULT_BRANCH}" | jq -sRr @uri)"
           INTEGRATION_BRANCH="orchestrator/project-${TRACKING_ISSUE_NUMBER}"
           INTEGRATION_BRANCH_REF="$(printf '%s' "${INTEGRATION_BRANCH}" | jq -sRr @uri)"
 
-          if gh api "repos/${{ github.repository }}/git/ref/heads/${INTEGRATION_BRANCH_REF}" >/dev/null 2>&1; then
+          if gh_retry gh api "repos/${{ github.repository }}/git/ref/heads/${INTEGRATION_BRANCH_REF}" >/dev/null 2>&1; then
             echo "Integration branch already exists: ${INTEGRATION_BRANCH}"
           else
-            BASE_SHA="$(gh api "repos/${{ github.repository }}/git/ref/heads/${DEFAULT_BRANCH_REF}" --jq '.object.sha')"
-            gh api "repos/${{ github.repository }}/git/refs" \
+            BASE_SHA="$(gh_retry gh api "repos/${{ github.repository }}/git/ref/heads/${DEFAULT_BRANCH_REF}" --jq '.object.sha')"
+            gh_retry gh api "repos/${{ github.repository }}/git/refs" \
               -f ref="refs/heads/${INTEGRATION_BRANCH}" \
               -f sha="${BASE_SHA}" >/dev/null
             echo "Created integration branch ${INTEGRATION_BRANCH} from ${DEFAULT_BRANCH}@${BASE_SHA}"
@@ -586,7 +590,7 @@ jobs:
             --input-file "${DECOMPOSITION_FILE}" \
             --integration-branch "${INTEGRATION_BRANCH}" > "${TRACKING_BODY_FILE}"
 
-          gh issue edit "${TRACKING_ISSUE_NUMBER}" \
+          gh_retry gh issue edit "${TRACKING_ISSUE_NUMBER}" \
             --repo "${{ github.repository }}" \
             --body-file "${TRACKING_BODY_FILE}" >/dev/null
 
