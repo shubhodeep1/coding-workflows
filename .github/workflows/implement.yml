@@ -991,6 +991,28 @@ jobs:
             fi
           done
 
+          # Check all modified/added shell scripts for syntax errors
+          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.sh'); do
+            if [ -f "$f" ]; then
+              if ! bash -n "$f" 2>&1; then
+                echo "::error file=${f}::Shell syntax error in ${f}"
+                ERRORS=$((ERRORS + 1))
+              fi
+            fi
+          done
+
+          # Check all modified/added YAML files for syntax errors using a YAML
+          # parser - bash -n must NOT be used on YAML files as it parses them
+          # as shell and produces false failures (e.g. 'name: foo (bar)').
+          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.yml' '*.yaml'); do
+            if [ -f "$f" ]; then
+              if ! python3 -c "import yaml, sys; f=open(sys.argv[1]); yaml.safe_load(f); f.close()" "$f" 2>&1; then
+                echo "::error file=${f}::YAML syntax error in ${f}"
+                ERRORS=$((ERRORS + 1))
+              fi
+            fi
+          done
+
           if [ "${ERRORS}" -gt 0 ]; then
             echo "::error::${ERRORS} file(s) failed syntax validation."
             exit 1
