@@ -2271,10 +2271,11 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   CURRENT_WAVE="$(jq -r '.current_wave' "${STATE_FILE}")"
   TOTAL_WAVES="$(jq -r '.total_waves' "${STATE_FILE}")"
   JUDGE_CYCLE="$(jq -r '.judge_cycle' "${STATE_FILE}")"
+  JUDGE_STALL_CYCLES="$(jq -r '.judge_stall_cycles // .judge_cycle' "${STATE_FILE}")"
   # Backward compat: read recovery_count (new) or migrate from recovery_attempted (old)
   RECOVERY_COUNT="$(jq -r '.recovery_count // (if .recovery_attempted == true then 1 else 0 end)' "${STATE_FILE}")"
 
-  echo "Current wave: ${CURRENT_WAVE}/${TOTAL_WAVES}, Judge cycle: ${JUDGE_CYCLE}, Recovery count: ${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}"
+  echo "Current wave: ${CURRENT_WAVE}/${TOTAL_WAVES}, Judge cycle: ${JUDGE_CYCLE} (stall: ${JUDGE_STALL_CYCLES}), Recovery count: ${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}"
 
   # ---------------------------------------------------------------
   # Backward scan: check prior waves for non-terminal issues
@@ -3452,22 +3453,32 @@ with open('${STATE_FILE}', 'w') as f:
   echo "Wave ${CURRENT_WAVE} complete!"
 
   # ---------------------------------------------------------------
-  # Guard: cap judge cycles to prevent infinite loops
+  # Guard: cap judge stall cycles to prevent infinite loops.
+  # Only non-advancing actions (recovery, fix-ups, stalls) count
+  # against this budget. Clean wave advances are free.
   # ---------------------------------------------------------------
   MAX_JUDGE="${MAX_JUDGE_CYCLES:-25}"
   if ! [[ "${MAX_JUDGE}" =~ ^[0-9]+$ ]] || [ "${MAX_JUDGE}" -lt 1 ]; then
     MAX_JUDGE="25"
   fi
-  if [ "$((JUDGE_CYCLE + 1))" -gt "${MAX_JUDGE}" ]; then
-    echo "::error::Judge cycle limit reached ($((JUDGE_CYCLE + 1)) > ${MAX_JUDGE}). Marking project as failed."
+  # Dynamic floor: ensure budget is at least total_waves * 2 so that
+  # a project can never be starved by its own size.
+  DYNAMIC_FLOOR=$(( TOTAL_WAVES * 2 ))
+  if [ "${MAX_JUDGE}" -lt "${DYNAMIC_FLOOR}" ]; then
+    echo "Raising MAX_JUDGE_CYCLES from ${MAX_JUDGE} to dynamic floor ${DYNAMIC_FLOOR} (total_waves=${TOTAL_WAVES} × 2)."
+    MAX_JUDGE="${DYNAMIC_FLOOR}"
+  fi
+  if [ "$((JUDGE_STALL_CYCLES + 1))" -gt "${MAX_JUDGE}" ]; then
+    echo "::error::Judge stall cycle limit reached ($((JUDGE_STALL_CYCLES + 1)) > ${MAX_JUDGE}). Marking project as failed."
     jq '.status = "failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-      -f body="## Project Failed — Judge cycle limit exceeded
+      -f body="## Project Failed — Judge stall cycle limit exceeded
 
-Judge has run ${JUDGE_CYCLE} cycle(s) without reaching completion. MAX_JUDGE_CYCLES=${MAX_JUDGE}.
+Judge has used ${JUDGE_STALL_CYCLES} stall cycle(s) (recovery/fix-ups) out of ${MAX_JUDGE} allowed (total judge evaluations: ${JUDGE_CYCLE}).
+Clean wave advances do not count against this limit.
 Manual intervention required." >/dev/null
-    tg_notify "Project #${TRACKING_NUM} FAILED: judge cycle limit (${MAX_JUDGE}) exceeded." "CRITICAL"
+    tg_notify "Project #${TRACKING_NUM} FAILED: judge stall cycle limit (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}) exceeded." "CRITICAL"
     tg_cleanup_msgs "${TRACKING_NUM}"
     continue
   fi
@@ -3475,7 +3486,7 @@ Manual intervention required." >/dev/null
   # ---------------------------------------------------------------
   # Run judge (full repo checkout + Codex call)
   # ---------------------------------------------------------------
-  echo "Running judge evaluation (cycle $((JUDGE_CYCLE + 1)))..."
+  echo "Running judge evaluation (cycle $((JUDGE_CYCLE + 1)), stall: ${JUDGE_STALL_CYCLES}, budget: ${MAX_JUDGE})..."
 
   # Setup Codex config for judge
   mkdir -p ~/.codex
@@ -3671,7 +3682,7 @@ sys.exit(1)
   tg_notify "Judge evaluated #${TRACKING_NUM} (cycle $((JUDGE_CYCLE + 1))): ${JUDGE_STATUS}. ${JUDGE_JUSTIFICATION}" "DEBUG"
 
   # Post judge assessment to tracking issue
-  JUDGE_COMMENT="## Judge Evaluation — Cycle $((JUDGE_CYCLE + 1))
+  JUDGE_COMMENT="## Judge Evaluation — Cycle $((JUDGE_CYCLE + 1)) (stall budget: ${JUDGE_STALL_CYCLES}/${MAX_JUDGE})
 
 **Status:** ${JUDGE_STATUS}
 **Justification:** ${JUDGE_JUSTIFICATION}
@@ -3713,7 +3724,7 @@ PRs to revert: ${REVERT_COUNT}"
         post_state_comment
 
         set_tracking_phase_label "ai:merged"
-        post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s). Issue kept open for manual review."
+        post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s) (${JUDGE_STALL_CYCLES} stall). Issue kept open for manual review."
 
         tg_cleanup_msgs "${TRACKING_NUM}"
         MSG="Project #${TRACKING_NUM} completed! All waves merged and judge approved."
@@ -3762,7 +3773,7 @@ PRs to revert: ${REVERT_COUNT}"
       # ---------------------------------------------------------------
       if [ "${RECOVERY_COUNT}" -ge "${MAX_RECOVERY_ATTEMPTS}" ]; then
         echo "Recovery attempts exhausted (${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}). Stopping."
-        jq '.status = "failed" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        jq '.status = "failed" | .judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
         post_state_comment
 
@@ -3879,7 +3890,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
       fi
 
       # Update state — increment recovery_count (replaces old recovery_attempted boolean)
-      jq '.judge_cycle += 1 | .recovery_count = ((.recovery_count // (if .recovery_attempted == true then 1 else 0 end)) + 1) | .status = "in_progress"' \
+      jq '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1) | .recovery_count = ((.recovery_count // (if .recovery_attempted == true then 1 else 0 end)) + 1) | .status = "in_progress"' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
       post_state_comment
@@ -3961,7 +3972,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
         else
           echo "Current wave issue tracking changed from judge output. Staying on wave ${CURRENT_WAVE} until updated issues complete."
         fi
-        jq '.judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        jq '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment
         # Skip wave advancement — next poll cycle will re-check this wave
       else
@@ -4033,6 +4044,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
             "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         done
 
+        # Clean wave advance: does not consume stall budget.
         jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1" \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
@@ -4048,7 +4060,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
           -f body="${WAVE_COMMENT}" >/dev/null
       else
         # All waves dispatched but judge says in_progress with new issues
-        jq '.judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        jq '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
 
       # Post updated state
