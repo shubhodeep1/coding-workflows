@@ -869,7 +869,7 @@ run_standalone_stall_recovery() {
   for lbl in ai:clarification ai:planning ai:awaiting-approval ai:implementing ai:done ai:ready-to-merge; do
     local by_label
     by_label="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --state open --label "${lbl}" --json number --limit 1000 2>/dev/null || echo '[]')"
-    labeled_issues="$(jq -nc --argjson cur "${labeled_issues}" --argjson add "${by_label}" '$cur + $add | unique_by(.number)')"
+    labeled_issues="$(jq -s 'add | unique_by(.number)' <(printf '%s\n' "${labeled_issues}") <(printf '%s\n' "${by_label}"))"
   done
 
   local marker_issues
@@ -883,10 +883,10 @@ run_standalone_stall_recovery() {
     -f per_page=100 \
     -f q="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments" \
     2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
-  marker_issues="$(jq -nc --argjson a "${marker_state}" --argjson b "${marker_clarify}" '$a + $b | unique_by(.number)')"
+  marker_issues="$(jq -s 'add | unique_by(.number)' <(printf '%s\n' "${marker_state}") <(printf '%s\n' "${marker_clarify}"))"
 
   local candidates
-  candidates="$(jq -nc --argjson labeled "${labeled_issues}" --argjson marker "${marker_issues}" '$labeled + $marker | unique_by(.number)')"
+  candidates="$(jq -s 'add | unique_by(.number)' <(printf '%s\n' "${labeled_issues}") <(printf '%s\n' "${marker_issues}"))"
 
   ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set)"
 
@@ -3811,7 +3811,7 @@ STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
 echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
 
 CONFLICT_SWEEP_FIXED=0
-DEFAULT_BRANCH="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
 
 for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
