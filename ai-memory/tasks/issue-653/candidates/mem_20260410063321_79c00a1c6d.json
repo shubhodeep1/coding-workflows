@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Clarification Mapping (interpreted from `/answer`)**\n- `Q1: A` \u2192 Pre-flight failures must be treated as terminal `harness_error` for that run (no same-run repair/retry loop).\n- `Q2: A` \u2192 Auto-generated `.ai/validate.yml` must be ephemeral runtime context only (not written into repo checkout).\n- `Q3: B` \u2192 Canary failure is `harness_error` only for infra/harness causes; app startup/crash remains `needs_fixes`.\n\n**Representative code pattern inspected**\n- Existing validation flow in `scripts/validate_process.sh` (Phase 1 generate \u2192 Phase 2 execute \u2192 Phase 3 diagnose).\n- Prompt-fetch wiring in `.github/workflows/validate.yml` (currently fetches only `mode-validate-generate.txt` and `mode-validate-diagnose.txt`).\n\n**Files Likely To Change**\n- `scripts/validate_process.sh`\n- `prompts/mode-validate-diagnose.txt`\n- `prompts/mode-validate-generate.txt`\n- `prompts/mode-validate-discover.txt` (new)\n- `prompts/mode-validate-fix-harness.txt` (new)\n- `.github/workflows/validate.yml` (fetch new prompt files)\n- `docs/validation-phase-spec.md`\n- `README.md` (behavior docs; likely no new vars)\n- `examples/ai-validate-hints.yml` (only if schema changes; otherwise no change)\n\n**Functions/Modules To Implement**\n- Add Phase 0 discovery block in `validate_process.sh`:\n  - If `.ai/validate.yml` exists, keep current behavior (copy/use committed hints).\n  - Else run Codex with `mode-validate-discover.txt`, write discovered hints to runtime file, and feed that into generation.\n- Add cycle-aware harness mode in `validate_process.sh`:\n  - Cycle 1: current full clean + generate.\n  - Cycle 2+: keep `validation/`, clean only `validation/logs/`, run `mode-validate-fix-harness.txt`.\n- Add pre-flight validator block between generation/fix and execution:\n  - `docker compose -f validation/docker-compose.test.yml config --quiet`\n  - `bash -n` for all `validation/**/*.sh`\n  - Compose build context/dockerfile existence verification\n  - On failure: directly finalize as `harness_error` (terminal for run).\n- Add canary shortcut handling:\n  - Require canary-first contract from generator.\n  - If canary-only failure and evidence is infra/harness, classify directly as `harness_error`.\n  - If canary failure indicates app startup/crash, continue normal diagnosis path (`needs_fixes` eligible).\n- Expand diagnosis prompt with explicit harness-vs-app decision rules and \u201cprefer `harness_error` when uncertain\u201d.\n- Update generate prompt:\n  - Canary requirement (`00_canary.sh` first).\n  - Conditional category applicability with explicit skip rules.\n  - Remove \u201call mandatory\u201d contradiction while keeping coverage keys stable.\n\n**Data Structures Affected**\n- Runtime prompt/context assembly (`GENERATE_PROMPT_FILE`, `DIAGNOSE_PROMPT_FILE` inputs).\n- Runtime hints content (`VALIDATE_HINTS_FILE`) source changes: committed `.ai/validate.yml` or discovered ephemeral hints.\n- Validation result interpretation in `validation_result.json` for canary-based fast classification.\n- Optional metadata enrichment in `validation_metadata.json` (e.g., `harness_mode`, `hints_source`, `preflight_status`) without breaking existing keys.\n\n**API / Interface Changes**\n- New internal prompt interfaces:\n  - `mode-validate-discover.txt` output contract (ephemeral validate hints).\n  - `mode-validate-fix-harness.txt` contract (targeted edits under `validation/` only).\n- Workflow packaging change in `.github/workflows/validate.yml` to fetch additional prompt files.\n- No required consumer-repo config changes and no required new secrets/vars.\n\n**Potential Risks / Edge Cases**\n- Docker Compose JSON/introspection differences across versions during build-path checks.\n- Cycle 2+ may not have prior `validation/` directory (must gracefully fall back to full generation).\n- Persistent harness can preserve bad assumptions; mitigate by targeted fix prompt + terminal harness-error on structural breaks.\n- Canary classification false positives; mitigate by strict infra indicators and fallback to diagnosis when ambiguous.\n- Discovery output quality variability; keep non-blocking fallback to \u201cno hints\u201d behavior if discovery fails.\n\n**Testing Considerations**\n- Validation run with committed `.ai/validate.yml` still bypasses discovery and behaves as before.\n- Missing `.ai/validate.yml` run generates ephemeral hints and succeeds end-to-end.\n- Pre-flight failure scenarios:\n  - bad compose YAML\n  - broken shell syntax\n  - invalid `build.context`/`dockerfile` path\n  - verify immediate terminal `harness_error` and no diagnosis run.\n- Cycle behavior:\n  - Cycle 1 full generate\n  - Cycle 2+ fix existing harness without deleting `validation/`.\n- Canary behavior:\n  - infra canary failure => direct `harness_error`\n  - app startup crash canary failure => diagnosis path => `needs_fixes`.\n- Category applicability:\n  - repo without DB skips DB-specific categories\n  - repo without HTTP server skips route/error-format categories\n  - core categories always implemented.\n- Regression checks: existing status labels/comments/artifacts remain compatible.\n\n**Conflict Detection (issue text vs current code/answers)**\n- Conflict 1: Proposed R2 text mentions using retry/regenerate loop on pre-flight failure, but clarified `Q1: A` requires terminal failure with no same-run retries.\n- Conflict 2: Proposed R5 text says canary failure always shortcuts to `harness_error`, but clarified `Q3: B` requires app-startup/crash canary failures to remain `needs_fixes`.\n- Conflict 3: Issue file list omits `.github/workflows/validate.yml`, but this workflow must be updated to fetch new prompt files; otherwise runtime will fail in consumer repos.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "846fa0a777233e983a29b38f6180da8236e5646018f4d47633b7d124a91724d5",
+  "lineage": {
+    "issue_number": 653,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24229659000",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24229659000",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/653"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260410063321_79c00a1c6d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 653,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24229659000"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #653",
+  "timestamps": {
+    "created_at": "2026-04-10T06:33:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
