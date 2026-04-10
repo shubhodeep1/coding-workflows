@@ -736,7 +736,15 @@ This is useful after fixing the root cause manually (e.g. correcting a Docker co
 
 - You can optionally add `.ai/validate.yml` in a consumer repo to guide harness generation and diagnosis.
 - Baseline example: [`examples/ai-validate-hints.yml`](examples/ai-validate-hints.yml).
-- If `.ai/validate.yml` is absent, validation still runs with defaults and generic harness prompts.
+- If `.ai/validate.yml` is absent, validation now runs a lightweight discovery phase that generates an ephemeral runtime hints file (not committed).
+
+### Validation Harness Lifecycle
+
+- Cycle 1 generates a new harness under `validation/`.
+- Cycle 2+ keeps the existing owned harness and applies targeted fixes instead of full regeneration.
+- Before execution, validation runs pre-flight checks (`docker compose config`, shell syntax, and compose build path resolution).
+- Pre-flight failures are classified as terminal `harness_error` for that run.
+- The first generated test must be a canary infrastructure check (`00_canary.sh` style); infra-only canary failures shortcut to `harness_error`, while app startup/crash signals continue to diagnosis.
 
 ## Repository Structure
 
