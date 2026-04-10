@@ -2591,11 +2591,14 @@ jobs:
             fi
           done
           git reset --hard HEAD
-          git clean -fd
+          # Use -ffdx: double-force clears nested git repos (-ff), and -x also
+          # removes files matching .gitignore (e.g. .serena/) so nothing
+          # ignored can survive to block the upcoming merge simulation.
+          git clean -ffdx
 
           # The scripts may have been removed during artifact cleanup in the
           # commit step (caller repos delete fetched scripts before committing)
-          # or wiped by git clean -fd above.
+          # or wiped by git clean -ffdx above.
           # Re-fetch any missing scripts so later steps (merge-conflict check,
           # Telegram notifications) can use them.
           wf_source="${{ github.repository_owner }}/coding-workflows"
@@ -2683,6 +2686,13 @@ jobs:
             fi
           done
 
+          # Safety net: clean any remaining untracked files (including
+          # .gitignore'd ones) that the MERGE_STASH loop may have missed.
+          # git merge refuses to proceed when an untracked working-tree file
+          # would be overwritten; this ensures the tree is fully clean before
+          # the merge simulation.  Tracked files are never removed by git clean.
+          git clean -ffdx 2>/dev/null || true
+
           merge_exit=0
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || merge_exit=$?
 
@@ -2768,10 +2778,29 @@ jobs:
           # collide with files from origin/BASE_BRANCH during the merge.
           RESOLVE_STASH="$(mktemp -d)"
           for d in scripts .serena prompts ai-memory; do
-            if [ -d "${d}" ] && [ -n "$(git ls-files --others --directory "${d}" 2>/dev/null)" ]; then
-              mv "${d}" "${RESOLVE_STASH}/${d}"
+            if [ -d "${d}" ]; then
+              if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
+                # Directory contains tracked files — move only the untracked
+                # files individually so the index stays consistent with the
+                # working tree (moving tracked files causes "Entry … not
+                # uptodate. Cannot merge." errors).
+                while IFS= read -r f; do
+                  [ -n "${f}" ] && [ -e "${f}" ] && {
+                    mkdir -p "${RESOLVE_STASH}/$(dirname "${f}")"
+                    mv "${f}" "${RESOLVE_STASH}/${f}"
+                  }
+                done < <(git ls-files --others -- "${d}/")
+              else
+                # Directory is entirely untracked — safe to move as a whole.
+                mv "${d}" "${RESOLVE_STASH}/${d}"
+              fi
             fi
           done
+
+          # Safety net: remove any remaining untracked files (including
+          # .gitignore'd ones) that the loop above may have missed, preventing
+          # "Untracked working tree file … would be overwritten by merge."
+          git clean -ffdx 2>/dev/null || true
 
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
 
