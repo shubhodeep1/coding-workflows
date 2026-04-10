@@ -766,7 +766,7 @@ fi
       echo "----- ${harness_file} -----"
       cat "${harness_file}"
       echo
-    done < <(find validation -type f | sort)
+    done < <(find validation -type f -not -path 'validation/logs/*' | sort)
   fi
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
