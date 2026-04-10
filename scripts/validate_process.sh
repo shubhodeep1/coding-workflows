@@ -418,6 +418,11 @@ else
   printf 'Standalone validation run. Tracking issue is not provided.\n' > "${PROJECT_SPEC_FILE}"
 fi
 
+INTEGRATION_BRANCH=""
+if is_tracking_run; then
+  INTEGRATION_BRANCH="$(sed -n 's/^\*\*Integration branch:\*\* `\([^`]*\)`$/\1/p' "${PROJECT_SPEC_FILE}" | head -n1 | tr -d '\r')"
+fi
+
 if [ -f .ai/validate.yml ]; then
   cp .ai/validate.yml "${VALIDATE_HINTS_FILE}"
 else
@@ -887,6 +892,7 @@ case "${DIAG_STATUS}" in
 ---
 **Orchestrator metadata** (do not edit)
 - Tracking issue: #${TRACKING_ISSUE_RAW}
+- Integration branch: ${INTEGRATION_BRANCH}
 - Local ID: \`${FIX_ID}\`
 - Type: validation-fix-up (cycle ${VALIDATION_CYCLE})
 - Priority: ${FIX_PRIORITY}

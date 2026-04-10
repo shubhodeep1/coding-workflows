@@ -45,6 +45,10 @@ def _base_state(status: str = "in_progress") -> dict:
 		"dependency_edges": [],
 		"issue_number_map": {"issue-1": 10},
 		"pending_issue_defs": {},
+		"integration_branch": "",
+		"final_merge_strategy": "squash",
+		"final_merge_pr": None,
+		"final_merge_status": "pending",
 	}
 
 
@@ -81,12 +85,19 @@ def _run_poller(
 	gql_labels: dict[int, list[str]] | None = None,
 	codex_json: dict | None = None,
 	fail_validation_dispatch: bool = False,
+	prs: list[dict] | None = None,
+	existing_branches: list[str] | None = None,
+	merge_conflict_on_sync: bool = False,
+	blocked_check_shas: list[str] | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
 	tracking_comments = tracking_comments or []
 	issue_labels = issue_labels or {10: ["ai:merged"]}
 	gql_labels = gql_labels or {}
+	prs = prs or []
+	existing_branches = existing_branches or ["main"]
+	blocked_check_shas = blocked_check_shas or []
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -138,6 +149,11 @@ def _run_poller(
 			"issue_label_calls": {},
 			"fail_validation_dispatch": fail_validation_dispatch,
 			"default_branch": "main",
+			"prs": prs,
+			"existing_branches": existing_branches,
+			"merge_conflict_on_sync": merge_conflict_on_sync,
+			"merge_calls": [],
+			"blocked_check_shas": blocked_check_shas,
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -146,9 +162,7 @@ def _run_poller(
 			encoding="utf-8",
 		)
 
-		_write_exec(
-			bin_dir / "gh",
-			"""#!/usr/bin/env python3
+		gh_mock = r'''#!/usr/bin/env python3
 import json
 import re
 import sys
@@ -219,12 +233,98 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 			print('dispatch failed', file=sys.stderr)
 			sys.exit(1)
 		tracking = None
+		ref = None
 		for i, arg in enumerate(args):
+			if arg == '--ref' and i + 1 < len(args):
+				ref = args[i + 1]
 			if arg == '-f' and i + 1 < len(args) and args[i + 1].startswith('tracking_issue='):
 				tracking = args[i + 1].split('=', 1)[1]
-		store['validation_dispatches'].append({'workflow': wf, 'tracking_issue': tracking})
+		store['validation_dispatches'].append({'workflow': wf, 'tracking_issue': tracking, 'ref': ref})
 		save()
 		sys.exit(0)
+	sys.exit(1)
+
+if args[0] == 'pr' and len(args) >= 2 and args[1] == 'list':
+	base = None
+	head = None
+	jq_query = None
+	for i, arg in enumerate(args):
+		if arg == '--base' and i + 1 < len(args):
+			base = args[i + 1]
+		if arg == '--head' and i + 1 < len(args):
+			head = args[i + 1]
+		if arg == '--jq' and i + 1 < len(args):
+			jq_query = args[i + 1]
+	prs = []
+	for pr in store.get('prs', []):
+		if base and pr.get('baseRefName') != base:
+			continue
+		if head and pr.get('headRefName') != head:
+			continue
+		prs.append(pr)
+	if jq_query == '.[0].number // empty':
+		if prs:
+			print(prs[0].get('number'))
+		else:
+			print('')
+	else:
+		print(json.dumps(prs))
+	sys.exit(0)
+
+if args[0] == 'pr' and len(args) >= 2 and args[1] == 'create':
+	base = ''
+	head = ''
+	title = ''
+	body = ''
+	i = 2
+	while i < len(args):
+		if args[i] == '--base' and i + 1 < len(args):
+			base = args[i + 1]
+			i += 2
+			continue
+		if args[i] == '--head' and i + 1 < len(args):
+			head = args[i + 1]
+			i += 2
+			continue
+		if args[i] == '--title' and i + 1 < len(args):
+			title = args[i + 1]
+			i += 2
+			continue
+		if args[i] == '--body' and i + 1 < len(args):
+			body = args[i + 1]
+			i += 2
+			continue
+		i += 1
+	next_num = store.get('next_pr_number', 300)
+	store['next_pr_number'] = next_num + 1
+	pr = {
+		'number': next_num,
+		'state': 'open',
+		'baseRefName': base,
+		'headRefName': head,
+		'mergeable': True,
+		'mergeable_state': 'clean',
+		'title': title,
+		'body': body,
+	}
+	store.setdefault('prs', []).append(pr)
+	save()
+	print(f'https://github.com/owner/repo/pull/{next_num}')
+	sys.exit(0)
+
+if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
+	pr_num = int(args[2])
+	for pr in store.get('prs', []):
+		if pr.get('number') == pr_num:
+			if pr.get('mergeable') is False:
+				print('conflict', file=sys.stderr)
+				sys.exit(1)
+			pr['state'] = 'closed'
+			pr['merged'] = True
+			store.setdefault('merged_prs', []).append(pr_num)
+			save()
+			sys.exit(0)
+	print('not found', file=sys.stderr)
 	sys.exit(1)
 
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'edit':
@@ -303,7 +403,7 @@ if args[0] == 'api':
 			if f.startswith('query='):
 				query = f.split('=', 1)[1]
 		aliases = []
-		for _, issue_num in re.findall(r'i(\\d+)\\s*:\\s*issue\\(number:\\s*(\\d+)\\)', query):
+		for _, issue_num in re.findall(r'i(\d+)\s*:\s*issue\(number:\s*(\d+)\)', query):
 			aliases.append(int(issue_num))
 		repo = {}
 		for num in aliases:
@@ -314,13 +414,13 @@ if args[0] == 'api':
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
 
-	m = re.search(r'/issues/(\\d+)/comments(?:\\?per_page=100)?$', path)
+	m = re.search(r'/issues/(\d+)/comments(?:\?per_page=100)?$', path)
 	if m and method == 'GET' and not fields:
 		issue = get_issue(m.group(1))
 		print(json.dumps(issue['comments']))
 		sys.exit(0)
 
-	m = re.search(r'/issues/(\\d+)/comments$', path)
+	m = re.search(r'/issues/(\d+)/comments$', path)
 	if m and fields:
 		issue = get_issue(m.group(1))
 		body = ''
@@ -334,7 +434,7 @@ if args[0] == 'api':
 		print(json.dumps({'id': cid}))
 		sys.exit(0)
 
-	m = re.search(r'/issues/(\\d+)/labels$', path)
+	m = re.search(r'/issues/(\d+)/labels$', path)
 	if m:
 		num = m.group(1)
 		issue = get_issue(num)
@@ -348,7 +448,7 @@ if args[0] == 'api':
 			print(json.dumps([{'name': l} for l in labels]))
 		sys.exit(0)
 
-	m = re.search(r'/issues/(\\d+)$', path)
+	m = re.search(r'/issues/(\d+)$', path)
 	if m:
 		issue = get_issue(m.group(1))
 		if jq == '.body':
@@ -357,6 +457,72 @@ if args[0] == 'api':
 			print(json.dumps({'body': issue.get('body', '')}))
 		sys.exit(0)
 
+	m = re.search(r'/pulls/(\d+)$', path)
+	if m:
+		pr_num = int(m.group(1))
+		pr = None
+		for item in store.get('prs', []):
+			if item.get('number') == pr_num:
+				pr = item
+				break
+		if pr is None:
+			print('{}')
+			sys.exit(0)
+		if jq == '.state':
+			print(pr.get('state', 'open'))
+		elif jq == '.merged_at != null':
+			merged_at = pr.get('merged_at')
+			if merged_at is None and pr.get('merged') is True:
+				merged_at = 'mock-merged-at'
+			print('true' if merged_at is not None else 'false')
+		elif jq == '.merged':
+			merged = pr.get('merged')
+			if merged is None:
+				merged = pr.get('state') == 'merged'
+			print('true' if merged else 'false')
+		elif jq == '.mergeable_state // ""':
+			print(pr.get('mergeable_state', ''))
+		elif jq == '.mergeable':
+			val = pr.get('mergeable', True)
+			if val is True:
+				print('true')
+			elif val is False:
+				print('false')
+			else:
+				print('null')
+		elif jq == '.head.sha':
+			print(pr.get('headSha', f'mocksha{pr_num}'))
+		else:
+			print(json.dumps({'state': pr.get('state', 'open'), 'mergeable': pr.get('mergeable', True)}))
+		sys.exit(0)
+
+	if re.search(r'/merges$', path) and (method == 'POST' or fields):
+		base = ''
+		head = ''
+		for f in fields:
+			if f.startswith('base='):
+				base = f.split('=', 1)[1]
+			if f.startswith('head='):
+				head = f.split('=', 1)[1]
+		store.setdefault('merge_calls', []).append({'base': base, 'head': head})
+		if store.get('merge_conflict_on_sync'):
+			print('conflict', file=sys.stderr)
+			sys.exit(1)
+		save()
+		print(json.dumps({'merged': True}))
+		sys.exit(0)
+
+	m = re.search(r'/git/ref/heads/(.+)$', path)
+	if m:
+		encoded_branch = m.group(1)
+		from urllib.parse import unquote
+		branch = unquote(encoded_branch)
+		if branch in store.get('existing_branches', ['main']):
+			print(json.dumps({'ref': f'refs/heads/{branch}', 'object': {'sha': 'mocksha'}}))
+			sys.exit(0)
+		print('not found', file=sys.stderr)
+		sys.exit(1)
+
 	if path.endswith('/timeline'):
 		if jq:
 			print('')
@@ -364,11 +530,17 @@ if args[0] == 'api':
 			print('[]')
 		sys.exit(0)
 
-	if re.search(r'/commits/.+/check-runs(\?.*)?$', path):
+	m = re.search(r'/commits/([^/]+)/check-runs(\?.*)?$', path)
+	if m:
+		sha = m.group(1)
+		incomplete = 1 if sha in store.get('blocked_check_shas', []) else 0
 		if jq:
-			print('0')
+			print(str(incomplete))
 		else:
-			print(json.dumps({'check_runs': []}))
+			if incomplete:
+				print(json.dumps({'check_runs': [{'status': 'in_progress', 'conclusion': None}]}))
+			else:
+				print(json.dumps({'check_runs': []}))
 		sys.exit(0)
 
 	if re.search(r'^repos/[^/]+/[^/]+$', path):
@@ -383,8 +555,8 @@ if args[0] == 'api':
 
 print('Unsupported gh call: ' + ' '.join(args), file=sys.stderr)
 sys.exit(1)
-""",
-		)
+'''
+		_write_exec(bin_dir / "gh", gh_mock)
 
 		_write_exec(
 			bin_dir / "codex",
@@ -455,6 +627,7 @@ print(json.dumps(parsed))
 		result["latest_state"] = _extract_latest_state(tracking_issue["comments"])
 		result["tracking_labels"] = tracking_issue["labels"]
 		result["tracking_closed"] = tracking_issue.get("closed", False)
+		result["merge_calls"] = result.get("merge_calls", [])
 		return result
 
 
@@ -504,11 +677,13 @@ def test_label_batch_graphql_full_skips_rest_fallback():
 
 def test_complete_verdict_enters_validation_mode_when_enabled():
 	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
 	result = _run_poller(
 		state=state,
 		enable_validation="true",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
 	)
 	assert result["latest_state"]["status"] == "validating"
 	assert result["latest_state"]["judge_cycle"] == 1
@@ -516,6 +691,10 @@ def test_complete_verdict_enters_validation_mode_when_enabled():
 	assert "ai:validating" in result["tracking_labels"]
 	assert result["tracking_closed"] is False
 	assert len(result["validation_dispatches"]) == 1
+	assert result["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert result["merge_calls"]
+	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
+	assert result["merge_calls"][0]["head"] == "main"
 
 
 def test_complete_verdict_enters_validation_mode_when_enable_validation_is_mixed_case_truthy():
@@ -551,15 +730,181 @@ def test_complete_verdict_redispatches_validation_when_previous_dispatch_cycle_e
 
 def test_complete_verdict_keeps_open_when_validation_disabled():
 	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 350,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
 	)
 	assert result["latest_state"]["status"] == "complete"
 	assert result["tracking_closed"] is False
 	assert result["validation_dispatches"] == []
+	assert "ai:merged" in result["tracking_labels"]
+	assert result["latest_state"]["final_merge_pr"] == 350
+	assert result["latest_state"]["final_merge_status"] == "merged"
+
+
+def test_missing_integration_branch_marks_failed():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main"],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["final_merge_status"] == "failed"
+	assert "final_merge_error" in result["latest_state"]
+
+
+def test_final_merge_conflict_sets_merge_conflict_status():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 351,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": False,
+			"mergeable_state": "dirty",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "merge_conflict"
+	assert result["latest_state"]["final_merge_status"] == "conflict"
+	assert result["latest_state"]["final_merge_pr"] == 351
+
+
+def test_final_merge_waits_for_required_checks_before_merging():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 352,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"headSha": "blockedsha352",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		blocked_check_shas=["blockedsha352"],
+	)
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result["latest_state"]["final_merge_pr"] == 352
+	assert result.get("merged_prs", []) == []
+
+
+def test_final_merge_treats_closed_merged_pr_as_success():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_status"] = "conflict"
+	prs = [
+		{
+			"number": 353,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 353
+	assert result["latest_state"]["final_merge_status"] == "merged"
+
+
+def test_merge_conflict_state_completes_when_final_pr_already_merged_and_branch_deleted():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_status"] = "conflict"
+	state["final_merge_pr"] = 354
+	prs = [
+		{
+			"number": 354,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert "ai:merged" in result["tracking_labels"]
+	assert result["latest_state"]["final_merge_pr"] == 354
+	assert result["latest_state"]["final_merge_status"] == "merged"
+
+
+def test_standalone_conflict_sweep_skips_integration_base_prs():
+	state = _base_state(status="complete")
+	prs = [
+		{
+			"number": 410,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-10",
+			"mergeable": False,
+			"mergeable_state": "dirty",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result.get("merge_calls", []) == []
 
 
 

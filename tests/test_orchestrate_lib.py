@@ -75,6 +75,10 @@ def _make_state(
 		"dependency_edges": [],
 		"issue_number_map": {},
 		"pending_issue_defs": {},
+		"integration_branch": "",
+		"final_merge_strategy": "squash",
+		"final_merge_pr": None,
+		"final_merge_status": "pending",
 	}
 
 
@@ -307,7 +311,7 @@ def test_build_tracking_state_schema():
 	data = _make_decomposition()
 	waves = orchestrate_lib.compute_waves(data)
 	issue_map = {"issue-1": 10}
-	state = orchestrate_lib.build_tracking_state(data, waves, issue_map)
+	state = orchestrate_lib.build_tracking_state(data, waves, issue_map, integration_branch="orchestrator/project-42")
 	assert state["schema_version"] == "orchestrate_state.v1"
 	assert state["total_issues"] == 2
 	assert state["total_waves"] == 1
@@ -315,8 +319,66 @@ def test_build_tracking_state_schema():
 	assert state["judge_cycle"] == 0
 	assert state["recovery_attempted"] is False
 	assert state["status"] == "in_progress"
+	assert state["integration_branch"] == "orchestrator/project-42"
+	assert state["final_merge_strategy"] == "squash"
+	assert state["final_merge_pr"] is None
+	assert state["final_merge_status"] == "pending"
 	# issue-2 should be in pending_issue_defs (not in issue_map)
 	assert "issue-2" in state["pending_issue_defs"]
+
+
+def test_build_tracking_issue_body_includes_integration_branch():
+	data = _make_decomposition()
+	waves = orchestrate_lib.compute_waves(data)
+	body = orchestrate_lib.build_tracking_issue_body(
+		data,
+		waves,
+		integration_branch="orchestrator/project-55",
+	)
+	assert "**Integration branch:** `orchestrator/project-55`" in body
+
+
+def test_parse_tracking_body_extracts_integration_branch():
+	body = """## Project: Test Project
+
+Summary
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-66`
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+
+---
+"""
+	parsed = orchestrate_lib.parse_tracking_body(body)
+	assert parsed["integration_branch"] == "orchestrator/project-66"
+
+
+def test_rebuild_tracking_state_preserves_integration_defaults():
+	body = """## Project: Test Project
+
+Summary
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-77`
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+
+---
+"""
+	state = orchestrate_lib.rebuild_tracking_state(body, {"issue-1": 10}, tracking_issue=123)
+	assert state["integration_branch"] == "orchestrator/project-77"
+	assert state["final_merge_strategy"] == "squash"
+	assert state["final_merge_pr"] is None
+	assert state["final_merge_status"] == "pending"
 
 
 # ---------------------------------------------------------------------------

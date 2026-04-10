@@ -160,6 +160,7 @@ def build_tracking_state(
 	data: dict[str, Any],
 	waves: list[list[dict[str, Any]]],
 	issue_number_map: dict[str, int],
+	integration_branch: str = "",
 ) -> dict[str, Any]:
 	"""Build the orchestrator tracking state object.
 
@@ -222,10 +223,18 @@ def build_tracking_state(
 		"dependency_edges": data.get("dependency_edges", []),
 		"issue_number_map": issue_number_map,
 		"pending_issue_defs": pending_issue_defs,
+		"integration_branch": integration_branch,
+		"final_merge_strategy": "squash",
+		"final_merge_pr": None,
+		"final_merge_status": "pending",
 	}
 
 
-def build_tracking_issue_body(data: dict[str, Any], waves: list[list[dict[str, Any]]]) -> str:
+def build_tracking_issue_body(
+	data: dict[str, Any],
+	waves: list[list[dict[str, Any]]],
+	integration_branch: str = "",
+) -> str:
 	"""Build the markdown body for the project tracking issue."""
 	lines: list[str] = []
 	lines.append(f"## Project: {data['project_title']}")
@@ -235,6 +244,8 @@ def build_tracking_issue_body(data: dict[str, Any], waves: list[list[dict[str, A
 	lines.append("---")
 	lines.append("")
 	lines.append(f"**Total issues:** {len(data['issues'])} | **Waves:** {len(waves)}")
+	if integration_branch:
+		lines.append(f"**Integration branch:** `{integration_branch}`")
 	lines.append("")
 
 	for wave_idx, wave in enumerate(waves):
@@ -585,11 +596,16 @@ def parse_tracking_body(body: str) -> dict[str, Any]:
 		"project_title": "",
 		"waves": [],
 		"dependency_edges": [],
+		"integration_branch": "",
 	}
 
 	title_match = re.search(r"^## Project:\s*(.+)$", body, re.MULTILINE)
 	if title_match:
 		result["project_title"] = title_match.group(1).strip()
+
+	integration_match = re.search(r"^\*\*Integration branch:\*\*\s*`?([^`\n]+)`?$", body, re.MULTILINE)
+	if integration_match:
+		result["integration_branch"] = integration_match.group(1).strip()
 
 	# Split on wave headers and parse each section
 	wave_sections = re.split(r"### Wave \d+", body)
@@ -701,6 +717,10 @@ def rebuild_tracking_state(
 		"dependency_edges": parsed["dependency_edges"],
 		"issue_number_map": {k: v for k, v in issue_number_map.items()},
 		"pending_issue_defs": pending_issue_defs,
+		"integration_branch": parsed.get("integration_branch", ""),
+		"final_merge_strategy": "squash",
+		"final_merge_pr": None,
+		"final_merge_status": "pending",
 		"tracking_issue": tracking_issue,
 		"state_rebuilt": True,
 	}
@@ -745,7 +765,7 @@ def cmd_build_tracking_body(args: argparse.Namespace) -> int:
 		data = json.load(f)
 	data = validate_decomposition(data)
 	waves = compute_waves(data)
-	body = build_tracking_issue_body(data, waves)
+	body = build_tracking_issue_body(data, waves, integration_branch=(args.integration_branch or ""))
 	print(body)
 	return 0
 
@@ -929,6 +949,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p_body = subparsers.add_parser("build-tracking-body", help="Build tracking issue markdown body")
 	p_body.add_argument("--input-file", required=True)
+	p_body.add_argument("--integration-branch", default="", help="Optional integration branch name")
 	p_body.set_defaults(func=cmd_build_tracking_body)
 
 	p_next = subparsers.add_parser("next-wave", help="Get next wave to dispatch")

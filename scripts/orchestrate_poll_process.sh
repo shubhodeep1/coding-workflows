@@ -427,21 +427,231 @@ has_label() {
   echo "${labels_json}" | jq -e --arg label "${label}" 'index($label) != null' >/dev/null 2>&1
 }
 
+integration_branch_exists() {
+  local branch_name="$1"
+  [ -n "${branch_name}" ] || return 1
+  local branch_ref
+  local gh_error
+  branch_ref="$(printf '%s' "${branch_name}" | jq -sRr @uri)"
+
+  if gh_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" 2>&1 >/dev/null)"; then
+    return 0
+  fi
+
+  if printf '%s' "${gh_error}" | grep -Eqi '(^gh: Not Found|HTTP 404|404 Not Found|status code 404|\bnot found\b)'; then
+    return 1
+  fi
+
+  echo "::warning::Unable to verify integration branch '${branch_name}' due to GitHub API error; assuming it still exists." >&2
+  return 0
+}
+
+mark_integration_branch_missing_failed() {
+  local integration_branch="$1"
+  local reason="Integration branch '${integration_branch}' is missing. It may have been deleted externally. Manual intervention required."
+  jq --arg reason "${reason}" --arg branch "${integration_branch}" \
+    '.status = "failed" |
+     .final_merge_status = "failed" |
+     .integration_branch = $branch |
+     .final_merge_error = $reason' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment
+  post_tracking_comment "## ❌ Integration branch missing\n\n${reason}"
+  tg_notify "❌ Project #${TRACKING_NUM} failed: missing integration branch '${integration_branch}'."
+  tg_cleanup_msgs "${TRACKING_NUM}"
+}
+
+sync_default_into_integration_branch() {
+  local integration_branch="$1"
+  local default_branch="$2"
+
+  if [ -z "${integration_branch}" ]; then
+    return 0
+  fi
+
+  if ! integration_branch_exists "${integration_branch}"; then
+    mark_integration_branch_missing_failed "${integration_branch}"
+    return 1
+  fi
+
+  local merge_error
+  if merge_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/merges" \
+    -f base="${integration_branch}" \
+    -f head="${default_branch}" \
+    -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >/dev/null)"; then
+    return 0
+  fi
+
+  if ! printf '%s' "${merge_error}" | grep -Eqi '(HTTP 409|status code 409|merge conflict|conflict)'; then
+    echo "::warning::Unable to sync '${default_branch}' into '${integration_branch}' due to transient GitHub API error; will retry next poll." >&2
+    return 0
+  fi
+
+  post_tracking_comment "## ⚠️ Integration sync warning\n\nUnable to sync \\`${default_branch}\\` into \\`${integration_branch}\\`. This is usually a merge conflict. The project can continue, but final merge may require manual conflict resolution."
+  tg_notify "⚠️ Sync warning for #${TRACKING_NUM}: could not merge '${default_branch}' into '${integration_branch}'."
+  return 0
+}
+
+finalize_integration_merge_if_needed() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local project_title="$3"
+  local final_pr
+
+  if [ -z "${integration_branch}" ]; then
+    return 0
+  fi
+
+  local final_merge_status
+  final_merge_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}")"
+  if [ "${final_merge_status}" = "merged" ]; then
+    return 0
+  fi
+
+  final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}")"
+  if [ -n "${final_pr}" ] && [ "${final_pr}" != "null" ]; then
+    local existing_pr_state
+    local existing_pr_merged
+    existing_pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
+    existing_pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' 2>/dev/null || echo "")"
+    if [ "${existing_pr_state}" = "closed" ] && [ "${existing_pr_merged}" = "true" ]; then
+      jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment
+      return 0
+    fi
+  fi
+
+  if ! integration_branch_exists "${integration_branch}"; then
+    mark_integration_branch_missing_failed "${integration_branch}"
+    return 1
+  fi
+
+  if [ -z "${final_pr}" ] || [ "${final_pr}" = "null" ]; then
+    final_pr="$(gh pr list \
+      --repo "${GITHUB_REPOSITORY}" \
+      --state open \
+      --base "${default_branch}" \
+      --head "${integration_branch}" \
+      --json number \
+      --jq '.[0].number // empty' 2>/dev/null || true)"
+  fi
+
+  if [ -z "${final_pr}" ]; then
+    local final_pr_url
+    final_pr_url="$(gh pr create \
+      --repo "${GITHUB_REPOSITORY}" \
+      --base "${default_branch}" \
+      --head "${integration_branch}" \
+      --title "feat: ${project_title}" \
+      --body "Squash merge of orchestrator project #${TRACKING_NUM}.\n\nRefs #${TRACKING_NUM}" 2>/dev/null || true)"
+    final_pr="$(printf '%s\n' "${final_pr_url}" | grep -oE '/pull/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+  fi
+
+  if [ -z "${final_pr}" ]; then
+    post_tracking_comment "## ⚠️ Final merge could not start\n\nUnable to create or locate the final integration PR from \\`${integration_branch}\\` to \\`${default_branch}\\`."
+    return 1
+  fi
+
+  jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "pending"' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment
+
+  local pr_state
+  local pr_mergeable
+  local pr_merged
+  pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
+  pr_mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' 2>/dev/null || echo "")"
+  pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' 2>/dev/null || echo "")"
+
+  if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
+    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    return 0
+  fi
+
+  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "false" ]; then
+    jq --argjson final_pr "${final_pr}" \
+      '.status = "merge_conflict" | .final_merge_pr = $final_pr | .final_merge_status = "conflict"' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    post_tracking_comment "## ⚠️ Final merge conflict\n\nFinal PR #${final_pr} from \\`${integration_branch}\\` to \\`${default_branch}\\` has merge conflicts. Resolve conflicts manually, then re-run the poller."
+    tg_notify "⚠️ Final merge conflict for #${TRACKING_NUM} (PR #${final_pr})."
+    return 1
+  fi
+
+  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" != "true" ]; then
+    echo "  [final-merge] PR #${final_pr} mergeability is '${pr_mergeable:-unknown}'. Will retry next poll."
+    return 1
+  fi
+
+  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}"; then
+    echo "  [final-merge] Required checks not complete for PR #${final_pr}. Will retry next poll."
+    return 1
+  fi
+
+  if gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch >/dev/null 2>&1; then
+    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    post_tracking_comment "## ✅ Final merge complete\n\nIntegration branch \\`${integration_branch}\\` was squash-merged into \\`${default_branch}\\` via PR #${final_pr}."
+    return 0
+  fi
+
+  pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
+  pr_mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' 2>/dev/null || echo "")"
+  pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' 2>/dev/null || echo "")"
+
+  if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
+    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    return 0
+  fi
+
+  if [ "${pr_mergeable}" = "false" ]; then
+    jq --argjson final_pr "${final_pr}" \
+      '.status = "merge_conflict" | .final_merge_pr = $final_pr | .final_merge_status = "conflict"' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    post_tracking_comment "## ⚠️ Final merge conflict\n\nFinal PR #${final_pr} from \\`${integration_branch}\\` to \\`${default_branch}\\` could not be squash-merged due to conflicts. Resolve manually, then re-run the poller."
+    tg_notify "⚠️ Final merge conflict for #${TRACKING_NUM} (PR #${final_pr})."
+    return 1
+  fi
+
+  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" != "true" ]; then
+    echo "  [final-merge] PR #${final_pr} mergeability is '${pr_mergeable:-unknown}' after merge attempt. Will retry next poll."
+    return 1
+  fi
+
+  post_tracking_comment "## ⚠️ Final merge blocked\n\nFinal PR #${final_pr} could not be merged automatically. Review branch protections/checks and merge manually if needed."
+  return 1
+}
+
 dispatch_validation_workflow() {
   local validation_cycle="$1"
+  local validation_ref="${2:-}"
   local wf_name="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
   echo "Dispatching ${wf_name} for tracking #${TRACKING_NUM} (cycle ${validation_cycle})"
-  if gh_retry gh workflow run "${wf_name}" \
-    --repo "${GITHUB_REPOSITORY}" \
-    -f tracking_issue="${TRACKING_NUM}" >/dev/null 2>&1; then
+  local run_args=("${wf_name}" "--repo" "${GITHUB_REPOSITORY}")
+  if [ -n "${validation_ref}" ]; then
+    run_args+=("--ref" "${validation_ref}")
+  fi
+  run_args+=("-f" "tracking_issue=${TRACKING_NUM}")
+
+  if gh_retry gh workflow run "${run_args[@]}" >/dev/null 2>&1; then
     return 0
   fi
   # Fallback: try internal-validate.yml (coding-workflows repo convention)
   if [ "${wf_name}" != "internal-validate.yml" ]; then
     echo "Primary dispatch failed; trying internal-validate.yml fallback"
-    if gh_retry gh workflow run "internal-validate.yml" \
-      --repo "${GITHUB_REPOSITORY}" \
-      -f tracking_issue="${TRACKING_NUM}" >/dev/null 2>&1; then
+    run_args=("internal-validate.yml" "--repo" "${GITHUB_REPOSITORY}")
+    if [ -n "${validation_ref}" ]; then
+      run_args+=("--ref" "${validation_ref}")
+    fi
+    run_args+=("-f" "tracking_issue=${TRACKING_NUM}")
+    if gh_retry gh workflow run "${run_args[@]}" >/dev/null 2>&1; then
       return 0
     fi
   fi
@@ -450,6 +660,8 @@ dispatch_validation_workflow() {
 
 dispatch_validation_if_needed() {
   local validation_cycle="$1"
+  local integration_branch
+  integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   local last_dispatch_cycle
   local last_dispatch_ts
   local now_epoch
@@ -467,13 +679,17 @@ dispatch_validation_if_needed() {
     echo "Validation workflow for cycle ${validation_cycle} appears stale (dispatched >$(( stale_threshold_secs / 60 ))m ago with no label). Redispatching..."
   fi
 
-  if dispatch_validation_workflow "${validation_cycle}"; then
+  if dispatch_validation_workflow "${validation_cycle}" "${integration_branch}"; then
     jq --argjson cycle "${validation_cycle}" --argjson ts "$(date +%s)" \
       '.validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
-    post_tracking_comment "## 🧪 Runtime validation dispatched\n\n- Cycle: ${validation_cycle}\n- Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`"
-    tg_notify "Validation dispatched for project #${TRACKING_NUM} (cycle ${validation_cycle})." "DEBUG"
+    if [ -n "${integration_branch}" ]; then
+      post_tracking_comment "## 🧪 Runtime validation dispatched\n\n- Cycle: ${validation_cycle}\n- Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`\n- Ref: \`${integration_branch}\`"
+    else
+      post_tracking_comment "## 🧪 Runtime validation dispatched\n\n- Cycle: ${validation_cycle}\n- Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`"
+    fi
+    tg_notify "🧪 Validation dispatched for project #${TRACKING_NUM} (cycle ${validation_cycle})." "DEBUG"
     return 0
   fi
 
@@ -520,6 +736,18 @@ mark_validation_failed() {
 
 mark_validation_complete() {
   local validation_cycle="$1"
+  local integration_branch
+  local default_branch
+  local project_title
+
+  integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+  default_branch="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+  project_title="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
+
+  if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}"; then
+    return 0
+  fi
+
   jq --argjson cycle "${validation_cycle}" '.status = "complete" | .validation_completed_cycle = $cycle' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
@@ -1848,7 +2076,53 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   echo "${STATE_JSON}" > "${STATE_FILE}"
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
 
+  DEFAULT_BRANCH_TRACKING="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+  INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+  if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
+    && [ "${PROJECT_STATUS}" != "complete" ] \
+    && [ "${PROJECT_STATUS}" != "failed" ] \
+    && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
+    && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
+    if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+      continue
+    fi
+    PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+    if [ "${PROJECT_STATUS}" = "failed" ]; then
+      continue
+    fi
+  fi
+
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+
+  if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
+    FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+    FINAL_DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+    FINAL_PROJECT_TITLE="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
+
+    if ! finalize_integration_merge_if_needed "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" "${FINAL_PROJECT_TITLE}"; then
+      continue
+    fi
+
+    if has_label "${TRACKING_LABELS}" "ai:validated"; then
+      VALIDATION_CYCLE="$(jq -r '.validation_cycle // 1' "${STATE_FILE}")"
+      mark_validation_complete "${VALIDATION_CYCLE}"
+      continue
+    fi
+
+    echo "Project complete!"
+    jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    set_tracking_phase_label "ai:merged"
+    post_tracking_comment "Project completed successfully. Issue kept open for manual review."
+    tg_cleanup_msgs "${TRACKING_NUM}"
+    MSG="✅ Project #${TRACKING_NUM} completed successfully."
+    MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+    if [ -n "${GITHUB_RUN_ID:-}" ]; then
+      MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+    fi
+    tg_send_msg "${MSG}" >/dev/null
+    continue
+  fi
 
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
     sync_validation_fix_issues_from_comments "${COMMENTS}"
@@ -2417,7 +2691,7 @@ json.dump(result, sys.stdout)
       # Fetch PR JSON once — reused for state/merged checks and PR_META below.
       _rb_pr_json="$(_fetch_pr_json "${RB_PR}")"
       RB_PR_STATE="$(_jq_field "${_rb_pr_json}" '.state' 'open|closed|merged')"
-      RB_PR_MERGED="$(_jq_field "${_rb_pr_json}" '.merged' 'true|false')"
+      RB_PR_MERGED="$(_jq_field "${_rb_pr_json}" '.merged_at != null' 'true|false')"
       [ -n "${RB_PR_MERGED}" ] || RB_PR_MERGED="false"
       if [ "${RB_PR_STATE}" != "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
         # PR is closed (not merged) — skip entirely
@@ -2692,7 +2966,7 @@ sys.exit(1)
             # Re-check PR state before expensive fix+push (race condition safety net)
             _rb_recheck_json="$(_fetch_pr_json "${RB_PR}")"
             RB_PR_STATE_NOW="$(_jq_field "${_rb_recheck_json}" '.state' 'open|closed|merged')"
-            RB_PR_MERGED_NOW="$(_jq_field "${_rb_recheck_json}" '.merged' 'true|false')"
+            RB_PR_MERGED_NOW="$(_jq_field "${_rb_recheck_json}" '.merged_at != null' 'true|false')"
             [ -n "${RB_PR_MERGED_NOW}" ] || RB_PR_MERGED_NOW="false"
             if [ "${RB_PR_STATE_NOW}" != "open" ] && [ "${RB_PR_MERGED_NOW}" != "true" ]; then
               # PR was closed without merge — skip
@@ -2890,11 +3164,13 @@ ${RB_FIX_DESC}
           NEW_ISSUE_TITLE="$(echo "${RB_JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
           NEW_ISSUE_BODY="$(echo "${RB_JUDGE_JSON}" | jq -r '.new_issue.body // empty' | sed 's/\\n/\n/g')"
           if [ -n "${NEW_ISSUE_TITLE}" ] && [ -n "${NEW_ISSUE_BODY}" ]; then
+            RB_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
             FULL_NEW_BODY="${NEW_ISSUE_BODY}
 
 ---
 **Orchestrator metadata** (do not edit)
 - Tracking issue: #${TRACKING_NUM}
+- Integration branch: ${RB_INTEGRATION_BRANCH}
 - Replaces: #${rb_issue} (PR #${RB_PR} closed — approach rework)
 - Type: review-blocked-reissue
 - Managed by: AI Orchestrator"
@@ -3424,11 +3700,19 @@ PRs to revert: ${REVERT_COUNT}"
   case "${JUDGE_STATUS}" in
     complete)
       if [ "${ENABLE_VALIDATION}" != "true" ]; then
+        FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+        FINAL_DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+        FINAL_PROJECT_TITLE="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
+
+        if ! finalize_integration_merge_if_needed "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" "${FINAL_PROJECT_TITLE}"; then
+          continue
+        fi
+
         echo "Project complete!"
         jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment
 
-        set_tracking_phase_label "ai:validated"
+        set_tracking_phase_label "ai:merged"
         post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s). Issue kept open for manual review."
 
         tg_cleanup_msgs "${TRACKING_NUM}"
@@ -3569,6 +3853,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 ---
 **Orchestrator metadata** (do not edit)
 - Tracking issue: #${TRACKING_NUM}
+- Integration branch: $(jq -r '.integration_branch // ""' "${STATE_FILE}")
 - Local ID: \`${FIX_ID}\`
 - Type: judge-fix-up (cycle $((JUDGE_CYCLE + 1)))
 - Managed by: AI Orchestrator"
@@ -3636,6 +3921,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 ---
 **Orchestrator metadata** (do not edit)
 - Tracking issue: #${TRACKING_NUM}
+- Integration branch: $(jq -r '.integration_branch // ""' "${STATE_FILE}")
 - Local ID: \`${NEW_ID}\`
 - Type: judge-addition (cycle $((JUDGE_CYCLE + 1)))
 - Managed by: AI Orchestrator"
@@ -3717,6 +4003,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 ---
 **Orchestrator metadata** (do not edit)
 - Tracking issue: #${TRACKING_NUM}
+- Integration branch: $(jq -r '.integration_branch // ""' "${STATE_FILE}")
 - Local ID: \`${local_id}\`
 - Priority: ${DEF_PRIORITY}
 - Managed by: AI Orchestrator"
@@ -3805,7 +4092,7 @@ echo "========================================"
 STANDALONE_PRS="$(gh pr list \
 	--repo "${GITHUB_REPOSITORY}" \
 	--state open \
-	--json number,headRefName \
+	--json number,headRefName,baseRefName \
 	--limit 100 2>/dev/null || echo "[]")"
 
 STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
@@ -3817,7 +4104,12 @@ DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.defau
 for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
 	S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+	S_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].baseRefName")"
 	if [ -z "${S_PR}" ] || [ -z "${S_HEAD}" ] || [ "${S_PR}" = "null" ] || [ "${S_HEAD}" = "null" ]; then
+		continue
+	fi
+
+	if [[ "${S_BASE}" == orchestrator/project-* ]]; then
 		continue
 	fi
 
