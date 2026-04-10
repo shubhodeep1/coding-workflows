@@ -487,7 +487,7 @@ sync_default_into_integration_branch() {
     return 0
   fi
 
-  post_tracking_comment "## ⚠️ Integration sync warning\n\nUnable to sync \\`${default_branch}\\` into \\`${integration_branch}\\`. This is usually a merge conflict. The project can continue, but final merge may require manual conflict resolution."
+  post_tracking_comment "## ⚠️ Integration sync warning\n\nUnable to sync \`${default_branch}\` into \`${integration_branch}\`. This is usually a merge conflict. The project can continue, but final merge may require manual conflict resolution."
   tg_notify "⚠️ Sync warning for #${TRACKING_NUM}: could not merge '${default_branch}' into '${integration_branch}'."
   return 0
 }
@@ -549,7 +549,7 @@ finalize_integration_merge_if_needed() {
   fi
 
   if [ -z "${final_pr}" ]; then
-    post_tracking_comment "## ⚠️ Final merge could not start\n\nUnable to create or locate the final integration PR from \\`${integration_branch}\\` to \\`${default_branch}\\`."
+    post_tracking_comment "## ⚠️ Final merge could not start\n\nUnable to create or locate the final integration PR from \`${integration_branch}\` to \`${default_branch}\`."
     return 1
   fi
 
@@ -576,7 +576,7 @@ finalize_integration_merge_if_needed() {
       '.status = "merge_conflict" | .final_merge_pr = $final_pr | .final_merge_status = "conflict"' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
-    post_tracking_comment "## ⚠️ Final merge conflict\n\nFinal PR #${final_pr} from \\`${integration_branch}\\` to \\`${default_branch}\\` has merge conflicts. Resolve conflicts manually, then re-run the poller."
+    post_tracking_comment "## ⚠️ Final merge conflict\n\nFinal PR #${final_pr} from \`${integration_branch}\` to \`${default_branch}\` has merge conflicts. Resolve conflicts manually, then re-run the poller."
     tg_notify "⚠️ Final merge conflict for #${TRACKING_NUM} (PR #${final_pr})."
     return 1
   fi
@@ -595,7 +595,7 @@ finalize_integration_merge_if_needed() {
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
-    post_tracking_comment "## ✅ Final merge complete\n\nIntegration branch \\`${integration_branch}\\` was squash-merged into \\`${default_branch}\\` via PR #${final_pr}."
+    post_tracking_comment "## ✅ Final merge complete\n\nIntegration branch \`${integration_branch}\` was squash-merged into \`${default_branch}\` via PR #${final_pr}."
     return 0
   fi
 
@@ -615,7 +615,7 @@ finalize_integration_merge_if_needed() {
       '.status = "merge_conflict" | .final_merge_pr = $final_pr | .final_merge_status = "conflict"' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
-    post_tracking_comment "## ⚠️ Final merge conflict\n\nFinal PR #${final_pr} from \\`${integration_branch}\\` to \\`${default_branch}\\` could not be squash-merged due to conflicts. Resolve manually, then re-run the poller."
+    post_tracking_comment "## ⚠️ Final merge conflict\n\nFinal PR #${final_pr} from \`${integration_branch}\` to \`${default_branch}\` could not be squash-merged due to conflicts. Resolve manually, then re-run the poller."
     tg_notify "⚠️ Final merge conflict for #${TRACKING_NUM} (PR #${final_pr})."
     return 1
   fi
