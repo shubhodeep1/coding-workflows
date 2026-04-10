@@ -1072,13 +1072,13 @@ jobs:
             source scripts/label_helpers.sh
             ensure_label_exists "ai:implementation-failed" "${{ github.repository }}"
           else
-            gh label create "ai:implementation-failed" --repo "${{ github.repository }}" \
+            gh_retry gh label create "ai:implementation-failed" --repo "${{ github.repository }}" \
               --color "e11d48" --description "Implementation produced no changes despite an approved plan — will be re-issued" \
               2>/dev/null || true
           fi
-          gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --remove-label 'ai:done' --add-label 'ai:implementation-failed' 2>/dev/null || \
-          gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --add-label 'ai:implementation-failed' 2>/dev/null || true
 
       - name: Push branch
@@ -1463,7 +1463,7 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
-          gh label create "ai:done" --repo "${{ github.repository }}" \
+          gh_retry gh label create "ai:done" --repo "${{ github.repository }}" \
             --color "0e8a16" --description "Implementation PR created" \
             2>/dev/null || true
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
@@ -1499,7 +1499,7 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
-          gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
+          gh_retry gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
             --color "fbca04" --description "Awaiting human approval to implement" \
             2>/dev/null || true
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
@@ -1515,7 +1515,7 @@ jobs:
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
-            gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
+            gh_retry gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
               --color "fbca04" --description "Awaiting human approval to implement" \
               2>/dev/null || true
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \

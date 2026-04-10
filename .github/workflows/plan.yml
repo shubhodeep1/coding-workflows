@@ -430,6 +430,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Find clarification comments by HTML marker or legacy "Clarification required" prefix
           CLARIFY_IDS="$(jq -r '
             .[]
@@ -442,7 +443,7 @@ jobs:
 
           for cid in ${CLARIFY_IDS}; do
             echo "Deleting clarification comment ${cid}"
-            gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${cid}" || true
+            gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${cid}" || true
           done
 
       - name: Extract clarification answers and questions
@@ -648,6 +649,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           # Build prompt: static context + instructions + dynamic planning context,
           # all inlined so the model doesn't waste tool calls reading files.
@@ -774,7 +776,7 @@ jobs:
 
           # Update progress comment to signal model invocation is starting
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
-            gh api "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" \
+            gh_retry gh api "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" \
               -X PATCH \
               -f body="<!-- ai:plan-progress -->⏳ Planning in progress — invoking model (${MODEL_EDITOR})…" \
               >/dev/null 2>&1 || true
@@ -799,7 +801,7 @@ jobs:
               echo "Retrying in ${sleep_secs}s..."
               # Update progress comment on retry to keep E2E inactivity timer alive
               if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
-                gh api "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" \
+                gh_retry gh api "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" \
                   -X PATCH \
                   -f body="<!-- ai:plan-progress -->⏳ Planning in progress — model attempt ${attempt} failed, retrying (${attempt}/${max_attempts})…" \
                   >/dev/null 2>&1 || true
@@ -878,9 +880,10 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Clean up progress comment — real output replaces it
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
-            gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
+            gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
           fi
           source scripts/label_helpers.sh
           # Strip absolute CI runner paths from Codex output
@@ -975,9 +978,10 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Clean up progress comment — real output replaces it
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
-            gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
+            gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
           fi
           source scripts/label_helpers.sh
           # Strip absolute CI runner paths from Codex output so comments show clean relative paths
@@ -1180,8 +1184,9 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
-            gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
+            gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
           fi
 
       - name: Capture planning failure context
