@@ -88,6 +88,25 @@ CRITICAL — safe final JSON emission:
 CRITICAL — deterministic MongoDB / mongosh assertions:
 - NEVER parse raw `mongosh` stdout text with `grep`, `awk`, or string matching for assertions. Shell output formatting varies across mongosh versions and environments (whitespace, BSON decorators, cursor metadata, banners).
 - ALWAYS use the `--quiet` flag with `mongosh` to suppress connection banners and prompts.
+- For boolean existence checks (for example `event_id=evt-001` in `validation_smoke.inbound_events`), prefer a single sentinel token from `mongosh` and compare exact equality (`FOUND` / `MISSING`).
+- Use a bounded retry loop after a successful POST before failing persistence checks (for example 5 attempts, 1s interval) to tolerate accepted-but-not-yet-visible writes.
+- Distinguish query execution failures from missing documents: non-zero `mongosh` exit or unexpected token must fail with a dedicated "query failed" diagnostic.
+- NEVER use blank-line trimming or `tail -n1` heuristics to extract assertion values from `mongosh` output.
+- Example bounded wrapper: `for attempt in 1 2 3 4 5; do ...sentinel check... && break; sleep 1; done`.
+- Recommended sentinel pattern (run this per-attempt inside your bounded retry loop):
+    TMP_MONGO_ERR="${TMP_MONGO_ERR:-$(mktemp)}"
+    if TOKEN=$(mongosh --quiet --eval 'const c=db.getSiblingDB("validation_smoke").inbound_events.countDocuments({event_id:"evt-001"}); print(c>0?"FOUND":"MISSING");' "$MONGO_URI" 2>"$TMP_MONGO_ERR"); then
+      case "$TOKEN" in
+        FOUND) : ;;
+        MISSING) echo "not persisted" >&2; false ;;
+        *) ERR_MSG=$(cat "$TMP_MONGO_ERR" 2>/dev/null); echo "query failed: ${ERR_MSG:-no stderr from mongosh}" >&2; exit 1 ;;
+      esac
+    else
+      MONGO_STATUS=$?
+      ERR_MSG=$(cat "$TMP_MONGO_ERR" 2>/dev/null)
+      echo "query failed (exit $MONGO_STATUS): ${ERR_MSG:-no stderr from mongosh}" >&2
+      exit 1
+    fi
 - For existence/count checks, use `JSON.stringify` to produce machine-parseable output:
     RESULT=$(mongosh --quiet --eval 'JSON.stringify({count: db.getSiblingDB("mydb").mycollection.countDocuments({event_id: "evt-001"})})' "$MONGO_URI")
     COUNT=$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])')
@@ -95,7 +114,7 @@ CRITICAL — deterministic MongoDB / mongosh assertions:
     RESULT=$(mongosh --quiet --eval 'JSON.stringify(db.getSiblingDB("mydb").mycollection.findOne({event_id: "evt-001"}, {_id:0, status:1}))' "$MONGO_URI")
 - Parse the JSON output in Python (or `jq`) — never with shell string matching.
 - If `mongosh` is unavailable in the container, use `python3` with `pymongo` or a direct HTTP health-check as a fallback.
-- ALWAYS add a brief retry/sleep loop (e.g. 3 attempts, 1s apart) before the assertion to tolerate async write propagation. The HTTP 202 response only means the request was accepted, not that the write has landed.
+- ALWAYS add a brief retry/sleep loop (e.g. 5 attempts, 1s apart) before the assertion to tolerate async write propagation. The HTTP 202 response only means the request was accepted, not that the write has landed.
 
 CRITICAL — grep-safe TAP counting under `set -e` / `pipefail`:
 - `grep` exits with code 1 when zero lines match. Under `set -e` or `pipefail`, this kills the script even when zero matches is the expected (all-pass) outcome.
