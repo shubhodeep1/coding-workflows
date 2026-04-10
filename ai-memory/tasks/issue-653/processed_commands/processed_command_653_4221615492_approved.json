@@ -5,13 +5,29 @@
   "entry_id": "processed_command_653_4221615492_approved",
   "issue_number": 653,
   "metadata": {
+    "branch": "ai/issue-653",
+    "changed_files": [
+      ".github/workflows/validate.yml",
+      "README.md",
+      "docs/validation-phase-spec.md",
+      "prompts/mode-validate-diagnose.txt",
+      "prompts/mode-validate-discover.txt",
+      "prompts/mode-validate-fix-harness.txt",
+      "prompts/mode-validate-generate.txt",
+      "scripts/validate_process.sh"
+    ],
+    "issue_number": 653,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/653",
+    "pr_number": 660,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/660",
+    "run_attempt": "1",
+    "run_id": "24229921645",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24229921645"
   },
   "run_attempt": 1,
   "run_id": "24229921645",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-10T06:34:22Z",
+  "status": "completed",
+  "timestamp": "2026-04-10T07:02:51Z",
   "workflow": "implement"
 }
