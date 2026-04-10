@@ -2930,7 +2930,7 @@ jobs:
           ensure_label_exists "ai:closed" "${REPOSITORY}"
 
           # -----------------------------------------------------------
-          # Detect orchestrator-managed PRs — the poller handles those
+          # Find linked issues for judge context
           # -----------------------------------------------------------
           ISSUE_NUMBERS="$(gh api graphql \
             -f owner="${REPOSITORY%/*}" \
@@ -2945,7 +2945,6 @@ jobs:
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
           fi
 
-          IS_ORCHESTRATOR="false"
           FIRST_ISSUE=""
           FIRST_ISSUE_BODY=""
           while IFS= read -r issue_number; do
@@ -2957,17 +2956,7 @@ jobs:
             if [ -z "${FIRST_ISSUE_BODY}" ]; then
               FIRST_ISSUE_BODY="${BODY}"
             fi
-            if echo "${BODY}" | grep -q 'Managed by: AI Orchestrator'; then
-              IS_ORCHESTRATOR="true"
-              break
-            fi
           done <<< "${ISSUE_NUMBERS}"
-
-          if [ "${IS_ORCHESTRATOR}" = "true" ]; then
-            echo "PR is orchestrator-managed — skipping judge (poller handles review-blocked)."
-            echo "judge_skip_reason=orchestrator" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
           if [ -z "${FIRST_ISSUE}" ]; then
             echo "No linked issues found — judge will use PR title/body as requirement context."
@@ -3629,8 +3618,6 @@ jobs:
             esac
           else
             case "${JUDGE_SKIP_REASON}" in
-              orchestrator)
-                MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations)\nDeferred to orchestrator poller' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               disabled)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge disabled\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               not_writable)
