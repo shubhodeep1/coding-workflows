@@ -653,20 +653,39 @@ dispatch_validation_workflow() {
   fi
   run_args+=("-f" "tracking_issue=${TRACKING_NUM}")
 
-  if gh_retry gh workflow run "${run_args[@]}" >/dev/null 2>&1; then
+  local _dispatch_err
+  _dispatch_err="$(mktemp)"
+  if gh_retry gh workflow run "${run_args[@]}" >/dev/null 2>"${_dispatch_err}"; then
+    rm -f "${_dispatch_err}"
     return 0
   fi
+  local _primary_err
+  _primary_err="$(cat "${_dispatch_err}" 2>/dev/null || true)"
+  rm -f "${_dispatch_err}"
+
   # Fallback: try internal-validate.yml (coding-workflows repo convention)
   if [ "${wf_name}" != "internal-validate.yml" ]; then
-    echo "Primary dispatch failed; trying internal-validate.yml fallback"
+    echo "Primary dispatch failed (${_primary_err:-unknown error}); trying internal-validate.yml fallback"
     run_args=("internal-validate.yml" "--repo" "${GITHUB_REPOSITORY}")
     if [ -n "${validation_ref}" ]; then
       run_args+=("--ref" "${validation_ref}")
     fi
     run_args+=("-f" "tracking_issue=${TRACKING_NUM}")
-    if gh_retry gh workflow run "${run_args[@]}" >/dev/null 2>&1; then
+    local _fallback_err
+    _fallback_err="$(mktemp)"
+    if gh_retry gh workflow run "${run_args[@]}" >/dev/null 2>"${_fallback_err}"; then
+      rm -f "${_fallback_err}"
       return 0
     fi
+    local _fallback_err_msg
+    _fallback_err_msg="$(cat "${_fallback_err}" 2>/dev/null || true)"
+    rm -f "${_fallback_err}"
+    echo "Fallback dispatch also failed (${_fallback_err_msg:-unknown error})"
+    # Export combined error for caller to include in failure reason
+    VALIDATION_DISPATCH_ERROR="primary (${wf_name}): ${_primary_err:-unknown}; fallback (internal-validate.yml): ${_fallback_err_msg:-unknown}"
+  else
+    echo "Dispatch of ${wf_name} failed (${_primary_err:-unknown error})"
+    VALIDATION_DISPATCH_ERROR="${wf_name}: ${_primary_err:-unknown}"
   fi
   return 1
 }
@@ -2178,7 +2197,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       fi
 
       if ! dispatch_validation_if_needed "${VALIDATION_CYCLE}"; then
-        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
       fi
       continue
     fi
@@ -2234,7 +2253,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     set_tracking_phase_label "ai:validating"
 
     if ! dispatch_validation_if_needed "${NEXT_VALIDATION_CYCLE}"; then
-      mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${NEXT_VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+      mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${NEXT_VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
     fi
     continue
   fi
@@ -2270,7 +2289,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       post_tracking_comment "## 🔁 Validation reset via /revalidate\n\nAll validation counters cleared. Re-dispatching validation (cycle 1)."
       tg_notify "/revalidate: project #${TRACKING_NUM} reset from validation-failed. Dispatching validation cycle 1." "DEBUG"
       if ! dispatch_validation_if_needed 1; then
-        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after /revalidate reset."
+        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after /revalidate reset. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
       fi
       continue
     fi
@@ -3789,6 +3808,8 @@ PRs to revert: ${REVERT_COUNT}"
         continue
       fi
 
+      post_tracking_comment "## ✅ Judge declared project complete — cycle $((JUDGE_CYCLE + 1))\n\n**Reason:** ${JUDGE_JUSTIFICATION}\n\nAll waves have merged and the judge is satisfied. Transitioning to runtime validation (cycle ${VALIDATION_CYCLE}) to confirm correctness before closing."
+
       jq --argjson cycle "${VALIDATION_CYCLE}" \
         '.status = "validating" |
          .judge_cycle += 1 |
@@ -3804,7 +3825,7 @@ PRs to revert: ${REVERT_COUNT}"
       set_tracking_phase_label "ai:validating"
 
       if ! dispatch_validation_if_needed "${VALIDATION_CYCLE}"; then
-        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write."
+        mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
       fi
       ;;
 
