@@ -221,7 +221,7 @@ fi
 
 When you need to use a library/framework API you're unsure about:
 - Use `mcp__context7__resolve-library-id` to find the library
-- Use `mcp__context7__get-library-docs` to fetch current documentation
+- Use `mcp__context7__query-docs` to fetch current documentation
 - This avoids hallucinating API signatures and reduces retry loops.
 - If Context7 is unavailable, proceed normally.
 ```
@@ -229,7 +229,7 @@ When you need to use a library/framework API you're unsure about:
 **Acceptance criteria:**
 - Context7 MCP configured in `~/.codex/config.toml` when not disabled
 - `required = false` (graceful fallback)
-- System instructions guide the LLM to use Context7 when unsure about library APIs
+- System instructions guide the LLM to use the Context7 resolve + query-docs sequence when unsure about library APIs
 - README.md documents `CONTEXT7_DISABLED` variable
 - No impact on existing Serena setup
 

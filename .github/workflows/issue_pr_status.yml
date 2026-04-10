@@ -42,21 +42,34 @@ jobs:
 
           mkdir -p scripts
 
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
           fetch_from_ref_or_local() {
             local repo_path="$1"
             local target_path="$2"
             local tmp_path="${target_path}.tmp"
             local attempt=1
 
-            while [ "${attempt}" -le 4 ]; do
+            while [ "${attempt}" -le 5 ]; do
               if gh api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/${repo_path}?ref=${script_ref}" > "${tmp_path}" 2>/tmp/_gh_rl_err; then
                 mv "${tmp_path}" "${target_path}"
                 return 0
               fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit (attempt ${attempt}/4), sleeping 30s…" >&2
-                sleep 30; attempt=$((attempt + 1))
+                echo "::warning::Rate limit hit (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait; attempt=$((attempt + 1))
               else
                 break
               fi
@@ -138,9 +151,8 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
-            gh_retry gh issue edit "${issue_number}" -R "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-            if ! gh_retry gh issue edit "${issue_number}" -R "${REPOSITORY}" --add-label "${FINAL_LABEL}"; then
-              echo "::warning::Failed to add label '${FINAL_LABEL}' to issue #${issue_number}."
+            if ! gh_retry gh issue edit "${issue_number}" -R "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label "${FINAL_LABEL}"; then
+              echo "::warning::Failed to update labels on issue #${issue_number}."
             fi
           done <<< "${ISSUE_NUMBERS}"
 
@@ -219,6 +231,7 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
           if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
             echo "Telegram not configured; skipping PR merged alert."
             exit 0
@@ -247,7 +260,7 @@ jobs:
           if [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then
             while IFS= read -r issue_number; do
               [ -n "${issue_number}" ] || continue
-              BODY="$(gh api "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null || echo "")"
+              BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
               if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
                 IS_ORCHESTRATED="true"
                 break

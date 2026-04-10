@@ -53,12 +53,57 @@ jobs:
         id: find_tracking
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          # gh_helpers.sh is not yet available (checkout + fetch happen later),
+          # so use an inline retry helper — same pattern as "Fetch workflow
+          # support scripts".
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
+          _gh_retry() {
+            local attempt=1
+            while [ "${attempt}" -le 5 ]; do
+              if "$@" 2>/tmp/_gh_retry_err; then return 0; fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_retry_err 2>/dev/null; then
+                echo "::warning::Rate limit hit (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait
+              else
+                local wait_secs=$(( 2 ** (attempt - 1) ))
+                echo "::warning::gh command failed (attempt ${attempt}/5), retrying in ${wait_secs}s…" >&2
+                sleep "${wait_secs}"
+              fi
+              attempt=$((attempt + 1))
+            done
+            echo "::error::gh command failed after 5 attempts: $*" >&2
+            return 1
+          }
+
+          _is_truthy() {
+            case "$(echo "$1" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          STANDALONE_ENABLED=false
+          if _is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY:-true}"; then
+            STANDALONE_ENABLED=true
+          fi
 
           # Find all open issues with the orchestrator tracking label
-          TRACKING_ISSUES="$(gh_retry gh issue list \
+          TRACKING_ISSUES="$(_gh_retry gh issue list \
             --repo "${{ github.repository }}" \
             --label "ai:orchestrator-tracking" \
             --state open \
@@ -68,14 +113,24 @@ jobs:
           COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
           echo "Found ${COUNT} active tracking issue(s)"
 
+          echo "${TRACKING_ISSUES}" > "${RUNTIME_DIR}/tracking_issues.json"
+
           if [ "${COUNT}" -eq 0 ]; then
-            echo "No active orchestrator projects. Exiting."
+            if [ "${STANDALONE_ENABLED}" = "true" ]; then
+              echo "No active orchestrator projects. Continuing for standalone stall recovery."
+              echo "has_tracking=false" >> "$GITHUB_OUTPUT"
+              echo "has_work=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "No active orchestrator projects and standalone stall recovery is disabled. Exiting."
+            echo "has_tracking=false" >> "$GITHUB_OUTPUT"
             echo "has_work=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          echo "has_tracking=true" >> "$GITHUB_OUTPUT"
           echo "has_work=true" >> "$GITHUB_OUTPUT"
-          echo "${TRACKING_ISSUES}" > "${RUNTIME_DIR}/tracking_issues.json"
 
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -163,11 +218,11 @@ jobs:
           _gh_api_fetch() {
             local outfile="$1"; shift
             local attempt=1
-            while [ "${attempt}" -le 4 ]; do
+            while [ "${attempt}" -le 5 ]; do
               if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
-                sleep 30; attempt=$((attempt + 1))
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait; attempt=$((attempt + 1))
               else return 1; fi
             done; return 1
           }
@@ -186,8 +241,13 @@ jobs:
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+              schema_tmp="ai-memory/schemas/${sf}.tmp"
+              if _gh_api_fetch "${schema_tmp}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}"; then
+                mv "${schema_tmp}" "ai-memory/schemas/${sf}"
+              else
+                rm -f "${schema_tmp}"
+              fi
             fi
           done
           for pf in mode-judge.txt mode-judge-review-blocked.txt; do
@@ -255,6 +315,7 @@ jobs:
           SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
           SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
           SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
           SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
           ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
@@ -270,6 +331,7 @@ jobs:
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
           MAX_RECOVERY_ATTEMPTS: ${{ vars.MAX_RECOVERY_ATTEMPTS || '3' }}
           MAX_VALIDATION_RECOVERY_ATTEMPTS: ${{ vars.MAX_VALIDATION_RECOVERY_ATTEMPTS || '2' }}
           MODEL_CONFLICT_RESOLVER: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
@@ -326,16 +388,16 @@ jobs:
       - name: Rate-limit cooldown before retrigger
         if: >-
           !cancelled()
-          && steps.find_tracking.outputs.has_work == 'true'
+          && steps.find_tracking.outputs.has_tracking == 'true'
           && inputs.caller_workflow != ''
         run: |
           set -euo pipefail
           NOW="$(date +%s)"
           ELAPSED=$(( NOW - JOB_START_EPOCH ))
-          # Ensure at least 30s cooldown, then round up to the next
-          # 45th-second mark (45s, 1m45s, 2m45s, …) leaving ~15s margin
+          # Ensure at least 60s cooldown, then round up to the next
+          # 45th-second mark (1m45s, 2m45s, …) leaving ~15s margin
           # for the retrigger step to finish within the billing minute.
-          EARLIEST=$(( ELAPSED + 30 ))
+          EARLIEST=$(( ELAPSED + 60 ))
           TARGET=$(( (((EARLIEST + 74) / 60) * 60) - 15 ))
           SLEEP_SECS=$(( TARGET - ELAPSED ))
           echo "Elapsed ${ELAPSED}s — sleeping ${SLEEP_SECS}s to align to ~${TARGET}s ($(( TARGET / 60 ))m$(( TARGET % 60 ))s)"
@@ -344,7 +406,7 @@ jobs:
       - name: Retrigger poller for continuous polling
         if: >-
           !cancelled()
-          && steps.find_tracking.outputs.has_work == 'true'
+          && steps.find_tracking.outputs.has_tracking == 'true'
           && inputs.caller_workflow != ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}

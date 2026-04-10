@@ -102,6 +102,20 @@ def test_validate_decomposition_invalid_schema():
 		pass
 
 
+def test_validate_decomposition_missing_schema_version_legacy_accepted():
+	data = _make_decomposition()
+	data.pop("schema_version")
+	result = orchestrate_lib.validate_decomposition(data)
+	assert result["schema_version"] == "orchestrate_decomposition.v1"
+
+
+def test_validate_decomposition_null_schema_version_legacy_accepted():
+	data = _make_decomposition()
+	data["schema_version"] = None
+	result = orchestrate_lib.validate_decomposition(data)
+	assert result["schema_version"] == "orchestrate_decomposition.v1"
+
+
 def test_validate_decomposition_duplicate_ids():
 	issues = [
 		{"id": "dup", "title": "A", "body": "B", "priority": 1},

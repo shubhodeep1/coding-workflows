@@ -26,8 +26,11 @@ def validate_decomposition(data: dict[str, Any]) -> dict[str, Any]:
 		raise OrchestrateError("Decomposition must be a JSON object")
 
 	sv = data.get("schema_version")
-	if sv != "orchestrate_decomposition.v1":
+	if sv not in (None, "orchestrate_decomposition.v1"):
 		raise OrchestrateError(f"Unsupported schema_version: {sv!r}")
+
+	data = dict(data)
+	data["schema_version"] = "orchestrate_decomposition.v1"
 
 	title = data.get("project_title", "")
 	if not isinstance(title, str) or not title.strip():
@@ -735,7 +738,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 	path = Path(args.input_file).resolve()
 	with path.open("r", encoding="utf-8") as f:
 		data = json.load(f)
-	validate_decomposition(data)
+	data = validate_decomposition(data)
 	_print_json({"ok": True, "issues": len(data["issues"]), "edges": len(data.get("dependency_edges", []))})
 	return 0
 
@@ -744,7 +747,7 @@ def cmd_compute_waves(args: argparse.Namespace) -> int:
 	path = Path(args.input_file).resolve()
 	with path.open("r", encoding="utf-8") as f:
 		data = json.load(f)
-	validate_decomposition(data)
+	data = validate_decomposition(data)
 	waves = compute_waves(data)
 	output = []
 	for wave_idx, wave in enumerate(waves):
@@ -760,7 +763,7 @@ def cmd_build_tracking_body(args: argparse.Namespace) -> int:
 	path = Path(args.input_file).resolve()
 	with path.open("r", encoding="utf-8") as f:
 		data = json.load(f)
-	validate_decomposition(data)
+	data = validate_decomposition(data)
 	waves = compute_waves(data)
 	body = build_tracking_issue_body(data, waves, integration_branch=(args.integration_branch or ""))
 	print(body)

@@ -81,6 +81,8 @@ def _run_poller(
 	tracking_labels: list[str] | None = None,
 	tracking_comments: list[str] | None = None,
 	issue_labels: dict[int, list[str]] | None = None,
+	gql_mode: str = "full",
+	gql_labels: dict[int, list[str]] | None = None,
 	codex_json: dict | None = None,
 	fail_validation_dispatch: bool = False,
 	prs: list[dict] | None = None,
@@ -92,6 +94,7 @@ def _run_poller(
 	tracking_labels = tracking_labels or []
 	tracking_comments = tracking_comments or []
 	issue_labels = issue_labels or {10: ["ai:merged"]}
+	gql_labels = gql_labels or {}
 	prs = prs or []
 	existing_branches = existing_branches or ["main"]
 	blocked_check_shas = blocked_check_shas or []
@@ -140,6 +143,10 @@ def _run_poller(
 			"next_comment_id": 2 + len(tracking_comments),
 			"validation_dispatches": [],
 			"closed_issues": [],
+			"graphql_mode": gql_mode,
+			"graphql_labels": {str(k): list(v) for k, v in gql_labels.items()},
+			"graphql_calls": 0,
+			"issue_label_calls": {},
 			"fail_validation_dispatch": fail_validation_dispatch,
 			"default_branch": "main",
 			"prs": prs,
@@ -213,6 +220,10 @@ if not args:
 	sys.exit(0)
 
 if args[0] == 'label' and len(args) >= 3 and args[1] == 'create':
+	sys.exit(0)
+
+if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
+	print('[]')
 	sys.exit(0)
 
 if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
@@ -380,6 +391,29 @@ if args[0] == 'api':
 		print('{}')
 		sys.exit(0)
 
+	if path == 'graphql':
+		mode = store.get('graphql_mode', 'full')
+		store['graphql_calls'] = int(store.get('graphql_calls', 0)) + 1
+		save()
+		if mode == 'error':
+			print('graphql failed', file=sys.stderr)
+			sys.exit(1)
+		query = ''
+		for f in fields:
+			if f.startswith('query='):
+				query = f.split('=', 1)[1]
+		aliases = []
+		for _, issue_num in re.findall(r'i(\d+)\s*:\s*issue\(number:\s*(\d+)\)', query):
+			aliases.append(int(issue_num))
+		repo = {}
+		for num in aliases:
+			if mode == 'partial' and aliases and num == aliases[-1]:
+				continue
+			labels = store.get('graphql_labels', {}).get(str(num), get_issue(num).get('labels', []))
+			repo[f'i{num}'] = {'labels': {'nodes': [{'name': label} for label in labels]}}
+		print(json.dumps({'data': {'repository': repo}}))
+		sys.exit(0)
+
 	m = re.search(r'/issues/(\d+)/comments(?:\?per_page=100)?$', path)
 	if m and method == 'GET' and not fields:
 		issue = get_issue(m.group(1))
@@ -402,7 +436,11 @@ if args[0] == 'api':
 
 	m = re.search(r'/issues/(\d+)/labels$', path)
 	if m:
-		issue = get_issue(m.group(1))
+		num = m.group(1)
+		issue = get_issue(num)
+		counts = store.setdefault('issue_label_calls', {})
+		counts[num] = int(counts.get(num, 0)) + 1
+		save()
 		labels = issue['labels']
 		if jq:
 			print(json.dumps(labels))
@@ -525,6 +563,14 @@ sys.exit(1)
 			"""#!/usr/bin/env python3
 import json
 import os
+import sys
+
+# Drain stdin to avoid SIGPIPE on the upstream cat process
+# when the prompt file is larger than the OS pipe buffer.
+try:
+	sys.stdin.read()
+except Exception:
+	pass
 
 output = os.environ.get('MOCK_CODEX_JSON', '{}')
 parsed = json.loads(output)
@@ -588,6 +634,45 @@ print(json.dumps(parsed))
 # ---------------------------------------------------------------------------
 # Tests: orchestrate poll validation lifecycle
 # ---------------------------------------------------------------------------
+
+
+def test_label_batch_graphql_error_falls_back_to_rest():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		gql_mode="error",
+	)
+	assert result["graphql_calls"] == 1
+	assert result["issue_label_calls"].get("10", 0) > 0
+
+
+def test_label_batch_graphql_partial_falls_back_to_rest():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		gql_mode="partial",
+	)
+	assert result["graphql_calls"] == 1
+	assert result["issue_label_calls"].get("10", 0) > 0
+
+
+def test_label_batch_graphql_full_skips_rest_fallback():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		gql_mode="full",
+	)
+	assert result["graphql_calls"] == 1
+	assert result["issue_label_calls"].get("10", 0) == 0
 
 
 def test_complete_verdict_enters_validation_mode_when_enabled():
