@@ -2600,6 +2600,14 @@ jobs:
               cp -a "${d}" "${UNTRACKED_BACKUP}/${d}"
             fi
           done
+          # Explicitly remove known CI-generated files before reset/clean.
+          # In consumer repos these files are fetched at runtime (untracked);
+          # git reset --hard does not remove untracked files, so they linger
+          # and cause "Untracked working tree file would be overwritten" when
+          # git merge later tries to write the same path from origin/BASE_BRANCH.
+          # In the source repo these files are tracked, so git reset --hard HEAD
+          # will restore them after this removal — no data loss occurs.
+          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh 2>/dev/null || true
           git reset --hard HEAD
           # Use -ffdx: double-force clears nested git repos (-ff), and -x also
           # removes files matching .gitignore (e.g. .serena/) so nothing
@@ -2703,6 +2711,17 @@ jobs:
           # the merge simulation.  Tracked files are never removed by git clean.
           git clean -ffdx 2>/dev/null || true
 
+          # Guardrail diagnostics: emit working tree state before merge so any
+          # future untracked-file collision is immediately obvious in CI logs.
+          echo "=== pre-merge working tree state ==="
+          git status --porcelain 2>/dev/null || true
+          _pre_merge_untracked="$(git ls-files --others --exclude-standard 2>/dev/null || true)"
+          if [ -n "${_pre_merge_untracked}" ]; then
+            echo "untracked files:"
+            printf '%s\n' "${_pre_merge_untracked}" | head -20
+          fi
+          echo "====================================="
+
           merge_exit=0
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || merge_exit=$?
 
@@ -2717,12 +2736,17 @@ jobs:
           rm -rf "${MERGE_STASH}"
 
           # If the merge command itself failed (e.g. missing identity, corrupt
-          # refs) WITHOUT producing unmerged index entries, we must not
-          # silently report "no conflicts".  Treat an unexpected merge failure
-          # as a conflict so the resolver step can attempt a proper merge.
+          # refs, or untracked file collision) WITHOUT producing unmerged index
+          # entries, we must not silently report "no conflicts".  Treat an
+          # unexpected merge failure as a conflict so the resolver step can
+          # attempt a proper merge.
           if [ -z "$(git ls-files --unmerged)" ]; then
             if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
-              echo "::warning::git merge exited ${merge_exit} without entering merge state — treating as conflict"
+              if [ "${merge_exit}" -eq 128 ]; then
+                echo "::error::Merge precheck failed (exit 128): untracked files or a corrupted working tree blocked git merge. Review the pre-merge diagnostics above to identify the colliding file."
+              else
+                echo "::warning::git merge exited ${merge_exit} without entering merge state — treating as conflict"
+              fi
               echo "Merge conflict detected (merge command failed)"
               echo "MERGE_CONFLICT=true" >> "$GITHUB_ENV"
               for d in .serena scripts prompts; do
@@ -2786,6 +2810,9 @@ jobs:
 
           # Move workflow-fetched untracked dirs out of the way so they don't
           # collide with files from origin/BASE_BRANCH during the merge.
+          # First, explicitly remove known CI-generated files that may be
+          # untracked in consumer repos (see "Detect merge conflicts" step).
+          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh 2>/dev/null || true
           RESOLVE_STASH="$(mktemp -d)"
           for d in scripts .serena prompts ai-memory; do
             if [ -d "${d}" ]; then
