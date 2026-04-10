@@ -16,6 +16,20 @@ This repository contains reusable `workflow_call` workflows that power the full 
 8. **Validate** — Runtime harness generation + local Docker smoke validation with machine-readable results
 9. **Update Workflows** — Automatically updates workflow wrappers in consumer repos when upstream templates change
 
+### Memory System
+
+All active pipeline phases (clarify, plan, implement, review, orchestrate, validate) now integrate with the AI memory subsystem.  Workflows persist decisions, implementation plans, review findings, and validation results as candidate records to a dedicated `ai-memory` git branch.  Before constructing each LLM prompt, relevant prior context is retrieved from memory and injected between the static prompt prefix and the dynamic issue/PR content — preserving provider-side prompt-prefix caching while giving the model awareness of previous runs.
+
+Key behaviors:
+
+- **Run events** are recorded at the start and end of every phase (fail-open: a memory error never fails the workflow).
+- **Candidate records** capture decisions, plans, code summaries, review findings, and validation outcomes.
+- **Processed-command idempotency** (`/answer`, `/approved`) prevents duplicate plan or implement runs caused by rapid re-triggering.
+- **Task lineage** tracks the full issue-to-PR lifecycle (open → in_progress → merged/closed) and is finalized when a PR closes or merges.
+- **Kill switch:** set the `AI_MEMORY_ENABLED` repository variable to `false` to disable all memory operations without any other code change.
+
+Memory operations are implemented in `scripts/memory_helpers.sh` (shared helper wrappers) and `scripts/ai_memory.py` (CLI). The `ai-memory` branch is created automatically on the first write.
+
 ## Quickstart
 
 Get AI-powered issue-to-PR automation running in your repository in a few minutes.
@@ -29,7 +43,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | Secret | Required | Used By | Description |
 |---|---|---|---|
 | `GH_PAT` | **Yes** | All workflows | GitHub Personal Access Token with `repo` scope |
-| `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | [OpenRouter](https://openrouter.ai) API key for LLM access |
+| `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, memory_maintenance | [OpenRouter](https://openrouter.ai) API key for LLM access and AI memory keyword extraction |
 | `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Telegram bot token for notifications and message cleanup |
 
 #### Variables
@@ -470,7 +484,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | Secret | Used By | Description |
 |---|---|---|
 | `GH_PAT` | All workflows | GitHub PAT with repo access |
-| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | OpenRouter API key for LLM access |
+| `OPENROUTER_API_KEY` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, memory_maintenance | OpenRouter API key for LLM access and AI memory keyword extraction |
 | `TG_BOT_SECRET` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Telegram bot token (optional; also used for message cleanup) |
 
 ## Required Variables
