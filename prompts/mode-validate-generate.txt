@@ -92,12 +92,14 @@ CRITICAL — deterministic MongoDB / mongosh assertions:
 - Use a bounded retry loop after a successful POST before failing persistence checks (for example 5 attempts, 1s interval) to tolerate accepted-but-not-yet-visible writes.
 - Distinguish query execution failures from missing documents: non-zero `mongosh` exit or unexpected token must fail with a dedicated "query failed" diagnostic.
 - NEVER use blank-line trimming or `tail -n1` heuristics to extract assertion values from `mongosh` output.
-- Recommended sentinel pattern:
+- Example bounded wrapper: `for attempt in 1 2 3 4 5; do ...sentinel check... && break; sleep 1; done`.
+- Recommended sentinel pattern (run this per-attempt inside your bounded retry loop):
+    TMP_MONGO_ERR="${TMP_MONGO_ERR:-$(mktemp)}"
     TOKEN=$(mongosh --quiet --eval 'const c=db.getSiblingDB("validation_smoke").inbound_events.countDocuments({event_id:"evt-001"}); print(c>0?"FOUND":"MISSING");' "$MONGO_URI" 2>"$TMP_MONGO_ERR")
     case "$TOKEN" in
       FOUND) : ;;
       MISSING) echo "not persisted" ;;
-      *) echo "query failed: $(cat "$TMP_MONGO_ERR")" ;;
+      *) ERR_MSG=$(cat "$TMP_MONGO_ERR" 2>/dev/null); echo "query failed: ${ERR_MSG:-no stderr from mongosh}" ;;
     esac
 - For existence/count checks, use `JSON.stringify` to produce machine-parseable output:
     RESULT=$(mongosh --quiet --eval 'JSON.stringify({count: db.getSiblingDB("mydb").mycollection.countDocuments({event_id: "evt-001"})})' "$MONGO_URI")
