@@ -276,7 +276,7 @@ SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS
 4. Get project spec from tracking issue body via `gh api`, or `${RUNTIME_DIR}/project_spec.txt`
 5. Determine harness mode by cycle:
    - Cycle 1 (or missing owned harness): full generate (clean `validation/` then `mode-validate-generate.txt`)
-   - Cycle 2+: preserve `validation/`, clean only `validation/logs/`, use `mode-validate-fix-harness.txt`
+   - Cycle 2+: if an owned harness already exists in the workspace (for example, restored from artifacts), preserve `validation/`, clean only `validation/logs/`, and use `mode-validate-fix-harness.txt`; otherwise fall back to full generate mode
 6. Build prompt: static context + TOOL_CALL_BUDGET + selected prompt + project spec + hints + prior failure context
 7. Run Codex: `cat prompt | codex exec --model "${MODEL_EDITOR}" --full-auto > output 2> log`
    - Retry up to 2 attempts

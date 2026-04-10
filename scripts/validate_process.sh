@@ -407,7 +407,7 @@ run_preflight_checks()
 	fi
 
 	local shell_count
-	shell_count="$(find validation -type f -name '*.sh' | wc -l | tr -d ' ')"
+	shell_count="$(find validation -type f -name '*.sh' -not -path 'validation/logs/*' | wc -l | tr -d ' ')"
 	if [ "${shell_count}" -eq 0 ]; then
 		echo "No shell scripts found under validation/." >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
@@ -420,7 +420,7 @@ run_preflight_checks()
 			PRE_FLIGHT_STATUS="fail"
 			return 1
 		fi
-	done < <(find validation -type f -name '*.sh' | sort)
+	done < <(find validation -type f -name '*.sh' -not -path 'validation/logs/*' | sort)
 
 	local compose_json_file
 	compose_json_file="${RUNTIME_DIR}/validation_compose_config.json"

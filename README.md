@@ -741,7 +741,7 @@ This is useful after fixing the root cause manually (e.g. correcting a Docker co
 ### Validation Harness Lifecycle
 
 - Cycle 1 generates a new harness under `validation/`.
-- Cycle 2+ keeps the existing owned harness and applies targeted fixes instead of full regeneration.
+- Cycle 2+ reuses and targeted-fixes the existing owned harness when `validation/` is present (for example, restored from artifacts); otherwise it safely falls back to full regeneration.
 - Before execution, validation runs pre-flight checks (`docker compose config`, shell syntax, and compose build path resolution).
 - Pre-flight failures are classified as terminal `harness_error` for that run.
 - The first generated test must be a canary infrastructure check (`00_canary.sh` style); infra-only canary failures shortcut to `harness_error`, while app startup/crash signals continue to diagnosis.
