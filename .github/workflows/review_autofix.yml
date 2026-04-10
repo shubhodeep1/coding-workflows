@@ -2635,9 +2635,33 @@ jobs:
           bash scripts/git_ref_health_check.sh repair
           git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
 
-          git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
+          # Ensure committer identity is available — git merge (even with
+          # --no-commit) requires it when recording a merge result.  Earlier
+          # steps may set this, but after git clean / reset it can be lost if
+          # the runner has no global git config.
+          git config user.name  "codex-bot"        2>/dev/null || true
+          git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
 
+          merge_exit=0
+          git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || merge_exit=$?
+
+          # If the merge command itself failed (e.g. missing identity, corrupt
+          # refs) WITHOUT producing unmerged index entries, we must not
+          # silently report "no conflicts".  Treat an unexpected merge failure
+          # as a conflict so the resolver step can attempt a proper merge.
           if [ -z "$(git ls-files --unmerged)" ]; then
+            if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+              echo "::warning::git merge exited ${merge_exit} without entering merge state — treating as conflict"
+              echo "Merge conflict detected (merge command failed)"
+              echo "MERGE_CONFLICT=true" >> "$GITHUB_ENV"
+              for d in .serena scripts prompts; do
+                if [ -d "${UNTRACKED_BACKUP}/${d}" ]; then
+                  cp -a "${UNTRACKED_BACKUP}/${d}" .
+                fi
+              done
+              rm -rf "${UNTRACKED_BACKUP}"
+              exit 0
+            fi
             echo "No merge conflicts detected"
             # Only abort if a merge is actually in progress (MERGE_HEAD exists).
             # When the branch is already up-to-date, git merge succeeds immediately
@@ -2673,6 +2697,10 @@ jobs:
           set -euo pipefail
 
           echo "Running Codex resolver"
+
+          # Ensure committer identity is set (see "Detect merge conflicts" step).
+          git config user.name  "codex-bot"        2>/dev/null || true
+          git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
 
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
 
