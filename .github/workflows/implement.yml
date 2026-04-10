@@ -1002,11 +1002,11 @@ jobs:
           done
 
           # Check all modified/added YAML files for syntax errors using a YAML
-          # parser — bash -n must NOT be used on YAML files as it parses them
+          # parser - bash -n must NOT be used on YAML files as it parses them
           # as shell and produces false failures (e.g. 'name: foo (bar)').
           for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.yml' '*.yaml'); do
             if [ -f "$f" ]; then
-              if ! python3 -c "import yaml, sys; yaml.safe_load(open(sys.argv[1]))" "$f" 2>&1; then
+              if ! python3 -c "import yaml, sys; f=open(sys.argv[1]); yaml.safe_load(f); f.close()" "$f" 2>&1; then
                 echo "::error file=${f}::YAML syntax error in ${f}"
                 ERRORS=$((ERRORS + 1))
               fi
