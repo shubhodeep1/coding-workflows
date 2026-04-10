@@ -493,7 +493,11 @@ if args[0] == 'api':
 		elif jq == '.head.sha':
 			print(pr.get('headSha', f'mocksha{pr_num}'))
 		else:
-			print(json.dumps({'state': pr.get('state', 'open'), 'mergeable': pr.get('mergeable', True)}))
+			print(json.dumps({
+				'state': pr.get('state', 'open'),
+				'mergeable': pr.get('mergeable', True),
+				'head': {'sha': pr.get('headSha', f'mocksha{pr_num}'), 'ref': pr.get('headRefName', '')},
+			}))
 		sys.exit(0)
 
 	if re.search(r'/merges$', path) and (method == 'POST' or fields):
