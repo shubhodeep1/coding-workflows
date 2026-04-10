@@ -1055,6 +1055,54 @@ def test_validated_label_marks_complete_and_keeps_open():
 	assert "ai:validated" in result["tracking_labels"]
 
 
+def test_validated_removes_stale_validating_and_validation_fixing_labels():
+	"""Both ai:validating and ai:validation-fixing must be removed when ai:validated is present.
+
+	The set_tracking_phase_label function previously built --remove-label args
+	for ALL sibling phase labels.  If gh issue edit failed for any of those
+	(e.g. the label was not on the issue) the || true silently swallowed the
+	error, leaving stale ai:validating / ai:validation-fixing on the issue
+	even after the project had been marked as validated.  The fix fetches
+	current issue labels first and only removes labels that are present.
+	"""
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 2
+	# Issue already has ai:validated (set by validate_process.sh in cycle 2)
+	# but still carries the stale labels from earlier phases.
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating", "ai:validation-fixing", "ai:validated"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert result["tracking_closed"] is False
+	final_labels = result["tracking_labels"]
+	assert "ai:validated" in final_labels, f"ai:validated missing from {final_labels}"
+	assert "ai:validating" not in final_labels, f"ai:validating still present in {final_labels}"
+	assert "ai:validation-fixing" not in final_labels, f"ai:validation-fixing still present in {final_labels}"
+
+
+def test_validated_from_validation_fixing_state_removes_all_stale_labels():
+	"""Stale labels are removed when the state is validation-fixing at poll time."""
+	state = _base_state(status="validation-fixing")
+	state["validation_cycle"] = 2
+	state["validation_active_fix_issues"] = []
+	# Issue has both stale labels along with ai:validated (cycle 2 passed).
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating", "ai:validation-fixing", "ai:validated"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	final_labels = result["tracking_labels"]
+	assert "ai:validated" in final_labels, f"ai:validated missing from {final_labels}"
+	assert "ai:validating" not in final_labels, f"ai:validating still present in {final_labels}"
+	assert "ai:validation-fixing" not in final_labels, f"ai:validation-fixing still present in {final_labels}"
+
+
 # ---------------------------------------------------------------------------
 # Tests: judge advancement logic (fix-up issue handling)
 # ---------------------------------------------------------------------------

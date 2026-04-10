@@ -201,12 +201,27 @@ set_tracking_phase_label()
     if phase_changes="$(python3 scripts/ai_labels.py resolve-phase \
       --contract-file "${contract_file}" \
       --phase "${phase_label}" 2>/dev/null)"; then
+      # Fetch current labels on the issue so we only attempt to remove labels
+      # that are actually present.  Trying to remove a label that does not
+      # exist on the issue can cause `gh issue edit` to return an error,
+      # which the outer `|| true` would silently swallow — leaving stale
+      # labels (e.g. ai:validating + ai:validation-fixing) in place even
+      # after the phase has advanced to ai:validated.
+      local current_issue_labels
+      current_issue_labels="$(gh_retry gh api \
+        "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/labels" \
+        --jq '[.[].name]' 2>/dev/null || echo '[]')"
+
       # Build a single gh issue edit command with all --remove-label and
       # --add-label flags instead of one API call per label.
       local edit_args=()
       while IFS= read -r remove_label; do
         [ -n "${remove_label}" ] || continue
-        edit_args+=(--remove-label "${remove_label}")
+        # Only remove labels that are currently on the issue to avoid
+        # errors from trying to remove absent labels.
+        if echo "${current_issue_labels}" | jq -e --arg l "${remove_label}" 'index($l) != null' >/dev/null 2>&1; then
+          edit_args+=(--remove-label "${remove_label}")
+        fi
       done < <(echo "${phase_changes}" | jq -r '.remove[]?')
 
       while IFS= read -r add_label; do
