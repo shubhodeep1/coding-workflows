@@ -409,10 +409,10 @@ jobs:
           NOW="$(date +%s)"
           ELAPSED=$(( NOW - JOB_START_EPOCH ))
           # Ensure at least 5m cooldown, then round up to the next
-          # 45th-second mark (5m45s, 6m45s, …) leaving ~15s margin
+          # 40th-second mark (5m40s, 6m40s, …) leaving ~20s margin
           # for the retrigger step to finish within the billing minute.
           EARLIEST=$(( ELAPSED + 300 ))
-          TARGET=$(( (((EARLIEST + 74) / 60) * 60) - 15 ))
+          TARGET=$(( (((EARLIEST + 79) / 60) * 60) - 20 ))
           SLEEP_SECS=$(( TARGET - ELAPSED ))
           echo "Elapsed ${ELAPSED}s — sleeping ${SLEEP_SECS}s to align to ~${TARGET}s ($(( TARGET / 60 ))m$(( TARGET % 60 ))s)"
           sleep "${SLEEP_SECS}"
