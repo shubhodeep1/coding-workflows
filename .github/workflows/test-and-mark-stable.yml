@@ -1373,6 +1373,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: YAML lint
+        run: |
+          set -euo pipefail
+          pip install -q yamllint
+          yamllint -s .github/workflows/*.yml .github/actions/*/action.yml
+
       - name: Shell script syntax check
         run: |
           set -euo pipefail
