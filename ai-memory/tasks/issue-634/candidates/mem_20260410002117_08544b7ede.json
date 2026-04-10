@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nANSWERS:\nQ36: A\n\nRATIONALE:\nQ36: The issue explicitly targets `validation/tests/01_core_smoke.sh` and optionally `validation/app_server.py`, and the clarification states those files are not present in the current workspace, so planning must be grounded in the correct repo/path and branch first. I\u2019m assuming the orchestrator/operator can provide that concrete location in the `/answer` reply.",
+  "fingerprint": "a0a3761e82e184dad3b64dae70e6512dcbee4eba694dc7febe8a8425d73e2d7e",
+  "lineage": {
+    "issue_number": 634,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24219940616",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24219940616",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/634"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20260410002117_08544b7ede",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 634,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24219940616"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #634",
+  "timestamps": {
+    "created_at": "2026-04-10T00:21:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
