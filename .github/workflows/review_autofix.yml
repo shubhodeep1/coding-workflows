@@ -93,14 +93,27 @@ jobs:
           # scripts cause silent MCP failures.
           mkdir -p scripts
           # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
           _gh_api_fetch() {
             local outfile="$1"; shift
             local attempt=1
-            while [ "${attempt}" -le 4 ]; do
+            while [ "${attempt}" -le 5 ]; do
               if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
-                sleep 30; attempt=$((attempt + 1))
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait; attempt=$((attempt + 1))
               else return 1; fi
             done; return 1
           }
@@ -119,8 +132,13 @@ jobs:
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+              schema_tmp="ai-memory/schemas/${sf}.tmp"
+              if _gh_api_fetch "${schema_tmp}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}"; then
+                mv "${schema_tmp}" "ai-memory/schemas/${sf}"
+              else
+                rm -f "${schema_tmp}"
+              fi
             fi
           done
           # Model catalog: try script_ref first, fall back to local copy from checkout.
@@ -273,6 +291,7 @@ jobs:
           SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
           SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
           SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
           SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -340,9 +359,22 @@ jobs:
           set -euo pipefail
 
           # Retry wrapper for gh api calls — rate-limit-aware.
-          # On rate-limit (403/429), sleeps 30s and retries.
+          # On rate-limit (403/429), waits until X-RateLimit-Reset and retries.
           # On other failures, uses exponential backoff.
           # Usage: gh_retry <output_file> [gh api args...]
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
           gh_retry() {
             local outfile="$1"; shift
             local attempt max_attempts=5 delay=2
@@ -351,8 +383,8 @@ jobs:
                 return 0
               fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/gh_retry_stderr 2>/dev/null; then
-                echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), sleeping 30s…" >&2
-                sleep 30
+                echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+                _rl_wait
               else
                 cat /tmp/gh_retry_stderr >&2
                 if [ "$attempt" -lt "$max_attempts" ]; then
@@ -543,7 +575,7 @@ jobs:
           if [ "$IS_SMOKE" = "false" ]; then
             ISSUE_NUM=$(echo "${PR_BODY}" | grep -oP '(?:issues/|issue\s*#)(\d+)' | head -1 | grep -oP '\d+' || true)
             if [ -n "$ISSUE_NUM" ]; then
-              ISSUE_TITLE=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' 2>/dev/null || echo "")
+              ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
               if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
                 IS_SMOKE=true
               fi
@@ -1317,7 +1349,7 @@ jobs:
 
               # Background watchdog for this reviewer attempt
               (
-                wd_iter=0
+                wd_iter=$(( RANDOM % 9 ))  # jitter: stagger PR state checks across reviewers
                 while true; do
                   sleep 10
                   now="$(date +%s)"
@@ -1345,7 +1377,11 @@ jobs:
                   # PR state check — abort if PR was merged/closed (~every 90s)
                   wd_iter=$((wd_iter + 1))
                   if [ $((wd_iter % 9)) -eq 0 ]; then
-                    pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+                    # Pipe through grep to reject error JSON that gh api dumps to
+                    # stdout on 403/429 rate-limit responses (--jq is not applied
+                    # to error bodies, so raw JSON leaks into the variable and
+                    # defeats the || echo "open" fallback).
+                    pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
                     if [ "${pr_state}" != "open" ]; then
                       echo "Reviewer ${model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
                       touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
@@ -1892,6 +1928,11 @@ jobs:
           Plain text only.
           Output exactly these sections in this order:
           Changes made:
+          IMPORTANT: If ANY bullet under "Changes made:" touches a line that was
+          also modified in the LAST RUN DIFF, you MUST include these two fields
+          in that bullet (the commit will be rejected otherwise):
+            • Regression fingerprint: <file:symbol or failure key>
+            • Runtime failure path: <execution path that fails>
           Already satisfied (suggested but already present):
           Ignored suggestions (with short reason):
           Reviewer files processed:
@@ -2051,7 +2092,7 @@ jobs:
                 # PR state check — abort if PR was merged/closed (~every 2 min)
                 wd_iter=$((wd_iter + 1))
                 if [ $((wd_iter % 8)) -eq 0 ]; then
-                  pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+                  pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
                   if [ "${pr_state}" != "open" ]; then
                     echo "Editor aborted — PR #${PR_NUMBER} is ${pr_state} (attempt ${attempt})." >&2
                     touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
@@ -2366,9 +2407,29 @@ jobs:
           # never trigger the oscillation guard.
           EXCLUDED_FILES = {"pre_assembled_static.txt"}
 
+          # Non-code files where "Runtime failure path" is semantically
+          # meaningless — documentation, configs, licences, etc.
+          _NON_CODE_EXTS = {
+              ".md", ".txt", ".rst", ".adoc",
+              ".json", ".yaml", ".yml", ".toml",
+              ".csv", ".tsv",
+              ".lock",
+          }
+          _NON_CODE_BASENAMES = {"LICENSE", "LICENSE.txt", "NOTICE"}
+
+          def _is_non_code(path: str) -> bool:
+              import os as _os
+              basename = _os.path.basename(path)
+              if basename in _NON_CODE_BASENAMES:
+                  return True
+              _, ext = _os.path.splitext(basename)
+              return ext.lower() in _NON_CODE_EXTS
+
           overlaps = []
           for file_path, staged_file_ranges in staged_ranges.items():
               if file_path in EXCLUDED_FILES:
+                  continue
+              if _is_non_code(file_path):
                   continue
               previous_ranges = last_run_ranges.get(file_path, [])
               if not previous_ranges:
@@ -2535,14 +2596,27 @@ jobs:
             script_ref="stable"
           fi
           # Rate-limit-aware fetch
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
           _gh_api_fetch() {
             local outfile="$1"; shift
             local attempt=1
-            while [ "${attempt}" -le 4 ]; do
+            while [ "${attempt}" -le 5 ]; do
               if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
-                sleep 30; attempt=$((attempt + 1))
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait; attempt=$((attempt + 1))
               else return 1; fi
             done; return 1
           }
@@ -2561,9 +2635,33 @@ jobs:
           bash scripts/git_ref_health_check.sh repair
           git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
 
-          git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
+          # Ensure committer identity is available — git merge (even with
+          # --no-commit) requires it when recording a merge result.  Earlier
+          # steps may set this, but after git clean / reset it can be lost if
+          # the runner has no global git config.
+          git config user.name  "codex-bot"        2>/dev/null || true
+          git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
 
+          merge_exit=0
+          git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || merge_exit=$?
+
+          # If the merge command itself failed (e.g. missing identity, corrupt
+          # refs) WITHOUT producing unmerged index entries, we must not
+          # silently report "no conflicts".  Treat an unexpected merge failure
+          # as a conflict so the resolver step can attempt a proper merge.
           if [ -z "$(git ls-files --unmerged)" ]; then
+            if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+              echo "::warning::git merge exited ${merge_exit} without entering merge state — treating as conflict"
+              echo "Merge conflict detected (merge command failed)"
+              echo "MERGE_CONFLICT=true" >> "$GITHUB_ENV"
+              for d in .serena scripts prompts; do
+                if [ -d "${UNTRACKED_BACKUP}/${d}" ]; then
+                  cp -a "${UNTRACKED_BACKUP}/${d}" .
+                fi
+              done
+              rm -rf "${UNTRACKED_BACKUP}"
+              exit 0
+            fi
             echo "No merge conflicts detected"
             # Only abort if a merge is actually in progress (MERGE_HEAD exists).
             # When the branch is already up-to-date, git merge succeeds immediately
@@ -2599,6 +2697,10 @@ jobs:
           set -euo pipefail
 
           echo "Running Codex resolver"
+
+          # Ensure committer identity is set (see "Detect merge conflicts" step).
+          git config user.name  "codex-bot"        2>/dev/null || true
+          git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
 
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
 
@@ -2763,7 +2865,7 @@ jobs:
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
-            PR_DATA="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
@@ -2777,9 +2879,8 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:ready-to-merge on issue #${issue_number}"
-            gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge'; then
-              echo "::warning::Failed to add ai:ready-to-merge label to issue #${issue_number} — retrying in 2s..."
+            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:ready-to-merge'; then
+              echo "::warning::Failed to update labels on issue #${issue_number} — retrying in 2s..."
               sleep 2
               gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge' \
                 || echo "::warning::Retry also failed for issue #${issue_number}. Label may need manual application."
@@ -2857,7 +2958,7 @@ jobs:
           ensure_label_exists "ai:closed" "${REPOSITORY}"
 
           # -----------------------------------------------------------
-          # Detect orchestrator-managed PRs — the poller handles those
+          # Find linked issues for judge context
           # -----------------------------------------------------------
           ISSUE_NUMBERS="$(gh api graphql \
             -f owner="${REPOSITORY%/*}" \
@@ -2867,12 +2968,11 @@ jobs:
             --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
-            PR_DATA="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
           fi
 
-          IS_ORCHESTRATOR="false"
           FIRST_ISSUE=""
           FIRST_ISSUE_BODY=""
           while IFS= read -r issue_number; do
@@ -2880,21 +2980,11 @@ jobs:
             if [ -z "${FIRST_ISSUE}" ]; then
               FIRST_ISSUE="${issue_number}"
             fi
-            BODY="$(gh api "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null || echo "")"
+            BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
             if [ -z "${FIRST_ISSUE_BODY}" ]; then
               FIRST_ISSUE_BODY="${BODY}"
             fi
-            if echo "${BODY}" | grep -q 'Managed by: AI Orchestrator'; then
-              IS_ORCHESTRATOR="true"
-              break
-            fi
           done <<< "${ISSUE_NUMBERS}"
-
-          if [ "${IS_ORCHESTRATOR}" = "true" ]; then
-            echo "PR is orchestrator-managed — skipping judge (poller handles review-blocked)."
-            echo "judge_skip_reason=orchestrator" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
           if [ -z "${FIRST_ISSUE}" ]; then
             echo "No linked issues found — judge will use PR title/body as requirement context."
@@ -3097,13 +3187,14 @@ jobs:
                 gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
                   --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' \
                   --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' \
-                  --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-                gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge' || true
+                  --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' \
+                  --add-label 'ai:ready-to-merge' || true
               done <<< "${ISSUE_NUMBERS}"
 
               # Attempt merge
-              PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
-              PR_MERGEABLE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.mergeable' 2>/dev/null || echo "")"
+              _pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+              PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed|merged' || echo "")"
+              PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
               if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
                 if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
                   gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
@@ -3127,11 +3218,11 @@ jobs:
                   gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
                     --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' \
                     --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' \
-                    --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-                  gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:ready-to-merge' || true
+                    --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' \
+                    --add-label 'ai:ready-to-merge' || true
                 done <<< "${ISSUE_NUMBERS}"
 
-                PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
+                PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
                 if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
                   gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
                     || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
@@ -3182,7 +3273,7 @@ jobs:
                   if [[ "${REPOSITORY}" != *"/coding-workflows" ]]; then
                     rm -f ./pre_assembled_static.txt
                     rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-                    rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh
+                    rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
                     rm -rf .serena
                     rm -rf prompts
                   fi
@@ -3324,7 +3415,7 @@ jobs:
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
-            PR_DATA="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
@@ -3338,9 +3429,8 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number}"
-            gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:review-blocked'; then
-              echo "::warning::Failed to add ai:review-blocked label to issue #${issue_number} — retrying in 2s..."
+            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:review-blocked'; then
+              echo "::warning::Failed to update labels on issue #${issue_number} — retrying in 2s..."
               sleep 2
               gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:review-blocked' \
                 || echo "::warning::Retry also failed for issue #${issue_number}. Label may need manual application."
@@ -3556,8 +3646,6 @@ jobs:
             esac
           else
             case "${JUDGE_SKIP_REASON}" in
-              orchestrator)
-                MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations)\nDeferred to orchestrator poller' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               disabled)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge disabled\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               not_writable)
@@ -3570,7 +3658,7 @@ jobs:
           MSG+="PR: ${PR_URL}${ISSUE_LINE}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "CRITICAL"
 
       - name: Check PR state before failure alerts
         if: (failure() || cancelled()) && env.PR_CLOSED != 'true'
@@ -3578,7 +3666,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           source scripts/gh_helpers.sh 2>/dev/null || true
-          pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "open")"
+          pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
           if [ "${pr_state}" != "open" ]; then
             echo "PR #${PR_NUMBER} is ${pr_state} — skipping failure alerts."
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"
@@ -3621,8 +3709,7 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number} (workflow failure)"
-            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' || true
-            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:review-blocked' || true
+            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:review-blocked' || true
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (workflow failure)
@@ -3740,7 +3827,7 @@ jobs:
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
-            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/codex_model_catalog.json
+            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/codex_model_catalog.json
             rm -rf .serena prompts
             rm -f .github/ai/orchestrate_schema.v1.json
           fi

@@ -119,14 +119,27 @@ jobs:
           # scripts cause silent MCP failures.
           mkdir -p scripts
           # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
           _gh_api_fetch() {
             local outfile="$1"; shift
             local attempt=1
-            while [ "${attempt}" -le 4 ]; do
+            while [ "${attempt}" -le 5 ]; do
               if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
-                sleep 30; attempt=$((attempt + 1))
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait; attempt=$((attempt + 1))
               else return 1; fi
             done; return 1
           }
@@ -147,8 +160,13 @@ jobs:
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+              schema_tmp="ai-memory/schemas/${sf}.tmp"
+              if _gh_api_fetch "${schema_tmp}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}"; then
+                mv "${schema_tmp}" "ai-memory/schemas/${sf}"
+              else
+                rm -f "${schema_tmp}"
+              fi
             fi
           done
           # Always use the canonical instruction files from coding-workflows
@@ -243,8 +261,8 @@ jobs:
             echo "Issue #${ISSUE_NUMBER} is in ai:clarification phase; transitioning to ai:planning for /answer processing."
             source scripts/label_helpers.sh
             ensure_label_exists "ai:planning" "${{ github.repository }}"
-            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:planning' >/dev/null
-            gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:clarification" >/dev/null 2>&1 || true
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:planning' --remove-label 'ai:clarification' >/dev/null 2>&1 || true
           else
             echo "Issue #${ISSUE_NUMBER} has neither ai:planning nor ai:clarification labels. Skipping planning run."
             echo "Current labels: ${ISSUE_LABELS_JSON}"
@@ -344,12 +362,23 @@ jobs:
               exit 1
             fi
 
-            if ! printf '%s' "${CLAIM_RESULT}" | jq -e '((.operation_result.claimed // .claimed) | type) == "boolean"' >/dev/null 2>&1; then
+            if ! CLAIMED="$(printf '%s' "${CLAIM_RESULT}" | jq -r '
+              if (if (.operation_result | type) == "object" then (.operation_result | has("claimed")) else false end) then
+                (.operation_result.claimed | select(type == "boolean"))
+              elif has("claimed") then
+                (.claimed | select(type == "boolean"))
+              else
+                null
+              end
+            ' 2>/dev/null)"; then
               echo "::error::Malformed /answer claim output while AI memory is enabled"
               exit 1
             fi
 
-            CLAIMED="$(printf '%s' "${CLAIM_RESULT}" | jq -r '.operation_result.claimed // .claimed')"
+            if [[ "${CLAIMED}" != "true" && "${CLAIMED}" != "false" ]]; then
+              echo "::error::Malformed /answer claim output while AI memory is enabled"
+              exit 1
+            fi
           else
             CLAIMED="true"
           fi
@@ -528,6 +557,7 @@ jobs:
           SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
           SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
           SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
           SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -856,10 +886,9 @@ jobs:
           # Strip absolute CI runner paths from Codex output
           sed -i -E 's|/home/runner/work/[^/]+/[^/]+/||g' "${CODEX_OUTPUT_FILE}"
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 &
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 &
-          wait
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:clarification' --remove-label 'ai:planning' \
+            --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
 
           {
             echo "Clarification required"
@@ -931,12 +960,12 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
 
-          # Orchestrator-managed issues: general tracking (cleaned up at project end).
+          # Orchestrator-managed issues: skip TG alert (auto-answered by orchestrate_clarify_respond).
           # Non-orchestrator issues: phase tracking (cleaned up when plan is approved).
           if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
+            echo "Skipping TG alert for orchestrator-managed issue (will be auto-answered)."
           else
-            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "DEBUG"
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "CRITICAL"
           fi
 
       - name: Post implementation plan
@@ -977,8 +1006,8 @@ jobs:
             -f body="$(cat "${PLAN_COMMENT_FILE}")"
 
           ensure_label_exists "ai:awaiting-approval" "${{ github.repository }}"
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:awaiting-approval' --remove-label 'ai:planning' >/dev/null 2>&1 || true
 
       - name: Record planning candidate (plan posted)
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
@@ -1074,7 +1103,7 @@ jobs:
           if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
             tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
           else
-            tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "${MSG}" "DEBUG"
+            tg_send_phase_tracked "${ISSUE_NUMBER}" "plan" "${MSG}" "CRITICAL"
           fi
 
       - name: Record planning run completed
@@ -1180,8 +1209,8 @@ jobs:
           ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:planning") != null' >/dev/null; then
             ensure_label_exists "ai:clarification" "${{ github.repository }}"
-            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
-            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:planning" >/dev/null 2>&1 || true
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:clarification' --remove-label 'ai:planning' >/dev/null 2>&1 || true
           fi
 
       - name: Comment on issue failure

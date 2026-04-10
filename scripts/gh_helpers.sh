@@ -10,8 +10,10 @@
 #   curl_gh_api       — run a curl command against GitHub API with retry
 #
 # Rate limit detection: on 403/429 "rate limit" responses the helper
-# sleeps 30 s before retrying.  Other transient failures use exponential
-# backoff (1 s, 2 s, 4 s, …).
+# queries GitHub's GET /rate_limit endpoint (not itself rate-limited)
+# to read X-RateLimit-Reset, then sleeps until reset+1 s (capped at
+# 600 s, floored at 1 s, fallback 30 s).  Other transient failures
+# use exponential backoff (1 s, 2 s, 4 s, …).
 
 # Guard against double-sourcing
 if [ "${_GH_HELPERS_LOADED:-}" = "1" ]; then
@@ -29,9 +31,60 @@ _is_gh_rate_limit()
 }
 
 # ---------------------------------------------------------------
+# _sleep_until_reset — compute wait from an epoch timestamp.
+#
+# Caps at 600 s, floors at 1 s, falls back to 30 s if the
+# timestamp is empty or unparseable.
+# ---------------------------------------------------------------
+_sleep_until_reset()
+{
+	local reset_epoch="$1"
+	local wait_secs
+
+	if [ -n "${reset_epoch}" ] && [ "${reset_epoch}" -gt 0 ] 2>/dev/null; then
+		wait_secs=$(( reset_epoch - $(date +%s) + 1 ))
+		[ "${wait_secs}" -lt 1 ] && wait_secs=1
+		[ "${wait_secs}" -gt 600 ] && wait_secs=600
+	else
+		wait_secs=30
+	fi
+
+	echo "::warning::  Rate limit resets in ${wait_secs}s (X-RateLimit-Reset: ${reset_epoch:-unknown})" >&2
+	sleep "${wait_secs}"
+}
+
+# ---------------------------------------------------------------
+# _parse_reset_header — extract X-RateLimit-Reset from a header
+# dump file (produced by curl -D).
+#
+# Prints the epoch timestamp to stdout; empty string on failure.
+# ---------------------------------------------------------------
+_parse_reset_header()
+{
+	local header_file="$1"
+	grep -i '^x-ratelimit-reset:' "${header_file}" 2>/dev/null \
+		| head -1 | awk '{print $2}' | tr -d '\r'
+}
+
+# ---------------------------------------------------------------
+# _gh_rate_limit_wait — query GitHub's /rate_limit endpoint via
+# the gh CLI and sleep until the reset window passes.
+#
+# Falls back to 30 s if the header cannot be parsed.
+# ---------------------------------------------------------------
+_gh_rate_limit_wait()
+{
+	local _reset_ts
+	_reset_ts=$(gh api -i /rate_limit 2>/dev/null \
+		| grep -i '^x-ratelimit-reset:' | head -1 \
+		| awk '{print $2}' | tr -d '\r') || true
+	_sleep_until_reset "${_reset_ts}"
+}
+
+# ---------------------------------------------------------------
 # gh_retry — Execute a gh CLI command with automatic retry.
 #
-# Rate-limit errors  → sleep 30 s, retry (up to max_attempts).
+# Rate-limit errors  → wait until X-RateLimit-Reset, retry (up to max_attempts).
 # Other failures     → exponential backoff 1 s, 2 s, 4 s, …
 #
 # Usage:
@@ -55,8 +108,8 @@ gh_retry()
 		stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
 
 		if _is_gh_rate_limit "${stderr_content}"; then
-			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), sleeping 30s before retry…" >&2
-			sleep 30
+			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+			_gh_rate_limit_wait
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
@@ -104,8 +157,8 @@ gh_retry_to_file()
 		stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
 
 		if _is_gh_rate_limit "${stderr_content}"; then
-			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), sleeping 30s before retry…" >&2
-			sleep 30
+			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+			_gh_rate_limit_wait
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
@@ -127,6 +180,36 @@ gh_retry_to_file()
 }
 
 # ---------------------------------------------------------------
+# _safe_gh_jq — run gh api and suppress stdout on failure.
+#
+# When gh api receives a non-2xx response (e.g. 403 rate limit),
+# it dumps the raw error JSON to stdout WITHOUT applying the --jq
+# filter.  The common shell pattern
+#   val="$(gh api ... --jq '.field' 2>/dev/null || echo "fallback")"
+# is broken because the error JSON on stdout combines with the
+# fallback string, producing garbage that fails equality checks.
+#
+# This function captures stdout to a temp file, checks the exit
+# code, and only emits output on success.  On failure it outputs
+# nothing and returns 1, so `|| echo "fallback"` works correctly.
+#
+# Usage:
+#   val="$(_safe_gh_jq "repos/o/r/pulls/1" --jq '.state' || echo "open")"
+# ---------------------------------------------------------------
+_safe_gh_jq()
+{
+	local _tmpf
+	_tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX")
+	if gh api "$@" > "${_tmpf}"; then
+		cat "${_tmpf}"
+		rm -f "${_tmpf}"
+		return 0
+	fi
+	rm -f "${_tmpf}"
+	return 1
+}
+
+# ---------------------------------------------------------------
 # curl_gh_api — curl wrapper with rate-limit retry for GitHub API.
 #
 # Captures HTTP status code.  On 429 or 403-with-rate-limit body,
@@ -143,17 +226,19 @@ curl_gh_api()
 {
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
 	local attempt=1
-	local body_file
+	local body_file header_file
 	body_file=$(mktemp "${TMPDIR:-/tmp}/curl_gh_body.XXXXXX")
+	header_file=$(mktemp "${TMPDIR:-/tmp}/curl_gh_hdr.XXXXXX")
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
 		: > "${body_file}"
+		: > "${header_file}"
 		local http_code
-		http_code=$(curl -o "${body_file}" -w '%{http_code}' "$@" 2>/dev/null) || http_code="000"
+		http_code=$(curl -o "${body_file}" -D "${header_file}" -w '%{http_code}' "$@" 2>/dev/null) || http_code="000"
 
 		if [ "${http_code}" -ge 200 ] 2>/dev/null && [ "${http_code}" -lt 300 ] 2>/dev/null; then
 			cat "${body_file}"
-			rm -f "${body_file}"
+			rm -f "${body_file}" "${header_file}"
 			return 0
 		fi
 
@@ -161,8 +246,10 @@ curl_gh_api()
 		body_content=$(cat "${body_file}" 2>/dev/null || true)
 
 		if [ "${http_code}" = "429" ] || { [ "${http_code}" = "403" ] && _is_gh_rate_limit "${body_content}"; }; then
-			echo "::warning::GitHub API rate limit (HTTP ${http_code}, attempt ${attempt}/${max_attempts}), sleeping 30s…" >&2
-			sleep 30
+			echo "::warning::GitHub API rate limit (HTTP ${http_code}, attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+			local _reset_ts
+			_reset_ts=$(_parse_reset_header "${header_file}")
+			_sleep_until_reset "${_reset_ts}"
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::GitHub API curl failed HTTP ${http_code} (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
@@ -172,7 +259,7 @@ curl_gh_api()
 		attempt=$(( attempt + 1 ))
 	done
 
-	rm -f "${body_file}"
+	rm -f "${body_file}" "${header_file}"
 	echo "::error::GitHub API curl failed after ${max_attempts} attempts" >&2
 	return 1
 }

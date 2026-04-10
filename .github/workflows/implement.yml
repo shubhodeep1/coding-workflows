@@ -219,14 +219,27 @@ jobs:
           # scripts cause silent MCP failures.
           mkdir -p scripts
           # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
           _gh_api_fetch() {
             local outfile="$1"; shift
             local attempt=1
-            while [ "${attempt}" -le 4 ]; do
+            while [ "${attempt}" -le 5 ]; do
               if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
-                sleep 30; attempt=$((attempt + 1))
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait; attempt=$((attempt + 1))
               else return 1; fi
             done; return 1
           }
@@ -252,8 +265,13 @@ jobs:
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+              schema_tmp="ai-memory/schemas/${sf}.tmp"
+              if _gh_api_fetch "${schema_tmp}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}"; then
+                mv "${schema_tmp}" "ai-memory/schemas/${sf}"
+              else
+                rm -f "${schema_tmp}"
+              fi
               if [ "${is_self_repo}" = "false" ]; then
                 echo "ai-memory/schemas/${sf}" >> "${FETCHED_MANIFEST}"
               fi
@@ -365,8 +383,8 @@ jobs:
             exit 0
           fi
           ensure_label_exists "ai:implementing" "${{ github.repository }}"
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:implementing' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:awaiting-approval" >/dev/null 2>&1 || true
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:implementing' --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
           echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true" >> "$GITHUB_ENV"
 
       - name: Claim /approved command
@@ -534,6 +552,7 @@ jobs:
           SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
           SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
           SERENA_DISABLED: ${{ vars.SERENA_DISABLED || 'false' }}
+          CONTEXT7_DISABLED: ${{ vars.CONTEXT7_DISABLED || 'false' }}
           SERENA_IGNORED_DIRS: ${{ vars.SERENA_IGNORED_DIRS || '' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -1159,14 +1178,27 @@ jobs:
 
           mkdir -p scripts
           # Rate-limit-aware fetch
+          _rl_wait() {
+            local _reset_ts _wait_secs
+            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+            else
+              _wait_secs=30
+            fi
+            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+            sleep "${_wait_secs}"
+          }
           _gh_api_fetch() {
             local outfile="$1"; shift
             local attempt=1
-            while [ "${attempt}" -le 4 ]; do
+            while [ "${attempt}" -le 5 ]; do
               if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
-                sleep 30; attempt=$((attempt + 1))
+                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
+                _rl_wait; attempt=$((attempt + 1))
               else return 1; fi
             done; return 1
           }
@@ -1196,8 +1228,9 @@ jobs:
 
           PR_HEAD_REF=""
           if [ -n "${PR_NUMBER}" ]; then
-            PR_HEAD_REF="$(gh pr view "${PR_NUMBER}" --repo "${{ github.repository }}" --json headRefName --jq '.headRefName // ""' 2>/dev/null || true)"
-            gh pr view "${PR_NUMBER}" --repo "${{ github.repository }}" --json files --jq '.files[].path' > "${CHANGED_FILES_FILE}" || true
+            _pr_view_json="$(gh pr view "${PR_NUMBER}" --repo "${{ github.repository }}" --json headRefName,files 2>/dev/null || echo '{}')"
+            PR_HEAD_REF="$(echo "${_pr_view_json}" | jq -r '.headRefName // ""')"
+            echo "${_pr_view_json}" | jq -r '.files[].path' > "${CHANGED_FILES_FILE}" || true
           else
             : > "${CHANGED_FILES_FILE}"
           fi
@@ -1413,8 +1446,8 @@ jobs:
           gh label create "ai:done" --repo "${{ github.repository }}" \
             --color "0e8a16" --description "Implementation PR created" \
             2>/dev/null || true
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:done' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:done' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
 
       - name: Record implementation run success event
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
@@ -1449,8 +1482,8 @@ jobs:
           gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
             --color "fbca04" --description "Awaiting human approval to implement" \
             2>/dev/null || true
-          gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
 
       - name: Comment on issue failure
         if: failure() || cancelled()
@@ -1465,8 +1498,8 @@ jobs:
             gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
               --color "fbca04" --description "Awaiting human approval to implement" \
               2>/dev/null || true
-            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:awaiting-approval' >/dev/null
-            gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:implementing" >/dev/null 2>&1 || true
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
@@ -1525,14 +1558,27 @@ jobs:
             fi
             mkdir -p scripts
             # Rate-limit-aware fetch
+            _rl_wait() {
+              local _reset_ts _wait_secs
+              _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
+              if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+                _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
+                [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
+                [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
+              else
+                _wait_secs=30
+              fi
+              echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
+              sleep "${_wait_secs}"
+            }
             _gh_api_fetch() {
               local outfile="$1"; shift
               local attempt=1
-              while [ "${attempt}" -le 4 ]; do
+              while [ "${attempt}" -le 5 ]; do
                 if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
                 if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                  echo "::warning::Rate limit hit during fetch (attempt ${attempt}/4), sleeping 30s…" >&2
-                  sleep 30; attempt=$((attempt + 1))
+                  echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
+                  _rl_wait; attempt=$((attempt + 1))
                 else return 1; fi
               done; return 1
             }
