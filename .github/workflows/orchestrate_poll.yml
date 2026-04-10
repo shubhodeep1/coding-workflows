@@ -147,7 +147,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          npm install -g "@openai/codex@v0.114.0" --no-audit --no-fund
+          CODEX_VERSION="${{ vars.CODEX_VERSION || 'v0.114.0' }}"
+          npm install -g "@openai/codex@${CODEX_VERSION}" --no-audit --no-fund
 
           missing_tools=()
           for tool in jq curl gh; do
