@@ -71,6 +71,14 @@ Docker Compose healthcheck YAML rules (CRITICAL):
 - The final JSON result must include: `result` (`pass` or `fail`), `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures` (array of objects with `test`, `error`, and `log_tail`), and `duration_seconds`
 - Keep each `log_tail` concise (for example, the last 30 lines)
 
+Canary requirement (mandatory):
+- The first test script in `validation/tests/` MUST be a canary infrastructure test (for example `validation/tests/00_canary.sh`).
+- The canary must validate harness infrastructure before app assertions:
+  - Connectivity to each declared Docker service
+  - Reachability of application port/health endpoint
+  - Required CLI tools present (`curl`, `jq`, `python3`, plus service CLIs like `mongosh`/`psql` when used)
+- If canary fails, remaining tests must be skipped and the failure must clearly indicate canary/infrastructure gating.
+
 CRITICAL — safe final JSON emission:
 - The final JSON result object MUST be assembled entirely in Python, not via bash variable interpolation into Python source.
 - NEVER use an unquoted heredoc (`<<PY`) that embeds bash variables like `${FAILURES_JSON}` into Python code. Bash expansion injects raw control characters (tabs, newlines, backslashes from log tails) into the Python string literal, causing `json.decoder.JSONDecodeError`.
@@ -125,7 +133,7 @@ CRITICAL — grep-safe TAP counting under `set -e` / `pipefail`:
 - NEVER use bare `grep ... | wc -l` in a pipeline under `pipefail` — `grep` returning 1 (no match) will propagate through the pipe and trigger ERR/exit.
 - Test the all-pass case (zero `not ok` lines) mentally before finalizing the script.
 
-Mandatory validation coverage (all required):
+Validation coverage (implement only when concretely applicable):
 1. Build verification
 2. Startup and health checks
 3. Local service integration testing
@@ -140,6 +148,11 @@ Mandatory validation coverage (all required):
 
 Applicability behavior:
 - If an item is not applicable, implement a deterministic skip with a clear reason.
+- Skip `migration_verification` and `local_service_integration` when no database/ORM/migration framework is detected.
+- Skip `route_testing`, `error_format_validation`, and `inbound_handler_testing` when no HTTP routes/server are detected.
+- Skip `graceful_shutdown` when there is no long-running process or signal handling path.
+- Skip `existing_test_suite_execution` when no existing test command (`npm test`, `pytest`, `go test`, etc.) is present.
+- Core categories that always apply: `build_verification`, `startup_health_checks`, `env_var_validation`, `dependency_auditing`.
 - Reuse existing repo scripts/tests when available, but still generate runtime smoke coverage.
 - For startup checks, treat crashes caused by unavailable external APIs as real failures.
 

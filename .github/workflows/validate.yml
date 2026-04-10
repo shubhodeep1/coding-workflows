@@ -181,7 +181,7 @@ jobs:
             echo "Model catalog not on ${script_ref} yet; using local copy."
           fi
 
-          for pf in mode-validate-generate.txt mode-validate-diagnose.txt; do
+          for pf in mode-validate-generate.txt mode-validate-diagnose.txt mode-validate-discover.txt mode-validate-fix-harness.txt; do
             fetch_from_ref_or_local "prompts/${pf}" "prompts/${pf}"
           done
 

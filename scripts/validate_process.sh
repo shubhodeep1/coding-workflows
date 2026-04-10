@@ -54,6 +54,9 @@ fi
 PROJECT_SPEC_FILE="${RUNTIME_DIR}/project_spec.txt"
 STATIC_CONTEXT_FILE="${RUNTIME_DIR}/validate_static.txt"
 VALIDATE_HINTS_FILE="${RUNTIME_DIR}/validate_hints.txt"
+DISCOVER_PROMPT_FILE="${RUNTIME_DIR}/validate_discover_prompt.txt"
+DISCOVER_OUTPUT_FILE="${RUNTIME_DIR}/validate_discover_output.txt"
+DISCOVER_LOG_FILE="${RUNTIME_DIR}/validate_discover.log"
 GENERATE_PROMPT_FILE="${RUNTIME_DIR}/validate_generate_prompt.txt"
 GENERATE_OUTPUT_FILE="${RUNTIME_DIR}/validate_generate_output.txt"
 GENERATE_LOG_FILE="${RUNTIME_DIR}/validate_generate.log"
@@ -70,6 +73,13 @@ CONTAINER_LOG_TAIL_FILE="${RUNTIME_DIR}/container_logs_tail.txt"
 NULL_JSON_FILE="${RUNTIME_DIR}/null.json"
 PRE_GENERATE_STATUS_FILE="${RUNTIME_DIR}/pre_generate_git_status.txt"
 POST_GENERATE_STATUS_FILE="${RUNTIME_DIR}/post_generate_git_status.txt"
+PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
+PRIOR_RESULT_JSON_FILE="${RUNTIME_DIR}/prior_validation_result.json"
+PRIOR_CONTAINER_LOGS_FILE="${RUNTIME_DIR}/prior_container_logs_tail.txt"
+
+HINTS_SOURCE="none"
+HARNESS_MODE="generate"
+PRE_FLIGHT_STATUS="not_run"
 
 mkdir -p "${RUNTIME_DIR}"
 printf 'null\n' > "${NULL_JSON_FILE}"
@@ -315,6 +325,9 @@ write_metadata_file()
     --arg status "${status}" \
     --arg summary "${summary}" \
     --arg failure_summary "${failure_summary}" \
+    --arg hints_source "${HINTS_SOURCE}" \
+    --arg harness_mode "${HARNESS_MODE}" \
+    --arg pre_flight_status "${PRE_FLIGHT_STATUS}" \
     --arg repository "${GITHUB_REPOSITORY}" \
     --arg tracking_issue "${TRACKING_ISSUE_RAW}" \
     --arg runtime_dir "${RUNTIME_DIR}" \
@@ -331,6 +344,9 @@ write_metadata_file()
       status: $status,
       summary: $summary,
       failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
+      hints_source: $hints_source,
+      harness_mode: $harness_mode,
+      pre_flight_status: $pre_flight_status,
       repository: $repository,
       tracking_issue: $tracking_issue,
       compose_file: $compose_file,
@@ -371,6 +387,107 @@ cleanup_runtime_containers()
     && [ "${VALIDATION_COMPOSE_FILE}" != "validation/docker-compose.test.yml" ]; then
     docker compose -f "${VALIDATION_COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
   fi
+}
+
+run_preflight_checks()
+{
+	PRE_FLIGHT_STATUS="running"
+	: > "${PRE_FLIGHT_LOG_FILE}"
+
+	if [ ! -f validation/docker-compose.test.yml ]; then
+		echo "Missing validation/docker-compose.test.yml" >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_STATUS="fail"
+		return 1
+	fi
+
+	if ! docker compose -f validation/docker-compose.test.yml config --quiet >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+		echo "Compose syntax/validation check failed." >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_STATUS="fail"
+		return 1
+	fi
+
+	local shell_count
+	shell_count="$(find validation -type f -name '*.sh' -not -path 'validation/logs/*' | wc -l | tr -d ' ')"
+	if [ "${shell_count}" -eq 0 ]; then
+		echo "No shell scripts found under validation/." >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_STATUS="fail"
+		return 1
+	fi
+
+	while IFS= read -r shell_file; do
+		if ! bash -n "${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+			echo "Shell syntax check failed: ${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}"
+			PRE_FLIGHT_STATUS="fail"
+			return 1
+		fi
+	done < <(find validation -type f -name '*.sh' -not -path 'validation/logs/*' | sort)
+
+	local compose_json_file
+	compose_json_file="${RUNTIME_DIR}/validation_compose_config.json"
+	if ! docker compose -f validation/docker-compose.test.yml config --format json > "${compose_json_file}" 2>> "${PRE_FLIGHT_LOG_FILE}"; then
+		echo "Compose JSON export unavailable or failed; skipping build context and dockerfile path verification." >> "${PRE_FLIGHT_LOG_FILE}"
+		printf '%s\n' '{"services":{}}' > "${compose_json_file}"
+	fi
+
+	if ! python3 - "${compose_json_file}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY'
+import json
+import os
+import sys
+
+compose_json_path = sys.argv[1]
+
+with open(compose_json_path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+services = payload.get("services") or {}
+compose_dir = os.path.abspath("validation")
+missing = []
+
+for service_name, service_cfg in services.items():
+    build_cfg = service_cfg.get("build")
+    if not build_cfg:
+        continue
+
+    context = "."
+    dockerfile = "Dockerfile"
+    if isinstance(build_cfg, str):
+        context = build_cfg
+    elif isinstance(build_cfg, dict):
+        context = build_cfg.get("context") or "."
+        dockerfile = build_cfg.get("dockerfile") or "Dockerfile"
+    else:
+        continue
+
+    if os.path.isabs(context):
+        resolved_context = os.path.normpath(context)
+    else:
+        resolved_context = os.path.normpath(os.path.join(compose_dir, context))
+
+    if os.path.isabs(dockerfile):
+        resolved_dockerfile = os.path.normpath(dockerfile)
+    else:
+        resolved_dockerfile = os.path.normpath(os.path.join(resolved_context, dockerfile))
+
+    if not os.path.isdir(resolved_context):
+        missing.append(f"service={service_name} missing build context: {resolved_context}")
+        continue
+    if not os.path.isfile(resolved_dockerfile):
+        missing.append(f"service={service_name} missing dockerfile: {resolved_dockerfile}")
+
+if missing:
+    for line in missing:
+        print(line)
+    sys.exit(1)
+
+print("Build context and dockerfile path checks passed.")
+PY
+	then
+		PRE_FLIGHT_STATUS="fail"
+		return 1
+	fi
+
+	PRE_FLIGHT_STATUS="pass"
+	return 0
 }
 
 trap cleanup_runtime_containers EXIT
@@ -423,12 +540,6 @@ if is_tracking_run; then
   INTEGRATION_BRANCH="$(sed -n 's/^\*\*Integration branch:\*\* `\([^`]*\)`$/\1/p' "${PROJECT_SPEC_FILE}" | head -n1 | tr -d '\r')"
 fi
 
-if [ -f .ai/validate.yml ]; then
-  cp .ai/validate.yml "${VALIDATE_HINTS_FILE}"
-else
-  printf '# No .ai/validate.yml hints file found\n' > "${VALIDATE_HINTS_FILE}"
-fi
-
 {
   if [ -f codex_system_instructions.md ]; then
     echo "=== SYSTEM INSTRUCTIONS ==="
@@ -455,6 +566,94 @@ fi
     echo
   fi
 } > "${STATIC_CONTEXT_FILE}"
+
+
+# ---------------------------------------------------------------
+# Phase 0: Discover validation hints when repository hints are absent
+# ---------------------------------------------------------------
+if [ -f .ai/validate.yml ]; then
+  cp .ai/validate.yml "${VALIDATE_HINTS_FILE}"
+  HINTS_SOURCE="committed"
+else
+  {
+    cat "${STATIC_CONTEXT_FILE}"
+    echo
+    echo "TOOL_CALL_BUDGET: 15"
+    echo
+    echo "=== DISCOVERY TASK ==="
+    echo
+    cat prompts/mode-validate-discover.txt
+    echo
+    echo "=== PROJECT SPEC ==="
+    cat "${PROJECT_SPEC_FILE}"
+    echo
+    echo "Output only YAML for .ai/validate.yml with no markdown fences or prose."
+  } > "${DISCOVER_PROMPT_FILE}"
+
+  DISCOVER_SUCCESS=false
+  for attempt in 1 2; do
+    echo "Validation hint discovery attempt ${attempt}/2"
+    if cat "${DISCOVER_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2); then
+      if python3 - "${DISCOVER_OUTPUT_FILE}" "${VALIDATE_HINTS_FILE}" <<'PY'
+import re
+import sys
+
+source_file = sys.argv[1]
+output_file = sys.argv[2]
+
+with open(source_file, "r", encoding="utf-8", errors="replace") as handle:
+    raw = handle.read().replace("\r", "")
+
+candidate = raw.strip()
+if "```" in raw:
+    match = re.search(r"```(?:yaml|yml)?\n(.*?)```", raw, flags=re.DOTALL | re.IGNORECASE)
+    if match:
+        candidate = match.group(1).strip()
+
+if not candidate:
+    sys.exit(1)
+
+if candidate.lstrip().startswith("{") or candidate.lstrip().startswith("["):
+    sys.exit(1)
+
+if len(candidate) > 12000:
+    sys.exit(1)
+
+lines = [
+    line.lstrip()
+    for line in candidate.splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+]
+if not lines:
+    sys.exit(1)
+
+if lines[0].lower().startswith(("error:", "fatal:", "traceback", "exception")):
+    sys.exit(1)
+
+expected_key = re.compile(r"^(type|entry|port|health_check|services|env_overrides|custom_tests|skip_tests):\s*", re.IGNORECASE)
+if not any(expected_key.match(line) for line in lines):
+    sys.exit(1)
+
+with open(output_file, "w", encoding="utf-8") as handle:
+    handle.write(candidate)
+    handle.write("\n")
+PY
+      then
+        DISCOVER_SUCCESS=true
+        HINTS_SOURCE="discovered"
+        break
+      fi
+    fi
+    if [ "${attempt}" -lt 2 ]; then
+      sleep $((attempt * 5))
+    fi
+  done
+
+  if [ "${DISCOVER_SUCCESS}" != "true" ]; then
+    printf '# No .ai/validate.yml hints file found\n' > "${VALIDATE_HINTS_FILE}"
+    HINTS_SOURCE="none"
+  fi
+fi
 
 
 # ---------------------------------------------------------------
@@ -496,17 +695,28 @@ AI validation workflow and must not be committed." >/dev/null 2>&1 || true
   fi
 fi
 
-if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
-  echo "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." >&2
-  exit 1
-fi
 if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then
-  echo "Refusing to delete non-directory 'validation' path." >&2
-  exit 1
+	echo "Refusing to use non-directory 'validation' path." >&2
+	exit 1
 fi
-rm -rf validation
-mkdir -p validation/logs
-touch validation/.ai-validation-owned
+
+if [ "${VALIDATION_CYCLE}" -gt 1 ] \
+	&& [ -d validation ] \
+	&& [ -f validation/.ai-validation-owned ] \
+	&& [ -f validation/validate.sh ]; then
+	HARNESS_MODE="fix"
+	mkdir -p validation/logs
+	find validation/logs -mindepth 1 -delete 2>/dev/null || true
+else
+	HARNESS_MODE="generate"
+	if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
+		echo "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." >&2
+		exit 1
+	fi
+	rm -rf validation
+	mkdir -p validation/logs
+	touch validation/.ai-validation-owned
+fi
 
 if command -v git >/dev/null 2>&1; then
   git status --porcelain --untracked-files=all -- . ':!validation/**' | sort > "${PRE_GENERATE_STATUS_FILE}" 2>/dev/null || true
@@ -518,9 +728,11 @@ fi
 # ---------------------------------------------------------------
 PRIOR_FAILURE_CONTEXT_FILE="${RUNTIME_DIR}/prior_validation_failures.txt"
 : > "${PRIOR_FAILURE_CONTEXT_FILE}"
+: > "${PRIOR_RESULT_JSON_FILE}"
+: > "${PRIOR_CONTAINER_LOGS_FILE}"
 
 if [ "${VALIDATION_CYCLE}" -gt 1 ] && is_tracking_run; then
-  echo "Cycle ${VALIDATION_CYCLE}: fetching prior validation failure context from tracking issue #${TRACKING_ISSUE_NUM}."
+	echo "Cycle ${VALIDATION_CYCLE}: fetching prior validation failure context from tracking issue #${TRACKING_ISSUE_NUM}."
   PRIOR_COMMENTS="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments" \
     --paginate --jq '[.[] | select(.body | test("Runtime validation"))] | .[-3:] | .[].body' 2>/dev/null || true)"
   if [ -n "${PRIOR_COMMENTS}" ]; then
@@ -533,7 +745,15 @@ if [ "${VALIDATION_CYCLE}" -gt 1 ] && is_tracking_run; then
       echo
       echo "${PRIOR_COMMENTS}"
     } > "${PRIOR_FAILURE_CONTEXT_FILE}"
+
+    jq -n --arg summary "${PRIOR_COMMENTS}" '{result: "fail", phase: "prior_cycle", summary: $summary}' > "${PRIOR_RESULT_JSON_FILE}"
+    printf '%s\n' "${PRIOR_COMMENTS}" > "${PRIOR_CONTAINER_LOGS_FILE}"
   fi
+fi
+
+HARNESS_PROMPT_SOURCE="prompts/mode-validate-generate.txt"
+if [ "${HARNESS_MODE}" = "fix" ]; then
+	HARNESS_PROMPT_SOURCE="prompts/mode-validate-fix-harness.txt"
 fi
 
 {
@@ -543,12 +763,41 @@ fi
   echo
   echo "=== IMPLEMENTATION TASK ==="
   echo
-  cat prompts/mode-validate-generate.txt
+  cat "${HARNESS_PROMPT_SOURCE}"
   echo
   if [ -s "${PRIOR_FAILURE_CONTEXT_FILE}" ]; then
     echo "=== PRIOR VALIDATION FAILURES (DO NOT REPEAT) ==="
     cat "${PRIOR_FAILURE_CONTEXT_FILE}"
     echo
+  fi
+  if [ -s "${PRIOR_RESULT_JSON_FILE}" ]; then
+    echo "=== PRIOR STRUCTURED VALIDATION FAILURE JSON ==="
+    cat "${PRIOR_RESULT_JSON_FILE}"
+    echo
+  fi
+  if [ -s "${PRIOR_CONTAINER_LOGS_FILE}" ]; then
+    echo "=== PRIOR CONTAINER LOG TAILS ==="
+    cat "${PRIOR_CONTAINER_LOGS_FILE}"
+    echo
+  fi
+  if [ "${HARNESS_MODE}" = "fix" ]; then
+    echo "=== EXISTING HARNESS FILES ==="
+    while IFS= read -r harness_file; do
+      harness_size_bytes="$(wc -c < "${harness_file}" | tr -d ' ')"
+      if [ "${harness_size_bytes}" -gt 200000 ]; then
+        echo "----- ${harness_file} (skipped: file too large for prompt context) -----"
+        echo
+        continue
+      fi
+      if [ -s "${harness_file}" ] && ! grep -Iq . "${harness_file}"; then
+        echo "----- ${harness_file} (skipped: non-text file) -----"
+        echo
+        continue
+      fi
+      echo "----- ${harness_file} -----"
+      cat "${harness_file}"
+      echo
+    done < <(find validation -type f -not -path 'validation/logs/*' | sort)
   fi
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
@@ -561,16 +810,21 @@ fi
   echo "VALIDATION_TIMEOUT_MINUTES: ${VALIDATION_TIMEOUT}"
   echo "PREFERRED_COMPOSE_FILE: ${VALIDATION_COMPOSE_FILE}"
   echo "VALIDATION_CYCLE: ${VALIDATION_CYCLE}"
+  echo "HARNESS_MODE: ${HARNESS_MODE}"
   echo "SYNTHETIC_TEST_USERNAME_ENV_VAR: VALIDATION_TEST_USERNAME"
   echo "SYNTHETIC_TEST_PASSWORD_ENV_VAR: VALIDATION_TEST_PASSWORD"
   echo "SYNTHETIC_TEST_API_KEY_ENV_VAR: VALIDATION_TEST_API_KEY"
   echo
-  echo "Generate the harness directly in the repository workspace for immediate execution."
+  if [ "${HARNESS_MODE}" = "fix" ]; then
+    echo "Fix the existing harness directly in the repository workspace. Keep passing tests/config unchanged."
+  else
+    echo "Generate the harness directly in the repository workspace for immediate execution."
+  fi
 } > "${GENERATE_PROMPT_FILE}"
 
 GENERATE_SUCCESS=false
 for attempt in 1 2; do
-  echo "Validation harness generation attempt ${attempt}/2"
+  echo "Validation harness ${HARNESS_MODE} attempt ${attempt}/2"
   if cat "${GENERATE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${GENERATE_OUTPUT_FILE}" 2> >(tee -a "${GENERATE_LOG_FILE}" >&2); then
     if [ -f validation/validate.sh ]; then
       GENERATE_SUCCESS=true
@@ -612,7 +866,30 @@ find validation -type f -name '*.sh' -exec chmod +x {} +
 
 
 # ---------------------------------------------------------------
-# Phase 2: Execute validation harness (idle-timeout based)
+# Phase 2: Pre-flight checks for generated harness
+# ---------------------------------------------------------------
+if ! run_preflight_checks; then
+  failure_summary="Validation pre-flight checks failed. See validation_preflight.log artifact."
+  jq -n \
+    --arg diagnosis "Pre-flight validation failed before test execution." \
+    --arg harness_fixes "$(tail -n 120 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true)" \
+    '{
+      status: "harness_error",
+      diagnosis: $diagnosis,
+      fix_issues: [],
+      harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix validation/docker-compose.test.yml, shell syntax, or build context/dockerfile paths." end)
+    }' > "${DIAGNOSE_RESULT_FILE}"
+
+  post_tracking_comment "## ❌ Runtime validation harness pre-flight failed\n\n${failure_summary}\n\n\`docker compose config\`, shell syntax, or build context/dockerfile path checks failed."
+  set_tracking_phase_label "ai:validation-failed"
+  write_result_files "fail" "Validation failed due to harness pre-flight error" "${failure_summary}"
+  tg_notify "Validation pre-flight failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+  exit 0
+fi
+
+
+# ---------------------------------------------------------------
+# Phase 3: Execute validation harness (idle-timeout based)
 # ---------------------------------------------------------------
 # The timeout is activity-based: the process is killed only if it
 # produces no output for VALIDATION_TIMEOUT minutes. This allows
@@ -794,27 +1071,75 @@ if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ]; then
 fi
 
 if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ] && [ "${PASS_SCHEMA_OK}" = "true" ]; then
-  summary_text="Runtime validation passed (${PASSED_TESTS}/${TOTAL_TESTS} tests, ${DURATION_SECONDS}s)."
-  post_tracking_comment "## ✅ Runtime validation passed\n\n- Passed tests: ${PASSED_TESTS}/${TOTAL_TESTS}\n- Duration: ${DURATION_SECONDS}s"
-  set_tracking_phase_label "ai:validated"
-  write_result_files "pass" "${summary_text}" ""
-  tg_notify "Runtime validation passed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${PASSED_TESTS}/${TOTAL_TESTS})." "DEBUG"
-  exit 0
+	summary_text="Runtime validation passed (${PASSED_TESTS}/${TOTAL_TESTS} tests, ${DURATION_SECONDS}s)."
+	post_tracking_comment "## ✅ Runtime validation passed\n\n- Passed tests: ${PASSED_TESTS}/${TOTAL_TESTS}\n- Duration: ${DURATION_SECONDS}s"
+	set_tracking_phase_label "ai:validated"
+	write_result_files "pass" "${summary_text}" ""
+	tg_notify "Runtime validation passed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${PASSED_TESTS}/${TOTAL_TESTS})." "DEBUG"
+	exit 0
 fi
 
 
 # ---------------------------------------------------------------
-# Phase 3: Diagnose failures
+# Collect container logs (used for canary classification + diagnosis)
 # ---------------------------------------------------------------
 : > "${CONTAINER_LOG_TAIL_FILE}"
 if [ -d validation/logs ]; then
-  while IFS= read -r log_file; do
-    echo "===== ${log_file} (tail 80) =====" >> "${CONTAINER_LOG_TAIL_FILE}"
-    tail -n 80 "${log_file}" >> "${CONTAINER_LOG_TAIL_FILE}" 2>/dev/null || true
-    echo >> "${CONTAINER_LOG_TAIL_FILE}"
-  done < <(find validation/logs -type f | sort)
+	while IFS= read -r log_file; do
+		echo "===== ${log_file} (tail 80) =====" >> "${CONTAINER_LOG_TAIL_FILE}"
+		tail -n 80 "${log_file}" >> "${CONTAINER_LOG_TAIL_FILE}" 2>/dev/null || true
+		echo >> "${CONTAINER_LOG_TAIL_FILE}"
+	done < <(find validation/logs -type f | sort)
 fi
 
+
+# ---------------------------------------------------------------
+# Canary shortcut: classify infra-only canary failure as harness_error
+# ---------------------------------------------------------------
+CANARY_TEST_NAME="$(jq -r '.failures[0].test // ""' "${VALIDATION_RESULT_FILE}")"
+CANARY_ERROR_TEXT="$(jq -r '.failures[0].error // ""' "${VALIDATION_RESULT_FILE}" | tr '[:upper:]' '[:lower:]')"
+CANARY_ONLY_FAILURE=false
+CANARY_APP_SIGNAL_IN_LOGS=false
+if [ -s "${CONTAINER_LOG_TAIL_FILE}" ]; then
+	if grep -E -i -q 'application crashed|app crashed|process exited|server startup failed|panic|traceback|exception in app|fatal error|segmentation fault' "${CONTAINER_LOG_TAIL_FILE}"; then
+		CANARY_APP_SIGNAL_IN_LOGS=true
+	fi
+fi
+
+if [ "${FAILED_TESTS}" = "1" ] && [ -n "${CANARY_TEST_NAME}" ] && [ -n "${CANARY_ERROR_TEXT}" ]; then
+	if [[ "${CANARY_TEST_NAME}" == *00_canary* ]]; then
+		CANARY_ONLY_FAILURE=true
+	fi
+fi
+
+if [ "${CANARY_ONLY_FAILURE}" = true ]; then
+	if echo "${CANARY_ERROR_TEXT}" | grep -E -q 'connection refused|could not resolve host|command not found|exit code 127|no such file or directory|invalid compose|healthcheck|network|timeout waiting for'; then
+		if [ "${CANARY_APP_SIGNAL_IN_LOGS}" != "true" ] \
+			&& ! echo "${CANARY_ERROR_TEXT}" | grep -E -q 'application crashed|app crashed|process exited|server startup failed|panic|traceback|exception in app'; then
+			jq -n \
+				--arg diagnosis "Canary infrastructure check failed before app validation. Classified as harness_error." \
+				--arg harness_fixes "${FIRST_FAILURE}" \
+				'{
+					status: "harness_error",
+					diagnosis: $diagnosis,
+					fix_issues: [],
+					harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix canary test infrastructure assumptions (ports/services/tools)." end)
+				}' > "${DIAGNOSE_RESULT_FILE}"
+
+			failure_summary="Validation harness error: ${FIRST_FAILURE}"
+			post_tracking_comment "## ❌ Runtime validation harness error\n\n${failure_summary}\n\nCanary infrastructure check failed and remaining tests were skipped."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "fail" "Validation failed due to harness error" "${failure_summary}"
+			tg_notify "Validation harness canary failure for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 0
+		fi
+	fi
+fi
+
+
+# ---------------------------------------------------------------
+# Phase 4: Diagnose failures
+# ---------------------------------------------------------------
 {
   cat "${STATIC_CONTEXT_FILE}"
   echo

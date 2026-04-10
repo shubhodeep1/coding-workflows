@@ -68,6 +68,25 @@ Status semantics:
 - `harness_error`: harness defect found; explain in `harness_fixes`; keep `fix_issues` empty.
 - `infeasible`: validation cannot proceed safely without non-local/external requirements.
 
+Classification decision tree (apply before status selection):
+- Classify as `harness_error` (NOT `needs_fixes`) when ANY of these are true:
+  - Failure involves shell output parsing of mongosh/psql/redis-cli (`grep`, `awk`, or brittle string match on CLI output)
+  - Docker Compose fails to build or start (YAML parse error, missing Dockerfile, wrong build context)
+  - Health check fails because harness config uses wrong port, endpoint, or protocol
+  - Test script exits non-zero due to bash scripting error (`set -u`/`pipefail`/syntax error)
+  - Error references a file path under `validation/`
+  - Connection refused to a service the harness was supposed to start
+  - Exit code 127 (`command not found`) inside a test container
+  - Wrong content-type expectation in test assertion (expected JSON vs HTML mismatch, or vice versa)
+  - `curl`/`wget` to localhost fails with connection refused caused by harness port mismatch
+  - Logs contain `no such file or directory` for paths the harness was expected to create
+- Classify as `needs_fixes` ONLY when ALL are true:
+  - Application code crashes, returns wrong status codes, or produces incorrect output
+  - The test correctly exercises documented/expected application behavior
+  - Test infrastructure (Docker/networking/assertions) is demonstrably sound
+  - Failure persists regardless of equivalent assertion style or harness expression
+- When in doubt, prefer `harness_error`. False `harness_error` is cheaper than false `needs_fixes`.
+
 `depends_on` is optional and should be included only when applicable.
 
 SERENA MCP EFFICIENCY (MANDATORY):

@@ -68,8 +68,11 @@ State: "validating"
   │ dispatch validate.yml via workflow_dispatch
   ▼
 validate.yml runs:
-  Phase 1: Codex (xhigh) generates validation/ harness
-  Phase 2: Runner builds app in Docker, runs tests
+  Phase 0: Discover `.ai/validate.yml` hints when missing (ephemeral runtime file)
+  Phase 1: Codex generates/fixes validation harness (`generate` on cycle 1, `fix-harness` on cycle 2+)
+  Phase 2: Harness pre-flight checks (compose config, shell syntax, build context/dockerfile paths)
+  Phase 3: Runner builds app in Docker, runs tests
+  Phase 4: Diagnose failures (unless pre-flight/canary shortcut already classified)
   │
   ├─ All tests pass
   │   → add ai:validated label
@@ -184,7 +187,23 @@ Instructs the LLM to:
    - Prefer `curl` for HTTP testing
    - For startup testing: the app must tolerate missing external API connections. If the app crashes because it can't reach `api.telegram.org`, that IS a valid failure — the app should handle missing external connections gracefully (retry, degrade, etc.), not crash on startup
 
+Additional requirements:
+- First test must be a canary (`validation/tests/00_canary.sh`) that validates harness infra before app assertions.
+- Coverage categories are conditional by applicability (not all mandatory); core categories always apply.
+
 Include the SERENA MCP EFFICIENCY block (same as mode-judge.txt).
+
+### 1b. prompts/mode-validate-discover.txt
+
+Prompt for Phase 0 hint discovery.
+
+Outputs only YAML for `.ai/validate.yml` schema-compatible hints. This output is runtime-only when repo hints are absent and is not committed to the repository.
+
+### 1c. prompts/mode-validate-fix-harness.txt
+
+Prompt for cycle 2+ targeted harness repair.
+
+Scope is strictly `validation/` files and prior failure context; it must patch failing assertions/config minimally instead of regenerating the whole harness.
 
 ### 2. prompts/mode-validate-diagnose.txt
 
@@ -243,28 +262,43 @@ SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS
 - `post_comment()` — post comment to tracking issue
 - `add_label()` — add label (call `python3 scripts/ai_labels.py ensure-labels` first)
 
-**Phase 1: Generate harness**
+**Phase 0: Discover hints**
+
+1. If `.ai/validate.yml` exists, copy/use it directly.
+2. Else run Codex with `mode-validate-discover.txt` and store discovered YAML in runtime workspace only.
+3. If discovery fails, continue with fallback "no hints" behavior.
+
+**Phase 1: Generate or fix harness**
 
 1. Setup Codex config (`~/.codex/config.toml`) — same pattern as `orchestrate_poll_process.sh` lines 195-201
 2. Setup Serena: `bash scripts/setup_serena.sh --mode editing --context codex`
 3. Assemble static context — same pattern as `orchestrate_poll_process.sh` lines 232-250
 4. Get project spec from tracking issue body via `gh api`, or `${RUNTIME_DIR}/project_spec.txt`
-5. Check for `.ai/validate.yml` hints
-6. Build prompt: static context + TOOL_CALL_BUDGET + mode-validate-generate.txt + project spec + hints
+5. Determine harness mode by cycle:
+   - Cycle 1 (or missing owned harness): full generate (clean `validation/` then `mode-validate-generate.txt`)
+   - Cycle 2+: if an owned harness already exists in the workspace (for example, restored from artifacts), preserve `validation/`, clean only `validation/logs/`, and use `mode-validate-fix-harness.txt`; otherwise fall back to full generate mode
+6. Build prompt: static context + TOOL_CALL_BUDGET + selected prompt + project spec + hints + prior failure context
 7. Run Codex: `cat prompt | codex exec --model "${MODEL_EDITOR}" --full-auto > output 2> log`
    - Retry up to 2 attempts
    - Verify `validation/validate.sh` was created
    - On failure: post comment, Telegram, exit 1
 8. `chmod +x` all `.sh` files in `validation/`
 
-**Phase 2: Execute validation**
+**Phase 2: Pre-flight checks**
+
+1. `docker compose -f validation/docker-compose.test.yml config --quiet`
+2. `bash -n` for every `validation/**/*.sh`
+3. Verify each compose `build.context` + `dockerfile` resolves to existing paths
+4. On failure: terminal `harness_error` for the run (`ai:validation-failed`), skip execution and diagnosis
+
+**Phase 3: Execute validation**
 
 1. Run `validation/validate.sh` with `timeout ${VALIDATION_TIMEOUT}m`
 2. Capture output to `${VALIDATION_LOG}`
 3. Extract structured JSON result from output — use the brace-matching Python pattern from `orchestrate_poll_process.sh` lines 313-348 to find last JSON with `"result"` key
 4. If timeout (exit 124): synthesize failure JSON with `"phase": "timeout"`
 
-**Phase 3: Handle result**
+**Phase 4: Handle result**
 
 **If result is "pass":**
 - Add `ai:validated` label
@@ -273,12 +307,14 @@ SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS
 - Exit 0
 
 **If result is "fail":**
+- Canary shortcut: if canary-only failure indicates infra/harness cause, classify directly as `harness_error`.
+- If canary indicates app startup/crash behavior, continue to diagnosis (`needs_fixes` remains possible).
 - Build diagnosis prompt: static context + mode-validate-diagnose.txt + project spec + failure JSON + container logs (tail) + validation log (tail 200 lines)
 - Run Codex to diagnose
 - Parse the diagnosis JSON (same brace-matching pattern)
 - Handle by status:
   - `needs_fixes`: Create fix-up issues via `gh issue create` with orchestrator metadata (same pattern as `orchestrate_poll_process.sh` lines 480-501, but with `Type: validation-fix-up (cycle N)`)
-  - `harness_error`: Log warning, post comment explaining the harness was wrong, add `ai:validation-failed` label, Telegram. A harness error means the AI generated bad tests — don't loop, escalate.
+  - `harness_error`: Log warning, post comment explaining the harness was wrong, add `ai:validation-failed` label, Telegram. This run is terminal; poller-level next steps decide revalidation.
   - `infeasible`: Post comment explaining why, add `ai:validation-failed` label, Telegram.
 - For `needs_fixes`: add `ai:validation-fixing` label, post comment listing fix-up issues created, Telegram notification
 - Exit 0 (the poller manages the re-validation cycle, not this script)
