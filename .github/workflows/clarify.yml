@@ -247,6 +247,7 @@ jobs:
           EOF
           fi
           source scripts/memory_helpers.sh 2>/dev/null || true
+          memory_ensure_branch 2>/dev/null || true
 
           if ! declare -F memory_retrieve >/dev/null 2>&1 \
             || ! declare -F memory_record_run_event >/dev/null 2>&1 \

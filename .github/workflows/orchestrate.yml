@@ -47,6 +47,17 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
+      - name: Configure git auth for memory helper clones
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -171,6 +182,7 @@ jobs:
           fi
 
           source scripts/memory_helpers.sh
+          memory_ensure_branch
 
           memory_record_run_event \
             --run-id "${{ github.run_id }}" \

@@ -22,6 +22,17 @@ jobs:
         with:
           token: ${{ secrets.GH_PAT }}
 
+      - name: Configure git auth for memory helper clones
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -163,6 +174,7 @@ jobs:
 
       - name: Finalize linked issue lineage state
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_MEMORY_ENABLED: ${{ vars.AI_MEMORY_ENABLED || 'true' }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -201,6 +213,7 @@ jobs:
           fi
 
           source scripts/memory_helpers.sh
+          memory_ensure_branch
 
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue

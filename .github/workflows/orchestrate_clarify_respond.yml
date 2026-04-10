@@ -211,6 +211,7 @@ jobs:
           fi
 
           source scripts/memory_helpers.sh
+          memory_ensure_branch
 
           METADATA_JSON="$(jq -cn \
             --arg repository "${{ github.repository }}" \

@@ -333,6 +333,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/memory_helpers.sh
+          memory_ensure_branch
 
           CHECK_RESULT="$(memory_processed_command_check \
             --issue-number "${ISSUE_NUMBER}" \

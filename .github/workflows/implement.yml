@@ -409,9 +409,12 @@ jobs:
 
       - name: Claim /approved command
         if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           source scripts/memory_helpers.sh
+          memory_ensure_branch
 
           check_json="$(memory_processed_command_check \
             --issue-number "${ISSUE_NUMBER}" \

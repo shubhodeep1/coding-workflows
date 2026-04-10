@@ -37,6 +37,59 @@ _memory_retrieve_fallback()
 	return 0
 }
 
+memory_ensure_branch()
+{
+	# Ensure the ai-memory branch exists on the remote.  If it doesn't,
+	# create an empty orphan branch and push it so that subsequent memory
+	# read operations (which clone with --branch ai-memory) don't fail.
+	if ! _memory_enabled; then
+		return 0
+	fi
+
+	local branch="${AI_MEMORY_BRANCH:-ai-memory}"
+	local token="${GH_TOKEN:-}"
+
+	# Resolve authenticated origin URL
+	local origin_url
+	origin_url="$(git remote get-url origin 2>/dev/null || echo "")"
+	if [[ -z "${origin_url}" ]]; then
+		_memory_warn "ensure-branch: no origin remote configured"
+		return 0
+	fi
+
+	# Check if branch exists on remote
+	if git ls-remote --heads origin "${branch}" 2>/dev/null | grep -q "${branch}"; then
+		return 0
+	fi
+
+	echo "AI memory branch '${branch}' does not exist — creating it."
+
+	local temp_dir
+	temp_dir="$(mktemp -d)"
+
+	(
+		cd "${temp_dir}"
+		git init --quiet
+		git config user.name "codex-bot"
+		git config user.email "codex@users.noreply.github.com"
+		git remote add origin "${origin_url}"
+		git checkout --orphan "${branch}"
+
+		mkdir -p ai-memory
+		echo "AI memory branch — created automatically." > ai-memory/README.md
+		git add ai-memory/README.md
+		git commit --quiet -m "Initialize ai-memory branch"
+		git push origin "${branch}" 2>&1
+	) || {
+		_memory_warn "ensure-branch: failed to create '${branch}' (fail-open)"
+		rm -rf "${temp_dir}"
+		return 0
+	}
+
+	rm -rf "${temp_dir}"
+	echo "AI memory branch '${branch}' created successfully."
+}
+
 memory_record_run_event()
 {
 	if ! _memory_enabled; then
