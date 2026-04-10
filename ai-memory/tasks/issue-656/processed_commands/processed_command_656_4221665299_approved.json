@@ -5,13 +5,22 @@
   "entry_id": "processed_command_656_4221665299_approved",
   "issue_number": 656,
   "metadata": {
+    "branch": "ai/issue-656",
+    "changed_files": [
+      "tests/e2e_smoke_canary.txt"
+    ],
+    "issue_number": 656,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/656",
+    "pr_number": 657,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/657",
+    "run_attempt": "1",
+    "run_id": "24230077412",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24230077412"
   },
   "run_attempt": 1,
   "run_id": "24230077412",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-10T06:39:13Z",
+  "status": "completed",
+  "timestamp": "2026-04-10T06:40:11Z",
   "workflow": "implement"
 }
