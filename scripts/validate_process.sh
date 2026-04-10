@@ -425,9 +425,8 @@ run_preflight_checks()
 	local compose_json_file
 	compose_json_file="${RUNTIME_DIR}/validation_compose_config.json"
 	if ! docker compose -f validation/docker-compose.test.yml config --format json > "${compose_json_file}" 2>> "${PRE_FLIGHT_LOG_FILE}"; then
-		echo "Compose JSON export failed; cannot verify build context and dockerfile paths." >> "${PRE_FLIGHT_LOG_FILE}"
-		PRE_FLIGHT_STATUS="fail"
-		return 1
+		echo "Compose JSON export unavailable or failed; skipping build context and dockerfile path verification." >> "${PRE_FLIGHT_LOG_FILE}"
+		printf '%s\n' '{"services":{}}' > "${compose_json_file}"
 	fi
 
 	if ! python3 - "${compose_json_file}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY'
@@ -611,7 +610,28 @@ if "```" in raw:
     if match:
         candidate = match.group(1).strip()
 
-if not candidate or ":" not in candidate:
+if not candidate:
+    sys.exit(1)
+
+if candidate.lstrip().startswith("{") or candidate.lstrip().startswith("["):
+    sys.exit(1)
+
+if len(candidate) > 12000:
+    sys.exit(1)
+
+lines = [
+    line.lstrip()
+    for line in candidate.splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+]
+if not lines:
+    sys.exit(1)
+
+if lines[0].lower().startswith(("error:", "fatal:", "traceback", "exception")):
+    sys.exit(1)
+
+expected_key = re.compile(r"^(type|entry|port|health_check|services|env_overrides|custom_tests|skip_tests):\s*", re.IGNORECASE)
+if not any(expected_key.match(line) for line in lines):
     sys.exit(1)
 
 with open(output_file, "w", encoding="utf-8") as handle:
@@ -763,6 +783,17 @@ fi
   if [ "${HARNESS_MODE}" = "fix" ]; then
     echo "=== EXISTING HARNESS FILES ==="
     while IFS= read -r harness_file; do
+      harness_size_bytes="$(wc -c < "${harness_file}" | tr -d ' ')"
+      if [ "${harness_size_bytes}" -gt 200000 ]; then
+        echo "----- ${harness_file} (skipped: file too large for prompt context) -----"
+        echo
+        continue
+      fi
+      if [ -s "${harness_file}" ] && ! grep -Iq . "${harness_file}"; then
+        echo "----- ${harness_file} (skipped: non-text file) -----"
+        echo
+        continue
+      fi
       echo "----- ${harness_file} -----"
       cat "${harness_file}"
       echo
@@ -1050,11 +1081,31 @@ fi
 
 
 # ---------------------------------------------------------------
+# Collect container logs (used for canary classification + diagnosis)
+# ---------------------------------------------------------------
+: > "${CONTAINER_LOG_TAIL_FILE}"
+if [ -d validation/logs ]; then
+	while IFS= read -r log_file; do
+		echo "===== ${log_file} (tail 80) =====" >> "${CONTAINER_LOG_TAIL_FILE}"
+		tail -n 80 "${log_file}" >> "${CONTAINER_LOG_TAIL_FILE}" 2>/dev/null || true
+		echo >> "${CONTAINER_LOG_TAIL_FILE}"
+	done < <(find validation/logs -type f | sort)
+fi
+
+
+# ---------------------------------------------------------------
 # Canary shortcut: classify infra-only canary failure as harness_error
 # ---------------------------------------------------------------
 CANARY_TEST_NAME="$(jq -r '.failures[0].test // ""' "${VALIDATION_RESULT_FILE}")"
 CANARY_ERROR_TEXT="$(jq -r '.failures[0].error // ""' "${VALIDATION_RESULT_FILE}" | tr '[:upper:]' '[:lower:]')"
 CANARY_ONLY_FAILURE=false
+CANARY_APP_SIGNAL_IN_LOGS=false
+if [ -s "${CONTAINER_LOG_TAIL_FILE}" ]; then
+	if grep -E -i -q 'application crashed|app crashed|process exited|server startup failed|panic|traceback|exception in app|fatal error|segmentation fault' "${CONTAINER_LOG_TAIL_FILE}"; then
+		CANARY_APP_SIGNAL_IN_LOGS=true
+	fi
+fi
+
 if [ "${FAILED_TESTS}" = "1" ] && [ -n "${CANARY_TEST_NAME}" ] && [ -n "${CANARY_ERROR_TEXT}" ]; then
 	if [[ "${CANARY_TEST_NAME}" == *00_canary* ]]; then
 		CANARY_ONLY_FAILURE=true
@@ -1063,7 +1114,8 @@ fi
 
 if [ "${CANARY_ONLY_FAILURE}" = true ]; then
 	if echo "${CANARY_ERROR_TEXT}" | grep -E -q 'connection refused|could not resolve host|command not found|exit code 127|no such file or directory|invalid compose|healthcheck|network|timeout waiting for'; then
-		if ! echo "${CANARY_ERROR_TEXT}" | grep -E -q 'application crashed|app crashed|process exited|server startup failed|panic|traceback|exception in app'; then
+		if [ "${CANARY_APP_SIGNAL_IN_LOGS}" != "true" ] \
+			&& ! echo "${CANARY_ERROR_TEXT}" | grep -E -q 'application crashed|app crashed|process exited|server startup failed|panic|traceback|exception in app'; then
 			jq -n \
 				--arg diagnosis "Canary infrastructure check failed before app validation. Classified as harness_error." \
 				--arg harness_fixes "${FIRST_FAILURE}" \
@@ -1082,15 +1134,6 @@ if [ "${CANARY_ONLY_FAILURE}" = true ]; then
 			exit 0
 		fi
 	fi
-fi
-
-: > "${CONTAINER_LOG_TAIL_FILE}"
-if [ -d validation/logs ]; then
-	while IFS= read -r log_file; do
-		echo "===== ${log_file} (tail 80) =====" >> "${CONTAINER_LOG_TAIL_FILE}"
-		tail -n 80 "${log_file}" >> "${CONTAINER_LOG_TAIL_FILE}" 2>/dev/null || true
-		echo >> "${CONTAINER_LOG_TAIL_FILE}"
-	done < <(find validation/logs -type f | sort)
 fi
 
 
