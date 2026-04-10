@@ -53,7 +53,6 @@ jobs:
         id: find_tracking
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
         run: |
           set -euo pipefail
           # gh_helpers.sh is not yet available (checkout + fetch happen later),
@@ -90,18 +89,6 @@ jobs:
             return 1
           }
 
-          _is_truthy() {
-            case "$(echo "$1" | tr '[:upper:]' '[:lower:]')" in
-              1|true|yes|on) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          STANDALONE_ENABLED=false
-          if _is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY:-true}"; then
-            STANDALONE_ENABLED=true
-          fi
-
           # Find all open issues with the orchestrator tracking label
           TRACKING_ISSUES="$(_gh_retry gh issue list \
             --repo "${{ github.repository }}" \
@@ -116,14 +103,7 @@ jobs:
           echo "${TRACKING_ISSUES}" > "${RUNTIME_DIR}/tracking_issues.json"
 
           if [ "${COUNT}" -eq 0 ]; then
-            if [ "${STANDALONE_ENABLED}" = "true" ]; then
-              echo "No active orchestrator projects. Continuing for standalone stall recovery."
-              echo "has_tracking=false" >> "$GITHUB_OUTPUT"
-              echo "has_work=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
-            echo "No active orchestrator projects and standalone stall recovery is disabled. Exiting."
+            echo "No active orchestrator projects. Exiting gracefully — cron will start the next cycle."
             echo "has_tracking=false" >> "$GITHUB_OUTPUT"
             echo "has_work=false" >> "$GITHUB_OUTPUT"
             exit 0
