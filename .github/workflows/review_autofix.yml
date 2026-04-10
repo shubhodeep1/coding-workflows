@@ -2251,6 +2251,11 @@ jobs:
           Review file issue audit:
           - none (editor failed before producing a validated summary)
 
+          Regression fingerprint:
+          - unavailable (editor fallback)
+
+          Runtime failure path:
+          - unavailable (editor fallback)
           __EDITOR_SUMMARY__
 
           echo "Editor failed after retries; continuing with fallback summary."
@@ -2535,6 +2540,11 @@ jobs:
           Review file issue audit:
           - none (no editor summary output was generated)
 
+          Regression fingerprint:
+          - unavailable (editor fallback)
+
+          Runtime failure path:
+          - unavailable (editor fallback)
           __EDITOR_SUMMARY__
           fi
 
