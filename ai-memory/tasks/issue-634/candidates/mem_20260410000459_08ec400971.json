@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nANSWERS:\nQ31: A\n\nRATIONALE:\nQ31: The issue explicitly targets `validation/tests/01_core_smoke.sh` (and optionally `validation/app_server.py`), but those files are not present in the current workspace context; selecting **A** is required so planning can proceed against the correct repo/path and branch with file-grounded verification.",
+  "fingerprint": "fb49ce4240cd3a9195e4f3b3f675e10c1475761b3c59a8e0d4c3166bd77c309e",
+  "lineage": {
+    "issue_number": 634,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24219450667",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24219450667",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/634"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20260410000459_08ec400971",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 634,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24219450667"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #634",
+  "timestamps": {
+    "created_at": "2026-04-10T00:04:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
