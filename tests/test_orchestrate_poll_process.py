@@ -432,6 +432,11 @@ if args[0] == 'api':
 			sys.exit(0)
 		if jq == '.state':
 			print(pr.get('state', 'open'))
+		elif jq == '.merged_at != null':
+			merged_at = pr.get('merged_at')
+			if merged_at is None and pr.get('merged') is True:
+				merged_at = 'mock-merged-at'
+			print('true' if merged_at is not None else 'false')
 		elif jq == '.merged':
 			merged = pr.get('merged')
 			if merged is None:

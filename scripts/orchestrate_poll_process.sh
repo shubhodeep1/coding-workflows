@@ -393,7 +393,7 @@ finalize_integration_merge_if_needed() {
     local existing_pr_state
     local existing_pr_merged
     existing_pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
-    existing_pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged' 2>/dev/null || echo "")"
+    existing_pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' 2>/dev/null || echo "")"
     if [ "${existing_pr_state}" = "closed" ] && [ "${existing_pr_merged}" = "true" ]; then
       jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -442,7 +442,7 @@ finalize_integration_merge_if_needed() {
   local pr_merged
   pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
   pr_mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' 2>/dev/null || echo "")"
-  pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged' 2>/dev/null || echo "")"
+  pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' 2>/dev/null || echo "")"
 
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
@@ -481,7 +481,7 @@ finalize_integration_merge_if_needed() {
 
   pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
   pr_mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' 2>/dev/null || echo "")"
-  pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged' 2>/dev/null || echo "")"
+  pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' 2>/dev/null || echo "")"
 
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
@@ -1977,7 +1977,7 @@ for tidx in $(seq 0 $(( COUNT - 1 ))); do
 
       # Guard: check PR state before invoking the judge
       RB_PR_STATE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-      RB_PR_MERGED="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null || echo "false")"
+      RB_PR_MERGED="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged_at != null' 2>/dev/null || echo "false")"
       if [ "${RB_PR_STATE}" != "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
         # PR is closed (not merged) — skip entirely
         echo "  PR #${RB_PR} is closed (not merged). Cleaning up labels and skipping."
@@ -2257,7 +2257,7 @@ sys.exit(1)
             echo "  Judge is applying fixes to PR #${RB_PR}..."
             # Re-check PR state before expensive fix+push (race condition safety net)
             RB_PR_STATE_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.state' 2>/dev/null || echo "")"
-            RB_PR_MERGED_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged' 2>/dev/null || echo "false")"
+            RB_PR_MERGED_NOW="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" --jq '.merged_at != null' 2>/dev/null || echo "false")"
             if [ "${RB_PR_STATE_NOW}" != "open" ] && [ "${RB_PR_MERGED_NOW}" != "true" ]; then
               # PR was closed without merge — skip
               echo "::warning::PR #${RB_PR} is closed (not merged). Skipping fix application."
