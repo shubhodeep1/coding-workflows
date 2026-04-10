@@ -708,6 +708,21 @@ When a tracking issue reaches `ai:validation-failed`, you can manually reset it 
 
 This is useful after fixing the root cause manually (e.g. correcting a Docker config, adding a missing env var, or updating a dependency). There is no limit on how many times `/revalidate` can be used — the operator decides when to stop retrying.
 
+### Manual Reset: `/judge_resume`
+
+When a tracking issue reaches terminal `failed` status due to judge stall cycle exhaustion (`MAX_JUDGE_CYCLES`) or recovery attempt exhaustion (`MAX_RECOVERY_ATTEMPTS`), you can manually resume it by commenting `/judge_resume` on the tracking issue. The next poller cycle will:
+
+1. Reset judge stall cycles (`judge_stall_cycles` → 0).
+2. Reset recovery counter (`recovery_count` → 0).
+3. Transition the project status from `failed` to `in_progress`.
+4. Resume normal wave processing immediately.
+
+This does **not** reset the total `judge_cycle` counter (which is informational only — it tracks how many times the judge has been invoked overall). Only the stall and recovery counters that gate the failure limits are reset.
+
+Use this after manual intervention (e.g. fixing a problematic issue, merging a stuck PR, or adjusting `MAX_JUDGE_CYCLES`/`MAX_RECOVERY_ATTEMPTS` variables). There is no limit on how many times `/judge_resume` can be used.
+
+> **Note:** `/judge_resume` only applies to judge/recovery failures. For validation failures (`ai:validation-failed`), use `/revalidate` instead.
+
 ### Validation Controls
 
 | Variable | Default | Behavior |

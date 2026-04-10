@@ -2263,6 +2263,36 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     fi
   fi
 
+  # ---------------------------------------------------------------
+  # /judge_resume — manual reset from judge/recovery failure
+  # ---------------------------------------------------------------
+  # When a project is in terminal failed state (status="failed") but
+  # NOT from validation (no ai:validation-failed label), a /judge_resume
+  # comment posted AFTER the latest state comment resets judge stall
+  # cycles and recovery counters, allowing the poller to resume.
+  if [ "${PROJECT_STATUS}" = "failed" ] && ! has_label "${TRACKING_LABELS}" "ai:validation-failed"; then
+    JUDGE_RESUME_REQUESTED="$(echo "${COMMENTS}" | jq -r '
+      (to_entries | map(select(.value.body | contains("ORCHESTRATOR_STATE_V1"))) | last | .key // -1) as $last_state_idx |
+      [to_entries[] | select(.key > $last_state_idx and (.value.body | test("^\\s*/judge_resume(\\s|$)"; "m")))] | length > 0
+    ')"
+
+    if [ "${JUDGE_RESUME_REQUESTED}" = "true" ]; then
+      echo "  /judge_resume requested for project #${TRACKING_NUM}. Resetting judge and recovery counters."
+      PREV_JUDGE_STALL="$(jq -r '.judge_stall_cycles // .judge_cycle' "${STATE_FILE}")"
+      PREV_RECOVERY="$(jq -r '.recovery_count // 0' "${STATE_FILE}")"
+      jq \
+        '.status = "in_progress" |
+         .judge_stall_cycles = 0 |
+         .recovery_count = 0' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment
+      post_tracking_comment "## ▶️ Project resumed via /judge_resume\n\nJudge stall cycles reset: ${PREV_JUDGE_STALL} → 0\nRecovery count reset: ${PREV_RECOVERY} → 0\nStatus: failed → in_progress\n\nThe poller will resume processing on the next cycle."
+      tg_notify "/judge_resume: project #${TRACKING_NUM} resumed from failed state. Judge stall cycles ${PREV_JUDGE_STALL}→0, recovery ${PREV_RECOVERY}→0." "WARNING"
+      # Fall through to normal processing below instead of continuing
+      PROJECT_STATUS="in_progress"
+    fi
+  fi
+
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
     echo "Project already ${PROJECT_STATUS}, skipping."
     continue
