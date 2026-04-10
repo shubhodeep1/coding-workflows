@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: For pre-flight failures (compose/bash/path checks), what should happen immediately after detection?**\nChoices:\n- **A** \u2014 Mark `harness_error` and end the run as terminal (`ai:validation-failed`) without same-run retries (RECOMMENDED)\n- **B** \u2014 Add an in-script retry loop that repairs/regenerates harness and re-runs pre-flight in the same validation run\n- **C** \u2014 Skip diagnosis but create `needs_fixes` issues for app code even when pre-flight fails\nReply: `Q1: A`\n**Q2: When Phase 0 auto-generates `.ai/validate.yml` (if missing), where should it live?**\nChoices:\n- **A** \u2014 Ephemeral workspace file for the current validation run only (not committed) (RECOMMENDED)\n- **B** \u2014 Write to repo root `.ai/validate.yml` in checkout but do not commit\n- **C** \u2014 Write and commit `.ai/validate.yml` back to the branch when missing\nReply: `Q2: A`\n**Q3: If the canary test fails because the app port is unreachable, how should it be classified?**\nChoices:\n- **A** \u2014 Always `harness_error` (strict canary shortcut, no diagnosis)\n- **B** \u2014 `harness_error` only for infra/harness causes; app startup/crash remains `needs_fixes` (RECOMMENDED)\n- **C** \u2014 Never shortcut; always run full diagnosis even after canary failure\nReply: `Q3: B`",
+  "fingerprint": "3d4a2000195e2270962edee33767d06c45b288594e4265469b3f39d21e9fde01",
+  "lineage": {
+    "issue_number": 653,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24229237156",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24229237156",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260410061338_3500d5154e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 653,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24229237156"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #653 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-10T06:13:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
