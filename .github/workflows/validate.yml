@@ -67,7 +67,7 @@ jobs:
 
       - name: Setup shared runtime
         id: runtime
-        uses: ./.github/actions/setup-runtime
+        uses: shubhodeep1/coding-workflows/.github/actions/setup-runtime@stable
         with:
           runtime_prefix: codex-validate
           required_env_csv: OPENROUTER_API_KEY
