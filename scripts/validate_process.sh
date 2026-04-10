@@ -440,7 +440,7 @@ compose_json_path = sys.argv[1]
 with open(compose_json_path, "r", encoding="utf-8") as handle:
     payload = json.load(handle)
 
-services = payload.get("services", {})
+services = payload.get("services") or {}
 compose_dir = os.path.abspath("validation")
 missing = []
 
@@ -841,7 +841,7 @@ if ! run_preflight_checks; then
   failure_summary="Validation pre-flight checks failed. See validation_preflight.log artifact."
   jq -n \
     --arg diagnosis "Pre-flight validation failed before test execution." \
-    --arg harness_fixes "$(tail -n 120 \"${PRE_FLIGHT_LOG_FILE}\" 2>/dev/null || true)" \
+    --arg harness_fixes "$(tail -n 120 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true)" \
     '{
       status: "harness_error",
       diagnosis: $diagnosis,
@@ -1056,7 +1056,7 @@ CANARY_TEST_NAME="$(jq -r '.failures[0].test // ""' "${VALIDATION_RESULT_FILE}")
 CANARY_ERROR_TEXT="$(jq -r '.failures[0].error // ""' "${VALIDATION_RESULT_FILE}" | tr '[:upper:]' '[:lower:]')"
 CANARY_ONLY_FAILURE=false
 if [ "${FAILED_TESTS}" = "1" ] && [ -n "${CANARY_TEST_NAME}" ] && [ -n "${CANARY_ERROR_TEXT}" ]; then
-	if [[ "${CANARY_TEST_NAME}" == *canary* || "${CANARY_TEST_NAME}" == *00_canary* ]]; then
+	if [[ "${CANARY_TEST_NAME}" == *00_canary* ]]; then
 		CANARY_ONLY_FAILURE=true
 	fi
 fi
