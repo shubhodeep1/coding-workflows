@@ -2071,11 +2071,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 
   # ---------------------------------------------------------------
   # Orphan sweep: find review-blocked issues that belong to this
-  # project but are not tracked in the current wave.  Without this,
-  # the in-workflow judge skips orchestrator-managed issues (exit 0)
-  # expecting the poller to handle them, but the poller only scans
-  # issues listed in the state file's current wave — orphans get
-  # stuck with ai:review-blocked forever.
+  # project but are not tracked in the current wave.  The poller
+  # only scans issues listed in the state file's current wave —
+  # orphans would get stuck with ai:review-blocked forever without
+  # this sweep re-injecting them.
   # ---------------------------------------------------------------
   ORPHAN_RB_JSON="[]"
   if ! ORPHAN_RB_JSON="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" \
