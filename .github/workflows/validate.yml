@@ -65,6 +65,17 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
+      - name: Configure git auth for memory helper clones
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+
       - name: Setup shared runtime
         id: runtime
         uses: shubhodeep1/coding-workflows/.github/actions/setup-runtime@stable
@@ -190,10 +201,12 @@ jobs:
         continue-on-error: true
         env:
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
           source scripts/memory_helpers.sh
+          memory_ensure_branch
 
           issue_number="${TRACKING_ISSUE}"
           if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then

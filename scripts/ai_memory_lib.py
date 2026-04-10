@@ -1340,11 +1340,35 @@ def _file_lock(lock_name: str) -> Any:
         os.close(fd)
 
 
+def _inject_token_into_url(url: str, token: str) -> str:
+    """Embed a GitHub token into an HTTPS origin URL for authenticated clones.
+
+    Converts ``https://github.com/owner/repo`` →
+    ``https://x-access-token:TOKEN@github.com/owner/repo``.
+    SSH and file URLs are returned unchanged.
+    """
+    if not url.startswith("https://"):
+        return url
+    # Already has embedded credentials — leave as-is.
+    if "@" in url.split("//", 1)[-1].split("/", 1)[0]:
+        return url
+    return url.replace("https://", f"https://x-access-token:{token}@", 1)
+
+
 def _resolve_origin_url(repo_root: Path) -> str:
     process = _run_git(repo_root, ["remote", "get-url", "origin"], check=False)
     if process.returncode == 0:
-        return process.stdout.strip()
-    return str(repo_root.resolve())
+        url = process.stdout.strip()
+    else:
+        url = str(repo_root.resolve())
+    # When running in CI the origin URL from actions/checkout is bare HTTPS
+    # (https://github.com/owner/repo) with no embedded credentials.  Subprocess
+    # git-clone calls therefore fail with "could not read Username".  If a
+    # GH_TOKEN env-var is available, inject it so clones authenticate properly.
+    token = os.environ.get("GH_TOKEN", "")
+    if token and url.startswith("https://"):
+        url = _inject_token_into_url(url, token)
+    return url
 
 
 def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
