@@ -1616,6 +1616,17 @@ recover_stalled_issue() {
 
   echo "  [stall-recovery] Issue #${issue_num} stuck in '${phase}' for ${stall_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
 
+  # ---- Guard: skip recovery if the issue is already closed on GitHub ----
+  # Defence-in-depth for the current poll cycle: even if the state file
+  # hasn't been updated yet, don't post recovery comments on closed issues
+  # (e.g. issues whose PRs were already merged).
+  local _gh_issue_state
+  _gh_issue_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.state' || echo "")"
+  if [ "${_gh_issue_state}" = "closed" ]; then
+    echo "  [stall-recovery] Issue #${issue_num} is closed on GitHub — skipping recovery."
+    return 1  # Signal: no action taken
+  fi
+
   # ---- Guard: skip recovery if a *fresh* workflow is actively processing this issue ----
   if issue_has_active_workflow "${issue_num}"; then
     echo "  [stall-recovery] Issue #${issue_num} has a recent active workflow run — skipping recovery (workflow is slow, not stalled)."
@@ -3430,6 +3441,25 @@ fi
     echo "${WAVE_STATUS}" | jq -r '.issues[] | "\(.id) \(.status)"' | while read -r local_id status; do
       echo "  ${local_id}: ${status}"
     done
+
+    # Persist terminal statuses back to the state file so that future
+    # poll cycles (and detect_stalls) see the correct status even when
+    # label fetches fail.  Without this, the state file would stay
+    # "pending" forever for merged/closed issues.
+    while IFS= read -r _ws_entry; do
+      _ws_id="$(echo "${_ws_entry}" | jq -r '.id')"
+      _ws_gh="$(echo "${_ws_entry}" | jq -r '.github_issue')"
+      _ws_status="$(echo "${_ws_entry}" | jq -r '.status')"
+      [ -n "${_ws_id}" ] && [ "${_ws_id}" != "null" ] || continue
+      case "${_ws_status}" in
+        merged|closed)
+          echo "  Persisting terminal status '${_ws_status}' for ${_ws_id} (#${_ws_gh}) to state file."
+          jq --arg lid "${_ws_id}" --arg st "${_ws_status}" --argjson wi "${WAVE_IDX}" \
+            '(.waves[$wi].issues[] | select(.id == $lid)).status = $st' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          ;;
+      esac
+    done < <(echo "${WAVE_STATUS}" | jq -c '.issues[]')
 
     # ---------------------------------------------------------------
     # Stall detection and self-healing
