@@ -40,6 +40,7 @@ jobs:
           python3 -m py_compile scripts/serena_efficiency_report.py
           python3 -m py_compile scripts/orchestrate_lib.py
           python3 -m py_compile scripts/ai_labels.py
+          python3 -m py_compile scripts/collect_workflow_logs.py
 
       - name: Orchestrate lib unit tests
         run: |
@@ -55,6 +56,11 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/test_overlap_validation_fallback.py
+
+      - name: Workflow log collector unit tests
+        run: |
+          set -euo pipefail
+          python3 tests/test_collect_workflow_logs.py
 
       - name: JSON schema validation
         run: |
