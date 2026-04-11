@@ -385,58 +385,57 @@ set_tracking_phase_label() {
 
   ensure_label_exists "${phase_label}"
 
-  if [ -f "${contract_file}" ]; then
-    local phase_changes
-    if phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>/dev/null)"; then
-      # Fetch current labels on the issue so we only attempt to remove labels
-      # that are actually present.  Trying to remove a label that does not
-      # exist on the issue can cause `gh issue edit` to return an error,
-      # which the outer `|| true` would silently swallow — leaving stale
-      # labels (e.g. ai:validating + ai:validation-fixing) in place even
-      # after the phase has advanced to ai:validated.
-      local current_issue_labels
-      current_issue_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
+  if [ ! -f "${contract_file}" ]; then
+    echo "::warning::set_tracking_phase_label: missing label contract ${contract_file}; cannot apply '${phase_label}' safely." >&2
+    return 1
+  fi
 
-      # Build a single gh issue edit command with all --remove-label and
-      # --add-label flags instead of one API call per label.
-      local edit_args=()
-      while IFS= read -r remove_label; do
-        [ -n "${remove_label}" ] || continue
-        # Only remove labels that are currently on the issue to avoid
-        # errors from trying to remove absent labels.
-        if echo "${current_issue_labels}" | jq -e --arg l "${remove_label}" 'index($l) != null' >/dev/null 2>&1; then
-          edit_args+=(--remove-label "${remove_label}")
-        fi
-      done < <(echo "${phase_changes}" | jq -r '.remove[]?')
+  local phase_changes
+  if ! phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>/dev/null)"; then
+    echo "::warning::set_tracking_phase_label: resolve-phase failed for '${phase_label}' using ${contract_file}." >&2
+    return 1
+  fi
 
-      while IFS= read -r add_label; do
-        [ -n "${add_label}" ] || continue
-        ensure_label_exists "${add_label}"
-        edit_args+=(--add-label "${add_label}")
-      done < <(echo "${phase_changes}" | jq -r '.add[]?')
+  # Fetch current labels on the issue so we only attempt to remove labels
+  # that are actually present.  Trying to remove a label that does not
+  # exist on the issue can cause `gh issue edit` to return an error,
+  # which the outer `|| true` would silently swallow — leaving stale
+  # labels (e.g. ai:validating + ai:validation-fixing) in place even
+  # after the phase has advanced to ai:validated.
+  local current_issue_labels
+  current_issue_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
 
-      if [ "${#edit_args[@]}" -gt 0 ]; then
-        local _label_err_file
-        _label_err_file="$(mktemp)"
-        if ! gh_retry gh issue edit "${TRACKING_NUM}" \
-          --repo "${GITHUB_REPOSITORY}" \
-          "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
-          echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_NUM} (contract mode): $(cat "${_label_err_file}" 2>/dev/null)" >&2
-        fi
-        rm -f "${_label_err_file}"
-      fi
-      return 0
+  # Build a single gh issue edit command with all --remove-label and
+  # --add-label flags instead of one API call per label.
+  local edit_args=()
+  while IFS= read -r remove_label; do
+    [ -n "${remove_label}" ] || continue
+    # Only remove labels that are currently on the issue to avoid
+    # errors from trying to remove absent labels.
+    if echo "${current_issue_labels}" | jq -e --arg l "${remove_label}" 'index($l) != null' >/dev/null 2>&1; then
+      edit_args+=(--remove-label "${remove_label}")
     fi
-  fi
+  done < <(echo "${phase_changes}" | jq -r '.remove[]?')
 
-  local _label_err_file
-  _label_err_file="$(mktemp)"
-  if ! gh_retry gh issue edit "${TRACKING_NUM}" \
-    --repo "${GITHUB_REPOSITORY}" \
-    --add-label "${phase_label}" >/dev/null 2>"${_label_err_file}"; then
-    echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_NUM} (fallback mode): $(cat "${_label_err_file}" 2>/dev/null)" >&2
+  while IFS= read -r add_label; do
+    [ -n "${add_label}" ] || continue
+    ensure_label_exists "${add_label}"
+    edit_args+=(--add-label "${add_label}")
+  done < <(echo "${phase_changes}" | jq -r '.add[]?')
+
+  if [ "${#edit_args[@]}" -gt 0 ]; then
+    local _label_err_file
+    _label_err_file="$(mktemp)"
+    if ! gh_retry gh issue edit "${TRACKING_NUM}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
+      echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_NUM}: $(cat "${_label_err_file}" 2>/dev/null)" >&2
+      rm -f "${_label_err_file}"
+      return 1
+    fi
+    rm -f "${_label_err_file}"
   fi
-  rm -f "${_label_err_file}"
+  return 0
 }
 
 get_issue_labels_json() {
@@ -448,6 +447,104 @@ has_label() {
   local labels_json="$1"
   local label="$2"
   echo "${labels_json}" | jq -e --arg label "${label}" 'index($label) != null' >/dev/null 2>&1
+}
+
+add_healing_note() {
+  local note="$1"
+  [ -n "${note}" ] || return 0
+  HEALING_NOTES+=("${note}")
+}
+
+post_healing_summary_comment() {
+  if [ "${#HEALING_NOTES[@]}" -eq 0 ]; then
+    return 0
+  fi
+  local unique_notes
+  unique_notes="$(printf '%s\n' "${HEALING_NOTES[@]}" | awk 'NF && !seen[$0]++')"
+  [ -n "${unique_notes}" ] || return 0
+  post_tracking_comment "## 🔧 Poller auto-healing updates
+
+$(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
+}
+
+reconcile_managed_issue_labels() {
+  local issue_num="$1"
+  local labels_json="$2"
+  local issue_state="$3"
+  local pr_state="$4"
+  local pr_merged="$5"
+  local contract_file=".github/ai/label_contract.v1.json"
+
+  if [ ! -f "${contract_file}" ]; then
+    echo "${labels_json}"
+    return 0
+  fi
+
+  local labels_csv
+  labels_csv="$(echo "${labels_json}" | jq -r 'join(",")' 2>/dev/null || echo "")"
+  local repair_json
+  repair_json="$(python3 scripts/ai_labels.py repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
+
+  local plan_json
+  plan_json="$(python3 - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" <<'PY'
+import json
+import sys
+
+current = set(json.loads(sys.argv[1]))
+repair = json.loads(sys.argv[2])
+issue_state = (sys.argv[3] or "").strip().lower()
+pr_merged = (sys.argv[4] or "").strip().lower() == "true"
+
+final = set(current)
+for label in repair.get("remove", []):
+	final.discard(label)
+for label in repair.get("add", []):
+	final.add(label)
+
+if pr_merged:
+	final.discard("ai:closed")
+	final.add("ai:merged")
+elif issue_state == "closed" and "ai:closed" not in final and "ai:merged" not in final:
+	final.add("ai:closed")
+
+add = sorted(final - current)
+remove = sorted(current - final)
+print(json.dumps({"add": add, "remove": remove, "final": sorted(final)}))
+PY
+)"
+
+  local add_count remove_count
+  add_count="$(echo "${plan_json}" | jq '(.add // []) | length' 2>/dev/null || echo "0")"
+  remove_count="$(echo "${plan_json}" | jq '(.remove // []) | length' 2>/dev/null || echo "0")"
+  if [ "${add_count}" -eq 0 ] && [ "${remove_count}" -eq 0 ]; then
+    echo "${labels_json}"
+    return 0
+  fi
+
+  local edit_args=()
+  while IFS= read -r remove_label; do
+    [ -n "${remove_label}" ] || continue
+    edit_args+=(--remove-label "${remove_label}")
+  done < <(echo "${plan_json}" | jq -r '.remove[]?')
+
+  while IFS= read -r add_label; do
+    [ -n "${add_label}" ] || continue
+    ensure_label_exists "${add_label}"
+    edit_args+=(--add-label "${add_label}")
+  done < <(echo "${plan_json}" | jq -r '.add[]?')
+
+  local updated_labels_json="${labels_json}"
+  local _label_err_file
+  _label_err_file="$(mktemp)"
+  if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
+    updated_labels_json="$(echo "${plan_json}" | jq -c '.final // []' 2>/dev/null || echo "${labels_json}")"
+    echo "LABEL_REPAIR issue=${issue_num} issue_state=${issue_state} pr_state=${pr_state:-none} pr_merged=${pr_merged} before=$(echo "${labels_json}" | jq -c .) after=$(echo "${updated_labels_json}" | jq -c .) add=$(echo "${plan_json}" | jq -c '.add // []') remove=$(echo "${plan_json}" | jq -c '.remove // []')"
+    add_healing_note "Issue #${issue_num}: labels repaired $(echo "${plan_json}" | jq -r '"(+\(.add|join(",")) -\(.remove|join(",")))"')"
+  else
+    echo "::warning::LABEL_REPAIR issue=${issue_num} failed: $(cat "${_label_err_file}" 2>/dev/null)" >&2
+  fi
+  rm -f "${_label_err_file}"
+  echo "${updated_labels_json}"
 }
 
 integration_branch_exists() {
@@ -1690,6 +1787,17 @@ recover_stalled_issue() {
 
   echo "  [stall-recovery] Issue #${issue_num} stuck in '${phase}' for ${stall_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
 
+  # ---- Guard: skip recovery for terminal reconciled state ----
+  local _reconciled_status
+  _reconciled_status="$(jq -r --arg lid "${local_id}" --argjson wi "${WAVE_IDX}" '.waves[$wi].issues[] | select(.id == $lid) | .status // empty' "${STATE_FILE}" 2>/dev/null | head -n1)"
+  case "${_reconciled_status}" in
+    merged|closed|skipped|not_created)
+      echo "STALL_SKIP issue=${issue_num} reason=terminal_state status=${_reconciled_status} phase=${phase} action=${action}"
+      add_healing_note "Issue #${issue_num}: skipped stall recovery (terminal state ${_reconciled_status})"
+      return 1
+      ;;
+  esac
+
   # ---- Guard: skip recovery if the issue is already closed on GitHub ----
   # Defence-in-depth for the current poll cycle: even if the state file
   # hasn't been updated yet, don't post recovery comments on closed issues
@@ -1697,13 +1805,29 @@ recover_stalled_issue() {
   local _gh_issue_state
   _gh_issue_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.state' || echo "")"
   if [ "${_gh_issue_state}" = "closed" ]; then
-    echo "  [stall-recovery] Issue #${issue_num} is closed on GitHub — skipping recovery."
+    local _closed_labels
+    _closed_labels="$(get_issue_labels_json "${issue_num}")"
+    if ! has_label "${_closed_labels}" "ai:merged" && ! has_label "${_closed_labels}" "ai:closed"; then
+      ensure_label_exists "ai:closed"
+      gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:closed" >/dev/null 2>&1 || true
+      _closed_labels="$(echo "${_closed_labels}" | jq -c '. + ["ai:closed"] | unique' 2>/dev/null || echo "${_closed_labels}")"
+      add_healing_note "Issue #${issue_num}: closed issue healed with ai:closed label"
+      STALL_HEALING_CHANGED=true
+    fi
+    if [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; then
+      jq --arg lid "${local_id}" --argjson wi "${WAVE_IDX}" \
+        '(.waves[$wi].issues[] | select(.id == $lid)).status = "closed"' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      add_healing_note "Issue #${issue_num}: state reconciled to closed"
+      STALL_HEALING_CHANGED=true
+    fi
+    echo "STALL_SKIP issue=${issue_num} reason=issue_closed_healed phase=${phase} action=${action}"
     return 1  # Signal: no action taken
   fi
 
   # ---- Guard: skip recovery if a *fresh* workflow is actively processing this issue ----
   if issue_has_active_workflow "${issue_num}"; then
-    echo "  [stall-recovery] Issue #${issue_num} has a recent active workflow run — skipping recovery (workflow is slow, not stalled)."
+    echo "STALL_SKIP issue=${issue_num} reason=active_workflow phase=${phase} action=${action}"
     return 1  # Signal: no action taken (caller should not increment counter)
   fi
 
@@ -2111,6 +2235,7 @@ COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
+  HEALING_NOTES=()
   echo "========================================"
   echo "Processing tracking issue #${TRACKING_NUM}: ${TRACKING_TITLE}"
   echo "========================================"
@@ -2749,6 +2874,40 @@ json.dump(result, sys.stdout)
   fi
 
   # ---------------------------------------------------------------
+  # Reconcile managed issue labels + truth signals before status/stall checks
+  # ---------------------------------------------------------------
+  ISSUE_STATES_JSON='{}'
+  PR_STATES_JSON='{}'
+  RECONCILE_LABELS_CHANGED=false
+  for inum in ${ISSUE_NUMS}; do
+    if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
+      continue
+    fi
+
+    ISSUE_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}" --jq '.state' | grep -xE 'open|closed' || echo "open")"
+    ISSUE_STATES_JSON="$(echo "${ISSUE_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${ISSUE_STATE}" '. + {($key): $state}')"
+
+    LINKED_PR_NUM="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/timeline" \
+      --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last // empty' || echo "")"
+    PR_STATE="unknown"
+    PR_MERGED="false"
+    if [[ "${LINKED_PR_NUM}" =~ ^[0-9]+$ ]]; then
+      _linked_pr_json="$(_fetch_pr_json "${LINKED_PR_NUM}")"
+      PR_STATE="$(_jq_field "${_linked_pr_json}" '.state' 'open|closed|merged')"
+      PR_MERGED="$(_jq_field "${_linked_pr_json}" '.merged_at != null' 'true|false')"
+      [ -n "${PR_MERGED}" ] || PR_MERGED="false"
+    fi
+    PR_STATES_JSON="$(echo "${PR_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${PR_STATE}" --arg merged "${PR_MERGED}" '. + {($key): {state: $state, merged: ($merged == "true")}}')"
+
+    BEFORE_LABELS="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')"
+    AFTER_LABELS="$(reconcile_managed_issue_labels "${inum}" "${BEFORE_LABELS}" "${ISSUE_STATE}" "${PR_STATE}" "${PR_MERGED}")"
+    if [ "${BEFORE_LABELS}" != "${AFTER_LABELS}" ]; then
+      RECONCILE_LABELS_CHANGED=true
+      LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${AFTER_LABELS}" '. + {($key): $labels}')"
+    fi
+  done
+
+  # ---------------------------------------------------------------
   # Update issue phase timestamps for stall tracking
   # ---------------------------------------------------------------
   STATE_HASH_BEFORE="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
@@ -2766,12 +2925,33 @@ json.dump(result, sys.stdout)
   # ---------------------------------------------------------------
   WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
     --state-file "${STATE_FILE}" \
-    --labels-json "${LABELS_JSON}")"
+    --labels-json "${LABELS_JSON}" \
+    --issue-states-json "${ISSUE_STATES_JSON}" \
+    --pr-states-json "${PR_STATES_JSON}")"
 
   echo "Wave status: ${WAVE_STATUS}"
   WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
   ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
   PROJECT_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.project_complete')"
+
+  # Persist reconciled status decisions every cycle (not only narrow branches).
+  RECONCILE_STATE_CHANGED=false
+  while IFS= read -r _ws_entry; do
+    _ws_id="$(echo "${_ws_entry}" | jq -r '.id')"
+    _ws_gh="$(echo "${_ws_entry}" | jq -r '.github_issue')"
+    _ws_status="$(echo "${_ws_entry}" | jq -r '.status')"
+    _ws_source="$(echo "${_ws_entry}" | jq -r '.decision_source // "unknown"')"
+    [ -n "${_ws_id}" ] && [ "${_ws_id}" != "null" ] || continue
+    _old_status="$(jq -r --arg lid "${_ws_id}" --argjson wi "${WAVE_IDX}" '.waves[$wi].issues[] | select(.id == $lid) | .status // ""' "${STATE_FILE}" | head -n1)"
+    echo "STATE_RECONCILE issue=${_ws_gh} id=${_ws_id} old=${_old_status:-none} new=${_ws_status} source=${_ws_source}"
+    if [ "${_old_status}" != "${_ws_status}" ]; then
+      jq --arg lid "${_ws_id}" --arg st "${_ws_status}" --argjson wi "${WAVE_IDX}" \
+        '(.waves[$wi].issues[] | select(.id == $lid)).status = $st' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      RECONCILE_STATE_CHANGED=true
+      add_healing_note "Issue #${_ws_gh}: state ${_old_status:-pending} → ${_ws_status} (${_ws_source})"
+    fi
+  done < <(echo "${WAVE_STATUS}" | jq -c '.issues[]')
 
   # ---------------------------------------------------------------
   # Auto-merge: merge PRs that are ready-to-merge
@@ -3629,25 +3809,6 @@ fi
       echo "  ${local_id}: ${status}"
     done
 
-    # Persist terminal statuses back to the state file so that future
-    # poll cycles (and detect_stalls) see the correct status even when
-    # label fetches fail.  Without this, the state file would stay
-    # "pending" forever for merged/closed issues.
-    while IFS= read -r _ws_entry; do
-      _ws_id="$(echo "${_ws_entry}" | jq -r '.id')"
-      _ws_gh="$(echo "${_ws_entry}" | jq -r '.github_issue')"
-      _ws_status="$(echo "${_ws_entry}" | jq -r '.status')"
-      [ -n "${_ws_id}" ] && [ "${_ws_id}" != "null" ] || continue
-      case "${_ws_status}" in
-        merged|closed)
-          echo "  Persisting terminal status '${_ws_status}' for ${_ws_id} (#${_ws_gh}) to state file."
-          jq --arg lid "${_ws_id}" --arg st "${_ws_status}" --argjson wi "${WAVE_IDX}" \
-            '(.waves[$wi].issues[] | select(.id == $lid)).status = $st' \
-            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-          ;;
-      esac
-    done < <(echo "${WAVE_STATUS}" | jq -c '.issues[]')
-
     # ---------------------------------------------------------------
     # Stuck-wave detection: if some issues have github_issue == null
     # and there are no pending_issue_defs for them, the deferred
@@ -3698,6 +3859,7 @@ fi
     STALL_COUNT="$(echo "${STALLS_JSON}" | jq -r '.count')"
 
     STALL_STATE_CHANGED=false
+    STALL_HEALING_CHANGED=false
 
     if [ "${STALL_COUNT}" -gt 0 ]; then
       echo "Detected ${STALL_COUNT} stalled issue(s). Checking for active workflow runs..."
@@ -3754,8 +3916,11 @@ with open('${STATE_FILE}', 'w') as f:
       fi
     fi
 
-    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ]; then
+    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ]; then
       post_state_comment
+    fi
+    if [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ]; then
+      post_healing_summary_comment
     fi
 
     continue

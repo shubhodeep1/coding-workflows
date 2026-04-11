@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -433,6 +434,95 @@ def test_review_blocked_label_priority_over_other_labels():
 	assert result["any_review_blocked"] is True
 	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
 	assert issues_by_gh[10]["status"] == "review-blocked"
+
+
+def test_reconcile_wave_status_precedence_pr_then_label_then_issue_state():
+	issue = {"id": "task-1", "github_issue": 10, "status": "pending"}
+	status, source = orchestrate_lib.reconcile_wave_issue_status(
+		issue=issue,
+		labels=["ai:planning"],
+		issue_state="closed",
+		pr_state="closed",
+		pr_merged=True,
+	)
+	assert status == "merged"
+	assert source == "linked_pr_merged"
+
+	status, source = orchestrate_lib.reconcile_wave_issue_status(
+		issue=issue,
+		labels=["ai:merged"],
+		issue_state="closed",
+		pr_state="closed",
+		pr_merged=False,
+	)
+	assert status == "merged"
+	assert source == "label_ai_merged"
+
+	status, source = orchestrate_lib.reconcile_wave_issue_status(
+		issue=issue,
+		labels=[],
+		issue_state="closed",
+		pr_state="closed",
+		pr_merged=False,
+	)
+	assert status == "closed"
+	assert source == "issue_closed"
+
+
+def test_reconcile_wave_status_terminal_non_regression():
+	issue_merged = {"id": "task-1", "github_issue": 10, "status": "merged"}
+	status_merged, source_merged = orchestrate_lib.reconcile_wave_issue_status(
+		issue=issue_merged,
+		labels=["ai:implementing"],
+		issue_state="open",
+		pr_state="open",
+		pr_merged=False,
+	)
+	assert status_merged == "merged"
+	assert source_merged == "stored_terminal"
+
+	issue_closed = {"id": "task-2", "github_issue": 11, "status": "closed"}
+	status_closed, source_closed = orchestrate_lib.reconcile_wave_issue_status(
+		issue=issue_closed,
+		labels=["ai:planning"],
+		issue_state="open",
+		pr_state="open",
+		pr_merged=False,
+	)
+	assert status_closed == "closed"
+	assert source_closed == "stored_terminal"
+
+
+def test_label_contract_matches_helper_catalog_and_phase_priority():
+	contract_path = Path(__file__).resolve().parent.parent / ".github" / "ai" / "label_contract.v1.json"
+	helper_path = Path(__file__).resolve().parent.parent / "scripts" / "label_helpers.sh"
+	contract = json.loads(contract_path.read_text(encoding="utf-8"))
+	contract_labels = set(contract["labels"].keys())
+
+	helper_body = helper_path.read_text(encoding="utf-8")
+	colors_block_match = re.search(
+		r"declare -A _AI_LABEL_COLORS=\((.*?)\n\)",
+		helper_body,
+		flags=re.S,
+	)
+	assert colors_block_match, "Could not parse _AI_LABEL_COLORS from label_helpers.sh"
+	helper_labels = set(re.findall(r'\["([^"]+)"\]=', colors_block_match.group(1)))
+	assert helper_labels == contract_labels, (
+		f"label_helpers catalog drift detected.\n"
+		f"Missing in helper: {sorted(contract_labels - helper_labels)}\n"
+		f"Extra in helper: {sorted(helper_labels - contract_labels)}"
+	)
+
+	phase_labels = {
+		member
+		for group in contract.get("phase_groups", [])
+		for member in group.get("members", [])
+	}
+	priority_labels = set(orchestrate_lib.PHASE_LABELS_PRIORITY)
+	missing_priority = sorted(phase_labels - priority_labels)
+	assert not missing_priority, (
+		f"PHASE_LABELS_PRIORITY missing contract phase labels: {missing_priority}"
+	)
 
 
 # ---------------------------------------------------------------------------

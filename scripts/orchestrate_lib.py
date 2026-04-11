@@ -298,6 +298,7 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:validated",
 	"ai:validation-failed",
 	"ai:validation-fixing",
+	"ai:validation-recovery",
 	"ai:validating",
 	"ai:done",
 	"ai:implementing",
@@ -307,6 +308,7 @@ PHASE_LABELS_PRIORITY: list[str] = [
 ]
 
 TERMINAL_PHASES: set[str] = {"ai:merged", "ai:closed", "ai:validated", "ai:validation-failed"}
+TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
 
 # Phases already handled by dedicated logic in the poller — stall detector
 # should not double-act on these.
@@ -378,6 +380,50 @@ def determine_phase(labels: list[str]) -> str:
 		if phase in labels:
 			return phase
 	return "no_labels"
+
+
+def reconcile_wave_issue_status(
+	issue: dict[str, Any],
+	labels: list[str],
+	issue_state: str | None = None,
+	pr_state: str | None = None,
+	pr_merged: bool | None = None,
+) -> tuple[str, str]:
+	"""Reconcile a wave issue status from labels + GitHub truth signals.
+
+	Precedence:
+	1) Stored terminal state never regresses.
+	2) Linked PR merged signal.
+	3) Explicit terminal labels.
+	4) Issue closed/open state.
+	5) Non-terminal phase labels.
+	6) Default in_progress.
+	"""
+	stored_status = str(issue.get("status") or "").strip()
+	if stored_status in TERMINAL_WAVE_STATUSES:
+		return stored_status, "stored_terminal"
+
+	raw_gh_num = issue.get("github_issue")
+	if raw_gh_num is None:
+		return "not_created", "no_github_issue"
+
+	if pr_merged is True:
+		return "merged", "linked_pr_merged"
+	if "ai:merged" in labels:
+		return "merged", "label_ai_merged"
+	if issue_state == "closed":
+		return "closed", "issue_closed"
+	if "ai:closed" in labels:
+		return "closed", "label_ai_closed"
+	if "ai:implementation-failed" in labels:
+		return "implementation-failed", "label_ai_implementation_failed"
+	if "ai:review-blocked" in labels:
+		return "review-blocked", "label_ai_review_blocked"
+	if "ai:ready-to-merge" in labels:
+		return "ready-to-merge", "label_ai_ready_to_merge"
+	if "ai:done" in labels:
+		return "done", "label_ai_done"
+	return "in_progress", "default_in_progress"
 
 
 def detect_stalls(
@@ -819,6 +865,26 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		_print_json({"ok": False, "error": "labels_json must be an object mapping issue numbers to label arrays"})
 		return 1
 
+	issue_states: dict[str, str] = {}
+	if getattr(args, "issue_states_json", None):
+		issue_states_raw = json.loads(args.issue_states_json)
+		if not isinstance(issue_states_raw, dict):
+			_print_json({"ok": False, "error": "issue_states_json must be an object mapping issue numbers to issue states"})
+			return 1
+		for key, value in issue_states_raw.items():
+			if value in ("open", "closed"):
+				issue_states[str(key)] = str(value)
+
+	pr_states: dict[str, dict[str, Any]] = {}
+	if getattr(args, "pr_states_json", None):
+		pr_states_raw = json.loads(args.pr_states_json)
+		if not isinstance(pr_states_raw, dict):
+			_print_json({"ok": False, "error": "pr_states_json must be an object mapping issue numbers to linked PR state objects"})
+			return 1
+		for key, value in pr_states_raw.items():
+			if isinstance(value, dict):
+				pr_states[str(key)] = value
+
 	current_wave_idx = state.get("current_wave", 1) - 1
 	waves = state.get("waves", [])
 
@@ -839,38 +905,45 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 
 		if raw_gh_num is None:
 			status = "not_created"
+			source = "no_github_issue"
 			any_not_created = True
 			all_merged = False
-			statuses.append({"id": issue["id"], "github_issue": raw_gh_num, "status": status})
+			statuses.append({"id": issue["id"], "github_issue": raw_gh_num, "status": status, "decision_source": source})
 			continue
 
 		gh_num_str = str(raw_gh_num)
 		labels = issue_labels.get(gh_num_str, [])
+		issue_state = issue_states.get(gh_num_str)
+		pr_entry = pr_states.get(gh_num_str, {})
+		pr_state = pr_entry.get("state") if isinstance(pr_entry, dict) else None
+		pr_merged = pr_entry.get("merged") if isinstance(pr_entry, dict) else None
+		if isinstance(pr_merged, str):
+			pr_merged = pr_merged.lower() == "true"
+		elif not isinstance(pr_merged, bool):
+			pr_merged = None
 
-		if "ai:review-blocked" in labels:
-			status = "review-blocked"
+		status, source = reconcile_wave_issue_status(
+			issue=issue,
+			labels=labels,
+			issue_state=issue_state if issue_state in ("open", "closed") else None,
+			pr_state=pr_state if pr_state in ("open", "closed") else None,
+			pr_merged=pr_merged,
+		)
+		if status == "review-blocked":
 			any_review_blocked = True
-			all_merged = False
-		elif "ai:merged" in labels:
-			status = "merged"
-		elif "ai:closed" in labels:
-			status = "closed"
+		if status in ("closed", "implementation-failed"):
 			any_failed = True
-		elif "ai:implementation-failed" in labels:
-			status = "implementation-failed"
-			any_failed = True
+		if status != "merged":
 			all_merged = False
-		elif "ai:ready-to-merge" in labels:
-			status = "ready-to-merge"
-			all_merged = False
-		elif "ai:done" in labels:
-			status = "done"
-			all_merged = False
-		else:
-			status = "in_progress"
-			all_merged = False
+		if status == "not_created":
+			any_not_created = True
 
-		statuses.append({"id": issue["id"], "github_issue": raw_gh_num, "status": status})
+		statuses.append({
+			"id": issue["id"],
+			"github_issue": raw_gh_num,
+			"status": status,
+			"decision_source": source,
+		})
 
 	project_complete = all_merged and (current_wave_idx + 1 >= len(waves))
 
@@ -973,6 +1046,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p_check = subparsers.add_parser("check-wave-status", help="Check current wave completion")
 	p_check.add_argument("--state-file", required=True)
 	p_check.add_argument("--labels-json", required=True, help='JSON: {"issue_num": ["label1", ...]}')
+	p_check.add_argument("--issue-states-json", default=None, help='Optional JSON: {"issue_num": "open|closed", ...}')
+	p_check.add_argument("--pr-states-json", default=None, help='Optional JSON: {"issue_num": {"state":"open|closed","merged":bool}, ...}')
 	p_check.set_defaults(func=cmd_check_wave_status)
 
 	p_rebuild = subparsers.add_parser("rebuild-state", help="Rebuild state from tracking body + issue map")
