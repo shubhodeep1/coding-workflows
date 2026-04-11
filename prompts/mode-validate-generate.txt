@@ -82,11 +82,12 @@ Canary requirement (mandatory):
 CRITICAL — robust service-state detection in canary:
 - NEVER parse human-readable `docker compose ps` text output (columns, status words) to determine whether a service container is running. Output formatting varies across Docker Compose versions and produces false negatives when the service is actually healthy.
 - ALWAYS resolve the container ID first with `docker compose ps -q <service>` and then use `docker inspect` for machine-readable state fields.
-- Recommended pattern for the canary "service is running" check:
+- Recommended pattern for the canary "service is running" check (this should be the FIRST TAP assertion, i.e. `ok 1` / `not ok 1`; subsequent checks increment sequentially):
     SERVICE="${SERVICE_NAME:-app}"
-    # Use || true so that a docker compose ps failure (e.g. transient daemon error) is
-    # caught by the empty-CID guard below, which emits a proper TAP "not ok" message
-    # instead of aborting the script under set -e before any output is written.
+    # The canary script uses set -e / set -euo pipefail. Use || true so that a
+    # transient docker compose ps failure is caught by the empty-CID guard below,
+    # which emits a proper TAP "not ok" message instead of aborting the script
+    # before any TAP output is written.
     CID=$(docker compose ps -q "$SERVICE" 2>/dev/null | head -n1 || true)
     if [ -z "$CID" ]; then
       echo "not ok 1 - $SERVICE service is not running (no container id returned by docker compose ps -q)"
@@ -100,7 +101,7 @@ CRITICAL — robust service-state detection in canary:
       echo "not ok 1 - $SERVICE service is not running (Status=$STATUS Running=$RUNNING)"
       exit 1
     fi
-- Keep TAP line numbers consistent with the rest of the canary script.
+- The "service is running" check must always be TAP assertion #1. All subsequent checks (endpoint reachability, tool presence, etc.) use sequentially increasing numbers (ok 2, ok 3, …).
 - Endpoint reachability (`curl`) and in-container tool checks are corroborating signals that should be emitted as separate TAP assertions (for example `ok 2 - app port is reachable`, `ok 3 - required tools present`). Do NOT conflate them with the "service is running" TAP line or use their failure as the sole reason to report the service as not running.
 
 CRITICAL — safe final JSON emission:
