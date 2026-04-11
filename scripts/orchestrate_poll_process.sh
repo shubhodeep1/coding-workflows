@@ -497,15 +497,15 @@ pr_merged = (sys.argv[4] or "").strip().lower() == "true"
 
 final = set(current)
 for label in repair.get("remove", []):
-	final.discard(label)
+    final.discard(label)
 for label in repair.get("add", []):
-	final.add(label)
+    final.add(label)
 
 if pr_merged:
-	final.discard("ai:closed")
-	final.add("ai:merged")
+    final.discard("ai:closed")
+    final.add("ai:merged")
 elif issue_state == "closed" and "ai:closed" not in final and "ai:merged" not in final:
-	final.add("ai:closed")
+    final.add("ai:closed")
 
 add = sorted(final - current)
 remove = sorted(current - final)
@@ -538,8 +538,14 @@ PY
   _label_err_file="$(mktemp)"
   if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
     updated_labels_json="$(echo "${plan_json}" | jq -c '.final // []' 2>/dev/null || echo "${labels_json}")"
-    echo "LABEL_REPAIR issue=${issue_num} issue_state=${issue_state} pr_state=${pr_state:-none} pr_merged=${pr_merged} before=$(echo "${labels_json}" | jq -c .) after=$(echo "${updated_labels_json}" | jq -c .) add=$(echo "${plan_json}" | jq -c '.add // []') remove=$(echo "${plan_json}" | jq -c '.remove // []')"
-    add_healing_note "Issue #${issue_num}: labels repaired $(echo "${plan_json}" | jq -r '"(+\(.add|join(",")) -\(.remove|join(",")))"')"
+    echo "LABEL_REPAIR issue=${issue_num} issue_state=${issue_state} pr_state=${pr_state:-none} pr_merged=${pr_merged}" >&2
+    echo "LABEL_REPAIR_DIFF issue=${issue_num} before=$(echo "${labels_json}" | jq -c .) after=$(echo "${updated_labels_json}" | jq -c .) add=$(echo "${plan_json}" | jq -c '.add // []') remove=$(echo "${plan_json}" | jq -c '.remove // []')" >&2
+    local _added_labels _removed_labels
+    _added_labels="$(echo "${plan_json}" | jq -r '(.add // []) | join(",")')"
+    _removed_labels="$(echo "${plan_json}" | jq -r '(.remove // []) | join(",")')"
+    [ -n "${_added_labels}" ] || _added_labels="none"
+    [ -n "${_removed_labels}" ] || _removed_labels="none"
+    add_healing_note "Issue #${issue_num}: labels repaired (+${_added_labels} -${_removed_labels})"
   else
     echo "::warning::LABEL_REPAIR issue=${issue_num} failed: $(cat "${_label_err_file}" 2>/dev/null)" >&2
   fi
@@ -1790,6 +1796,7 @@ recover_stalled_issue() {
   # ---- Guard: skip recovery for terminal reconciled state ----
   local _reconciled_status
   _reconciled_status="$(jq -r --arg lid "${local_id}" --argjson wi "${WAVE_IDX}" '.waves[$wi].issues[] | select(.id == $lid) | .status // empty' "${STATE_FILE}" 2>/dev/null | head -n1)"
+  # Keep this terminal list aligned with scripts/orchestrate_lib.py:TERMINAL_WAVE_STATUSES.
   case "${_reconciled_status}" in
     merged|closed|skipped|not_created)
       echo "STALL_SKIP issue=${issue_num} reason=terminal_state status=${_reconciled_status} phase=${phase} action=${action}"
@@ -2949,7 +2956,7 @@ json.dump(result, sys.stdout)
         '(.waves[$wi].issues[] | select(.id == $lid)).status = $st' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       RECONCILE_STATE_CHANGED=true
-      add_healing_note "Issue #${_ws_gh}: state ${_old_status:-pending} → ${_ws_status} (${_ws_source})"
+      add_healing_note "Issue #${_ws_gh}: state ${_old_status:-pending} -> ${_ws_status} (${_ws_source})"
     fi
   done < <(echo "${WAVE_STATUS}" | jq -c '.issues[]')
 

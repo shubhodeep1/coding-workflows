@@ -506,6 +506,8 @@ if args[0] == 'api':
 			print(json.dumps({
 				'state': pr.get('state', 'open'),
 				'mergeable': pr.get('mergeable', True),
+				'merged': pr.get('merged', False),
+				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
 				'head': {'sha': pr.get('headSha', f'mocksha{pr_num}'), 'ref': pr.get('headRefName', '')},
 			}))
 		sys.exit(0)
@@ -554,9 +556,9 @@ if args[0] == 'api':
 					},
 				})
 		if jq:
-			import subprocess as _sp
-			p = _sp.run(['jq', '-r', jq], input=json.dumps(events), capture_output=True, text=True)
-			print(p.stdout.rstrip())
+			import subprocess
+			jq_result = subprocess.run(['jq', '-r', jq], input=json.dumps(events), capture_output=True, text=True)
+			print(jq_result.stdout.rstrip())
 		else:
 			print(json.dumps(events))
 		sys.exit(0)

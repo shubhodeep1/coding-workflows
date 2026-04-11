@@ -398,8 +398,13 @@ def reconcile_wave_issue_status(
 	4) Issue closed/open state.
 	5) Non-terminal phase labels.
 	6) Default in_progress.
+
+	Returns:
+		(status, source) where:
+		- status is the reconciled wave issue status string
+		- source identifies which signal decided the status
 	"""
-	stored_status = str(issue.get("status") or "").strip()
+	stored_status = str(issue.get("status", "")).strip()
 	if stored_status in TERMINAL_WAVE_STATUSES:
 		return stored_status, "stored_terminal"
 
@@ -933,7 +938,7 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			any_review_blocked = True
 		if status in ("closed", "implementation-failed"):
 			any_failed = True
-		if status != "merged":
+		if status not in ("merged", "closed", "skipped"):
 			all_merged = False
 		if status == "not_created":
 			any_not_created = True

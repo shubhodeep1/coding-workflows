@@ -197,7 +197,7 @@ set_tracking_phase_label()
   ensure_label_exists "${phase_label}"
 
   if [ ! -f "${contract_file}" ]; then
-    echo "::warning::set_tracking_phase_label: missing label contract ${contract_file}; cannot apply '${phase_label}' safely." >&2
+    echo "::warning::set_tracking_phase_label: missing label contract ${contract_file}; cannot apply label '${phase_label}' safely." >&2
     return 1
   fi
 
