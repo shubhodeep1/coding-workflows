@@ -2581,7 +2581,7 @@ json.dump(result, sys.stdout)
   # Auto-merge: merge PRs that are ready-to-merge
   # ---------------------------------------------------------------
   echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "ready-to-merge") | .github_issue' | while read -r rtm_issue; do
-    [ -n "${rtm_issue}" ] && [ "${rtm_issue}" != "null" ] || continue
+    [[ "${rtm_issue}" =~ ^[0-9]+$ ]] || continue
     echo "  Issue #${rtm_issue} is ready-to-merge, finding linked PR..."
     RTM_PR="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rtm_issue}/timeline" \
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
@@ -2650,7 +2650,7 @@ json.dump(result, sys.stdout)
   # conflicts on a dedicated runner with a clean environment.
   # ---------------------------------------------------------------
   echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "in_progress") | .github_issue' | while read -r ip_issue; do
-    [ -n "${ip_issue}" ] && [ "${ip_issue}" != "null" ] || continue
+    [[ "${ip_issue}" =~ ^[0-9]+$ ]] || continue
     IP_PR="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ip_issue}/timeline" \
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
       || echo "")"
@@ -2733,7 +2733,7 @@ json.dump(result, sys.stdout)
     REVIEW_BLOCKED_STATE_CHANGED=false
 
     while read -r rb_issue; do
-      [ -n "${rb_issue}" ] && [ "${rb_issue}" != "null" ] || continue
+      [[ "${rb_issue}" =~ ^[0-9]+$ ]] || continue
       echo "  Processing review-blocked issue #${rb_issue}..."
 
       # Track retries per issue
@@ -3323,7 +3323,7 @@ ${RB_FIX_DESC}
   # ---------------------------------------------------------------
   IMPL_FAILED_STATE_CHANGED=false
   while read -r if_issue; do
-    [ -n "${if_issue}" ] && [ "${if_issue}" != "null" ] || continue
+    [[ "${if_issue}" =~ ^[0-9]+$ ]] || continue
 
     # Look up local_id for this issue so we can track no-op count
     IF_LOCAL_ID="$(jq -r --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" \

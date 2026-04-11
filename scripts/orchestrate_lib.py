@@ -833,8 +833,9 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 	statuses: list[dict[str, Any]] = []
 
 	for issue in wave["issues"]:
-		gh_num = str(issue.get("github_issue", ""))
-		labels = issue_labels.get(gh_num, [])
+		raw_gh_num = issue.get("github_issue")  # int or None (JSON null)
+		gh_num_str = str(raw_gh_num) if raw_gh_num is not None else ""
+		labels = issue_labels.get(gh_num_str, [])
 
 		if "ai:review-blocked" in labels:
 			status = "review-blocked"
@@ -859,7 +860,7 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			status = "in_progress"
 			all_merged = False
 
-		statuses.append({"id": issue["id"], "github_issue": gh_num, "status": status})
+		statuses.append({"id": issue["id"], "github_issue": raw_gh_num, "status": status})
 
 	project_complete = all_merged and (current_wave_idx + 1 >= len(waves))
 
