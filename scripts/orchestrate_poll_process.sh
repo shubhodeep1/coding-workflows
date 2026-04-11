@@ -3493,11 +3493,17 @@ sys.exit(1)
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
                 if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-                  git add -u -- ':!node_modules' ':!.serena'
-                  git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' | xargs -0 -r git add --
+                  git add -u -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
                 else
-                  git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena'
-                  git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' | xargs -0 -r git add --
+                  git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+                fi
+                echo "Staged files before commit:"
+                git diff --cached --name-only | sed 's/^/ - /' || true
+                if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
+                  echo "Error: .github/prompts or .github/scripts is staged"
+                  exit 1
                 fi
                 git commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}
 
