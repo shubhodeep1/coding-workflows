@@ -84,6 +84,9 @@ CRITICAL — robust service-state detection in canary:
 - ALWAYS resolve the container ID first with `docker compose ps -q <service>` and then use `docker inspect` for machine-readable state fields.
 - Recommended pattern for the canary "service is running" check:
     SERVICE="${SERVICE_NAME:-app}"
+    # Use || true so that a docker compose ps failure (e.g. transient daemon error) is
+    # caught by the empty-CID guard below, which emits a proper TAP "not ok" message
+    # instead of aborting the script under set -e before any output is written.
     CID=$(docker compose ps -q "$SERVICE" 2>/dev/null | head -n1 || true)
     if [ -z "$CID" ]; then
       echo "not ok 1 - $SERVICE service is not running (no container id returned by docker compose ps -q)"
@@ -98,7 +101,7 @@ CRITICAL — robust service-state detection in canary:
       exit 1
     fi
 - Keep TAP line numbers consistent with the rest of the canary script.
-- The endpoint reachability check and in-container tool checks are corroborating signals; do NOT gate the "service running" TAP line on curl/wget success alone.
+- Endpoint reachability (`curl`) and in-container tool checks are corroborating signals that should be emitted as separate TAP assertions (for example `ok 2 - app port is reachable`, `ok 3 - required tools present`). Do NOT conflate them with the "service is running" TAP line or use their failure as the sole reason to report the service as not running.
 
 CRITICAL — safe final JSON emission:
 - The final JSON result object MUST be assembled entirely in Python, not via bash variable interpolation into Python source.
