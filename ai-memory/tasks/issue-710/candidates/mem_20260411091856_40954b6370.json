@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `workflow_analysis_prompt_template`\n\nClarification mapping:\n- No `Q<ID>` clarifications were asked in this issue. `/answer [auto-answered-by-clarify]` indicates scope is clear enough to proceed with planning.\n\nRepresentative implementation pattern to follow:\n- Prompt-file structure/style reference: [prompts/mode-plan.txt](prompts/mode-plan.txt)\n- Content requirements source for this specific prompt: [docs/workflow-llm-analysis-plan.md](docs/workflow-llm-analysis-plan.md)\n\n1. Files likely to change\n1. [prompts/mode-workflow-analysis.txt](prompts/mode-workflow-analysis.txt) (new file)  \n2. [docs/workflow-llm-analysis-plan.md](docs/workflow-llm-analysis-plan.md) (optional: only if the implemented template wording intentionally differs from the documented draft and needs sync)\n\n2. Functions/modules to implement\n1. Add a new prompt template module `mode-workflow-analysis` under `prompts/`.\n2. Define the model role and input context for workflow optimization analysis.\n3. Define required optimization domains exactly: speed, cost/token usage, reliability.\n4. Define strict report output structure with stable section headings for downstream consumption:\n   - `## Executive Summary`\n   - `## Speed Optimizations`\n   - `## Cost Optimizations`\n   - `## Reliability Improvements`\n   - `## Per-Repo Breakdown`\n   - `## Metrics Appendix`\n5. Define guardrails/rules for recommendations (specific, actionable, impact-estimated, backward-compatible, no external-service proposals).\n\n3. Data structures affected\n1. Prompt input contract (conceptual): structured run metrics + summary stats + deep-dive log excerpts.\n2. Prompt output contract (markdown schema): fixed section names and ranked, actionable recommendations.\n3. No MongoDB collections, contracts, or indexes are affected by this issue.\n\n4. API/interface changes\n1. New internal prompt interface file is introduced at `prompts/mode-workflow-analysis.txt`.\n2. No public API/CLI/env-var changes are required in this issue.\n3. No workflow trigger/interface changes are required in this issue.\n\n5. Potential risks and edge cases\n1. Heading drift risk: if section titles differ from expected names, future automation that extracts sections (especially Executive Summary) may break.\n2. Overly broad prompt risk: can produce generic advice instead of run/step-specific recommendations.\n3. Cost risk: excessive prompt verbosity may increase token consumption in the analysis phase.\n4. Scope creep risk: adding integration wiring (workflow/script changes) in this issue could violate minimal-change intent if this issue is template-only.\n\n6. Testing considerations\n1. Static validation: file exists, is plain text, and follows `prompts/mode-*.txt` conventions.\n2. Content assertions: template includes all required analysis domains and all required output headings verbatim.\n3. Quality smoke check: run one manual LLM pass with sample metrics/log excerpt and verify output conforms to required report structure.\n4. Regression check: ensure no unrelated prompt templates are modified.\n\nConflict detection:\n- No factual conflict between issue text and codebase naming/path conventions.\n- Related runtime consumers (`workflow-log-analysis` workflow and analysis script) are not present yet in the current tree; this appears consistent with phased delivery under tracking issue #541 (template-first sequencing).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5ad2fb0ef4429cbbfe8fd2c56e86a6d0c22f678f2fca5e71cddaea55848c0ea5",
+  "lineage": {
+    "issue_number": 710,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24279330164",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24279330164",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/710"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260411091856_40954b6370",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 710,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24279330164"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #710",
+  "timestamps": {
+    "created_at": "2026-04-11T09:18:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
