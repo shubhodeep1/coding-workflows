@@ -61,9 +61,15 @@ jobs:
           UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
           LOCAL_DIR=".github/workflows"
           UPDATED_FILES=""
+          CREATED_FILES=""
           SKIPPED_FILES=""
           TOTAL_CHECKED=0
           TOTAL_UPDATED=0
+          TOTAL_CREATED=0
+
+          # The updater itself must already exist for this job to run;
+          # never overwrite or auto-create it to avoid bootstrap loops.
+          SELF_TEMPLATE="ai-update-workflows.yml"
 
           shopt -s nullglob
           for upstream_file in "${UPSTREAM_DIR}"/*.yml; do
@@ -72,8 +78,15 @@ jobs:
             TOTAL_CHECKED=$((TOTAL_CHECKED + 1))
 
             if [ ! -f "$local_file" ]; then
-              # Consumer doesn't use this template — skip
-              SKIPPED_FILES="${SKIPPED_FILES}${filename} (not present)\n"
+              if [ "$filename" = "$SELF_TEMPLATE" ]; then
+                SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater, skipped)\n"
+                continue
+              fi
+
+              echo "Creating: ${filename}"
+              cp "$upstream_file" "$local_file"
+              TOTAL_CREATED=$((TOTAL_CREATED + 1))
+              CREATED_FILES="${CREATED_FILES}• ${filename}\n"
               continue
             fi
 
@@ -89,12 +102,15 @@ jobs:
 
           echo "templates_checked=${TOTAL_CHECKED}" >> "$GITHUB_OUTPUT"
           echo "templates_updated=${TOTAL_UPDATED}" >> "$GITHUB_OUTPUT"
+          echo "templates_created=${TOTAL_CREATED}" >> "$GITHUB_OUTPUT"
 
           # Store multi-line outputs via files
           printf '%s' "$UPDATED_FILES" > /tmp/updated_files.txt
+          printf '%s' "$CREATED_FILES" > /tmp/created_files.txt
           printf '%s' "$SKIPPED_FILES" > /tmp/skipped_files.txt
 
-          if [ "$TOTAL_UPDATED" -eq 0 ]; then
+          TOTAL_CHANGED=$((TOTAL_UPDATED + TOTAL_CREATED))
+          if [ "$TOTAL_CHANGED" -eq 0 ]; then
             echo "All workflow wrappers are up to date."
             echo "has_updates=false" >> "$GITHUB_OUTPUT"
           else
@@ -110,12 +126,18 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add .github/workflows/
-          git commit -m "chore: update AI workflow wrappers from coding-workflows@stable
 
-          Updated templates:
-          $(cat /tmp/updated_files.txt)
-          Auto-applied by ai-update-workflows. To opt out, set the
-          ALLOW_WORKFLOW_EDITS repository variable to 'false'."
+          COMMIT_BODY=""
+          UPDATED_LIST=$(cat /tmp/updated_files.txt)
+          CREATED_LIST=$(cat /tmp/created_files.txt)
+          if [ -n "$UPDATED_LIST" ]; then
+            COMMIT_BODY="${COMMIT_BODY}Updated templates:\n${UPDATED_LIST}\n"
+          fi
+          if [ -n "$CREATED_LIST" ]; then
+            COMMIT_BODY="${COMMIT_BODY}New templates:\n${CREATED_LIST}\n"
+          fi
+
+          git commit -m "$(printf 'chore: update AI workflow wrappers from coding-workflows@stable\n\n%b\nAuto-applied by ai-update-workflows. To opt out, set the\nALLOW_WORKFLOW_EDITS repository variable to '\''false'\''.' "$COMMIT_BODY")"
 
           git push
 
@@ -148,13 +170,24 @@ jobs:
 
           REPO="${{ github.repository }}"
           UPDATED_COUNT="${{ steps.update.outputs.templates_updated }}"
+          CREATED_COUNT="${{ steps.update.outputs.templates_created }}"
           UPDATED_LIST=$(cat /tmp/updated_files.txt)
+          CREATED_LIST=$(cat /tmp/created_files.txt)
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           MSG="Workflow wrappers updated in ${REPO}
-
+          "
+          if [ -n "$UPDATED_LIST" ]; then
+            MSG="${MSG}
           ${UPDATED_COUNT} wrapper(s) updated:
-          ${UPDATED_LIST}
+          ${UPDATED_LIST}"
+          fi
+          if [ -n "$CREATED_LIST" ]; then
+            MSG="${MSG}
+          ${CREATED_COUNT} new wrapper(s) added:
+          ${CREATED_LIST}"
+          fi
+          MSG="${MSG}
           Source: coding-workflows@stable
           Run: ${RUN_URL}"
 
@@ -174,13 +207,24 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Templates checked:** ${{ steps.update.outputs.templates_checked }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Templates updated:** ${{ steps.update.outputs.templates_updated }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Templates created:** ${{ steps.update.outputs.templates_created }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${{ steps.update.outputs.has_updates }}" = "true" ]; then
-            echo "**Updated files:**" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            cat /tmp/updated_files.txt >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            UPDATED_LIST=$(cat /tmp/updated_files.txt)
+            CREATED_LIST=$(cat /tmp/created_files.txt)
+            if [ -n "$UPDATED_LIST" ]; then
+              echo "**Updated files:**" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              cat /tmp/updated_files.txt >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if [ -n "$CREATED_LIST" ]; then
+              echo "**New files:**" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              cat /tmp/created_files.txt >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            fi
           else
             echo "All wrappers are up to date." >> "$GITHUB_STEP_SUMMARY"
           fi
