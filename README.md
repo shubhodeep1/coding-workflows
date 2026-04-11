@@ -483,6 +483,75 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `orchestrate_poll.yml` | `schedule` (every ~5 min) + self-retrigger | Orchestrator progress poller + judge + auto-recovery. Self-retriggers via `workflow_dispatch` when active tracking issues exist for near-immediate next cycles; cron acts as fallback. |
 | `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates existing and creates new workflow wrappers from upstream templates |
 
+## Workflow Log Analysis
+
+This repository includes [`.github/workflows/workflow-log-analysis.yml`](.github/workflows/workflow-log-analysis.yml) to collect AI workflow telemetry and generate a markdown optimization report.
+
+### How to run
+
+Run **Actions -> Workflow Log Analysis -> Run workflow**.
+
+`workflow_dispatch` inputs:
+
+| Input | Default | Description |
+|---|---|---|
+| `lookback_days` | `"7"` | Days of workflow runs to collect. Passed to `scripts/collect_workflow_logs.py --lookback-days`. |
+| `repos_override` | `""` | Optional comma-separated `owner/repo` list. Each item is validated with `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`; invalid values fail the run. |
+
+Repository selection behavior:
+
+1. If `repos_override` is set, only those repositories are used.
+2. Otherwise, the workflow reads `.github/ai/consumer_repos.json` (if present) and also includes `${GITHUB_REPOSITORY}`.
+3. Duplicates and empty entries are removed.
+
+### Auth and configuration
+
+- `GH_PAT` is preferred for GitHub API/push operations, with `github.token` fallback in workflow steps.
+- `OPENROUTER_API_KEY` is required for `scripts/analyze_workflow_logs.py`.
+- Telegram notification is optional. If either `TG_BOT_SECRET` or `TG_ADMIN_CHAT_ID` is missing, notification is skipped.
+
+### Collector input/output contract
+
+Collector script: [`scripts/collect_workflow_logs.py`](scripts/collect_workflow_logs.py)
+
+- Primary CLI used by the workflow: `--lookback-days <N> --output workflow_log_report.json --repo <owner/repo>...`
+- Full CLI contract from `build_parser`:
+  - `--repo` (repeatable)
+  - window selector (exactly one): `--lookback-days` or `--since`
+  - `--output` (default `workflow_log_report.json`)
+  - `--per-page`, `--max-pages`, `--max-runs`
+- Token handling in `main`: uses `GH_TOKEN` with `GITHUB_TOKEN` fallback.
+
+Generated JSON report (`workflow_log_report.json`) includes:
+
+- `schema_version`
+- `generated_at`
+- `scope` (`repositories`, `workflow_families`, `source`)
+- `runs` (per-run metrics including `workflow_family`, `duration_seconds`, `retries`, and `failure_point`)
+- `summary` (`total_runs`, success/failure/cancelled/other counts, `avg_duration_seconds`, `p50_duration_seconds`, `p95_duration_seconds`)
+- `errors`
+
+### Analyzer input/output contract
+
+Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_logs.py)
+
+- Workflow invocation: `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json`
+- `load_input_data` accepts either:
+  - `--input` with a collector report (`runs` list), a combined bundle object (`run_metrics`, `summary_stats`, optional `deep_dive_logs`), or a JSON array of run metrics
+  - `--data-dir` containing `workflow_log_report.json` or `run_metrics.json` + `summary_stats.json` (optionally `run_logs/`)
+- Output path behavior from `resolve_dated_output_path`:
+  - default: `analysis/workflow-optimization-YYYY-MM-DD.md`
+  - same-day collisions: `analysis/workflow-optimization-YYYY-MM-DD-2.md`, `-3.md`, etc.
+- `main` prints the final report path on stdout and exits non-zero on API/write/input errors.
+
+### Workflow outputs
+
+- Artifact upload: `workflow-log-report` containing `workflow_log_report.json` (retention 7 days).
+- Repository commit: generated markdown report is committed/pushed to `${{ github.ref_name }}`.
+- No-op behavior: if the report file has no diff, commit/push is skipped (`No report changes to commit.`).
+- Telegram summary: when configured, sends completion message with report URL and workflow run URL.
+- Low-data windows are valid: the analyzer still writes a report when input data is sparse.
+
 ## Required Secrets
 
 | Secret | Used By | Description |
