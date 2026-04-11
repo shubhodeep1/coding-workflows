@@ -111,9 +111,27 @@ def gh_api_json(
         "-H",
         "Accept: application/vnd.github+json",
     ]
+    retry_markers = (
+        "rate limit",
+        "secondary",
+        "timeout",
+        "timed out",
+        "connection",
+        "temporarily unavailable",
+        "502",
+        "503",
+        "504",
+    )
 
     for attempt in range(1, retries + 1):
-        proc = subprocess.run(cmd, capture_output=True, text=True, env=base_env)
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, env=base_env, timeout=60)
+        except subprocess.TimeoutExpired as exc:
+            if attempt < retries:
+                time.sleep(backoff_seconds * attempt)
+                continue
+            raise RuntimeError(f"gh api timed out for {endpoint} after {exc.timeout}s") from exc
+
         if proc.returncode == 0:
             output = proc.stdout.strip()
             if not output:
@@ -127,7 +145,8 @@ def gh_api_json(
             raise RuntimeError(f"Expected JSON object from gh api ({endpoint})")
 
         stderr_text = (proc.stderr or "").strip()
-        retryable = "rate limit" in stderr_text.lower() or "secondary" in stderr_text.lower()
+        stderr_lower = stderr_text.lower()
+        retryable = any(marker in stderr_lower for marker in retry_markers)
         if retryable and attempt < retries:
             time.sleep(backoff_seconds * attempt)
             continue
@@ -365,8 +384,16 @@ def main(argv: list[str] | None = None) -> int:
         env_repo = os.getenv("GITHUB_REPOSITORY", "").strip()
         if env_repo:
             repositories = [env_repo]
+    repositories = list(dict.fromkeys(repositories))
     if not repositories:
         print("ERROR: no repositories specified; pass --repo or set GITHUB_REPOSITORY", file=sys.stderr)
+        return 2
+
+    if args.per_page <= 0 or args.max_pages <= 0 or args.max_runs < 0:
+        print(
+            "ERROR: --per-page and --max-pages must be > 0; --max-runs must be >= 0",
+            file=sys.stderr,
+        )
         return 2
 
     try:
