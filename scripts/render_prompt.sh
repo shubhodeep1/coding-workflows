@@ -50,6 +50,7 @@ extract_section() {
 extract_section "READ_ONLY" "${READ_ONLY_FILE}"
 extract_section "READ_WRITE" "${READ_WRITE_FILE}"
 
+line=""
 while IFS= read -r line || [ -n "${line}" ]; do
 	case "${line}" in
 		"{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}")
