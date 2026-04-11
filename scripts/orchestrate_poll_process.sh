@@ -3530,6 +3530,8 @@ if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
   done
 fi
 
+  INVOKE_JUDGE_FOR_STUCK=false
+
   if [ "${WAVE_COMPLETE}" != "true" ]; then
     echo "Wave ${CURRENT_WAVE} not yet complete."
 
@@ -3557,6 +3559,38 @@ fi
       esac
     done < <(echo "${WAVE_STATUS}" | jq -c '.issues[]')
 
+    # ---------------------------------------------------------------
+    # Stuck-wave detection: if some issues have github_issue == null
+    # and there are no pending_issue_defs for them, the deferred
+    # creation mechanism cannot create them.  If every *created*
+    # issue is already terminal (merged/closed), the wave will never
+    # complete on its own — invoke the judge to resolve it.
+    # ---------------------------------------------------------------
+    ANY_NOT_CREATED="$(echo "${WAVE_STATUS}" | jq -r '.any_not_created')"
+    if [ "${ANY_NOT_CREATED}" = "true" ]; then
+      _stuck_uncreated=0
+      while IFS= read -r _unc_id; do
+        [ -n "${_unc_id}" ] || continue
+        _unc_def="$(jq -r ".pending_issue_defs[\"${_unc_id}\"] // empty" "${STATE_FILE}")"
+        if [ -z "${_unc_def}" ]; then
+          _stuck_uncreated=$((_stuck_uncreated + 1))
+        fi
+      done < <(jq -r ".waves[${WAVE_IDX}].issues[] | select(.github_issue == null) | .id" "${STATE_FILE}" 2>/dev/null)
+
+      if [ "${_stuck_uncreated}" -gt 0 ]; then
+        # Check whether every created (non-null) issue is in a terminal state.
+        NON_TERMINAL_CREATED="$(echo "${WAVE_STATUS}" | jq \
+          '[.issues[] | select(.github_issue != null and .status != "merged" and .status != "closed")] | length')"
+        if [ "${NON_TERMINAL_CREATED}" -eq 0 ]; then
+          echo "Wave ${CURRENT_WAVE} is stuck: ${_stuck_uncreated} issue(s) have no GitHub issue and no pending definition. All created issues are terminal."
+          echo "Invoking judge to decide next action for stuck wave..."
+          tg_notify "Wave ${CURRENT_WAVE} of project #${TRACKING_NUM} is stuck: ${_stuck_uncreated} issue(s) have no GitHub issue and no pending definition. Invoking judge." "WARNING"
+          INVOKE_JUDGE_FOR_STUCK=true
+        fi
+      fi
+    fi
+
+    if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
     # ---------------------------------------------------------------
     # Stall detection and self-healing
     # ---------------------------------------------------------------
@@ -3636,9 +3670,14 @@ with open('${STATE_FILE}', 'w') as f:
     fi
 
     continue
+    fi  # end: INVOKE_JUDGE_FOR_STUCK != true
   fi
 
-  echo "Wave ${CURRENT_WAVE} complete!"
+  if [ "${INVOKE_JUDGE_FOR_STUCK}" = "true" ]; then
+    echo "Wave ${CURRENT_WAVE} stuck — invoking judge to define missing issues or decide next action..."
+  else
+    echo "Wave ${CURRENT_WAVE} complete!"
+  fi
 
   # ---------------------------------------------------------------
   # Guard: cap judge stall cycles to prevent infinite loops.
@@ -3780,6 +3819,15 @@ ${PR_DIFF}
     fi
     if [ "${ANY_FAILED}" = "true" ]; then
       echo "WARNING: Some issues in this wave were closed without merge."
+    fi
+    if [ "${INVOKE_JUDGE_FOR_STUCK}" = "true" ]; then
+      echo
+      echo "WARNING: This judge invocation was triggered because the wave is STUCK."
+      echo "Some issues in this wave have github_issue == null and no pending_issue_defs"
+      echo "to create them from. Deferred issue creation could not create these issues."
+      echo "All other (created) issues in the wave are in terminal states."
+      echo "You must decide what to do: define the missing issues, skip them, or take"
+      echo "another corrective action. The wave CANNOT complete on its own."
     fi
     echo
     echo "IMPORTANT: If current wave < total waves, the project is NOT complete."
