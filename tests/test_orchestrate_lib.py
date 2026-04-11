@@ -293,6 +293,46 @@ def test_check_wave_status_closed_counts_as_failed():
 	assert issues_by_gh[10]["status"] == "closed"
 
 
+def test_check_wave_status_null_github_issue_means_not_created():
+	"""Issues with github_issue: null should be reported as not_created."""
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{"id": "task-a", "github_issue": None, "status": "not_created"},
+				{"id": "task-b", "github_issue": None, "status": "not_created"},
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {}  # no labels since no issues exist
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_not_created"] is True
+	assert all(i["status"] == "not_created" for i in result["issues"])
+
+
+def test_check_wave_status_mixed_null_and_real_issues():
+	"""Mix of created and uncreated issues should report correctly."""
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{"id": "task-a", "github_issue": 10, "status": "pending"},
+				{"id": "task-b", "github_issue": None, "status": "not_created"},
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_not_created"] is True
+	issues_by_id = {i["id"]: i for i in result["issues"]}
+	assert issues_by_id["task-a"]["status"] == "merged"
+	assert issues_by_id["task-b"]["status"] == "not_created"
+
+
 # ---------------------------------------------------------------------------
 # Tests: state schema
 # ---------------------------------------------------------------------------

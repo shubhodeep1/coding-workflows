@@ -2408,6 +2408,99 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   ISSUE_NUMS="$(jq -r ".waves[${WAVE_IDX}].issues[].github_issue" "${STATE_FILE}" 2>/dev/null || echo "")"
 
   # ---------------------------------------------------------------
+  # Deferred issue creation for current wave: create GitHub issues
+  # for any entries with github_issue == null that have pending
+  # definitions.  This recovers from orchestrate.yml failing after
+  # creating the tracking issue but before creating child issues.
+  # ---------------------------------------------------------------
+  UNCREATED_IDS="$(jq -r ".waves[${WAVE_IDX}].issues[] | select(.github_issue == null) | .id" "${STATE_FILE}" 2>/dev/null || true)"
+  if [ -n "${UNCREATED_IDS}" ]; then
+    echo "Detected uncreated issues in wave ${CURRENT_WAVE}. Creating GitHub issues..."
+    DEFERRED_STATE_CHANGED=false
+    while IFS= read -r local_id; do
+      [ -n "${local_id}" ] || continue
+
+      # Check if already in issue_number_map (created in a prior cycle but state not synced)
+      EXISTING_NUM="$(jq -r ".issue_number_map[\"${local_id}\"] // empty" "${STATE_FILE}")"
+      if [ -n "${EXISTING_NUM}" ]; then
+        echo "  ${local_id}: already mapped to #${EXISTING_NUM}, updating wave entry."
+        jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${EXISTING_NUM} | .status = \"pending\")" \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        ISSUE_NUMS="${ISSUE_NUMS} ${EXISTING_NUM}"
+        DEFERRED_STATE_CHANGED=true
+        continue
+      fi
+
+      # Get issue definition from pending_issue_defs
+      ISSUE_DEF="$(jq -c ".pending_issue_defs[\"${local_id}\"] // empty" "${STATE_FILE}")"
+      if [ -z "${ISSUE_DEF}" ]; then
+        echo "::warning::No pending definition for ${local_id} in wave ${CURRENT_WAVE}, skipping."
+        continue
+      fi
+
+      DEF_TITLE="$(echo "${ISSUE_DEF}" | jq -r '.title')"
+      DEF_BODY="$(echo "${ISSUE_DEF}" | jq -r '.body' | sed 's/\\n/\n/g')"
+      DEF_PRIORITY="$(echo "${ISSUE_DEF}" | jq -r '.priority')"
+
+      FULL_BODY="${DEF_BODY}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #${TRACKING_NUM}
+- Integration branch: $(jq -r '.integration_branch // ""' "${STATE_FILE}")
+- Local ID: \`${local_id}\`
+- Priority: ${DEF_PRIORITY}
+- Managed by: AI Orchestrator"
+
+      ensure_label_exists "ai:clarification"
+      NEW_URL="$(gh issue create \
+        --repo "${GITHUB_REPOSITORY}" \
+        --title "${DEF_TITLE}" \
+        --body "${FULL_BODY}" \
+        --label "ai:clarification" 2>/dev/null || echo "")"
+
+      if [ -z "${NEW_URL}" ]; then
+        echo "::warning::Failed to create issue for ${local_id}; will retry next poll cycle."
+        continue
+      fi
+
+      NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+      NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
+      if ! [[ "${NEW_NUM}" =~ ^[0-9]+$ ]]; then
+        echo "::warning::Could not parse issue number for ${local_id}; will retry next poll cycle."
+        continue
+      fi
+
+      echo "  Created #${NEW_NUM}: ${DEF_TITLE} (${local_id})"
+      ISSUE_NUMS="${ISSUE_NUMS} ${NEW_NUM}"
+
+      # Update state: record the new issue number and remove from pending
+      jq ".issue_number_map[\"${local_id}\"] = ${NEW_NUM} | del(.pending_issue_defs[\"${local_id}\"])" \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+      # Update the wave entry with the github issue number
+      jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${NEW_NUM} | .status = \"pending\" | .last_seen_phase = \"\" | .status_since_ts = $(date +%s) | .stall_recovery_count = 0)" \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+      DEFERRED_STATE_CHANGED=true
+    done <<< "${UNCREATED_IDS}"
+
+    if [ "${DEFERRED_STATE_CHANGED}" = "true" ]; then
+      post_state_comment
+      post_tracking_comment "## 🔧 Deferred Issue Creation (Wave ${CURRENT_WAVE})
+
+Issues in this wave had not been created yet (likely from an interrupted initial setup). Created them now:
+
+$(for inum in ${ISSUE_NUMS}; do
+  [ -n "${inum}" ] && [ "${inum}" != "null" ] && echo "- #${inum}"
+done)
+
+These issues will enter the AI pipeline (clarify → plan → implement → review)."
+      tg_notify "Deferred issue creation for wave ${CURRENT_WAVE} of project #${TRACKING_NUM}. Created missing GitHub issues." "WARNING"
+    fi
+  fi
+
+  # ---------------------------------------------------------------
   # Orphan sweep: find review-blocked issues that belong to this
   # project but are not tracked in the current wave.  The poller
   # only scans issues listed in the state file's current wave —
