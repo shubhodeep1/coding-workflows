@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness error; failure_summary=Validation harness error: Adjust canary readiness logic under `validation/` so transient `starting` does not hard-fail when service is otherwise reachable. Recommended harness changes: 1) In `validation/00_canary.sh` service-state assertion, replace immediate fail on `starting` with bounded retry/wait (poll until `healthy`/`running` or timeout). 2) Make canary pass criteria consistent: if HTTP endpoint check succeeds and container is running, treat startup as ready (or continue polling health status without failing im",
+  "fingerprint": "3415c27ba59964b4169e64d396ebb19622c086a8af725d5bfb51087ad5cfb200",
+  "lineage": {
+    "issue_number": 561,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24289920288",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24289920288",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260411194739_5ace47bc60",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 561,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24289920288"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-11T19:47:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
