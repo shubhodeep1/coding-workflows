@@ -79,6 +79,27 @@ Canary requirement (mandatory):
   - Required CLI tools present (`curl`, `jq`, `python3`, plus service CLIs like `mongosh`/`psql` when used)
 - If canary fails, remaining tests must be skipped and the failure must clearly indicate canary/infrastructure gating.
 
+CRITICAL — robust service-state detection in canary:
+- NEVER parse human-readable `docker compose ps` text output (columns, status words) to determine whether a service container is running. Output formatting varies across Docker Compose versions and produces false negatives when the service is actually healthy.
+- ALWAYS resolve the container ID first with `docker compose ps -q <service>` and then use `docker inspect` for machine-readable state fields.
+- Recommended pattern for the canary "service is running" check:
+    SERVICE="${SERVICE_NAME:-app}"
+    CID=$(docker compose ps -q "$SERVICE" 2>/dev/null | head -n1 || true)
+    if [ -z "$CID" ]; then
+      echo "not ok 1 - $SERVICE service is not running (no container id returned by docker compose ps -q)"
+      exit 1
+    fi
+    RUNNING=$(docker inspect -f '{{.State.Running}}' "$CID" 2>/dev/null || echo "false")
+    STATUS=$(docker inspect -f '{{.State.Status}}' "$CID" 2>/dev/null || echo "unknown")
+    if [ "$RUNNING" = "true" ] || [ "$STATUS" = "running" ]; then
+      echo "ok 1 - $SERVICE service is running"
+    else
+      echo "not ok 1 - $SERVICE service is not running (Status=$STATUS Running=$RUNNING)"
+      exit 1
+    fi
+- Keep TAP line numbers consistent with the rest of the canary script.
+- The endpoint reachability check and in-container tool checks are corroborating signals; do NOT gate the "service running" TAP line on curl/wget success alone.
+
 CRITICAL — safe final JSON emission:
 - The final JSON result object MUST be assembled entirely in Python, not via bash variable interpolation into Python source.
 - NEVER use an unquoted heredoc (`<<PY`) that embeds bash variables like `${FAILURES_JSON}` into Python code. Bash expansion injects raw control characters (tabs, newlines, backslashes from log tails) into the Python string literal, causing `json.decoder.JSONDecodeError`.
