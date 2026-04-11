@@ -1149,6 +1149,7 @@ jobs:
             # --force-with-lease (only appropriate for unprotected bot branches).
             PUSH_ARGS=("-u" "origin" "HEAD:${TARGET_BRANCH}")
             if [ "${ALLOW_FORCE_PUSH:-false}" = "true" ]; then
+              echo "Force-push path active: using --force-with-lease (attempt ${attempt})."
               if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
                 # Pin the lease to the freshly-fetched remote SHA so the push
                 # succeeds even when the remote moved since our last fetch.
@@ -1159,17 +1160,35 @@ jobs:
               fi
             fi
 
-            if git push "${PUSH_ARGS[@]}"; then
+            PUSH_EXIT=0
+            git push "${PUSH_ARGS[@]}" || PUSH_EXIT=$?
+            if [ "${PUSH_EXIT}" -eq 0 ]; then
               echo "Push succeeded on attempt ${attempt}."
               exit 0
             fi
 
-            PUSH_EXIT=$?
             if [ "${attempt}" -lt 3 ]; then
               echo "Push attempt ${attempt} failed (exit ${PUSH_EXIT}); retrying..."
+              # When not force-pushing, attempt to reconcile a non-fast-forward
+              # rejection by rebasing local HEAD onto the freshly-fetched remote
+              # ref before the next push attempt.  When force-push is enabled the
+              # pinned --force-with-lease will overwrite the remote, so no rebase
+              # is needed (or safe) in that path.
+              if [ "${ALLOW_FORCE_PUSH:-false}" != "true" ]; then
+                if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
+                  echo "Attempting rebase onto origin/${TARGET_BRANCH} to reconcile non-fast-forward..."
+                  if ! git rebase "origin/${TARGET_BRANCH}"; then
+                    echo "::error::Rebase failed due to conflicts. Manual resolution required."
+                    echo "::warning::Aborting rebase — git state may need manual inspection if abort fails."
+                    git rebase --abort || true
+                    exit 1
+                  fi
+                  echo "Rebase onto origin/${TARGET_BRANCH} succeeded; retrying push."
+                fi
+              fi
               sleep $((attempt * 2))
             else
-              echo "Push failed after 3 attempts (exit ${PUSH_EXIT})."
+              echo "::error::Push failed after 3 attempts (exit ${PUSH_EXIT})."
               if [ "${ALLOW_FORCE_PUSH:-false}" != "true" ]; then
                 echo "Note: push was attempted without --force-with-lease."
                 echo "If the branch exists remotely and has diverged, the remote may have a non-fast-forward conflict."
