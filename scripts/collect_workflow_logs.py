@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""Collect GitHub Actions run/job telemetry for core AI workflow families."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode
+
+SCHEMA_VERSION = "workflow_log_collector.v1"
+CORE_WORKFLOW_FAMILIES = ("clarify", "plan", "implement", "review_autofix")
+
+
+def _parse_iso8601(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _format_iso8601(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _to_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Collect workflow run logs + reliability/timing metrics into JSON"
+    )
+    parser.add_argument(
+        "--repo",
+        action="append",
+        default=[],
+        help="Repository in owner/repo format (repeatable). Defaults to GITHUB_REPOSITORY.",
+    )
+    window = parser.add_mutually_exclusive_group(required=True)
+    window.add_argument(
+        "--lookback-days",
+        type=int,
+        help="Collect runs created within the last N days.",
+    )
+    window.add_argument(
+        "--since",
+        help="Collect runs created on/after ISO-8601 timestamp.",
+    )
+    parser.add_argument(
+        "--output",
+        default="workflow_log_report.json",
+        help="Output report path.",
+    )
+    parser.add_argument(
+        "--per-page",
+        type=int,
+        default=100,
+        help="GitHub API page size.",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=10,
+        help="Maximum pages fetched per endpoint.",
+    )
+    parser.add_argument(
+        "--max-runs",
+        type=int,
+        default=0,
+        help="Optional cap on total runs per repository (0 = unlimited).",
+    )
+    return parser
+
+
+def gh_api_json(
+    endpoint: str,
+    *,
+    token: str,
+    retries: int = 3,
+    backoff_seconds: float = 1.0,
+) -> dict[str, Any]:
+    base_env = os.environ.copy()
+    if token:
+        base_env["GH_TOKEN"] = token
+
+    cmd = [
+        "gh",
+        "api",
+        endpoint,
+        "--method",
+        "GET",
+        "-H",
+        "Accept: application/vnd.github+json",
+    ]
+
+    for attempt in range(1, retries + 1):
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=base_env)
+        if proc.returncode == 0:
+            output = proc.stdout.strip()
+            if not output:
+                return {}
+            try:
+                parsed = json.loads(output)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"Invalid JSON from gh api ({endpoint}): {exc}") from exc
+            if isinstance(parsed, dict):
+                return parsed
+            raise RuntimeError(f"Expected JSON object from gh api ({endpoint})")
+
+        stderr_text = (proc.stderr or "").strip()
+        retryable = "rate limit" in stderr_text.lower() or "secondary" in stderr_text.lower()
+        if retryable and attempt < retries:
+            time.sleep(backoff_seconds * attempt)
+            continue
+        raise RuntimeError(
+            f"gh api failed for {endpoint} (exit={proc.returncode}): {stderr_text or proc.stdout.strip()}"
+        )
+
+    raise RuntimeError(f"gh api failed for {endpoint} after retries")
+
+
+def normalize_workflow_family(workflow_name: str | None, workflow_path: str | None) -> str | None:
+    name = (workflow_name or "").lower()
+    path = (workflow_path or "").lower()
+    combined = f"{name} {path}"
+
+    if "orchestrate" in combined or "validate" in combined:
+        return None
+    if "clarify_respond" in combined:
+        return None
+
+    if any(tag in combined for tag in ("clarify", "ai-clarify", "internal-clarify")):
+        return "clarify"
+    if any(tag in combined for tag in ("plan", "ai-plan", "internal-plan")):
+        return "plan"
+    if any(tag in combined for tag in ("implement", "ai-implement", "internal-implement")):
+        return "implement"
+    if any(
+        tag in combined
+        for tag in (
+            "review_autofix",
+            "ai-review",
+            "internal-review",
+            "review",
+        )
+    ):
+        return "review_autofix"
+    return None
+
+
+def _build_runs_endpoint(repo: str, since_utc: datetime, per_page: int, page: int) -> str:
+    query = urlencode(
+        {
+            "status": "completed",
+            "created": f">={_format_iso8601(since_utc)}",
+            "per_page": str(per_page),
+            "page": str(page),
+        }
+    )
+    return f"repos/{repo}/actions/runs?{query}"
+
+
+def list_runs_for_repo(
+    repo: str,
+    *,
+    since_utc: datetime,
+    per_page: int,
+    max_pages: int,
+    max_runs: int,
+    token: str,
+) -> tuple[list[dict[str, Any]], bool]:
+    runs: list[dict[str, Any]] = []
+    capped = False
+
+    for page in range(1, max_pages + 1):
+        payload = gh_api_json(
+            _build_runs_endpoint(repo, since_utc, per_page, page),
+            token=token,
+        )
+        page_runs = payload.get("workflow_runs") or []
+        if not page_runs:
+            break
+
+        for run in page_runs:
+            family = normalize_workflow_family(run.get("name"), run.get("path"))
+            if family is None:
+                continue
+            run_copy = dict(run)
+            run_copy["_workflow_family"] = family
+            runs.append(run_copy)
+            if max_runs > 0 and len(runs) >= max_runs:
+                capped = True
+                return runs, capped
+
+    return runs, capped
+
+
+def _build_jobs_endpoint(repo: str, run_id: int, per_page: int, page: int) -> str:
+    query = urlencode({"filter": "all", "per_page": str(per_page), "page": str(page)})
+    return f"repos/{repo}/actions/runs/{run_id}/jobs?{query}"
+
+
+def list_jobs_for_run(
+    repo: str,
+    run_id: int,
+    *,
+    per_page: int,
+    max_pages: int,
+    token: str,
+) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
+    for page in range(1, max_pages + 1):
+        payload = gh_api_json(
+            _build_jobs_endpoint(repo, run_id, per_page, page),
+            token=token,
+        )
+        page_jobs = payload.get("jobs") or []
+        if not page_jobs:
+            break
+        jobs.extend(page_jobs)
+    return jobs
+
+
+def extract_failure_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
+    for job in jobs:
+        for step in job.get("steps") or []:
+            if (step.get("conclusion") or "").lower() == "failure":
+                return {
+                    "job_name": job.get("name"),
+                    "step_name": step.get("name"),
+                }
+
+    for job in jobs:
+        if (job.get("conclusion") or "").lower() == "failure":
+            return {
+                "job_name": job.get("name"),
+                "step_name": None,
+            }
+
+    return {
+        "job_name": None,
+        "step_name": None,
+    }
+
+
+def compute_run_metrics(
+    repository: str,
+    run: dict[str, Any],
+    jobs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    run_attempt = max(1, _to_int(run.get("run_attempt"), 1))
+    retries = max(0, run_attempt - 1)
+
+    started_at = _parse_iso8601(run.get("run_started_at"))
+    updated_at = _parse_iso8601(run.get("updated_at"))
+    duration_seconds = 0
+    if started_at and updated_at:
+        duration_seconds = max(0, int((updated_at - started_at).total_seconds()))
+
+    conclusion = run.get("conclusion")
+    failure_point = {"job_name": None, "step_name": None}
+    if (conclusion or "").lower() == "failure":
+        failure_point = extract_failure_point(jobs)
+
+    return {
+        "repository": repository,
+        "run_id": run.get("id"),
+        "workflow_name": run.get("name"),
+        "workflow_path": run.get("path"),
+        "workflow_family": run.get("_workflow_family"),
+        "status": run.get("status"),
+        "conclusion": conclusion,
+        "run_attempt": run_attempt,
+        "retries": retries,
+        "created_at": run.get("created_at"),
+        "run_started_at": run.get("run_started_at"),
+        "updated_at": run.get("updated_at"),
+        "duration_seconds": duration_seconds,
+        "failure_point": failure_point,
+    }
+
+
+def _percentile(values: list[int], percentile: int) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    rank = int(math.ceil((percentile / 100.0) * len(sorted_values)))
+    index = max(0, min(len(sorted_values) - 1, rank - 1))
+    return float(sorted_values[index])
+
+
+def build_report(
+    repositories: list[str],
+    runs: list[dict[str, Any]],
+    errors: list[dict[str, str]],
+) -> dict[str, Any]:
+    durations = [int(item.get("duration_seconds", 0)) for item in runs]
+    success_count = sum(1 for item in runs if (item.get("conclusion") or "").lower() == "success")
+    failure_count = sum(1 for item in runs if (item.get("conclusion") or "").lower() == "failure")
+    cancelled_count = sum(1 for item in runs if (item.get("conclusion") or "").lower() == "cancelled")
+
+    avg_duration = float(sum(durations) / len(durations)) if durations else 0.0
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": _format_iso8601(datetime.now(timezone.utc)),
+        "scope": {
+            "repositories": repositories,
+            "workflow_families": list(CORE_WORKFLOW_FAMILIES),
+            "source": "github_actions_api",
+        },
+        "runs": runs,
+        "summary": {
+            "total_runs": len(runs),
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "cancelled_count": cancelled_count,
+            "avg_duration_seconds": avg_duration,
+            "p50_duration_seconds": _percentile(durations, 50),
+            "p95_duration_seconds": _percentile(durations, 95),
+        },
+        "errors": errors,
+    }
+
+
+def _resolve_since_utc(args: argparse.Namespace) -> datetime:
+    if args.since:
+        since_dt = _parse_iso8601(args.since)
+        if since_dt is None:
+            raise ValueError(f"Invalid --since value: {args.since}")
+        return since_dt
+
+    if args.lookback_days is None:
+        raise ValueError("Either --since or --lookback-days is required")
+    if args.lookback_days < 0:
+        raise ValueError("--lookback-days must be >= 0")
+    return datetime.now(timezone.utc) - timedelta(days=args.lookback_days)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    repositories = [repo.strip() for repo in args.repo if repo.strip()]
+    if not repositories:
+        env_repo = os.getenv("GITHUB_REPOSITORY", "").strip()
+        if env_repo:
+            repositories = [env_repo]
+    if not repositories:
+        print("ERROR: no repositories specified; pass --repo or set GITHUB_REPOSITORY", file=sys.stderr)
+        return 2
+
+    try:
+        since_utc = _resolve_since_utc(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    token = os.getenv("GH_TOKEN", "") or os.getenv("GITHUB_TOKEN", "")
+
+    errors: list[dict[str, str]] = []
+    run_rows: list[dict[str, Any]] = []
+    successful_repo_queries = 0
+
+    for repo in repositories:
+        try:
+            runs, capped = list_runs_for_repo(
+                repo,
+                since_utc=since_utc,
+                per_page=args.per_page,
+                max_pages=args.max_pages,
+                max_runs=args.max_runs,
+                token=token,
+            )
+            successful_repo_queries += 1
+            if capped:
+                errors.append(
+                    {
+                        "repository": repo,
+                        "scope": "runs",
+                        "message": f"Run collection stopped after max-runs={args.max_runs}",
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(
+                {
+                    "repository": repo,
+                    "scope": "runs",
+                    "message": str(exc),
+                }
+            )
+            continue
+
+        for run in runs:
+            run_id = _to_int(run.get("id"), 0)
+            jobs: list[dict[str, Any]] = []
+            if run_id > 0:
+                try:
+                    jobs = list_jobs_for_run(
+                        repo,
+                        run_id,
+                        per_page=args.per_page,
+                        max_pages=args.max_pages,
+                        token=token,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(
+                        {
+                            "repository": repo,
+                            "run_id": str(run.get("id")),
+                            "scope": "jobs",
+                            "message": str(exc),
+                        }
+                    )
+
+            run_rows.append(compute_run_metrics(repo, run, jobs))
+
+    run_rows.sort(key=lambda item: (item.get("created_at") or ""), reverse=True)
+    report = build_report(repositories, run_rows, errors)
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    tmp_path.replace(output_path)
+
+    if successful_repo_queries == 0 and errors:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
