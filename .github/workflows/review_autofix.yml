@@ -128,7 +128,7 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -176,12 +176,23 @@ jobs:
               fi
             fi
           done
-          # Fetch judge prompt for review-blocked judge feature
+          # Fetch judge prompt and Serena canonical block for review-blocked judge feature
           mkdir -p prompts
           if [ ! -f prompts/mode-judge-review-blocked.txt ]; then
-            gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=${script_ref}" \
-              > prompts/mode-judge-review-blocked.txt 2>/dev/null || true
+            if ! _gh_api_fetch "prompts/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=${script_ref}"; then
+              echo "::warning::mode-judge-review-blocked.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=main"
+            fi
+          fi
+          if [ ! -f prompts/serena-efficiency-block.txt ]; then
+            if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
+              echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            fi
           fi
 
       - name: Validate PR number input
@@ -3192,7 +3203,7 @@ jobs:
             echo "=== REVIEW-BLOCKED JUDGE TASK ==="
             echo
             if [ -f prompts/mode-judge-review-blocked.txt ]; then
-              cat prompts/mode-judge-review-blocked.txt
+              bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
             else
               echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."
             fi

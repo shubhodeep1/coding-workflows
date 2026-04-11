@@ -606,7 +606,7 @@ else
     echo
     echo "=== DISCOVERY TASK ==="
     echo
-    cat prompts/mode-validate-discover.txt
+    bash scripts/render_prompt.sh prompts/mode-validate-discover.txt
     echo
     echo "=== PROJECT SPEC ==="
     cat "${PROJECT_SPEC_FILE}"
@@ -787,7 +787,7 @@ fi
   echo
   echo "=== IMPLEMENTATION TASK ==="
   echo
-  cat "${HARNESS_PROMPT_SOURCE}"
+  bash scripts/render_prompt.sh "${HARNESS_PROMPT_SOURCE}"
   echo
   if [ -s "${PRIOR_FAILURE_CONTEXT_FILE}" ]; then
     echo "=== PRIOR VALIDATION FAILURES (DO NOT REPEAT) ==="
@@ -1189,7 +1189,7 @@ fi
   echo
   echo "=== DIAGNOSIS TASK ==="
   echo
-  cat prompts/mode-validate-diagnose.txt
+  bash scripts/render_prompt.sh prompts/mode-validate-diagnose.txt
   echo
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"

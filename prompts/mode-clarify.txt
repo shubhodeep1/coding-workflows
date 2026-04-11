@@ -8,13 +8,7 @@ All context is inlined directly into the prompt for efficiency:
 Do NOT read pre_assembled_static.txt, issue_context.txt, or any of the individual
 source files — they are already loaded.
 
-SERENA MCP EFFICIENCY (MANDATORY):
-- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
-- Skip straight to activate_project and then use tools directly.
-- Prefer get_symbols_overview and find_symbol over raw file reads.
-- Use search_for_pattern instead of shell grep/rg when Serena is available.
-- Never read the same file region twice. Plan reads upfront.
-- If Serena tools are unavailable or error, fall back to normal file reads.
+{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
 For any repo inspection needed for clarification, follow SERENA MCP EFFICIENCY (MANDATORY).
 
