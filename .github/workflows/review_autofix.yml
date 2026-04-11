@@ -1075,14 +1075,7 @@ jobs:
           3. Does the fix introduce unnecessary complexity?
           Prefer the simpler solution.
 
-          SERENA MCP TOOLS (USE WHEN AVAILABLE)
-          Serena semantic tools are available via MCP for efficient code navigation:
-          - Use get_symbols_overview to see file structure without reading entire files.
-          - Use find_symbol to jump to specific symbol definitions.
-          - Use find_referencing_symbols to find callers/usages efficiently.
-          - Use search_for_pattern for regex searches instead of grepping.
-          - These tools reduce token usage significantly. Prefer them over full-file reads.
-          - If Serena tools are unavailable, fall back to normal file reads without stalling.
+          {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
           REVIEW OBJECTIVE
           Review the pull request as a senior engineer and identify issues in the modified code.
@@ -1320,6 +1313,10 @@ jobs:
           No code blocks
           No scripts
           __REVIEWER_PROMPT__
+
+          reviewer_prompt_rendered="$(mktemp)"
+          bash scripts/render_prompt.sh "${REVIEWER_PROMPT_BODY_FILE}" > "${reviewer_prompt_rendered}"
+          mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 
           {
             cat ./pre_assembled_static.txt
@@ -1834,15 +1831,7 @@ jobs:
           - do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
           The bug report may contain important context about the problem being fixed.
 
-          SERENA MCP TOOLS (MANDATORY WHEN AVAILABLE)
-          Use Serena MCP symbol-level tools to read and edit code surgically:
-          - Use get_symbols_overview to understand file structure instead of reading entire files.
-          - Use find_symbol to jump to specific definitions.
-          - Use replace_symbol_body to edit individual functions instead of rewriting entire files.
-          - Use insert_after_symbol / insert_before_symbol for precise insertions.
-          - Do NOT read entire files when you only need to modify a specific function.
-          - Do NOT output full file contents when replace_symbol_body can target the exact symbol.
-          - If Serena tools are unavailable, fall back to normal file operations without stalling.
+          {{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}
 
           EDITOR ROLE
           You are the final decision maker.
@@ -1991,6 +1980,10 @@ jobs:
           If a section has no items, write:
           - none
           __EDITOR_PROMPT__
+
+          editor_prompt_rendered="$(mktemp)"
+          bash scripts/render_prompt.sh "${EDITOR_PROMPT_BODY_FILE}" > "${editor_prompt_rendered}"
+          mv "${editor_prompt_rendered}" "${EDITOR_PROMPT_BODY_FILE}"
 
           diff_primary_usable=false
           diff_fallback_usable=false

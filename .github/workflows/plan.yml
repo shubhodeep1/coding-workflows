@@ -145,7 +145,7 @@ jobs:
           }
           # Only fetch scripts actually used by the plan workflow.
           # git_ref_health_check.sh is only needed by implement/edit workflows.
-          for f in gh_helpers.sh setup_serena.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -182,6 +182,16 @@ jobs:
               fi
             fi
           done
+
+          mkdir -p prompts
+          if [ ! -f prompts/serena-efficiency-block.txt ]; then
+            if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
+              echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            fi
+          fi
 
       - name: Create runtime workspace
         run: |
@@ -652,19 +662,8 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
-          # Build prompt: static context + instructions + dynamic planning context,
-          # all inlined so the model doesn't waste tool calls reading files.
-          # The static prefix (pre_assembled_static.txt) is identical across all
-          # runs, enabling LLM provider prompt-prefix caching.
-          {
-            cat ./pre_assembled_static.txt
-            echo
-            cat "${RUNTIME_DIR}/memory_context.txt"
-            echo
-            # Inject the configurable tool call budget before the static heredoc
-            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
-            echo
-            cat <<'EOF'
+          PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-plan-inline.txt"
+          cat > "${PROMPT_TEMPLATE_FILE}" <<'EOF'
           === PLANNING TASK ===
 
           You are executing the PLANNING phase of the AI development pipeline.
@@ -683,10 +682,7 @@ jobs:
           symbols/functions you need to inspect for the plan.
 
           SERENA MCP EFFICIENCY (MANDATORY):
-          - Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
-            Skip straight to activate_project and then use tools directly.
-          - Prefer get_symbols_overview and find_symbol over raw file reads.
-          - Never read the same file region twice. Plan reads upfront.
+          {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
           - For large files (>5000 lines), use get_symbols_overview with depth=0 first to
             get a high-level map, then drill into specific symbols with find_symbol.
             Do NOT use depth=1+ on very large files — it will exceed character limits.
@@ -770,6 +766,20 @@ jobs:
 
           The output must be plain text suitable for posting as an issue comment.
           EOF
+
+          # Build prompt: static context + instructions + dynamic planning context,
+          # all inlined so the model doesn't waste tool calls reading files.
+          # The static prefix (pre_assembled_static.txt) is identical across all
+          # runs, enabling LLM provider prompt-prefix caching.
+          {
+            cat ./pre_assembled_static.txt
+            echo
+            cat "${RUNTIME_DIR}/memory_context.txt"
+            echo
+            # Inject the configurable tool call budget before the static heredoc
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo
+            bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
             echo
             echo "=== PLANNING CONTEXT ==="
             cat "${PLANNING_CONTEXT_FILE}"

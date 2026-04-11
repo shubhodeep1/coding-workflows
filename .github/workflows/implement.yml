@@ -243,7 +243,7 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -293,6 +293,19 @@ jobs:
               fi
             fi
           done
+
+          mkdir -p prompts
+          if [ ! -f prompts/serena-efficiency-block.txt ]; then
+            if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
+              echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            fi
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "prompts/serena-efficiency-block.txt" >> "${FETCHED_MANIFEST}"
+            fi
+          fi
 
           # Fetch canonical agents.md from coding-workflows into the runtime
           # directory. This is combined with the caller repo's own agents.md
@@ -657,20 +670,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Build prompt: static context + instructions + dynamic implementation context,
-          # all inlined so the model doesn't waste tool calls reading files.
-          # The static prefix (pre_assembled_static.txt) is identical across all
-          # runs, enabling LLM provider prompt-prefix caching.
-          {
-            cat ./pre_assembled_static.txt
-            echo
-            echo "=== AI MEMORY CONTEXT ==="
-            cat "${MEMORY_CONTEXT_FILE}"
-            echo
-            # Inject the configurable tool call budget before the static heredoc
-            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
-            echo
-            cat <<'EOF'
+          PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-implement-inline.txt"
+          cat > "${PROMPT_TEMPLATE_FILE}" <<'EOF'
           === IMPLEMENTATION TASK ===
 
           You are executing the IMPLEMENTATION phase of the AI development pipeline.
@@ -693,15 +694,7 @@ jobs:
           4. Avoid modifying unrelated files.
 
           SERENA MCP EFFICIENCY (MANDATORY):
-          - Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
-            Skip straight to activate_project and then use tools directly.
-          - When reading code, prefer Serena MCP tools (get_symbols_overview, find_symbol,
-            find_referencing_symbols) over reading entire files. This reduces token usage.
-          - When modifying code, prefer Serena MCP tools (replace_symbol_body, insert_after_symbol,
-            insert_before_symbol) over reading and rewriting entire files.
-          - Start with get_symbols_overview to understand file structure before diving in.
-          - Never read the same file region twice. Plan reads upfront.
-          - If Serena tools are unavailable or error, fall back to normal file operations.
+          {{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}
 
           EFFICIENCY RULES (MANDATORY — reduces token waste):
           - Read ONLY the specific lines/symbols you need. Do NOT read entire files or
@@ -741,6 +734,21 @@ jobs:
 
           Your output should be repository changes only.
           EOF
+
+          # Build prompt: static context + instructions + dynamic implementation context,
+          # all inlined so the model doesn't waste tool calls reading files.
+          # The static prefix (pre_assembled_static.txt) is identical across all
+          # runs, enabling LLM provider prompt-prefix caching.
+          {
+            cat ./pre_assembled_static.txt
+            echo
+            echo "=== AI MEMORY CONTEXT ==="
+            cat "${MEMORY_CONTEXT_FILE}"
+            echo
+            # Inject the configurable tool call budget before the static heredoc
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo
+            bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
             echo
             echo "=== IMPLEMENTATION CONTEXT ==="
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
