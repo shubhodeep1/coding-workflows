@@ -2417,6 +2417,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   if [ -n "${UNCREATED_IDS}" ]; then
     echo "Detected uncreated issues in wave ${CURRENT_WAVE}. Creating GitHub issues..."
     DEFERRED_STATE_CHANGED=false
+    DEFERRED_CREATED_NUMS=""
     while IFS= read -r local_id; do
       [ -n "${local_id}" ] || continue
 
@@ -2427,6 +2428,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${EXISTING_NUM} | .status = \"pending\")" \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         ISSUE_NUMS="${ISSUE_NUMS} ${EXISTING_NUM}"
+        DEFERRED_CREATED_NUMS="${DEFERRED_CREATED_NUMS} ${EXISTING_NUM}"
         DEFERRED_STATE_CHANGED=true
         continue
       fi
@@ -2473,6 +2475,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 
       echo "  Created #${NEW_NUM}: ${DEF_TITLE} (${local_id})"
       ISSUE_NUMS="${ISSUE_NUMS} ${NEW_NUM}"
+      DEFERRED_CREATED_NUMS="${DEFERRED_CREATED_NUMS} ${NEW_NUM}"
 
       # Update state: record the new issue number and remove from pending
       jq ".issue_number_map[\"${local_id}\"] = ${NEW_NUM} | del(.pending_issue_defs[\"${local_id}\"])" \
@@ -2491,8 +2494,8 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 
 Issues in this wave had not been created yet (likely from an interrupted initial setup). Created them now:
 
-$(for inum in ${ISSUE_NUMS}; do
-  [ -n "${inum}" ] && [ "${inum}" != "null" ] && echo "- #${inum}"
+$(for inum in ${DEFERRED_CREATED_NUMS}; do
+  [ -n "${inum}" ] && echo "- #${inum}"
 done)
 
 These issues will enter the AI pipeline (clarify → plan → implement → review)."
