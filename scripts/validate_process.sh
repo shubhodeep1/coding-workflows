@@ -231,17 +231,27 @@ set_tracking_phase_label()
       done < <(echo "${phase_changes}" | jq -r '.add[]?')
 
       if [ "${#edit_args[@]}" -gt 0 ]; then
-        gh_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
+        local _label_err_file
+        _label_err_file="$(mktemp)"
+        if ! gh_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
           --repo "${GITHUB_REPOSITORY}" \
-          "${edit_args[@]}" >/dev/null || true
+          "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
+          echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_ISSUE_NUM} (contract mode): $(cat "${_label_err_file}" 2>/dev/null)" >&2
+        fi
+        rm -f "${_label_err_file}"
       fi
       return 0
     fi
   fi
 
-  gh_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
+  local _label_err_file
+  _label_err_file="$(mktemp)"
+  if ! gh_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
     --repo "${GITHUB_REPOSITORY}" \
-    --add-label "${phase_label}" >/dev/null || true
+    --add-label "${phase_label}" >/dev/null 2>"${_label_err_file}"; then
+    echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_ISSUE_NUM} (fallback mode): $(cat "${_label_err_file}" 2>/dev/null)" >&2
+  fi
+  rm -f "${_label_err_file}"
 }
 
 extract_last_json_with_key()
@@ -1089,6 +1099,24 @@ if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ] && [ "${PASS_
 	summary_text="Runtime validation passed (${PASSED_TESTS}/${TOTAL_TESTS} tests, ${DURATION_SECONDS}s)."
 	post_tracking_comment "## ✅ Runtime validation passed\n\n- Passed tests: ${PASSED_TESTS}/${TOTAL_TESTS}\n- Duration: ${DURATION_SECONDS}s"
 	set_tracking_phase_label "ai:validated"
+
+	# Verify the ai:validated label was applied; retry with direct add if missing.
+	# This prevents the orchestrator from looping forever when the label
+	# application silently fails (Bug: validation-fixing loop stuck).
+	if is_tracking_run; then
+		_verify_labels="$(gh_retry gh api \
+			"repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/labels" \
+			--jq '[.[].name]' 2>/dev/null || echo '[]')"
+		if ! echo "${_verify_labels}" | jq -e 'index("ai:validated") != null' >/dev/null 2>&1; then
+			echo "::warning::ai:validated label not found on #${TRACKING_ISSUE_NUM} after set_tracking_phase_label; retrying direct add." >&2
+			ensure_label_exists "ai:validated"
+			gh_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
+				--repo "${GITHUB_REPOSITORY}" \
+				--add-label "ai:validated" >/dev/null 2>&1 || \
+				echo "::warning::Retry of ai:validated label application also failed for #${TRACKING_ISSUE_NUM}." >&2
+		fi
+	fi
+
 	write_result_files "pass" "${summary_text}" ""
 	tg_notify "Runtime validation passed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${PASSED_TESTS}/${TOTAL_TESTS})." "DEBUG"
 	exit 0

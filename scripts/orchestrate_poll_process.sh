@@ -416,17 +416,27 @@ set_tracking_phase_label() {
       done < <(echo "${phase_changes}" | jq -r '.add[]?')
 
       if [ "${#edit_args[@]}" -gt 0 ]; then
-        gh_retry gh issue edit "${TRACKING_NUM}" \
+        local _label_err_file
+        _label_err_file="$(mktemp)"
+        if ! gh_retry gh issue edit "${TRACKING_NUM}" \
           --repo "${GITHUB_REPOSITORY}" \
-          "${edit_args[@]}" >/dev/null || true
+          "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
+          echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_NUM} (contract mode): $(cat "${_label_err_file}" 2>/dev/null)" >&2
+        fi
+        rm -f "${_label_err_file}"
       fi
       return 0
     fi
   fi
 
-  gh_retry gh issue edit "${TRACKING_NUM}" \
+  local _label_err_file
+  _label_err_file="$(mktemp)"
+  if ! gh_retry gh issue edit "${TRACKING_NUM}" \
     --repo "${GITHUB_REPOSITORY}" \
-    --add-label "${phase_label}" >/dev/null || true
+    --add-label "${phase_label}" >/dev/null 2>"${_label_err_file}"; then
+    echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_NUM} (fallback mode): $(cat "${_label_err_file}" 2>/dev/null)" >&2
+  fi
+  rm -f "${_label_err_file}"
 }
 
 get_issue_labels_json() {
@@ -690,6 +700,60 @@ dispatch_validation_workflow() {
   return 1
 }
 
+# Check whether the validation workflow (ai-validate.yml or internal-validate.yml)
+# has any currently active (in_progress or queued) runs.  Used to avoid
+# redispatching when a previous dispatch is still executing.
+has_active_validation_run() {
+  local wf_name="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
+  local active_count
+
+  active_count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
+    --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo '0')"
+  if [ "${active_count}" -gt 0 ]; then
+    return 0
+  fi
+
+  # Fallback: check internal-validate.yml if primary name differs
+  if [ "${wf_name}" != "internal-validate.yml" ]; then
+    active_count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
+      --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo '0')"
+    if [ "${active_count}" -gt 0 ]; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# Return the conclusion of the most recent *completed* validation workflow run
+# that was created on or after the last dispatch timestamp recorded in state.
+# Used as a fallback when the ai:validated / ai:validation-failed label is
+# missing despite the workflow having completed successfully.
+get_last_validation_run_conclusion() {
+  local wf_name="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
+  local last_dispatch_ts
+  last_dispatch_ts="$(jq -r '.validation_last_dispatch_ts // 0' "${STATE_FILE}")"
+
+  local runs_json
+  runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?status=completed&per_page=5" \
+    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+
+  # Fallback to internal-validate.yml if no completed runs found
+  if [ "$(echo "${runs_json}" | jq 'length')" -eq 0 ] && [ "${wf_name}" != "internal-validate.yml" ]; then
+    runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?status=completed&per_page=5" \
+      --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+  fi
+
+  # Select the most recent run created after our last dispatch timestamp
+  local conclusion
+  conclusion="$(echo "${runs_json}" | jq -r --argjson ts "${last_dispatch_ts}" '
+    [.[] | select((.created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) >= $ts)] |
+    sort_by(.created_at) | last | .conclusion // ""
+  ' 2>/dev/null || echo '')"
+
+  echo "${conclusion}"
+}
+
 dispatch_validation_if_needed() {
   local validation_cycle="$1"
   local integration_branch
@@ -708,7 +772,17 @@ dispatch_validation_if_needed() {
       echo "Validation workflow already dispatched for cycle ${validation_cycle} ($(( now_epoch - last_dispatch_ts ))s ago, threshold ${stale_threshold_secs}s)."
       return 0
     fi
-    echo "Validation workflow for cycle ${validation_cycle} appears stale (dispatched >$(( stale_threshold_secs / 60 ))m ago with no label). Redispatching..."
+    echo "Validation workflow for cycle ${validation_cycle} appears stale (dispatched >$(( stale_threshold_secs / 60 ))m ago with no label)."
+
+    # Before redispatching, verify the workflow is not still running.
+    # This prevents spurious redispatches when validation takes longer
+    # than the stale threshold.
+    if has_active_validation_run; then
+      echo "Validation workflow still has active runs despite stale threshold. Skipping redispatch."
+      return 0
+    fi
+
+    echo "No active validation runs found. Redispatching..."
   fi
 
   if dispatch_validation_workflow "${validation_cycle}" "${integration_branch}"; then
@@ -2198,6 +2272,21 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     if has_label "${TRACKING_LABELS}" "ai:validated"; then
       mark_validation_complete "${VALIDATION_CYCLE}"
       continue
+    fi
+
+    # Fallback: if the last validation workflow run completed successfully
+    # and no ai:validation-failed label exists, treat as validated.
+    # This handles the case where validate_process.sh completed but the
+    # ai:validated label was lost or never persisted (silent gh API failure).
+    if [ "${PROJECT_STATUS}" = "validating" ]; then
+      LAST_VAL_CONCLUSION="$(get_last_validation_run_conclusion)"
+      if [ "${LAST_VAL_CONCLUSION}" = "success" ]; then
+        echo "Fallback: last validation run concluded success without ai:validated label. Applying label and marking complete."
+        set_tracking_phase_label "ai:validated"
+        post_tracking_comment "## ℹ️ Validation completion detected via workflow run fallback\n\nThe \`ai:validated\` label was missing but the last validation workflow run concluded successfully. Applying label and completing."
+        mark_validation_complete "${VALIDATION_CYCLE}"
+        continue
+      fi
     fi
 
     if [ "${PROJECT_STATUS}" = "validating" ]; then
