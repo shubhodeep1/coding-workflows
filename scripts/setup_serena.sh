@@ -13,6 +13,7 @@
 #   SERENA_LANGUAGES       Space-separated list of languages to force (e.g. "typescript python")
 #   SERENA_DISABLED        Set to "true" to skip Serena setup entirely
 #   CONTEXT7_DISABLED      Set to "true" to skip Context7 MCP setup (default: "false")
+#   GIT_MCP_DISABLED       Set to "true" to skip Git MCP setup (default: "false")
 #
 # This script:
 #   1. Installs uv if not present
@@ -20,7 +21,7 @@
 #   3. Auto-detects project languages and installs language servers
 #   4. Creates .serena/project.yml if missing
 #   5. Creates ~/.serena/serena_config.yml (global config)
-#   6. Writes Serena and optional Context7 MCP config to ~/.codex/config.toml
+#   6. Writes Serena and optional Context7/Git MCP config to ~/.codex/config.toml
 #   7. Runs a health check
 #
 # On any failure, the script emits a warning and exits 0 so that the
@@ -60,6 +61,7 @@ fi
 SERENA_VERSION="${SERENA_VERSION:-main}"
 SERENA_DEBUG_LOG="${TMPDIR:-/tmp}/serena_debug.log"
 CONTEXT7_CONFIG_TOUCHED="false"
+GIT_CONFIG_TOUCHED="false"
 echo "Setting up Serena MCP server (version=${SERENA_VERSION}, mode=${SERENA_MODE}, context=${SERENA_CONTEXT})"
 
 # ── Helper: warn and exit cleanly ────────────────────────────────────────────
@@ -81,6 +83,10 @@ warn_and_exit() {
 	if [ "${CONTEXT7_CONFIG_TOUCHED:-false}" = "true" ] && [ -f "${CODEX_CFG}" ] && grep -Eq '^[[:space:]]*\[mcp_servers\.context7(\]|[.])' "${CODEX_CFG}"; then
 		remove_mcp_server_blocks "context7" "${CODEX_CFG}" || true
 		echo "Removed Context7 MCP server from ${CODEX_CFG}."
+	fi
+	if [ "${GIT_CONFIG_TOUCHED:-false}" = "true" ] && [ -f "${CODEX_CFG}" ] && grep -Eq '^[[:space:]]*\[mcp_servers\.git(\]|[.])' "${CODEX_CFG}"; then
+		remove_mcp_server_blocks "git" "${CODEX_CFG}" || true
+		echo "Removed Git MCP server from ${CODEX_CFG}."
 	fi
 	rm -f "${SERENA_DEBUG_LOG}"
 	exit 0
@@ -576,6 +582,26 @@ else
 	echo "Context7 MCP setup skipped (CONTEXT7_DISABLED=true)."
 fi
 
+GIT_CONFIG_TOUCHED="true"
+remove_mcp_server_blocks "git" "${CODEX_CONFIG}" || echo "::warning::Failed to clean existing Git MCP config; continuing without updating Git MCP config." >&2
+
+if [ "${GIT_MCP_DISABLED:-false}" != "true" ]; then
+	if cat >> "${CODEX_CONFIG}" <<GIT_MCP_EOF
+
+[mcp_servers.git]
+command = "uvx"
+args = ["mcp-server-git", "--repository", "${PROJECT_ROOT}"]
+required = false
+GIT_MCP_EOF
+	then
+		echo "Git MCP server appended to ${CODEX_CONFIG}"
+	else
+		echo "::warning::Failed to append Git MCP config; continuing without Git MCP setup." >&2
+	fi
+else
+	echo "Git MCP setup skipped (GIT_MCP_DISABLED=true)."
+fi
+
 # Verify the MCP config was actually written correctly
 if grep -q '\[mcp_servers\.serena\]' "${CODEX_CONFIG}"; then
 	echo "MCP server config verified in ${CODEX_CONFIG}"
@@ -672,6 +698,7 @@ echo "UV_CACHE_DIR: ${UV_CACHE_DIR:-'(not set)'}"
 echo "Codex config location: ${CODEX_CONFIG}"
 echo "MCP section present: $(grep -c '\[mcp_servers\.serena\]' "${CODEX_CONFIG}" 2>/dev/null || echo '0')"
 echo "Context7 MCP section present: $(grep -c '\[mcp_servers\.context7\]' "${CODEX_CONFIG}" 2>/dev/null || echo '0')"
+echo "Git MCP section present: $(grep -c '\[mcp_servers\.git\]' "${CODEX_CONFIG}" 2>/dev/null || echo '0')"
 echo "required=true set: $(grep -c 'required = true' "${CODEX_CONFIG}" 2>/dev/null || echo '0')"
 echo "Project root: ${PROJECT_ROOT}"
 echo ".serena/project.yml exists: $([ -f .serena/project.yml ] && echo 'yes' || echo 'no')"
