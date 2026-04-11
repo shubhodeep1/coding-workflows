@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping used for planning:\n\n- `Q1: A` -> Scope is only adding a new manual workflow file that wires existing scripts; no wrapper/template/internal variants.\n- `Q2: A` -> Commit and push the generated analysis report to the same branch/ref where `workflow_dispatch` was launched.\n- `Q3: B` -> Default analysis target set must be `.github/ai/consumer_repos.json` plus `${GITHUB_REPOSITORY}`, with optional input override.\n- `Q4: A` -> Telegram notification must be best-effort and non-blocking when Telegram config is missing.\n\nImplementation plan:\n\n1. Files likely to change\n- Add [workflow-log-analysis.yml](.github/workflows/workflow-log-analysis.yml) (new).\n- No script or contract changes planned under the approved scope (`Q1: A`).\n\n2. Functions/modules to implement\n- In the new workflow, implement `workflow_dispatch` trigger and two jobs:\n1. `collect-logs`\n2. `analyze-commit-notify`\n- `collect-logs` job responsibilities:\n1. Checkout repo.\n2. Setup Python 3.12.\n3. Resolve repository list:\n   - If `repos_override` input is provided: parse comma-separated `owner/repo` values.\n   - Else: read `.github/ai/consumer_repos.json` via `jq`, add `${GITHUB_REPOSITORY}`, dedupe, drop empties.\n4. Run `scripts/collect_workflow_logs.py` with:\n   - `--lookback-days <input>`\n   - repeated `--repo <owner/repo>` args for each resolved repo\n   - `--output workflow_log_report.json`\n5. Upload `workflow_log_report.json` as artifact.\n- `analyze-commit-notify` job responsibilities:\n1. `needs: collect-logs`.\n2. Checkout with write-capable token and full enough history for push.\n3. Download collector artifact.\n4. Setup Python 3.12.\n5. Run `scripts/analyze_workflow_logs.py --input workflow_log_report.json`; capture stdout as `REPORT_FILE`.\n6. Commit and push `REPORT_FILE` to `HEAD:${{ github.ref_name }}` (current dispatch ref).\n7. Send Telegram message using `scripts/tg_helpers.sh` `tg_send_msg` with report link and short summary extract.\n\nRepresentative pattern to follow:\n- Commit/push + Telegram optional behavior from [update_workflows.yml](.github/workflows/update_workflows.yml).\n- Consumer repo registry read pattern from [mark-stable.yml](.github/workflows/mark-stable.yml).\n\n3. Data structures affected\n- Generated collector payload: `workflow_log_report.json` (artifact between jobs).\n- Generated report file: `analysis/workflow-optimization-YYYY-MM-DD*.md` (from existing analyzer script).\n- Repo source list: `.github/ai/consumer_repos.json` plus `${GITHUB_REPOSITORY}` by default.\n- Runtime env/interface values:\n  - `GH_PAT` for push and GitHub API auth flow.\n  - `OPENROUTER_API_KEY` for analysis.\n  - Optional `TG_BOT_SECRET` + `TG_ADMIN_CHAT_ID` for notifications.\n\n4. API/interface changes\n- New manual workflow surfaced in Actions UI:\n1. `lookback_days` (string/int-like, default `7`)\n2. `repos_override` (comma-separated repos, default empty)\n- Expected behavior:\n1. On success, creates a git commit containing the analysis markdown file on the invoking branch.\n2. Telegram notify step is non-fatal when Telegram config is absent.\n- External API usage (already encapsulated by existing scripts):\n1. GitHub Actions REST via `gh api`:\n   - `GET /repos/{owner}/{repo}/actions/runs?...`\n   - `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?...`\n2. OpenRouter chat completions:\n   - `POST /chat/completions` (base `https://openrouter.ai/api/v1`)\n\n5. Potential risks and edge cases\n- `.github/ai/consumer_repos.json` missing/invalid/empty.\n- `repos_override` parse errors (whitespace, empty tokens, malformed repo names).\n- `GH_PAT` missing permissions for one or more target repos; collector should continue per script behavior and surface errors in report payload.\n- Push race/non-fast-forward if branch moves during workflow run.\n- `OPENROUTER_API_KEY` missing -> analyzer exits with error.\n- Telegram unset/misconfigured must not fail workflow (`Q4: A`).\n- Re-run same day produces suffixed report filenames (`-2`, `-3`, etc.); commit step should add exactly emitted file path.\n\n6. Testing considerations\n- Workflow syntax/lint:\n1. Ensure new YAML passes existing CI lint.\n- Manual dispatch verification matrix:\n1. Default run with empty `repos_override`, Telegram unset -> workflow succeeds, commits report to current branch.\n2. Run with explicit `repos_override` of multiple repos -> collector invoked with all repos.\n3. Run with missing `OPENROUTER_API_KEY` -> analyze job fails with clear error.\n4. Run with Telegram configured -> message delivered and includes working report URL.\n5. Run on non-default branch -> commit/push lands on that same branch (`Q2: A`).\n- Artifact and handoff checks:\n1. `workflow_log_report.json` uploaded by `collect-logs` and consumed by `analyze-commit-notify`.\n2. `REPORT_FILE` captured from analyzer stdout and used consistently by commit + notify steps.\n\nConflict detection (issue/spec vs codebase)\n- Conflict 1: design doc references a `phases_filter` workflow input, but current [collect_workflow_logs.py](scripts/collect_workflow_logs.py) CLI does not expose a phase-filter argument. Under `Q1: A` (workflow-only scope), this should be excluded from implementation to avoid a no-op/unsupported input.\n- Conflict 2: required default repo behavior (`Q3: B`) differs from collector script default (collector defaults to only `${GITHUB_REPOSITORY}` when no `--repo` is passed). Workflow must therefore resolve repo list and pass explicit repeated `--repo` arguments to satisfy scope without changing scripts.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4aafedd62bee994e0b514cea8106e0cfa21ce2cd2eed85440aa766c0e24d3b11",
+  "lineage": {
+    "issue_number": 731,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24282868694",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24282868694",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/731"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260411130311_407729c892",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 731,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24282868694"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #731",
+  "timestamps": {
+    "created_at": "2026-04-11T13:03:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
