@@ -70,6 +70,10 @@ def _load_json_file(path: Path) -> Any:
 		return json.loads(path.read_text(encoding="utf-8"))
 	except FileNotFoundError as exc:
 		raise ValueError(f"input file not found: {path}") from exc
+	except UnicodeDecodeError as exc:
+		raise ValueError(f"invalid UTF-8 in {path}: {exc}") from exc
+	except OSError as exc:
+		raise ValueError(f"unable to read input file {path}: {exc}") from exc
 	except json.JSONDecodeError as exc:
 		raise ValueError(f"invalid JSON in {path}: {exc}") from exc
 
@@ -79,11 +83,15 @@ def _collect_deep_dive_logs(run_logs_dir: Path) -> list[dict[str, str]]:
 		return []
 	entries: list[dict[str, str]] = []
 	for log_file in sorted(path for path in run_logs_dir.iterdir() if path.is_file()):
-		text = log_file.read_text(encoding="utf-8", errors="replace")
+		try:
+			with log_file.open("r", encoding="utf-8", errors="replace") as handle:
+				excerpt = handle.read(4000)
+		except OSError:
+			continue
 		entries.append(
 			{
 				"name": log_file.name,
-				"excerpt": text[:4000],
+				"excerpt": excerpt,
 			}
 		)
 	return entries
@@ -624,7 +632,7 @@ def main(argv: list[str] | None = None) -> int:
 	prompt_path = Path(args.prompt_file)
 	try:
 		prompt_template = prompt_path.read_text(encoding="utf-8")
-	except OSError as exc:
+	except (OSError, UnicodeDecodeError) as exc:
 		print(f"ERROR: unable to read prompt file {prompt_path}: {exc}", file=sys.stderr)
 		return 2
 
