@@ -41,6 +41,7 @@ jobs:
           python3 -m py_compile scripts/orchestrate_lib.py
           python3 -m py_compile scripts/ai_labels.py
           python3 -m py_compile scripts/collect_workflow_logs.py
+          python3 -m py_compile scripts/analyze_workflow_logs.py
 
       - name: Orchestrate lib unit tests
         run: |
@@ -61,6 +62,11 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/test_collect_workflow_logs.py
+
+      - name: Workflow log analyzer unit tests
+        run: |
+          set -euo pipefail
+          python3 tests/test_analyze_workflow_logs.py
 
       - name: JSON schema validation
         run: |
