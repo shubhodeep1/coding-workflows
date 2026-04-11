@@ -230,8 +230,8 @@ def test_check_wave_status_ready_to_merge():
 	result = _run_check_wave_status(state, labels)
 	assert result["wave_complete"] is False
 	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
-	assert issues_by_gh["10"]["status"] == "ready-to-merge"
-	assert issues_by_gh["11"]["status"] == "merged"
+	assert issues_by_gh[10]["status"] == "ready-to-merge"
+	assert issues_by_gh[11]["status"] == "merged"
 
 
 def test_check_wave_status_review_blocked():
@@ -242,7 +242,7 @@ def test_check_wave_status_review_blocked():
 	assert result["any_review_blocked"] is True
 	assert result["any_failed"] is False
 	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
-	assert issues_by_gh["10"]["status"] == "review-blocked"
+	assert issues_by_gh[10]["status"] == "review-blocked"
 
 
 def test_check_wave_status_review_blocked_and_failed():
@@ -290,7 +290,7 @@ def test_check_wave_status_closed_counts_as_failed():
 	result = _run_check_wave_status(state, labels)
 	assert result["any_failed"] is True
 	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
-	assert issues_by_gh["10"]["status"] == "closed"
+	assert issues_by_gh[10]["status"] == "closed"
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +392,7 @@ def test_review_blocked_label_priority_over_other_labels():
 	result = _run_check_wave_status(state, labels)
 	assert result["any_review_blocked"] is True
 	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
-	assert issues_by_gh["10"]["status"] == "review-blocked"
+	assert issues_by_gh[10]["status"] == "review-blocked"
 
 
 # ---------------------------------------------------------------------------
