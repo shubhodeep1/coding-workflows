@@ -12,6 +12,14 @@ Your task is to produce a concrete optimization report focused on:
 
 Use run-specific evidence. Prioritize high-impact recommendations that can be implemented with minimal risk.
 
+SERENA MCP EFFICIENCY (MANDATORY):
+- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
+- Prefer `get_symbols_overview` and `find_symbol` over raw file reads.
+- Use `find_referencing_symbols` for impact analysis.
+- Use `search_for_pattern` instead of shell grep when Serena is available.
+- Never read the same file region twice.
+- If Serena is unavailable or errors, fall back to normal file reads.
+
 Output requirements:
 - Use markdown.
 - Use these section headings exactly, in this exact order:
@@ -31,11 +39,12 @@ Section requirements:
   - For each recommendation include: evidence, root cause, exact change, estimated impact.
 - ## Cost Optimizations
   - Rank recommendations by estimated token and/or dollar savings.
+  - For each recommendation include: evidence, root cause, exact change, and estimated impact.
   - Include current vs. proposed prompt/model/thinking-level behavior where relevant.
   - Call out avoidable token waste patterns (for example repeated context, redundant searches, unnecessary high-reasoning usage).
 - ## Reliability Improvements
   - Rank recommendations by expected failure-rate reduction.
-  - Include failure pattern, likely cause, mitigation, and expected reliability impact.
+  - For each recommendation include: evidence (failure pattern), root cause, exact change, and expected reliability impact.
 - ## Per-Repo Breakdown
   - Add a subsection per repository with repo-specific findings and targeted actions.
 - ## Metrics Appendix
@@ -43,10 +52,11 @@ Section requirements:
 
 Rules:
 - Be specific: cite repo names, run IDs, workflow/job/step names, and measured values.
-- Be actionable: every finding must include a concrete recommendation.
+- Be actionable: every finding must include a concrete recommendation. Use markdown code blocks for code or configuration changes.
 - Estimate impact using percentages, absolute time/token deltas, or failure-rate deltas where possible.
 - Maintain backward compatibility. Do not recommend breaking changes.
 - Do not recommend adding external services or new infrastructure.
 - Do not invent missing data. If data is insufficient, state the gap and proceed with the best evidence available.
 - Avoid generic advice; tie each recommendation to observed metrics or logs.
+- Do not include secrets, credentials, or sensitive personal information (PII) in the report.
 - In cost recommendations, explicitly identify where lower-cost models or lower thinking levels can be used without sacrificing required quality.
