@@ -81,6 +81,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Languages for Serena symbol analysis |
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Disable the Serena MCP server |
 | `CONTEXT7_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Context7 MCP server |
+| `GIT_MCP_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Git MCP server setup (preloaded diff artifacts remain the fallback). |
 | `WORKFLOW_ORCHESTRATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | orchestrate, orchestrate_poll | Model override for orchestrator decomposer and judge |
 | `ORCHESTRATE_POLL_INTERVAL` | No | `5` | orchestrate | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
 | `ORCHESTRATE_POLL_CALLER_WORKFLOW` | No | `ai-orchestrate-poll.yml` | orchestrate_poll | Filename of the caller wrapper workflow to retrigger for continuous polling. The poller dispatches this workflow via `workflow_dispatch` at the end of each run when active tracking issues exist, so the next cycle starts immediately instead of waiting for the cron schedule. Set to empty string to disable self-retrigger. |
@@ -588,6 +589,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `MAX_RECOVERY_ATTEMPTS` | `3` | Max project-level recovery cycles (judge failure → auto-fix) |
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | `2` | Max validation-failure → judge re-evaluation cycles before terminal failure |
 | `CONTEXT7_DISABLED` | `false` | Disable the optional Context7 MCP server setup in workflows |
+| `GIT_MCP_DISABLED` | `false` | Disable the optional Git MCP server setup in workflows (preloaded diff artifacts remain fallback) |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
 | `AI_MEMORY_ROOT` | `ai-memory` | Memory root path used by workflows |
 | `AI_MEMORY_RETRIEVAL_PROFILES` | `ai-memory/config/retrieval_profiles.v1.json` | Retrieval role config |

@@ -59,6 +59,16 @@ Rules:
 - Keep normal Serena-first code navigation/editing workflow for repository semantics.
 - If Context7 is unavailable or errors, continue without it. Do not block implementation.
 
+## Git MCP Docs (OPTIONAL when available)
+
+Use Git MCP in review/edit flows to fetch scoped, on-demand git context when available.
+
+Rules:
+- Prefer targeted Git MCP queries (`git_status`, `git_diff`, `git_show`, `git_log`, `git_branch`) over broad git context dumps.
+- Keep Git MCP usage read-oriented in review/edit flows.
+- Keep existing preloaded diff/context artifacts as fallback when Git MCP is unavailable or disabled.
+- If Git MCP is unavailable or errors, continue with the existing fallback artifacts.
+
 ---
 
 ## 0. Prime Directive (NON-NEGOTIABLE)
