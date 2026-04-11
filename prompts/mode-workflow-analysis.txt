@@ -49,3 +49,4 @@ Rules:
 - Do not recommend adding external services or new infrastructure.
 - Do not invent missing data. If data is insufficient, state the gap and proceed with the best evidence available.
 - Avoid generic advice; tie each recommendation to observed metrics or logs.
+- In cost recommendations, explicitly identify where lower-cost models or lower thinking levels can be used without sacrificing required quality.
