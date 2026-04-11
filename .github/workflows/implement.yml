@@ -1138,33 +1138,19 @@ jobs:
           rm -f scripts/git_ref_health_check.sh
 
           for attempt in 1 2 3; do
+            # Fetch latest remote state so --force-with-lease can safely
+            # overwrite even if the branch has moved due to concurrent bot
+            # commits.  No rebase is performed; bot branches are bot-owned and
+            # the last successful push wins.
             if ! git fetch --no-tags --prune origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
-              echo "Fetch attempt ${attempt} failed; continuing with local refs."
+              echo "Fetch attempt ${attempt} failed; using local refs."
             fi
 
             PUSH_ARGS=("-u" "origin" "HEAD:${TARGET_BRANCH}")
             if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
-              # Stash transient uncommitted changes so rebase can run cleanly.
-              STASHED=0
-              if [ -n "$(git status --porcelain)" ]; then
-                echo "::warning::Working tree not clean before rebase; stashing transient changes."
-                git stash push --include-untracked -m "pre-rebase-${TARGET_BRANCH}-$(date +%s)"
-                STASHED=1
-              fi
-
-              if ! git rebase "refs/remotes/origin/${TARGET_BRANCH}"; then
-                echo "Rebase onto origin/${TARGET_BRANCH} failed; aborting push retries."
-                git rebase --abort || true
-                if [ "${STASHED}" -eq 1 ]; then
-                  git stash pop || echo "::warning::git stash pop failed after rebase abort; working tree may have transient files."
-                fi
-                exit 1
-              fi
-
-              if [ "${STASHED}" -eq 1 ]; then
-                git stash pop || echo "::warning::git stash pop failed after rebase; working tree may have transient files."
-              fi
-
+              # Pin the lease to the freshly-fetched remote SHA so the push
+              # succeeds even when the remote moved since our commit, without
+              # needing a rebase.
               REMOTE_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
               PUSH_ARGS+=("--force-with-lease=refs/heads/${TARGET_BRANCH}:${REMOTE_SHA}")
             else
