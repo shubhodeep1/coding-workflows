@@ -22,6 +22,14 @@ Fix strategy:
 - Prefer deterministic assertions over fragile output parsing.
 - If tests depend on infra readiness, add explicit retries/timeouts instead of brittle sleeps.
 
+CRITICAL — graceful shutdown container resolution:
+- After `docker compose stop <service>`, the container moves to `exited` state.
+- `docker compose ps -q <service>` only returns RUNNING containers and will return empty after stop.
+- To resolve a stopped container's ID, use: `docker compose ps -q --status exited <service>` or `docker compose ps -aq --filter "status=exited" <service>`.
+- To check the exit code, use: `docker inspect --format='{{.State.ExitCode}}' <container_id>`.
+- The test should assert the container exited with code 0 (clean shutdown), not just that it stopped.
+- If a graceful shutdown test fails with "app container id unavailable after stop", this is almost certainly caused by using `docker compose ps -q <service>` (without `--status exited` or `--all`) after stop. Fix by switching to the `--status exited` or `--all` variant.
+
 Output contract:
 - Return exactly one valid JSON object.
 - Do not wrap JSON in markdown fences.

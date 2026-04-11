@@ -133,6 +133,29 @@ CRITICAL — grep-safe TAP counting under `set -e` / `pipefail`:
 - NEVER use bare `grep ... | wc -l` in a pipeline under `pipefail` — `grep` returning 1 (no match) will propagate through the pipe and trigger ERR/exit.
 - Test the all-pass case (zero `not ok` lines) mentally before finalizing the script.
 
+CRITICAL — graceful shutdown container resolution:
+- After `docker compose stop <service>`, the container moves to `exited` state.
+- `docker compose ps -q <service>` only returns RUNNING containers and will return empty after stop.
+- To resolve a stopped container's ID, use: `docker compose ps -q --status exited <service>` or `docker compose ps -aq --filter "status=exited" <service>`.
+- To check the exit code, use: `docker inspect --format='{{.State.ExitCode}}' <container_id>`.
+- The test should assert the container exited with code 0 (clean shutdown), not just that it stopped.
+- Recommended pattern:
+    docker compose -f validation/docker-compose.test.yml stop -t 5 app
+    CID=$(docker compose -f validation/docker-compose.test.yml ps -q --status exited app)
+    if [ -z "$CID" ]; then
+      CID=$(docker ps -aq --filter "status=exited" --filter "name=app")
+    fi
+    if [ -z "$CID" ]; then
+      echo "not ok - app container id unavailable after stop"
+      exit 1
+    fi
+    EXIT_CODE=$(docker inspect --format='{{.State.ExitCode}}' "$CID")
+    if [ "$EXIT_CODE" != "0" ]; then
+      echo "not ok - app exited with code $EXIT_CODE (expected 0)"
+      exit 1
+    fi
+    echo "ok - app shut down gracefully with exit code 0"
+
 Validation coverage (implement only when concretely applicable):
 1. Build verification
 2. Startup and health checks
