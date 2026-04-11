@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `fix-remove-setup-serena-backup-artifact`\n\nClarification mapping:\n- No `Q<ID>` items were asked in Clarify.\n- Interpreted answer `/answer [auto-answered-by-clarify]` means proceed with the issue requirements unchanged.\n\nConflict detected:\n- The issue states `scripts/setup_serena.sh.backup` is a full duplicate of `scripts/setup_serena.sh`.\n- Current repository state shows they are not byte-identical (different size and hash). This does not block the requested cleanup, but it is a factual mismatch to note for implement/review.\n\n1. Files likely to change\n- `scripts/setup_serena.sh.backup` (delete from repo).\n- No other file changes expected unless a backup-path reference is discovered during implementation (none found in current scan).\n\n2. Functions/modules to implement\n- No runtime function/module implementation required.\n- Perform repository hygiene cleanup only:\n- Remove tracked backup artifact.\n- Re-verify references to `setup_serena.sh.backup` are zero.\n- Re-verify canonical setup path remains `scripts/setup_serena.sh` in workflows/scripts.\n\n3. Data structures affected\n- Git tracked file set only (one file removed).\n- No MongoDB collections/contracts affected.\n- No workflow input/output schema changes expected.\n\n4. API/interface changes\n- None.\n- Preserve existing env var wiring and behavior, especially `GIT_MCP_DISABLED` handling in `scripts/setup_serena.sh` and workflow env propagation.\n\n5. Potential risks and edge cases\n- Risk: deleting backup could remove unique logic if it was accidentally diverged. Mitigation: confirm canonical file is the only referenced executable path and keep it unchanged.\n- Risk: hidden reference in non-code/docs. Mitigation: run full-repo string search for `setup_serena.sh.backup` before/after deletion.\n- Risk: accidental behavior drift if `scripts/setup_serena.sh` is modified during cleanup. Mitigation: enforce diff scope to deletion-only unless explicitly needed.\n\n6. Testing considerations\n- Verification checks for acceptance criteria:\n- Search for `setup_serena.sh.backup` returns no matches.\n- Search for `setup_serena.sh` still shows expected workflow/script invocations against canonical path.\n- Search for `GIT_MCP_DISABLED` still shows existing wiring in workflows and `scripts/setup_serena.sh`.\n- Diff sanity: resulting change should be removal of `scripts/setup_serena.sh.backup` only.\n\nIf this plan looks good, reply `/approved`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d62ae57dc659b3cc6e2928115bddcf7d79c29e938ad5c0656828b599853904d0",
+  "lineage": {
+    "issue_number": 751,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24288761855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24288761855",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/751"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260411182948_fea05e8197",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 751,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24288761855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #751",
+  "timestamps": {
+    "created_at": "2026-04-11T18:29:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
