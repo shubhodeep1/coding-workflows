@@ -183,6 +183,10 @@ jobs:
           fi
 
           source scripts/memory_helpers.sh
+          declare -F memory_ensure_branch >/dev/null || {
+            echo "::error::memory_ensure_branch not defined after sourcing scripts/memory_helpers.sh"
+            exit 1
+          }
           memory_ensure_branch
 
           memory_record_run_event \
@@ -821,6 +825,9 @@ jobs:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_ORCHESTRATE || '200000' }}
         run: |
           set -euo pipefail
+          : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
+          : "${DECOMPOSITION_FILE:=${RUNTIME_DIR}/decomposition.json}"
+          : "${TRACKING_ISSUE_NUMBER:=0}"
           TOKENS=""
           if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
             TOKENS="$(grep -A1 'tokens used' "${RUNTIME_DIR}/codex_log.txt" | tail -1 | tr -d '[:space:]' || true)"
@@ -858,6 +865,9 @@ jobs:
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
         run: |
           set -euo pipefail
+          : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
+          : "${DECOMPOSITION_FILE:=${RUNTIME_DIR}/decomposition.json}"
+          : "${TRACKING_ISSUE_NUMBER:=0}"
 
           if [ ! -f "scripts/memory_helpers.sh" ]; then
             echo "::warning::scripts/memory_helpers.sh not found; skipping orchestration end memory record"
@@ -902,6 +912,9 @@ jobs:
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
+          : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
+          : "${DECOMPOSITION_FILE:=${RUNTIME_DIR}/decomposition.json}"
+          : "${TRACKING_ISSUE_NUMBER:=0}"
           source scripts/tg_helpers.sh
 
           STATUS="${{ job.status }}"
