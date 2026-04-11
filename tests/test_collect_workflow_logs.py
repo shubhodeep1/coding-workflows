@@ -18,8 +18,8 @@ COLLECTOR_PATH = REPO_ROOT / "scripts" / "collect_workflow_logs.py"
 
 
 spec = importlib.util.spec_from_file_location("collect_workflow_logs", COLLECTOR_PATH)
-collector = importlib.util.module_from_spec(spec)
 assert spec is not None and spec.loader is not None
+collector = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(collector)
 
 
@@ -301,6 +301,7 @@ print(json.dumps({}))
 		assert report["summary"]["success_count"] == 1
 		assert report["summary"]["failure_count"] == 1
 		assert report["summary"]["cancelled_count"] == 0
+		assert report["summary"]["other_count"] == 0
 		assert isinstance(report["summary"]["p50_duration_seconds"], float)
 		assert isinstance(report["summary"]["p95_duration_seconds"], float)
 		assert len(report["errors"]) == 1

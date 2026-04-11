@@ -336,6 +336,11 @@ def build_report(
     success_count = sum(1 for item in runs if (item.get("conclusion") or "").lower() == "success")
     failure_count = sum(1 for item in runs if (item.get("conclusion") or "").lower() == "failure")
     cancelled_count = sum(1 for item in runs if (item.get("conclusion") or "").lower() == "cancelled")
+    other_count = sum(
+        1
+        for item in runs
+        if (item.get("conclusion") or "").lower() not in {"success", "failure", "cancelled"}
+    )
 
     avg_duration = float(sum(durations) / len(durations)) if durations else 0.0
 
@@ -353,6 +358,7 @@ def build_report(
             "success_count": success_count,
             "failure_count": failure_count,
             "cancelled_count": cancelled_count,
+            "other_count": other_count,
             "avg_duration_seconds": avg_duration,
             "p50_duration_seconds": _percentile(durations, 50),
             "p95_duration_seconds": _percentile(durations, 95),
@@ -440,7 +446,7 @@ def main(argv: list[str] | None = None) -> int:
         for run in runs:
             run_id = _to_int(run.get("id"), 0)
             jobs: list[dict[str, Any]] = []
-            if run_id > 0:
+            if run_id > 0 and (run.get("conclusion") or "").lower() == "failure":
                 try:
                     jobs = list_jobs_for_run(
                         repo,
