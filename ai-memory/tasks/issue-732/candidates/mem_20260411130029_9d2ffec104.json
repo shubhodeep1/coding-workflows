@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping used for this plan:\n\n- `Q1: B` interpreted as: implement explicit coverage measurement in CI with a minimum threshold (not just test execution).\n- `Q2: A` interpreted as: enforce coverage for both `scripts/collect_workflow_logs.py` and `scripts/analyze_workflow_logs.py`.\n\nConflict check:\n\n- The issue title suggests \u201cadd CI/test coverage,\u201d but the codebase already runs both unit test files in CI.  \n- Resolved by clarification: the missing piece is coverage gating (percentage threshold), not basic test execution.\n\nImplementation plan:\n\n1. Files likely to change\n- `.github/workflows/ci.yml` (primary and likely only required change).\n- Optional (only if maintainability is preferred over inline commands): `.coveragerc` for shared coverage settings. Not required for minimal change.\n\n2. Functions/modules to implement\n- CI module: `lint` job in `.github/workflows/ci.yml`.\n- Add a coverage-tooling step (`python3 -m pip install coverage`) in the Python job path.\n- Replace or augment the two workflow-analysis test steps with coverage-gated execution:\n  - Collector gate for `tests/test_collect_workflow_logs.py` + `scripts/collect_workflow_logs.py`\n  - Analyzer gate for `tests/test_analyze_workflow_logs.py` + `scripts/analyze_workflow_logs.py`\n- Keep existing py_compile checks unchanged.\n\n3. Data structures affected\n- CI workflow step graph in `.github/workflows/ci.yml`.\n- Two numeric policy constants (coverage thresholds), one per script.\n- Coverage artifact file `.coverage` created during job runtime (ephemeral, not committed).\n\n4. API/interface changes\n- No runtime product API changes.\n- CI contract change: PRs now fail when workflow-analysis script coverage drops below threshold.\n- Scope explicitly limited to both scripts from Q2.\n\n5. Potential risks and edge cases\n- Threshold selection risk: current observed baseline is roughly `collect=45%`, `analyze=67%`; setting higher thresholds without adding tests will fail CI.\n- Fragility risk: exact percentages can shift when script statement counts change.\n- Dependency risk: installing `coverage` requires network/package availability in CI.\n- Execution hygiene: ensure `coverage erase` between script-specific runs so one script\u2019s data does not mask the other.\n\n6. Testing considerations\n- Local pre-check commands (mirroring CI behavior):\n  - `python3 tests/test_collect_workflow_logs.py`\n  - `python3 tests/test_analyze_workflow_logs.py`\n  - `coverage run tests/test_collect_workflow_logs.py && coverage report --include='scripts/collect_workflow_logs.py' --fail-under=<collector-threshold>`\n  - `coverage erase`\n  - `coverage run tests/test_analyze_workflow_logs.py && coverage report --include='scripts/analyze_workflow_logs.py' --fail-under=<analyzer-threshold>`\n- CI validation:\n  - Confirm new steps fail when coverage is below threshold and pass at/above threshold.\n  - Confirm unrelated CI steps (yamllint, py_compile, other unit tests) remain unaffected.\n\nRecommended threshold initialization for first implementation pass:\n\n- `collect_workflow_logs.py`: `--fail-under=45`\n- `analyze_workflow_logs.py`: `--fail-under=67`\n\nThis matches current baseline behavior while immediately enforcing no-regression coverage gates for both scripts.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "24db125853117a543e1316ca0d399eac7cbff739b6344b38c8d0c96b662dd18b",
+  "lineage": {
+    "issue_number": 732,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24282850392",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24282850392",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/732"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260411130029_9d2ffec104",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 732,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24282850392"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #732",
+  "timestamps": {
+    "created_at": "2026-04-11T13:00:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
