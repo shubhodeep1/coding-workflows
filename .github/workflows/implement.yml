@@ -1138,23 +1138,25 @@ jobs:
           rm -f scripts/git_ref_health_check.sh
 
           for attempt in 1 2 3; do
-            # Fetch latest remote state so --force-with-lease can safely
-            # overwrite even if the branch has moved due to concurrent bot
-            # commits.  No rebase is performed; bot branches are bot-owned and
-            # the last successful push wins.
+            # Fetch latest remote state before pushing so local tracking refs
+            # are up to date.
             if ! git fetch --no-tags --prune origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
               echo "Fetch attempt ${attempt} failed; using local refs."
             fi
 
+            # Default: normal (non-force) push, compatible with protected branches.
+            # Set ALLOW_FORCE_PUSH=true in the workflow environment to opt in to
+            # --force-with-lease (only appropriate for unprotected bot branches).
             PUSH_ARGS=("-u" "origin" "HEAD:${TARGET_BRANCH}")
-            if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
-              # Pin the lease to the freshly-fetched remote SHA so the push
-              # succeeds even when the remote moved since our commit, without
-              # needing a rebase.
-              REMOTE_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
-              PUSH_ARGS+=("--force-with-lease=refs/heads/${TARGET_BRANCH}:${REMOTE_SHA}")
-            else
-              PUSH_ARGS+=("--force-with-lease")
+            if [ "${ALLOW_FORCE_PUSH:-false}" = "true" ]; then
+              if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
+                # Pin the lease to the freshly-fetched remote SHA so the push
+                # succeeds even when the remote moved since our last fetch.
+                REMOTE_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
+                PUSH_ARGS+=("--force-with-lease=refs/heads/${TARGET_BRANCH}:${REMOTE_SHA}")
+              else
+                PUSH_ARGS+=("--force-with-lease")
+              fi
             fi
 
             if git push "${PUSH_ARGS[@]}"; then
@@ -1162,13 +1164,21 @@ jobs:
               exit 0
             fi
 
+            PUSH_EXIT=$?
             if [ "${attempt}" -lt 3 ]; then
-              echo "Push attempt ${attempt} failed; retrying..."
+              echo "Push attempt ${attempt} failed (exit ${PUSH_EXIT}); retrying..."
               sleep $((attempt * 2))
+            else
+              echo "Push failed after 3 attempts (exit ${PUSH_EXIT})."
+              if [ "${ALLOW_FORCE_PUSH:-false}" != "true" ]; then
+                echo "Note: push was attempted without --force-with-lease."
+                echo "If the branch exists remotely and has diverged, the remote may have a non-fast-forward conflict."
+                echo "Protected branches that disallow force-push will reject forced updates (GH013)."
+                echo "If this branch is unprotected and force-push is intended, set ALLOW_FORCE_PUSH=true."
+              fi
             fi
           done
 
-          echo "Push failed after 3 attempts."
           exit 1
 
       - name: Create Pull Request
