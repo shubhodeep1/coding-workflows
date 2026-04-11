@@ -1293,6 +1293,15 @@ jobs:
           Problem: lock may remain held if an exception occurs
           Runtime impact: subsequent cache operations will deadlock
 
+          PRE-APPROVAL TEST GATE (MANDATORY)
+          Before finalizing your review, run the test suite:
+          python3 tests/test_orchestrate_poll_process.py
+          If any test fails, report each failure as a blocking issue with:
+          - the test name
+          - the failure message
+          - the file and function under test
+          Do not report the PR as having no blocking issues if any test fails.
+
           OUTPUT RULES
           Output plain text only.
           No JSON
