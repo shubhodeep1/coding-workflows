@@ -1,0 +1,232 @@
+name: Workflow Log Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: Days of workflow runs to analyze
+        required: false
+        default: "7"
+        type: string
+      repos_override:
+        description: Optional comma-separated repositories (owner/repo)
+        required: false
+        default: ""
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: workflow-log-analysis-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  collect-logs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve repositories
+        id: resolve_repos
+        run: |
+          set -euo pipefail
+
+          OVERRIDE_INPUT="${{ github.event.inputs.repos_override || '' }}"
+          REPO_REGISTRY_PATH=".github/ai/consumer_repos.json"
+
+          declare -a repos=()
+
+          if [ -n "${OVERRIDE_INPUT//[[:space:]]/}" ]; then
+            IFS=',' read -r -a override_repos <<< "${OVERRIDE_INPUT}"
+            for raw_repo in "${override_repos[@]}"; do
+              repo="$(printf '%s' "${raw_repo}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+              [ -n "${repo}" ] || continue
+              if [[ ! "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+                echo "::error::Invalid repository format in repos_override: ${repo}"
+                exit 1
+              fi
+              repos+=("${repo}")
+            done
+          else
+            if [ -f "${REPO_REGISTRY_PATH}" ]; then
+              if ! jq -e 'type == "array"' "${REPO_REGISTRY_PATH}" >/dev/null 2>&1; then
+                echo "::error::${REPO_REGISTRY_PATH} must be valid JSON containing an array of repositories."
+                exit 1
+              fi
+
+              mapfile -t configured_repos < <(jq -r '.[]' "${REPO_REGISTRY_PATH}")
+              for raw_repo in "${configured_repos[@]}"; do
+                repo="$(printf '%s' "${raw_repo}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+                [ -n "${repo}" ] || continue
+                repos+=("${repo}")
+              done
+            else
+              echo "::warning::${REPO_REGISTRY_PATH} not found; defaulting to current repository only."
+            fi
+
+            repos+=("${GITHUB_REPOSITORY}")
+          fi
+
+          declare -A seen=()
+          declare -a deduped=()
+          for repo in "${repos[@]}"; do
+            [ -n "${repo}" ] || continue
+            if [ -z "${seen[${repo}]+x}" ]; then
+              seen["${repo}"]=1
+              deduped+=("${repo}")
+            fi
+          done
+
+          if [ "${#deduped[@]}" -eq 0 ]; then
+            echo "::error::No repositories resolved."
+            exit 1
+          fi
+
+          printf '%s\n' "${deduped[@]}" > /tmp/workflow-analysis-repos.txt
+          echo "repo_count=${#deduped[@]}" >> "$GITHUB_OUTPUT"
+
+          echo "Resolved repositories:"
+          printf ' - %s\n' "${deduped[@]}"
+
+      - name: Collect workflow logs
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+
+          LOOKBACK_DAYS="${{ github.event.inputs.lookback_days || '7' }}"
+          mapfile -t REPOS < /tmp/workflow-analysis-repos.txt
+
+          COLLECT_ARGS=(
+            --lookback-days "${LOOKBACK_DAYS}"
+            --output workflow_log_report.json
+          )
+
+          for repo in "${REPOS[@]}"; do
+            COLLECT_ARGS+=(--repo "${repo}")
+          done
+
+          python3 scripts/collect_workflow_logs.py "${COLLECT_ARGS[@]}"
+
+      - name: Upload workflow log report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-log-report
+          path: workflow_log_report.json
+          if-no-files-found: error
+          retention-days: 7
+
+  analyze-commit-notify:
+    needs: collect-logs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download workflow log report artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-log-report
+          path: .
+
+      - name: Run workflow log analysis
+        id: analyze
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+
+          REPORT_FILE="$(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json)"
+
+          if [ -z "${REPORT_FILE}" ] || [ ! -f "${REPORT_FILE}" ]; then
+            echo "::error::Analyzer did not produce a valid report file path."
+            exit 1
+          fi
+
+          echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push report
+        id: commit_report
+        run: |
+          set -euo pipefail
+
+          REPORT_FILE="${{ steps.analyze.outputs.report_file }}"
+          TARGET_BRANCH="${{ github.ref_name }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "${REPORT_FILE}"
+          if git diff --cached --quiet; then
+            echo "No report changes to commit."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git commit -m "chore: add workflow log analysis report"
+          git pull --rebase origin "${TARGET_BRANCH}"
+          git push origin "HEAD:${TARGET_BRANCH}"
+
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Send Telegram notification
+        if: always()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "::warning::Telegram not configured (TG_BOT_SECRET or TG_ADMIN_CHAT_ID missing) — skipping notification."
+            exit 0
+          fi
+
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::scripts/tg_helpers.sh not found — skipping Telegram notification."
+            exit 0
+          fi
+
+          source scripts/tg_helpers.sh
+
+          REPORT_FILE="${{ steps.analyze.outputs.report_file }}"
+          REPORT_URL="${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/${REPORT_FILE}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUMMARY_LINE="$(grep -m1 -E '^- |^[0-9]+\. ' "${REPORT_FILE}" || true)"
+          [ -n "${SUMMARY_LINE}" ] || SUMMARY_LINE="Analysis report generated."
+
+          MSG="Workflow log analysis completed for ${{ github.repository }}"
+          MSG+=$'\n'
+          MSG+="Report: ${REPORT_URL}"
+          MSG+=$'\n'
+          MSG+="Summary: ${SUMMARY_LINE}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_msg "${MSG}" "DEBUG" >/dev/null
