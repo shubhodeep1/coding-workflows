@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\nscripts/setup_serena.sh\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "e2b17bacd3e988f1ccd4385873211ec115405734f515814f2e8a3ae3409e6c4e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 750,
+    "run_id": "24288291613",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24288291613",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260411181316_7f3bf84b64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 750,
+    "run_id": "24288291613"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-11T18:13:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
