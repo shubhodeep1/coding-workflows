@@ -26,6 +26,11 @@ if [ -f "scripts/tg_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/tg_helpers.sh
 fi
+# shellcheck source=render_prompt.sh
+if [ -f "scripts/render_prompt.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/render_prompt.sh
+fi
 
 # _gh_url constructs a full GitHub URL for the current repository.
 _gh_url() {
@@ -2802,7 +2807,7 @@ json.dump(result, sys.stdout)
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
-        cat prompts/mode-judge-review-blocked.txt
+        render_mode_prompt prompts/mode-judge-review-blocked.txt
         echo
         echo "=== ISSUE #${rb_issue} (original requirement) ==="
         echo
@@ -3621,7 +3626,7 @@ ${PR_DIFF}
     echo
     echo "=== JUDGE TASK ==="
     echo
-    cat prompts/mode-judge.txt
+    render_mode_prompt prompts/mode-judge.txt
     echo
     echo "=== PROJECT SPEC ==="
     echo

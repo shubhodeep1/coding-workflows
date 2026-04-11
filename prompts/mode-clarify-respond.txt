@@ -24,13 +24,7 @@ Rules:
 Use Serena MCP tools or targeted file reads only to inspect specific code
 symbols referenced in the questions. Keep tool usage minimal.
 
-SERENA MCP EFFICIENCY (MANDATORY):
-- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
-  Skip straight to activate_project and then use tools directly.
-- Prefer get_symbols_overview and find_symbol over raw file reads.
-- Never read the same file region twice. Plan reads upfront.
-- If Serena tools are completely unavailable (startup failure), fall back to
-  shell grep/rg once per search. Do not attempt Serena calls after a failure.
+{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
 Output format (exact):
 

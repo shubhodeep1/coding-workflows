@@ -181,9 +181,10 @@ jobs:
             echo "Model catalog not on ${script_ref} yet; using local copy."
           fi
 
-          for pf in mode-validate-generate.txt mode-validate-diagnose.txt mode-validate-discover.txt mode-validate-fix-harness.txt; do
+          for pf in mode-validate-generate.txt mode-validate-diagnose.txt mode-validate-discover.txt mode-validate-fix-harness.txt serena-efficiency-block.txt; do
             fetch_from_ref_or_local "prompts/${pf}" "prompts/${pf}"
           done
+          fetch_from_ref_or_local "scripts/render_prompt.sh" "scripts/render_prompt.sh"
 
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then

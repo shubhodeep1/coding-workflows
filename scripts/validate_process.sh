@@ -107,6 +107,11 @@ if [ -f "scripts/tg_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/tg_helpers.sh
 fi
+# shellcheck source=render_prompt.sh
+if [ -f "scripts/render_prompt.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/render_prompt.sh
+fi
 
 
 # _gh_url constructs a full GitHub URL for the current repository.
@@ -597,7 +602,7 @@ else
     echo
     echo "=== DISCOVERY TASK ==="
     echo
-    cat prompts/mode-validate-discover.txt
+    render_mode_prompt prompts/mode-validate-discover.txt
     echo
     echo "=== PROJECT SPEC ==="
     cat "${PROJECT_SPEC_FILE}"
@@ -778,7 +783,7 @@ fi
   echo
   echo "=== IMPLEMENTATION TASK ==="
   echo
-  cat "${HARNESS_PROMPT_SOURCE}"
+  render_mode_prompt "${HARNESS_PROMPT_SOURCE}"
   echo
   if [ -s "${PRIOR_FAILURE_CONTEXT_FILE}" ]; then
     echo "=== PRIOR VALIDATION FAILURES (DO NOT REPEAT) ==="
@@ -1162,7 +1167,7 @@ fi
   echo
   echo "=== DIAGNOSIS TASK ==="
   echo
-  cat prompts/mode-validate-diagnose.txt
+  render_mode_prompt prompts/mode-validate-diagnose.txt
   echo
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"

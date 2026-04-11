@@ -182,6 +182,19 @@ jobs:
                 "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=main"
             fi
           fi
+          # Fetch canonical Serena efficiency fragment and render helper
+          if [ ! -f "prompts/serena-efficiency-block.txt" ]; then
+            _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}" || \
+            _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main" || true
+          fi
+          if [ ! -f "scripts/render_prompt.sh" ]; then
+            _gh_api_fetch "scripts/render_prompt.sh" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/render_prompt.sh?ref=${script_ref}" || \
+            _gh_api_fetch "scripts/render_prompt.sh" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/render_prompt.sh?ref=main" || true
+          fi
 
           # Keep canonical static instructions available in caller repos where
           # these files may not exist yet.
@@ -381,6 +394,8 @@ jobs:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY_RESPOND || '15' }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC1091
+          source scripts/render_prompt.sh
 
           # Keep static context first for cache reuse, then append run-specific
           # data so issue/comment changes do not invalidate the cached prefix.
@@ -388,7 +403,7 @@ jobs:
             cat ./pre_assembled_static.txt
             echo
             echo "=== CLARIFY RESPOND TASK ==="
-            cat prompts/mode-clarify-respond.txt
+            render_mode_prompt prompts/mode-clarify-respond.txt
             echo
             echo "=== MEMORY CONTEXT ==="
             cat "${RUNTIME_DIR}/memory_context.txt"

@@ -242,12 +242,20 @@ jobs:
               fi
             fi
           done
-          for pf in mode-judge.txt mode-judge-review-blocked.txt; do
+          for pf in mode-judge.txt mode-judge-review-blocked.txt serena-efficiency-block.txt; do
             if ! _gh_api_fetch "prompts/${pf}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/prompts/${pf}?ref=${script_ref}"; then
               echo "::warning::${pf} not found on ${script_ref}; falling back to main"
               _gh_api_fetch "prompts/${pf}" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/prompts/${pf}?ref=main"
+            fi
+          done
+          for sf in render_prompt.sh; do
+            if ! _gh_api_fetch "scripts/${sf}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${sf}?ref=${script_ref}"; then
+              echo "::warning::${sf} not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "scripts/${sf}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${sf}?ref=main" || true
             fi
           done
           if ! _gh_api_fetch ".github/ai/orchestrate_schema.v1.json" api -H 'Accept: application/vnd.github.raw+json' \

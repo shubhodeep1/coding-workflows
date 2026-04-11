@@ -279,6 +279,19 @@ jobs:
             _gh_api_fetch "prompts/mode-orchestrate.txt" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/prompts/mode-orchestrate.txt?ref=main"
           fi
+          # Fetch canonical Serena efficiency fragment and render helper
+          if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
+            echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
+            _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main" || true
+          fi
+          if ! _gh_api_fetch "scripts/render_prompt.sh" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/scripts/render_prompt.sh?ref=${script_ref}"; then
+            echo "::warning::render_prompt.sh not found on ${script_ref}; falling back to main"
+            _gh_api_fetch "scripts/render_prompt.sh" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/render_prompt.sh?ref=main" || true
+          fi
           # Fetch schema for reference in prompt
           mkdir -p .github/ai
           if ! _gh_api_fetch ".github/ai/orchestrate_schema.v1.json" api -H 'Accept: application/vnd.github.raw+json' \
@@ -408,6 +421,8 @@ jobs:
           PROJECT_DESCRIPTION: ${{ inputs.project_description }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC1091
+          source scripts/render_prompt.sh
 
           {
             cat ./pre_assembled_static.txt
@@ -424,7 +439,7 @@ jobs:
             echo
             echo "=== ORCHESTRATION TASK ==="
             echo
-            cat prompts/mode-orchestrate.txt
+            render_mode_prompt prompts/mode-orchestrate.txt
             echo
             echo "=== DECOMPOSITION SCHEMA ==="
             echo

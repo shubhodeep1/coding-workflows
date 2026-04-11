@@ -183,6 +183,17 @@ jobs:
               "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=${script_ref}" \
               > prompts/mode-judge-review-blocked.txt 2>/dev/null || true
           fi
+          # Fetch canonical Serena efficiency fragment and render helper
+          if [ ! -f prompts/serena-efficiency-block.txt ]; then
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}" \
+              > prompts/serena-efficiency-block.txt 2>/dev/null || true
+          fi
+          if [ ! -f scripts/render_prompt.sh ]; then
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/render_prompt.sh?ref=${script_ref}" \
+              > scripts/render_prompt.sh 2>/dev/null || true
+          fi
 
       - name: Validate PR number input
         run: |
@@ -3052,6 +3063,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          source scripts/render_prompt.sh 2>/dev/null || true
           if [ -f scripts/label_helpers.sh ] && source scripts/label_helpers.sh 2>/dev/null; then
             :
           else
@@ -3179,7 +3191,7 @@ jobs:
             echo "=== REVIEW-BLOCKED JUDGE TASK ==="
             echo
             if [ -f prompts/mode-judge-review-blocked.txt ]; then
-              cat prompts/mode-judge-review-blocked.txt
+              render_mode_prompt prompts/mode-judge-review-blocked.txt
             else
               echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."
             fi
