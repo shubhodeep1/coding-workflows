@@ -89,6 +89,7 @@ def _run_poller(
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
 	blocked_check_shas: list[str] | None = None,
+	validation_workflow_runs: list[dict] | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -98,6 +99,7 @@ def _run_poller(
 	prs = prs or []
 	existing_branches = existing_branches or ["main"]
 	blocked_check_shas = blocked_check_shas or []
+	validation_workflow_runs = validation_workflow_runs or []
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -154,6 +156,7 @@ def _run_poller(
 			"merge_conflict_on_sync": merge_conflict_on_sync,
 			"merge_calls": [],
 			"blocked_check_shas": blocked_check_shas,
+			"validation_workflow_runs": validation_workflow_runs,
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -552,6 +555,18 @@ if args[0] == 'api':
 			print(store.get('default_branch', 'main'))
 		else:
 			print(json.dumps({'default_branch': store.get('default_branch', 'main')}))
+		sys.exit(0)
+
+	m = re.search(r'/actions/workflows/[^/]+/runs', path)
+	if m:
+		runs = store.get('validation_workflow_runs', [])
+		result = {'workflow_runs': runs, 'total_count': len(runs)}
+		if jq:
+			import subprocess as _sp
+			p = _sp.run(['jq', '-r', jq], input=json.dumps(result), capture_output=True, text=True)
+			print(p.stdout.rstrip())
+		else:
+			print(json.dumps(result))
 		sys.exit(0)
 
 	print('{}')
@@ -1101,6 +1116,77 @@ def test_validated_from_validation_fixing_state_removes_all_stale_labels():
 	assert "ai:validated" in final_labels, f"ai:validated missing from {final_labels}"
 	assert "ai:validating" not in final_labels, f"ai:validating still present in {final_labels}"
 	assert "ai:validation-fixing" not in final_labels, f"ai:validation-fixing still present in {final_labels}"
+
+
+def test_validation_run_fallback_completes_when_label_missing():
+	"""When in validating state but ai:validated label is missing, the fallback
+	should detect a successful workflow run conclusion and mark complete."""
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 1
+	state["validation_last_dispatch_ts"] = 0
+	state["validation_last_dispatch_cycle"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating"],
+		validation_workflow_runs=[{
+			"status": "completed",
+			"conclusion": "success",
+			"created_at": "2026-01-01T00:00:00Z",
+		}],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert "ai:validated" in result["tracking_labels"]
+	# No new validation dispatch should have been made
+	assert len(result["validation_dispatches"]) == 0
+
+
+def test_validation_run_fallback_does_not_trigger_on_failure():
+	"""When the last validation run concluded with failure, the fallback should
+	not trigger and the poller should redispatch."""
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 1
+	state["validation_last_dispatch_ts"] = 0
+	state["validation_last_dispatch_cycle"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating"],
+		validation_workflow_runs=[{
+			"status": "completed",
+			"conclusion": "failure",
+			"created_at": "2026-01-01T00:00:00Z",
+		}],
+	)
+	# Should NOT complete — fallback only triggers on success
+	assert result["latest_state"]["status"] == "validating"
+	assert len(result["validation_dispatches"]) == 1
+
+
+def test_validation_active_run_prevents_redispatch():
+	"""When a validation run is still in progress and the stale threshold has
+	been exceeded, the poller should NOT redispatch."""
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 1
+	state["validation_last_dispatch_ts"] = 1  # Very old timestamp to trigger stale check
+	state["validation_last_dispatch_cycle"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validating"],
+		validation_workflow_runs=[{
+			"status": "in_progress",
+			"conclusion": None,
+			"created_at": "2026-01-01T00:00:00Z",
+		}],
+	)
+	# Should not have dispatched a new validation run
+	assert len(result["validation_dispatches"]) == 0
+	# Should still be in validating state
+	assert result["latest_state"]["status"] == "validating"
 
 
 # ---------------------------------------------------------------------------
