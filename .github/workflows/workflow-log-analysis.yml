@@ -1,0 +1,137 @@
+---
+name: Workflow Log Analysis
+
+"on":
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: >
+          Number of days of workflow run history to analyze.
+          Higher = more data but larger context. Max 30.
+        required: false
+        type: string
+        default: "7"
+      repos_override:
+        description: >
+          Comma-separated list of owner/repo to analyze instead of
+          consumer_repos.json + this repo. Leave blank for default.
+        required: false
+        type: string
+        default: ""
+      phases_filter:
+        description: >
+          Comma-separated phase names to include (clarify,plan,implement,
+          review,validate,orchestrate). Leave blank for all.
+        required: false
+        type: string
+        default: ""
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  collect-logs:
+    name: Collect workflow run logs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Collect workflow logs and extract metrics
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 scripts/collect_workflow_logs.py \
+            --lookback-days "${{ inputs.lookback_days }}" \
+            --repos "${{ inputs.repos_override }}" \
+            --phases "${{ inputs.phases_filter }}" \
+            --output-dir /tmp/analysis-data \
+            --deep-dive-count 10
+
+      - name: Upload analysis data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-analysis-data
+          path: /tmp/analysis-data/
+          retention-days: 3
+
+  analyze:
+    name: Analyze logs and generate report
+    needs: collect-logs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download analysis data artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-analysis-data
+          path: /tmp/analysis-data/
+
+      - name: Run LLM analysis and generate report
+        id: analyze
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL }}
+        run: |
+          set -euo pipefail
+          REPORT_FILE=$(python3 scripts/analyze_workflow_logs.py \
+            --data-dir /tmp/analysis-data \
+            --lookback-days "${{ inputs.lookback_days }}")
+          echo "REPORT_FILE=${REPORT_FILE}" >> "$GITHUB_ENV"
+          echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push report
+        if: env.REPORT_FILE != ''
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${REPORT_FILE}"
+          git commit -m "analysis: add workflow optimization report $(basename "${REPORT_FILE}" .md)"
+          git push origin HEAD:"${{ github.ref_name }}"
+
+      - name: Notify via Telegram
+        if: env.REPORT_FILE != ''
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          source scripts/tg_helpers.sh
+
+          REPORT_NAME="$(basename "${REPORT_FILE}")"
+          REPORT_URL="https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/${REPORT_FILE}"
+
+          # Build a compact summary from the executive summary section
+          EXEC_SUMMARY=""
+          if [ -f "${REPORT_FILE}" ]; then
+            EXEC_SUMMARY=$(sed -n '/^### Executive Summary/,/^### /{ /^### /d; p; }' \
+              "${REPORT_FILE}" | head -10 | sed 's/^[[:space:]]*//')
+          fi
+
+          MSG="📊 Workflow Optimization Report"$'\n'"${REPORT_NAME}"$'\n\n'"${EXEC_SUMMARY}"$'\n\n'"📄 ${REPORT_URL}"
+
+          tg_send_msg "${MSG}"

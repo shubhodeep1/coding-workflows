@@ -15,6 +15,7 @@ This repository contains reusable `workflow_call` workflows that power the full 
 7. **Memory Maintenance** — Monthly compaction and archival of AI memory records
 8. **Validate** — Runtime harness generation + local Docker smoke validation with machine-readable results
 9. **Update Workflows** — Automatically updates workflow wrappers in consumer repos when upstream templates change
+10. **Workflow Log Analysis** — On-demand LLM-powered analysis of workflow run telemetry with speed, cost, and reliability optimization reports committed to `analysis/`
 
 ### Memory System
 
@@ -478,6 +479,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `orchestrate_clarify_respond.yml` | `issue_comment.created` | Auto-answers clarification questions on orchestrator issues |
 | `orchestrate_poll.yml` | `schedule` (every ~5 min) + self-retrigger | Orchestrator progress poller + judge + auto-recovery. Self-retriggers via `workflow_dispatch` when active tracking issues exist for near-immediate next cycles; cron acts as fallback. |
 | `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates workflow wrappers from upstream templates |
+| `workflow-log-analysis.yml` | `workflow_dispatch` | On-demand LLM analysis of workflow run telemetry; commits a dated report to `analysis/` |
 
 ## Required Secrets
 
@@ -550,7 +552,51 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
 
-## Prompt Caching (OpenRouter + Codex)
+## Workflow Log Analysis
+
+The `workflow-log-analysis.yml` workflow provides on-demand LLM-powered analysis of
+GitHub Actions run telemetry. Trigger it manually from the **Actions** tab.
+
+### Inputs
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `lookback_days` | `7` | Days of run history to analyze (max 30) |
+| `repos_override` | _(empty)_ | Comma-separated `owner/repo` list. Leave blank to analyze this repo + all repos in `.github/ai/consumer_repos.json` |
+| `phases_filter` | _(empty)_ | Comma-separated phase names to include (`clarify`, `plan`, `implement`, `review`, `validate`, `orchestrate`). Leave blank for all phases |
+
+### What it does
+
+1. **Collect** — `scripts/collect_workflow_logs.py` fetches completed workflow runs
+   via the GitHub Jobs API (step-level timing without downloading large log zips),
+   then downloads full log zips for the top-N slowest and failed runs for deeper analysis.
+2. **Analyze** — `scripts/analyze_workflow_logs.py` assembles a prompt from the
+   collected metrics and calls OpenRouter (`WORKFLOW_EDITOR_MODEL`, `reasoning_effort=high`)
+   to generate an optimization report.
+3. **Commit** — The report is committed to `analysis/workflow-optimization-YYYY-MM-DD.md`
+   on the branch the workflow was dispatched from (typically `main`).
+4. **Notify** — A Telegram message with the executive summary and a link to the
+   report is sent to `TG_ADMIN_CHAT_ID` (if configured).
+
+### Report location
+
+Reports are committed to `analysis/workflow-optimization-YYYY-MM-DD.md`.
+If multiple runs happen on the same day, a counter suffix is added:
+`analysis/workflow-optimization-YYYY-MM-DD-2.md`.
+
+### Required secrets/variables
+
+All secrets and variables used by this workflow already exist in the standard setup:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `GH_PAT` | Secret | GitHub PAT with `repo` scope |
+| `OPENROUTER_API_KEY` | Secret | OpenRouter API key |
+| `WORKFLOW_EDITOR_MODEL` | Variable | Model for LLM analysis (default: `openai/gpt-5.3-codex`) |
+| `TG_BOT_SECRET` | Secret | Telegram bot token (optional) |
+| `TG_ADMIN_CHAT_ID` | Variable | Telegram chat ID for notifications (optional) |
+
+
 
 ### Determination (current stack)
 
