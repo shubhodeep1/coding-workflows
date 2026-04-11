@@ -191,4 +191,4 @@ JSON schema:
   "blockers": ["string"]
 }
 
-{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}
+{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}

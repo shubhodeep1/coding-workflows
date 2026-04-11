@@ -72,7 +72,7 @@ IMPORTANT — Autonomous decision-making:
   merge and document the limitation. Only block if the risk is exploitable
   in the target runtime environment.
 
-{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}
+{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
 Output contract:
 - Output MUST be a single valid JSON object. No markdown fences or surrounding text.
