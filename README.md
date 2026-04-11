@@ -14,7 +14,7 @@ This repository contains reusable `workflow_call` workflows that power the full 
 6. **Cancel on PR Close** — Cancels orphaned workflow runs when PRs close
 7. **Memory Maintenance** — Monthly compaction and archival of AI memory records
 8. **Validate** — Runtime harness generation + local Docker smoke validation with machine-readable results
-9. **Update Workflows** — Automatically updates workflow wrappers in consumer repos when upstream templates change
+9. **Update Workflows** — Automatically updates existing and creates new workflow wrappers in consumer repos when upstream templates change
 
 ### Memory System
 
@@ -421,10 +421,14 @@ jobs:
 > immediately when a new `@stable` release is tagged (via `repository_dispatch`
 > from this repo). It fetches the latest templates from
 > `coding-workflows@stable`, compares them against your local wrappers, and
-> overwrites any that have changed. A Telegram alert lists which files were
-> updated. To opt out, set `ALLOW_WORKFLOW_EDITS` to `false`. If you have
-> customized a wrapper and want to keep your changes, either opt out or
-> maintain your customizations after each update.
+> overwrites any that have changed. **New upstream templates are also created
+> automatically** — you no longer need to manually copy new workflow files.
+> The only exception is `ai-update-workflows.yml` itself, which must be
+> bootstrapped manually (it's the workflow that runs this process). A Telegram
+> alert lists which files were updated or created. To opt out, set
+> `ALLOW_WORKFLOW_EDITS` to `false`. If you have customized a wrapper and want
+> to keep your changes, either opt out or maintain your customizations after
+> each update.
 
 > All internal wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
 
@@ -477,7 +481,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `orchestrate.yml` | `workflow_dispatch` | Project decomposition + multi-issue orchestration |
 | `orchestrate_clarify_respond.yml` | `issue_comment.created` | Auto-answers clarification questions on orchestrator issues |
 | `orchestrate_poll.yml` | `schedule` (every ~5 min) + self-retrigger | Orchestrator progress poller + judge + auto-recovery. Self-retriggers via `workflow_dispatch` when active tracking issues exist for near-immediate next cycles; cron acts as fallback. |
-| `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates workflow wrappers from upstream templates |
+| `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates existing and creates new workflow wrappers from upstream templates |
 
 ## Required Secrets
 
