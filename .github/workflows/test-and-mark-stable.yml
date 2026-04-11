@@ -850,10 +850,17 @@ jobs:
 
           # 6a: Label the test issue as review-blocked (simulating autofix exhaustion)
           echo "Labeling issue #${ISSUE_NUMBER} as ai:review-blocked..."
-          gh label create "ai:review-blocked" --repo "${TEST_REPO}" \
-            --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
-            2>/dev/null || true
+          # Ensure the label exists before applying it (idempotent: check then create)
+          if ! gh api "repos/${TEST_REPO}/labels/ai:review-blocked" >/dev/null 2>&1; then
+            gh api "repos/${TEST_REPO}/labels" \
+              -X POST \
+              -f name="ai:review-blocked" \
+              -f color="e11d48" \
+              -f description="PR review/autofix could not resolve all issues — needs human intervention" \
+              >/dev/null 2>&1 || true
+          fi
           gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/labels" \
+            -X POST \
             -f "labels[]=ai:review-blocked" >/dev/null 2>&1 || true
           # Remove other ai: phase labels to simulate a clean review-blocked state
           for label in ai:done ai:ready-to-merge ai:implementing ai:merged; do
@@ -870,12 +877,15 @@ jobs:
           *This issue is managed by the AI orchestrator. Do not edit manually.*
           \`ai:orchestrator-tracking\`"
 
-          # Ensure the label exists before creating the issue (idempotent).
-          gh label create "ai:orchestrator-tracking" \
-            --repo "${TEST_REPO}" \
-            --color "a2eeef" \
-            --description "Orchestrator project tracking issue" \
-            2>/dev/null || true
+          # Ensure the label exists before creating the issue (idempotent: check then create)
+          if ! gh api "repos/${TEST_REPO}/labels/ai:orchestrator-tracking" >/dev/null 2>&1; then
+            gh api "repos/${TEST_REPO}/labels" \
+              -X POST \
+              -f name="ai:orchestrator-tracking" \
+              -f color="a2eeef" \
+              -f description="Orchestrator project tracking issue" \
+              >/dev/null 2>&1 || true
+          fi
 
           # Create the issue WITH the label atomically so the issues:opened
           # event payload already contains ai:orchestrator-tracking.  This
