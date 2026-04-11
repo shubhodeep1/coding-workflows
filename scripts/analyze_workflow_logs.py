@@ -132,7 +132,9 @@ def build_parser() -> argparse.ArgumentParser:
 		help="OpenRouter model ID.",
 	)
 	parser.add_argument(
+		"--max-prompt-tokens",
 		"--prompt-token-budget",
+		dest="prompt_token_budget",
 		type=int,
 		default=24000,
 		help="Approximate max prompt tokens before deterministic truncation.",
@@ -455,16 +457,17 @@ def truncate_to_budget(context: dict[str, Any], prompt_token_budget: int) -> dic
 		trim_list_field(field)
 
 	for field in ("per_repo", "per_workflow_family"):
-		while estimate() > prompt_token_budget and isinstance(trimmed.get(field), dict) and trimmed[field]:
-			ordered_keys = sorted(
-				trimmed[field].keys(),
-				key=lambda key: (
-					_to_int((trimmed[field].get(key) or {}).get("total_runs"), 0),
-					key,
-				),
-			)
-			first_key = ordered_keys[0]
-			del trimmed[field][first_key]
+		field_dict = trimmed.get(field)
+		if not isinstance(field_dict, dict) or not field_dict:
+			continue
+		ordered_keys = sorted(
+			field_dict.keys(),
+			key=lambda key: (_to_int((field_dict.get(key) or {}).get("total_runs"), 0), key),
+		)
+		for key in ordered_keys:
+			if estimate() <= prompt_token_budget:
+				break
+			del field_dict[key]
 			removed[field] += 1
 
 	trimmed["truncation"] = {
