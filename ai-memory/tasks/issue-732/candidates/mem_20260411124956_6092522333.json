@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Given that CI already runs tests for both workflow log scripts, what additional outcome should this issue implement?**\nChoices:\n- **A** \u2014 Expand/add unit test cases only (no coverage percentage gate), and keep CI as test execution only.\n- **B** \u2014 Add explicit coverage measurement in CI (for example `coverage.py`) with a minimum threshold for the workflow analysis scripts **(RECOMMENDED)**.\n- **C** \u2014 Treat current state as already satisfying the issue (no code change; close as completed).\nReply: `Q1: A` (or `Q1: B` or `Q1: C`)\n**Q2: Which script scope should be enforced for this issue?**\nChoices:\n- **A** \u2014 Both `collect_workflow_logs.py` and `analyze_workflow_logs.py` **(RECOMMENDED)**.\n- **B** \u2014 Only `analyze_workflow_logs.py`.\n- **C** \u2014 A different scope from tracking issue #541 (please choose this and specify in one line).\nReply: `Q2: A`",
+  "fingerprint": "7a0bdd59367ded2c389bb7e7da271a02c3ec19dd1fa6c38b2600ecc033912e3a",
+  "lineage": {
+    "issue_number": 732,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24282799296",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24282799296",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260411124956_6092522333",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 732,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24282799296"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #732 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-11T12:49:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
