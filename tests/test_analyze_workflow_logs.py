@@ -118,7 +118,6 @@ def test_call_openrouter_builds_payload_and_parses_response():
 	assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
 	assert captured["payload"]["model"] == "openai/gpt-5.3-codex"
 	assert captured["payload"]["max_tokens"] == 123
-	assert captured["payload"]["reasoning"] == {"effort": "high"}
 	assert any(k.lower() == "authorization" and v == "Bearer test-key" for k, v in captured["headers"])
 
 

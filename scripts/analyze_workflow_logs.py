@@ -61,7 +61,7 @@ def _estimate_tokens(payload: Any) -> int:
 	if isinstance(payload, str):
 		text = payload
 	else:
-		text = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+		text = json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True)
 	return max(1, len(text) // 4)
 
 
@@ -524,7 +524,6 @@ def call_openrouter(
 		"messages": messages,
 		"temperature": temperature,
 		"max_tokens": max_tokens,
-		"reasoning": {"effort": "high"},
 	}
 	request_body = json.dumps(payload).encode("utf-8")
 	request = urllib.request.Request(
