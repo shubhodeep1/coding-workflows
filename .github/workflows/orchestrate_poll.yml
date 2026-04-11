@@ -256,6 +256,12 @@ jobs:
             _gh_api_fetch ".github/ai/orchestrate_schema.v1.json" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/.github/ai/orchestrate_schema.v1.json?ref=main"
           fi
+          if ! _gh_api_fetch ".github/ai/label_contract.v1.json" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/.github/ai/label_contract.v1.json?ref=${script_ref}"; then
+            echo "::warning::label_contract.v1.json not found on ${script_ref}; falling back to main"
+            _gh_api_fetch ".github/ai/label_contract.v1.json" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/.github/ai/label_contract.v1.json?ref=main"
+          fi
           # Model catalog: try script_ref first, fall back to local copy from checkout.
           if _gh_api_fetch "scripts/codex_model_catalog.json.tmp" api -H 'Accept: application/vnd.github.raw+json' \
             "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}"; then

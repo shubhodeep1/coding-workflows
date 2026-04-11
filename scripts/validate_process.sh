@@ -196,62 +196,61 @@ set_tracking_phase_label()
 
   ensure_label_exists "${phase_label}"
 
-  if [ -f "${contract_file}" ]; then
-    local phase_changes
-    if phase_changes="$(python3 scripts/ai_labels.py resolve-phase \
-      --contract-file "${contract_file}" \
-      --phase "${phase_label}" 2>/dev/null)"; then
-      # Fetch current labels on the issue so we only attempt to remove labels
-      # that are actually present.  Trying to remove a label that does not
-      # exist on the issue can cause `gh issue edit` to return an error,
-      # which the outer `|| true` would silently swallow — leaving stale
-      # labels (e.g. ai:validating + ai:validation-fixing) in place even
-      # after the phase has advanced to ai:validated.
-      local current_issue_labels
-      current_issue_labels="$(gh_retry gh api \
-        "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/labels" \
-        --jq '[.[].name]' 2>/dev/null || echo '[]')"
+  if [ ! -f "${contract_file}" ]; then
+    echo "::warning::set_tracking_phase_label: missing label contract ${contract_file}; cannot apply label '${phase_label}' safely." >&2
+    return 1
+  fi
 
-      # Build a single gh issue edit command with all --remove-label and
-      # --add-label flags instead of one API call per label.
-      local edit_args=()
-      while IFS= read -r remove_label; do
-        [ -n "${remove_label}" ] || continue
-        # Only remove labels that are currently on the issue to avoid
-        # errors from trying to remove absent labels.
-        if echo "${current_issue_labels}" | jq -e --arg l "${remove_label}" 'index($l) != null' >/dev/null 2>&1; then
-          edit_args+=(--remove-label "${remove_label}")
-        fi
-      done < <(echo "${phase_changes}" | jq -r '.remove[]?')
+  local phase_changes
+  if ! phase_changes="$(python3 scripts/ai_labels.py resolve-phase \
+    --contract-file "${contract_file}" \
+    --phase "${phase_label}" 2>/dev/null)"; then
+    echo "::warning::set_tracking_phase_label: resolve-phase failed for '${phase_label}' using ${contract_file}." >&2
+    return 1
+  fi
 
-      while IFS= read -r add_label; do
-        [ -n "${add_label}" ] || continue
-        ensure_label_exists "${add_label}"
-        edit_args+=(--add-label "${add_label}")
-      done < <(echo "${phase_changes}" | jq -r '.add[]?')
+  # Fetch current labels on the issue so we only attempt to remove labels
+  # that are actually present.  Trying to remove a label that does not
+  # exist on the issue can cause `gh issue edit` to return an error,
+  # which the outer `|| true` would silently swallow — leaving stale
+  # labels (e.g. ai:validating + ai:validation-fixing) in place even
+  # after the phase has advanced to ai:validated.
+  local current_issue_labels
+  current_issue_labels="$(gh_retry gh api \
+    "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/labels" \
+    --jq '[.[].name]' 2>/dev/null || echo '[]')"
 
-      if [ "${#edit_args[@]}" -gt 0 ]; then
-        local _label_err_file
-        _label_err_file="$(mktemp)"
-        if ! gh_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
-          --repo "${GITHUB_REPOSITORY}" \
-          "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
-          echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_ISSUE_NUM} (contract mode): $(cat "${_label_err_file}" 2>/dev/null)" >&2
-        fi
-        rm -f "${_label_err_file}"
-      fi
-      return 0
+  # Build a single gh issue edit command with all --remove-label and
+  # --add-label flags instead of one API call per label.
+  local edit_args=()
+  while IFS= read -r remove_label; do
+    [ -n "${remove_label}" ] || continue
+    # Only remove labels that are currently on the issue to avoid
+    # errors from trying to remove absent labels.
+    if echo "${current_issue_labels}" | jq -e --arg l "${remove_label}" 'index($l) != null' >/dev/null 2>&1; then
+      edit_args+=(--remove-label "${remove_label}")
     fi
-  fi
+  done < <(echo "${phase_changes}" | jq -r '.remove[]?')
 
-  local _label_err_file
-  _label_err_file="$(mktemp)"
-  if ! gh_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
-    --repo "${GITHUB_REPOSITORY}" \
-    --add-label "${phase_label}" >/dev/null 2>"${_label_err_file}"; then
-    echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_ISSUE_NUM} (fallback mode): $(cat "${_label_err_file}" 2>/dev/null)" >&2
+  while IFS= read -r add_label; do
+    [ -n "${add_label}" ] || continue
+    ensure_label_exists "${add_label}"
+    edit_args+=(--add-label "${add_label}")
+  done < <(echo "${phase_changes}" | jq -r '.add[]?')
+
+  if [ "${#edit_args[@]}" -gt 0 ]; then
+    local _label_err_file
+    _label_err_file="$(mktemp)"
+    if ! gh_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
+      echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_ISSUE_NUM}: $(cat "${_label_err_file}" 2>/dev/null)" >&2
+      rm -f "${_label_err_file}"
+      return 1
+    fi
+    rm -f "${_label_err_file}"
   fi
-  rm -f "${_label_err_file}"
+  return 0
 }
 
 extract_last_json_with_key()

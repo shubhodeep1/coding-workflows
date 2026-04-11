@@ -90,6 +90,8 @@ def _run_poller(
 	merge_conflict_on_sync: bool = False,
 	blocked_check_shas: list[str] | None = None,
 	validation_workflow_runs: list[dict] | None = None,
+	issue_closed: dict[int, bool] | None = None,
+	issue_linked_prs: dict[int, int] | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -100,6 +102,8 @@ def _run_poller(
 	existing_branches = existing_branches or ["main"]
 	blocked_check_shas = blocked_check_shas or []
 	validation_workflow_runs = validation_workflow_runs or []
+	issue_closed = issue_closed or {}
+	issue_linked_prs = issue_linked_prs or {}
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -137,7 +141,7 @@ def _run_poller(
 				"labels": list(labels),
 				"comments": [],
 				"body": f"Issue {inum}",
-				"closed": False,
+				"closed": bool(issue_closed.get(inum, False)),
 			}
 
 		store = {
@@ -157,6 +161,7 @@ def _run_poller(
 			"merge_calls": [],
 			"blocked_check_shas": blocked_check_shas,
 			"validation_workflow_runs": validation_workflow_runs,
+			"issue_linked_prs": {str(k): int(v) for k, v in issue_linked_prs.items()},
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -456,8 +461,10 @@ if args[0] == 'api':
 		issue = get_issue(m.group(1))
 		if jq == '.body':
 			print(issue.get('body', ''))
+		elif jq == '.state':
+			print('closed' if issue.get('closed') else 'open')
 		else:
-			print(json.dumps({'body': issue.get('body', '')}))
+			print(json.dumps({'body': issue.get('body', ''), 'state': ('closed' if issue.get('closed') else 'open')}))
 		sys.exit(0)
 
 	m = re.search(r'/pulls/(\d+)$', path)
@@ -499,6 +506,8 @@ if args[0] == 'api':
 			print(json.dumps({
 				'state': pr.get('state', 'open'),
 				'mergeable': pr.get('mergeable', True),
+				'merged': pr.get('merged', False),
+				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
 				'head': {'sha': pr.get('headSha', f'mocksha{pr_num}'), 'ref': pr.get('headRefName', '')},
 			}))
 		sys.exit(0)
@@ -531,10 +540,27 @@ if args[0] == 'api':
 		sys.exit(1)
 
 	if path.endswith('/timeline'):
+		m = re.search(r'/issues/(\d+)/timeline$', path)
+		events = []
+		if m:
+			issue_num = m.group(1)
+			linked_pr = store.get('issue_linked_prs', {}).get(str(issue_num))
+			if linked_pr is not None:
+				events.append({
+					'event': 'cross-referenced',
+					'source': {
+						'issue': {
+							'number': int(linked_pr),
+							'pull_request': {'url': f'https://api.github.com/repos/owner/repo/pulls/{int(linked_pr)}'},
+						}
+					},
+				})
 		if jq:
-			print('')
+			import subprocess
+			jq_result = subprocess.run(['jq', '-r', jq], input=json.dumps(events), capture_output=True, text=True)
+			print(jq_result.stdout.rstrip())
 		else:
-			print('[]')
+			print(json.dumps(events))
 		sys.exit(0)
 
 	m = re.search(r'/commits/([^/]+)/check-runs(\?.*)?$', path)
@@ -1498,6 +1524,92 @@ def test_revalidate_not_triggered_for_non_validation_failure():
 	ls = result["latest_state"]
 	assert ls["status"] == "failed", f"Expected status=failed, got {ls['status']}"
 	assert result["validation_dispatches"] == []
+
+
+def test_missing_labels_closed_issue_healed_to_terminal_without_retrigger():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		issue_closed={10: True},
+	)
+	issue_status = result["latest_state"]["waves"][0]["issues"][0]["status"]
+	assert issue_status == "closed"
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert not any("/reclarify" in body or "/approved" in body for body in issue_comments)
+
+
+def test_stale_pending_terminal_truth_from_merged_pr_is_auto_corrected():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "pending"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		issue_linked_prs={10: 900},
+		prs=[
+			{
+				"number": 900,
+				"state": "closed",
+				"merged": True,
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+				"mergeable": None,
+				"mergeable_state": "unknown",
+			},
+		],
+	)
+	issue_status = result["latest_state"]["waves"][0]["issues"][0]["status"]
+	assert issue_status == "merged"
+	assert "ai:merged" in result["issues"]["10"]["labels"]
+
+
+def test_conflicting_phase_labels_are_repaired_to_single_phase():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:planning", "ai:implementing"]},
+	)
+	final_labels = result["issues"]["10"]["labels"]
+	assert "ai:implementing" in final_labels
+	assert "ai:planning" not in final_labels
+
+
+def test_contract_helper_guard_in_poller_tests():
+	contract_path = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
+	helper_path = REPO_ROOT / "scripts" / "label_helpers.sh"
+	contract = json.loads(contract_path.read_text(encoding="utf-8"))
+	helper_text = helper_path.read_text(encoding="utf-8")
+	match = re.search(r"declare -A _AI_LABEL_COLORS=\((.*?)\n\)", helper_text, flags=re.S)
+	assert match, "Could not parse label helper catalog"
+	helper_labels = set(re.findall(r'\["([^"]+)"\]=', match.group(1)))
+	assert helper_labels == set(contract["labels"].keys())
+
+
+def test_no_labels_open_issue_uses_bounded_recovery_policy():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert any("/reclarify" in body for body in issue_comments)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+	assert issue_entry["status"] == "in_progress"
 
 
 # ---------------------------------------------------------------------------
