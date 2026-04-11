@@ -58,7 +58,12 @@ jobs:
             done
           else
             if [ -f "${REPO_REGISTRY_PATH}" ]; then
-              mapfile -t configured_repos < <(jq -r '.[]' "${REPO_REGISTRY_PATH}" 2>/dev/null || true)
+              if ! jq -e 'type == "array"' "${REPO_REGISTRY_PATH}" >/dev/null 2>&1; then
+                echo "::error::${REPO_REGISTRY_PATH} must be valid JSON containing an array of repositories."
+                exit 1
+              fi
+
+              mapfile -t configured_repos < <(jq -r '.[]' "${REPO_REGISTRY_PATH}")
               for raw_repo in "${configured_repos[@]}"; do
                 repo="$(printf '%s' "${raw_repo}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
                 [ -n "${repo}" ] || continue
@@ -179,6 +184,7 @@ jobs:
           fi
 
           git commit -m "chore: add workflow log analysis report"
+          git pull --rebase origin "${TARGET_BRANCH}"
           git push origin "HEAD:${TARGET_BRANCH}"
 
           echo "committed=true" >> "$GITHUB_OUTPUT"
