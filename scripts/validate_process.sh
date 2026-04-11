@@ -787,7 +787,11 @@ fi
   echo
   echo "=== IMPLEMENTATION TASK ==="
   echo
-  cat "${HARNESS_PROMPT_SOURCE}"
+  if [ "${HARNESS_PROMPT_SOURCE}" = "prompts/mode-validate-generate.txt" ]; then
+	bash scripts/render_prompt.sh "${HARNESS_PROMPT_SOURCE}"
+  else
+	cat "${HARNESS_PROMPT_SOURCE}"
+  fi
   echo
   if [ -s "${PRIOR_FAILURE_CONTEXT_FILE}" ]; then
     echo "=== PRIOR VALIDATION FAILURES (DO NOT REPEAT) ==="
@@ -1189,7 +1193,7 @@ fi
   echo
   echo "=== DIAGNOSIS TASK ==="
   echo
-  cat prompts/mode-validate-diagnose.txt
+  bash scripts/render_prompt.sh prompts/mode-validate-diagnose.txt
   echo
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"

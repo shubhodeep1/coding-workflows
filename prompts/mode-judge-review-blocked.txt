@@ -72,11 +72,7 @@ IMPORTANT — Autonomous decision-making:
   merge and document the limitation. Only block if the risk is exploitable
   in the target runtime environment.
 
-SERENA MCP EFFICIENCY (MANDATORY):
-- Do NOT call onboarding, initial_instructions, or check_onboarding_performed.
-  Skip straight to activate_project and then use tools directly.
-- Prefer get_symbols_overview and find_symbol over raw file reads.
-- Never read the same file region twice. Plan reads upfront.
+{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
 Output contract:
 - Output MUST be a single valid JSON object. No markdown fences or surrounding text.

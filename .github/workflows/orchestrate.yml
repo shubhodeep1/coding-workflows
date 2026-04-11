@@ -251,7 +251,7 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh orchestrate_lib.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -282,6 +282,12 @@ jobs:
             echo "::warning::mode-orchestrate.txt not found on ${script_ref}; falling back to main"
             _gh_api_fetch "prompts/mode-orchestrate.txt" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/prompts/mode-orchestrate.txt?ref=main"
+          fi
+          if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
+            echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
+            _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
           fi
           # Fetch schema for reference in prompt
           mkdir -p .github/ai
@@ -428,7 +434,7 @@ jobs:
             echo
             echo "=== ORCHESTRATION TASK ==="
             echo
-            cat prompts/mode-orchestrate.txt
+            bash scripts/render_prompt.sh prompts/mode-orchestrate.txt
             echo
             echo "=== DECOMPOSITION SCHEMA ==="
             echo
