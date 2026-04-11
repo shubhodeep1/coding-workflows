@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness error; failure_summary=Validation harness error: Update `validation/tests/01_env_and_dependency.sh` test #2 so it exercises the intended missing-repository branch with otherwise valid CLI inputs. Specifically: 1) Change the collector invocation to include a required time-window argument (e.g., `--lookback-days 7`) while still unsetting `GITHUB_REPOSITORY`, `GH_TOKEN`, and `GITHUB_TOKEN`. 2) Keep the expected result as exit code 2 plus stderr containing `no repositories specified`. 3) Ensure the assertion no longer treats argparse window-val",
+  "fingerprint": "ad51d66a3db884c73e37a756dc448235b08c490a7b4cea95305d9fa57e284715",
+  "lineage": {
+    "issue_number": 541,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24285530499",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24285530499",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260411154207_2d68d2bfc2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 541,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24285530499"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-11T15:42:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
