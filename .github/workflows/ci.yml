@@ -23,10 +23,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Python CI dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install yamllint coverage
+
       - name: YAML lint
         run: |
           set -euo pipefail
-          pip install yamllint
           yamllint -s .github/workflows/*.yml .github/actions/*/action.yml
 
       - name: Python syntax check
@@ -58,15 +62,19 @@ jobs:
           set -euo pipefail
           python3 tests/test_overlap_validation_fallback.py
 
-      - name: Workflow log collector unit tests
+      - name: Workflow log collector coverage gate
         run: |
           set -euo pipefail
-          python3 tests/test_collect_workflow_logs.py
+          python3 -m coverage erase
+          python3 -m coverage run tests/test_collect_workflow_logs.py
+          python3 -m coverage report --include='scripts/collect_workflow_logs.py' --fail-under=45
 
-      - name: Workflow log analyzer unit tests
+      - name: Workflow log analyzer coverage gate
         run: |
           set -euo pipefail
-          python3 tests/test_analyze_workflow_logs.py
+          python3 -m coverage erase
+          python3 -m coverage run tests/test_analyze_workflow_logs.py
+          python3 -m coverage report --include='scripts/analyze_workflow_logs.py' --fail-under=67
 
       - name: JSON schema validation
         run: |
