@@ -583,20 +583,41 @@ else
 fi
 
 GIT_CONFIG_TOUCHED="true"
-remove_mcp_server_blocks "git" "${CODEX_CONFIG}" || echo "::warning::Failed to clean existing Git MCP config; continuing without updating Git MCP config." >&2
+GIT_CONFIG_CLEANED="false"
+if remove_mcp_server_blocks "git" "${CODEX_CONFIG}"; then
+	GIT_CONFIG_CLEANED="true"
+else
+	echo "::warning::Failed to clean existing Git MCP config; continuing without updating Git MCP config." >&2
+fi
 
 if [ "${GIT_MCP_DISABLED:-false}" != "true" ]; then
-	if cat >> "${CODEX_CONFIG}" <<GIT_MCP_EOF
+	if [ "${GIT_CONFIG_CLEANED}" = "true" ]; then
+		GIT_MCP_BIN="$(uvx --from "mcp-server-git" which mcp-server-git 2>/dev/null || true)"
+		if [ -z "${GIT_MCP_BIN}" ] || [ ! -x "${GIT_MCP_BIN}" ]; then
+			GIT_MCP_BIN="$(find "${HOME}/.cache/uv" -name "mcp-server-git" -type f -executable 2>/dev/null | head -1 || true)"
+		fi
+		if [ -n "${GIT_MCP_BIN}" ] && [ -x "${GIT_MCP_BIN}" ]; then
+			if cat >> "${CODEX_CONFIG}" <<GIT_MCP_EOF
 
 [mcp_servers.git]
-command = "uvx"
-args = ["mcp-server-git", "--repository", "${PROJECT_ROOT}"]
+command = "${GIT_MCP_BIN}"
+args = ["--repository", "${PROJECT_ROOT}"]
 required = false
+
+[mcp_servers.git.env]
+HOME = "${HOME}"
+PATH = "${PATH}"
 GIT_MCP_EOF
-	then
-		echo "Git MCP server appended to ${CODEX_CONFIG}"
+			then
+				echo "Git MCP server appended to ${CODEX_CONFIG}"
+			else
+				echo "::warning::Failed to append Git MCP config; continuing without Git MCP setup." >&2
+			fi
+		else
+			echo "::warning::Could not resolve mcp-server-git binary; skipping Git MCP setup." >&2
+		fi
 	else
-		echo "::warning::Failed to append Git MCP config; continuing without Git MCP setup." >&2
+		echo "Git MCP config update skipped because existing Git MCP config could not be cleaned."
 	fi
 else
 	echo "Git MCP setup skipped (GIT_MCP_DISABLED=true)."
