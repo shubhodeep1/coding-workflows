@@ -241,8 +241,8 @@ gh_api_json_to_file()
 			fi
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh api returned invalid JSON (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
-			echo "::group::Raw response (first 20 lines)" >&2
-			head -20 "${outfile}" >&2
+			echo "::group::Raw response (first 50 lines)" >&2
+			head -50 "${outfile}" >&2
 			echo "::endgroup::" >&2
 			sleep "${wait_secs}"
 		else
