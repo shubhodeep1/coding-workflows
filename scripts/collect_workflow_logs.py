@@ -321,10 +321,16 @@ def list_jobs_for_run(
 
 
 def _extract_step_name(log_file_name: str) -> str:
-    stem = Path(log_file_name).stem
-    normalized = stem.replace("_", " ").strip()
-    normalized = re.sub(r"^\d+\s*[- ]?\s*", "", normalized)
-    return normalized or stem or log_file_name
+    parts: list[str] = []
+    for raw_part in Path(log_file_name).with_suffix("").parts:
+        normalized = raw_part.replace("_", " ").strip()
+        normalized = re.sub(r"^\d+\s*[- ]?\s*", "", normalized)
+        if not normalized:
+            continue
+        if not parts and normalized.lower() == "logs":
+            continue
+        parts.append(normalized)
+    return "/".join(parts) or log_file_name
 
 
 def extract_log_excerpts(log_archive: bytes, max_chars: int = LOG_EXCERPT_MAX_CHARS) -> list[dict[str, str]]:
@@ -340,7 +346,7 @@ def extract_log_excerpts(log_archive: bytes, max_chars: int = LOG_EXCERPT_MAX_CH
                 continue
             excerpts.append(
                 {
-                    "step_name": _extract_step_name(Path(name).name),
+                    "step_name": _extract_step_name(name),
                     "excerpt": text[:max_chars],
                 }
             )
