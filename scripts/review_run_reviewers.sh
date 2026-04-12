@@ -476,10 +476,17 @@ run_reviewer() {
 
   # Each reviewer gets its own CODEX_HOME to prevent MCP server
   # conflicts (Serena, language servers) when running in parallel.
-  local reviewer_codex_home
-  reviewer_codex_home="$(mktemp -d /tmp/codex_home_reviewer.XXXXXX)"
-  cp -r "${CODEX_HOME}/." "${reviewer_codex_home}/"
+  # Avoid /tmp for CODEX_HOME because codex refuses helper binary setup there.
+  local reviewer_codex_root reviewer_codex_home
+  reviewer_codex_root="${RUNNER_TEMP:-${HOME}/.cache}/codex_home_reviewers"
+  mkdir -p "${reviewer_codex_root}"
+  reviewer_codex_home="$(mktemp -d "${reviewer_codex_root}/reviewer.${safe_name}.XXXXXX")"
+  if [ -d "${CODEX_HOME:-}" ]; then
+    cp -r "${CODEX_HOME}/." "${reviewer_codex_home}/"
+  fi
+  mkdir -p "${reviewer_codex_home}/bin"
   export CODEX_HOME="${reviewer_codex_home}"
+  export PATH="${reviewer_codex_home}/bin:${PATH}"
 
   while [ "${attempt}" -le 3 ]; do
     # Early exit if PR was closed/merged (detected by watchdog or another reviewer)
@@ -665,4 +672,3 @@ if [ "${reviewers_successful}" -eq 0 ]; then
 fi
 
 echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
-
