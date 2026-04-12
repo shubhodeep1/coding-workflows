@@ -638,8 +638,8 @@ finalize_integration_merge_if_needed() {
   if [ -n "${final_pr}" ] && [ "${final_pr}" != "null" ]; then
     local existing_pr_state
     local existing_pr_merged
-    existing_pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
-    existing_pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' 2>/dev/null || echo "")"
+    existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+    existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
     if [ "${existing_pr_state}" = "closed" ] && [ "${existing_pr_merged}" = "true" ]; then
       jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -686,9 +686,9 @@ finalize_integration_merge_if_needed() {
   local pr_state
   local pr_mergeable
   local pr_merged
-  pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
-  pr_mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' 2>/dev/null || echo "")"
-  pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' 2>/dev/null || echo "")"
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
 
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
@@ -725,9 +725,9 @@ finalize_integration_merge_if_needed() {
     return 0
   fi
 
-  pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' 2>/dev/null || echo "")"
-  pr_mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' 2>/dev/null || echo "")"
-  pr_merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' 2>/dev/null || echo "")"
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
 
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
@@ -950,7 +950,7 @@ mark_validation_complete() {
   local project_title
 
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-  default_branch="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+  default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   project_title="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
 
   if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}"; then
@@ -2250,14 +2250,30 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   # ---------------------------------------------------------------
   # Extract state from the tracking issue's comments
   # ---------------------------------------------------------------
-  if ! COMMENTS="$(gh_retry gh api --paginate \
-    "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100" \
-    | jq -s 'add // []' 2>/dev/null)"; then
-    COMMENTS='[]'
+  # Capture paginated comments to a temp file first, then validate the JSON
+  # before combining pages.  Piping gh api --paginate directly to jq can
+  # produce "Unfinished string at EOF" errors when the response is truncated
+  # due to network interruptions.
+  _comments_raw="$(mktemp "${TMPDIR:-/tmp}/comments_raw.XXXXXX")"
+  COMMENTS='[]'
+  if gh_retry_to_file "${_comments_raw}" gh api --paginate \
+    "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100"; then
+    _comments_merged="$(mktemp "${TMPDIR:-/tmp}/comments_merged.XXXXXX")"
+    if jq -s 'add // []' "${_comments_raw}" > "${_comments_merged}" 2>/dev/null \
+      && jq -e 'type == "array"' "${_comments_merged}" >/dev/null 2>&1; then
+      COMMENTS="$(cat "${_comments_merged}")"
+    else
+      echo "::warning::Comments JSON for issue #${TRACKING_NUM} failed validation; proceeding with empty list" >&2
+      echo "::group::Raw comments response (first 50 lines)" >&2
+      head -50 "${_comments_raw}" >&2
+      echo "::endgroup::" >&2
+    fi
+    rm -f "${_comments_merged}"
   fi
+  rm -f "${_comments_raw}"
 
   # Find the latest state comment (search from the end)
-  STATE_JSON="$(echo "${COMMENTS}" | jq -r '
+  STATE_JSON="$(printf '%s' "${COMMENTS}" | jq -r '
     [.[] | select(.body | contains("ORCHESTRATOR_STATE_V1"))] | last |
     .body |
     split("<!-- ORCHESTRATOR_STATE_V1")[1] |
@@ -2322,10 +2338,18 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     fi
   fi
 
+  # Validate that STATE_JSON is a proper JSON object before writing to disk.
+  # This guards against edge cases where the state comment body contained
+  # content that caused jq's string split to return a non-JSON fragment.
+  if ! printf '%s' "${STATE_JSON}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "::warning::STATE_JSON for issue #${TRACKING_NUM} is not a valid JSON object; skipping"
+    continue
+  fi
+
   echo "${STATE_JSON}" > "${STATE_FILE}"
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
 
-  DEFAULT_BRANCH_TRACKING="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+  DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
     && [ "${PROJECT_STATUS}" != "complete" ] \
@@ -2345,7 +2369,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 
   if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
     FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-    FINAL_DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+    FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
     FINAL_PROJECT_TITLE="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
 
     if ! finalize_integration_merge_if_needed "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" "${FINAL_PROJECT_TITLE}"; then
@@ -4215,7 +4239,7 @@ PRs to revert: ${REVERT_COUNT}"
     complete)
       if [ "${ENABLE_VALIDATION}" != "true" ]; then
         FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-        FINAL_DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "main")"
+        FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
         FINAL_PROJECT_TITLE="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
 
         if ! finalize_integration_merge_if_needed "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" "${FINAL_PROJECT_TITLE}"; then
