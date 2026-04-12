@@ -3,7 +3,7 @@
 # Runtime checks: guide generation success and determinism.
 #
 # Outputs TAP-compatible lines to stdout.
-# Exits 0 even on failed assertions (TAP convention); exit 1 only on script error.
+# Exits 1 when any assertion fails; also exits 1 on script errors.
 #
 # Usage: bash validation/tests/10_runtime_checks.sh
 
@@ -49,25 +49,32 @@ fi
 # ---------------------------------------------------------------------------
 
 if [ "$FAILED" -eq 0 ]; then
-  GUIDE_FIRST=$(mktemp /tmp/GUIDE.first.XXXXXX.md)
-  cp GUIDE.md "${GUIDE_FIRST}"
-
-  GENERATE_LOG_2=$(mktemp /tmp/generate-guide-second.XXXXXX.log)
-
-  if npm run generate-guide >"${GENERATE_LOG_2}" 2>&1; then
-    if cmp -s GUIDE.md "${GUIDE_FIRST}"; then
-      pass "guide generation is deterministic"
-    else
-      fail "guide generation is non-deterministic"
-      echo "# --- diff between first and second generated GUIDE.md ---" >&2
-      diff -u "${GUIDE_FIRST}" GUIDE.md >&2 || true
-      echo "# --- end of diff ---" >&2
-    fi
-  else
-    fail "second guide generation command failed"
-    echo "# --- second generate-guide output (last 20 lines) ---" >&2
-    tail -n 20 "${GENERATE_LOG_2}" >&2
+  if [ ! -f GUIDE.md ]; then
+    fail "guide generation did not produce GUIDE.md"
+    echo "# --- generate-guide output (last 20 lines) ---" >&2
+    tail -n 20 "${GENERATE_LOG_1}" >&2
     echo "# --- end of output ---" >&2
+  else
+    GUIDE_FIRST=$(mktemp /tmp/GUIDE.first.XXXXXX.md)
+    cp GUIDE.md "${GUIDE_FIRST}"
+
+    GENERATE_LOG_2=$(mktemp /tmp/generate-guide-second.XXXXXX.log)
+
+    if npm run generate-guide >"${GENERATE_LOG_2}" 2>&1; then
+      if cmp -s GUIDE.md "${GUIDE_FIRST}"; then
+        pass "guide generation is deterministic"
+      else
+        fail "guide generation is non-deterministic"
+        echo "# --- diff between first and second generated GUIDE.md ---" >&2
+        diff -u "${GUIDE_FIRST}" GUIDE.md >&2 || true
+        echo "# --- end of diff ---" >&2
+      fi
+    else
+      fail "second guide generation command failed"
+      echo "# --- second generate-guide output (last 20 lines) ---" >&2
+      tail -n 20 "${GENERATE_LOG_2}" >&2
+      echo "# --- end of output ---" >&2
+    fi
   fi
 fi
 
