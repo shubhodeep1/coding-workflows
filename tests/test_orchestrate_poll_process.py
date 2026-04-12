@@ -104,6 +104,7 @@ def _run_poller(
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
 	issue_linked_prs: dict[int, int] | None = None,
+	timeline_fail_for_issues: list[int] | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -116,6 +117,7 @@ def _run_poller(
 	validation_workflow_runs = validation_workflow_runs or []
 	issue_closed = issue_closed or {}
 	issue_linked_prs = issue_linked_prs or {}
+	timeline_fail_for_issues = timeline_fail_for_issues or []
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -174,6 +176,7 @@ def _run_poller(
 			"blocked_check_shas": blocked_check_shas,
 			"validation_workflow_runs": validation_workflow_runs,
 			"issue_linked_prs": {str(k): int(v) for k, v in issue_linked_prs.items()},
+			"timeline_fail_for_issues": [int(x) for x in timeline_fail_for_issues],
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -575,6 +578,9 @@ if args[0] == 'api':
 		events = []
 		if m:
 			issue_num = m.group(1)
+			if int(issue_num) in set(store.get('timeline_fail_for_issues', [])):
+				print('timeline lookup failed', file=sys.stderr)
+				sys.exit(1)
 			linked_pr = store.get('issue_linked_prs', {}).get(str(issue_num))
 			if linked_pr is not None:
 				events.append({
@@ -1001,6 +1007,71 @@ def test_validation_fixing_redispatches_when_fix_issues_merged():
 	assert result["latest_state"]["validation_cycle"] == 2
 	assert result["latest_state"]["validation_active_fix_issues"] == []
 	assert len(result["validation_dispatches"]) == 1
+
+
+def test_validation_fixing_backfills_ai_merged_from_linked_merged_pr_evidence():
+	state = _base_state(status="validation-fixing")
+	state["validation_cycle"] = 1
+	state["validation_last_dispatch_cycle"] = 1
+	state["validation_active_fix_issues"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:closed"]},
+		issue_linked_prs={501: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-04-12T08:00:00Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-501",
+				"mergeable": None,
+				"mergeable_state": "unknown",
+			},
+		],
+	)
+	assert result["latest_state"]["status"] == "validating"
+	assert result["latest_state"]["validation_cycle"] == 2
+	assert len(result["validation_dispatches"]) == 1
+	assert "ai:merged" in result["issues"]["501"]["labels"]
+	assert "ai:closed" not in result["issues"]["501"]["labels"]
+
+
+def test_validation_fixing_closed_without_merged_evidence_still_fails():
+	state = _base_state(status="validation-fixing")
+	state["validation_cycle"] = 1
+	state["validation_last_dispatch_cycle"] = 1
+	state["validation_active_fix_issues"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:closed"]},
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert "closed without merge" in result["latest_state"].get("validation_failure_reason", "")
+	assert "ai:merged" not in result["issues"]["501"]["labels"]
+
+
+def test_validation_fixing_lookup_failure_is_fail_safe_and_no_backfill():
+	state = _base_state(status="validation-fixing")
+	state["validation_cycle"] = 1
+	state["validation_last_dispatch_cycle"] = 1
+	state["validation_active_fix_issues"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:closed"]},
+		timeline_fail_for_issues=[501],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert "closed without merge" in result["latest_state"].get("validation_failure_reason", "")
+	assert "ai:merged" not in result["issues"]["501"]["labels"]
+	assert "merged PR lookup failed" in (result["stdout"] + result["stderr"])
 
 
 
