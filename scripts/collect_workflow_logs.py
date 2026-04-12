@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +20,19 @@ from urllib.parse import urlencode
 
 SCHEMA_VERSION = "workflow_log_collector.v1"
 CORE_WORKFLOW_FAMILIES = ("clarify", "plan", "implement", "review_autofix")
+LOG_EXCERPT_MAX_CHARS = 4000
+SLOW_RUNS_PER_REPO = 10
+RETRY_MARKERS = (
+    "rate limit",
+    "secondary",
+    "timeout",
+    "timed out",
+    "connection",
+    "temporarily unavailable",
+    "502",
+    "503",
+    "504",
+)
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -88,6 +104,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Optional cap on total runs per repository (0 = unlimited).",
     )
+    parser.add_argument(
+        "--max-log-runs",
+        type=int,
+        default=15,
+        help="Optional cap on notable runs to fetch raw logs for (0 = disabled).",
+    )
     return parser
 
 
@@ -111,18 +133,6 @@ def gh_api_json(
         "-H",
         "Accept: application/vnd.github+json",
     ]
-    retry_markers = (
-        "rate limit",
-        "secondary",
-        "timeout",
-        "timed out",
-        "connection",
-        "temporarily unavailable",
-        "502",
-        "503",
-        "504",
-    )
-
     for attempt in range(1, retries + 1):
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, env=base_env, timeout=60)
@@ -146,12 +156,59 @@ def gh_api_json(
 
         stderr_text = (proc.stderr or "").strip()
         stderr_lower = stderr_text.lower()
-        retryable = any(marker in stderr_lower for marker in retry_markers)
+        retryable = any(marker in stderr_lower for marker in RETRY_MARKERS)
         if retryable and attempt < retries:
             time.sleep(backoff_seconds * attempt)
             continue
         raise RuntimeError(
             f"gh api failed for {endpoint} (exit={proc.returncode}): {stderr_text or proc.stdout.strip()}"
+        )
+
+    raise RuntimeError(f"gh api failed for {endpoint} after retries")
+
+
+def gh_api_bytes(
+    endpoint: str,
+    *,
+    token: str,
+    retries: int = 3,
+    backoff_seconds: float = 1.0,
+) -> bytes:
+    base_env = os.environ.copy()
+    if token:
+        base_env["GH_TOKEN"] = token
+
+    cmd = [
+        "gh",
+        "api",
+        endpoint,
+        "--method",
+        "GET",
+        "-H",
+        "Accept: application/vnd.github+json",
+    ]
+
+    for attempt in range(1, retries + 1):
+        try:
+            proc = subprocess.run(cmd, capture_output=True, env=base_env, timeout=60)
+        except subprocess.TimeoutExpired as exc:
+            if attempt < retries:
+                time.sleep(backoff_seconds * attempt)
+                continue
+            raise RuntimeError(f"gh api timed out for {endpoint} after {exc.timeout}s") from exc
+
+        if proc.returncode == 0:
+            return proc.stdout
+
+        stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+        stderr_lower = stderr_text.lower()
+        retryable = any(marker in stderr_lower for marker in RETRY_MARKERS)
+        if retryable and attempt < retries:
+            time.sleep(backoff_seconds * attempt)
+            continue
+        stdout_text = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"gh api failed for {endpoint} (exit={proc.returncode}): {stderr_text or stdout_text}"
         )
 
     raise RuntimeError(f"gh api failed for {endpoint} after retries")
@@ -238,6 +295,10 @@ def _build_jobs_endpoint(repo: str, run_id: int, per_page: int, page: int) -> st
     return f"repos/{repo}/actions/runs/{run_id}/jobs?{query}"
 
 
+def _build_logs_endpoint(repo: str, run_id: int) -> str:
+    return f"repos/{repo}/actions/runs/{run_id}/logs"
+
+
 def list_jobs_for_run(
     repo: str,
     run_id: int,
@@ -257,6 +318,42 @@ def list_jobs_for_run(
             break
         jobs.extend(page_jobs)
     return jobs
+
+
+def _extract_step_name(log_file_name: str) -> str:
+    stem = Path(log_file_name).stem
+    normalized = stem.replace("_", " ").strip()
+    normalized = re.sub(r"^\d+\s*[- ]?\s*", "", normalized)
+    return normalized or stem or log_file_name
+
+
+def extract_log_excerpts(log_archive: bytes, max_chars: int = LOG_EXCERPT_MAX_CHARS) -> list[dict[str, str]]:
+    excerpts: list[dict[str, str]] = []
+    with zipfile.ZipFile(io.BytesIO(log_archive)) as archive:
+        names = sorted(name for name in archive.namelist() if not name.endswith("/"))
+        for name in names:
+            raw = archive.read(name)
+            text = raw.decode("utf-8", errors="replace")
+            if not text:
+                continue
+            excerpts.append(
+                {
+                    "step_name": _extract_step_name(Path(name).name),
+                    "excerpt": text[:max_chars],
+                }
+            )
+    return excerpts
+
+
+def list_run_log_excerpts(
+    repo: str,
+    run_id: int,
+    *,
+    token: str,
+    max_chars: int = LOG_EXCERPT_MAX_CHARS,
+) -> list[dict[str, str]]:
+    payload = gh_api_bytes(_build_logs_endpoint(repo, run_id), token=token)
+    return extract_log_excerpts(payload, max_chars=max_chars)
 
 
 def extract_failure_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
@@ -367,6 +464,73 @@ def build_report(
     }
 
 
+def _sort_runs_by_created_desc(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        runs,
+        key=lambda item: _parse_iso8601(item.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+
+
+def _run_created_at(run: dict[str, Any]) -> datetime:
+    return _parse_iso8601(run.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _run_identity(run: dict[str, Any]) -> tuple[str, int]:
+    return str(run.get("repository") or ""), _to_int(run.get("run_id"), 0)
+
+
+def select_notable_runs_for_logs(runs: list[dict[str, Any]], max_log_runs: int) -> list[dict[str, Any]]:
+    if max_log_runs <= 0:
+        return []
+
+    eligible = [
+        run
+        for run in runs
+        if isinstance(run, dict) and bool(run.get("repository")) and _to_int(run.get("run_id"), 0) > 0
+    ]
+    if not eligible:
+        return []
+
+    failed_runs = _sort_runs_by_created_desc(
+        [run for run in eligible if (run.get("conclusion") or "").lower() == "failure"]
+    )
+    retried_runs = _sort_runs_by_created_desc([run for run in eligible if _to_int(run.get("retries"), 0) > 0])
+
+    slow_runs: list[dict[str, Any]] = []
+    repositories = sorted({str(run.get("repository")) for run in eligible})
+    for repository in repositories:
+        repo_runs = [run for run in eligible if str(run.get("repository")) == repository]
+        repo_runs.sort(
+            key=lambda item: (
+                _to_int(item.get("duration_seconds"), 0),
+                _run_created_at(item),
+            ),
+            reverse=True,
+        )
+        slow_runs.extend(repo_runs[:SLOW_RUNS_PER_REPO])
+    slow_runs.sort(
+        key=lambda item: (
+            _to_int(item.get("duration_seconds"), 0),
+            _run_created_at(item),
+        ),
+        reverse=True,
+    )
+
+    ordered: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    for bucket in (failed_runs, retried_runs, slow_runs):
+        for run in bucket:
+            identity = _run_identity(run)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            ordered.append(run)
+            if len(ordered) >= max_log_runs:
+                return ordered
+    return ordered
+
+
 def _resolve_since_utc(args: argparse.Namespace) -> datetime:
     if args.since:
         since_dt = _parse_iso8601(args.since)
@@ -395,9 +559,9 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: no repositories specified; pass --repo or set GITHUB_REPOSITORY", file=sys.stderr)
         return 2
 
-    if args.per_page <= 0 or args.max_pages <= 0 or args.max_runs < 0:
+    if args.per_page <= 0 or args.max_pages <= 0 or args.max_runs < 0 or args.max_log_runs < 0:
         print(
-            "ERROR: --per-page and --max-pages must be > 0; --max-runs must be >= 0",
+            "ERROR: --per-page and --max-pages must be > 0; --max-runs and --max-log-runs must be >= 0",
             file=sys.stderr,
         )
         return 2
@@ -466,6 +630,23 @@ def main(argv: list[str] | None = None) -> int:
                     )
 
             run_rows.append(compute_run_metrics(repo, run, jobs))
+
+    for run in select_notable_runs_for_logs(run_rows, args.max_log_runs):
+        repository = str(run.get("repository") or "")
+        run_id = _to_int(run.get("run_id"), 0)
+        if not repository or run_id <= 0:
+            continue
+        try:
+            run["log_excerpts"] = list_run_log_excerpts(repository, run_id, token=token)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(
+                {
+                    "repository": repository,
+                    "run_id": str(run_id),
+                    "scope": "logs",
+                    "message": str(exc),
+                }
+            )
 
     run_rows.sort(key=lambda item: (item.get("created_at") or ""), reverse=True)
     report = build_report(repositories, run_rows, errors)

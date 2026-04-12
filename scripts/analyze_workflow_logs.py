@@ -100,6 +100,32 @@ def _collect_deep_dive_logs(run_logs_dir: Path) -> list[dict[str, str]]:
 	return entries
 
 
+def _collect_deep_dive_logs_from_runs(runs: list[dict[str, Any]]) -> list[dict[str, str]]:
+	entries: list[dict[str, str]] = []
+	for run in runs:
+		repository = str(run.get("repository") or "").strip()
+		run_id = _to_int(run.get("run_id"), 0)
+		if not repository or run_id <= 0:
+			continue
+		log_excerpts = run.get("log_excerpts")
+		if not isinstance(log_excerpts, list):
+			continue
+		for item in log_excerpts:
+			if not isinstance(item, dict):
+				continue
+			step_name = item.get("step_name")
+			excerpt = item.get("excerpt")
+			if not isinstance(step_name, str) or not isinstance(excerpt, str):
+				continue
+			entries.append(
+				{
+					"name": f"{repository}/{run_id}/{step_name}",
+					"excerpt": excerpt,
+				}
+			)
+	return entries
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(
 		description="Analyze workflow log telemetry with OpenRouter and write a dated markdown report."
@@ -145,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument(
 		"--max-output-tokens",
 		type=int,
-		default=4000,
+		default=100000,
 		help="Max completion tokens for the analysis report.",
 	)
 	parser.add_argument(
@@ -181,6 +207,7 @@ def load_input_data(args: argparse.Namespace) -> dict[str, Any]:
 		source_files.append(str(payload_path))
 		if isinstance(raw, dict) and isinstance(raw.get("runs"), list):
 			collector_report = raw
+			deep_dive_logs = _collect_deep_dive_logs_from_runs(raw.get("runs") or [])
 		elif isinstance(raw, dict):
 			run_metrics_value = raw.get("run_metrics")
 			if isinstance(run_metrics_value, list):
@@ -212,6 +239,8 @@ def load_input_data(args: argparse.Namespace) -> dict[str, Any]:
 			if not isinstance(raw_collector, dict):
 				raise ValueError(f"expected JSON object in {collector_path}")
 			collector_report = raw_collector
+			if isinstance(raw_collector.get("runs"), list):
+				deep_dive_logs = _collect_deep_dive_logs_from_runs(raw_collector.get("runs") or [])
 			source_files.append(str(collector_path))
 
 		run_metrics_path = data_dir / "run_metrics.json"
@@ -231,8 +260,9 @@ def load_input_data(args: argparse.Namespace) -> dict[str, Any]:
 			source_files.append(str(summary_path))
 
 		run_logs_dir = data_dir / "run_logs"
-		deep_dive_logs = _collect_deep_dive_logs(run_logs_dir)
-		if deep_dive_logs:
+		run_logs = _collect_deep_dive_logs(run_logs_dir)
+		if run_logs:
+			deep_dive_logs.extend(run_logs)
 			source_files.append(str(run_logs_dir))
 
 	if collector_report is None and run_metrics is None and summary_stats is None:
