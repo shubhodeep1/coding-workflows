@@ -13,6 +13,9 @@ TESTS_TOTAL=0
 TESTS_PASSED=0
 TESTS_FAILED=0
 FAILED=0
+TMP_DIR="${TMPDIR:-/tmp}"
+
+trap 'rm -f "${GENERATE_LOG_1:-}" "${GUIDE_FIRST:-}" "${GENERATE_LOG_2:-}"' EXIT
 
 pass() {
   TESTS_TOTAL=$((TESTS_TOTAL + 1))
@@ -33,7 +36,7 @@ echo "TAP version 13"
 # Assertion A: guide generation command succeeds
 # ---------------------------------------------------------------------------
 
-GENERATE_LOG_1=$(mktemp /tmp/generate-guide-first.XXXXXX.log)
+GENERATE_LOG_1=$(mktemp "${TMP_DIR}/generate-guide-first.XXXXXX.log")
 
 if npm run generate-guide >"${GENERATE_LOG_1}" 2>&1; then
   pass "guide generation command succeeds"
@@ -55,10 +58,10 @@ if [ "$FAILED" -eq 0 ]; then
     tail -n 20 "${GENERATE_LOG_1}" >&2
     echo "# --- end of output ---" >&2
   else
-    GUIDE_FIRST=$(mktemp /tmp/GUIDE.first.XXXXXX.md)
+    GUIDE_FIRST=$(mktemp "${TMP_DIR}/GUIDE.first.XXXXXX.md")
     cp GUIDE.md "${GUIDE_FIRST}"
 
-    GENERATE_LOG_2=$(mktemp /tmp/generate-guide-second.XXXXXX.log)
+    GENERATE_LOG_2=$(mktemp "${TMP_DIR}/generate-guide-second.XXXXXX.log")
 
     if npm run generate-guide >"${GENERATE_LOG_2}" 2>&1; then
       if cmp -s GUIDE.md "${GUIDE_FIRST}"; then
