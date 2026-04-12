@@ -64,7 +64,7 @@ jobs:
     concurrency:
       group: pr-autofix-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
       cancel-in-progress: true
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_call' && !inputs.pr_is_draft && !contains(inputs.pr_title, '[skip ai]') && !contains(inputs.pr_body, '[skip ai]')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (!inputs.pr_is_draft && !contains(inputs.pr_title, '[skip ai]') && !contains(inputs.pr_body, '[skip ai]')) }}
 
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
