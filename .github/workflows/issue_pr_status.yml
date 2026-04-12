@@ -152,7 +152,7 @@ jobs:
           BRANCH_ISSUE_NUMBER="$(printf '%s\n' "${PR_HEAD_REF}" | sed -nE 's#^ai/issue-([0-9]+)([-/].*)?$#\1#p' | head -n1)"
           if [ -n "${BRANCH_ISSUE_NUMBER}" ]; then
             if [ -n "${ISSUE_NUMBERS}" ]; then
-              ISSUE_NUMBERS="$(printf '%s\n%s\n' "${ISSUE_NUMBERS}" "${BRANCH_ISSUE_NUMBER}" | awk 'NF {print $1}' | sort -un)"
+              ISSUE_NUMBERS="$(printf '%s\n%s\n' "${ISSUE_NUMBERS}" "${BRANCH_ISSUE_NUMBER}" | awk 'NF' | sort -un)"
             else
               ISSUE_NUMBERS="${BRANCH_ISSUE_NUMBER}"
             fi
@@ -186,13 +186,7 @@ jobs:
               echo "::warning::Failed to update labels on issue #${issue_number}."
             fi
 
-            SHOULD_CLOSE="false"
-            if [ "${PR_MERGED}" != "true" ]; then
-              SHOULD_CLOSE="true"
-            elif [ "${PR_BASE_REF}" = "main" ]; then
-              SHOULD_CLOSE="true"
-            fi
-            if [ "${SHOULD_CLOSE}" = "true" ]; then
+            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ]; then
               echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."
               if ! gh_retry gh issue close "${issue_number}" -R "${REPOSITORY}"; then
                 echo "::warning::Failed to close issue #${issue_number}."
