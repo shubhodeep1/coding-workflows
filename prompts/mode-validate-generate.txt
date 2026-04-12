@@ -79,6 +79,31 @@ Canary requirement (mandatory):
   - Required CLI tools present (`curl`, `jq`, `python3`, plus service CLIs like `mongosh`/`psql` when used)
 - If canary fails, remaining tests must be skipped and the failure must clearly indicate canary/infrastructure gating.
 
+CRITICAL — robust service-state detection in canary:
+- NEVER parse human-readable `docker compose ps` text output (columns, status words) to determine whether a service container is running. Output formatting varies across Docker Compose versions and produces false negatives when the service is actually healthy.
+- ALWAYS resolve the container ID first with `docker compose ps -q <service>` and then use `docker inspect` for machine-readable state fields.
+- Recommended pattern for the canary "service is running" check (this should be the FIRST TAP assertion, i.e. `ok 1` / `not ok 1`; subsequent checks increment sequentially):
+    SERVICE="${SERVICE_NAME:-app}"
+    # The canary script uses set -e / set -euo pipefail. Use || true so that a
+    # transient docker compose ps failure is caught by the empty-CID guard below,
+    # which emits a proper TAP "not ok" message instead of aborting the script
+    # before any TAP output is written.
+    CID=$(docker compose ps -q "$SERVICE" 2>/dev/null | head -n1 || true)
+    if [ -z "$CID" ]; then
+      echo "not ok 1 - $SERVICE service is not running (no container id returned by docker compose ps -q)"
+      exit 1
+    fi
+    RUNNING=$(docker inspect -f '{{.State.Running}}' "$CID" 2>/dev/null || echo "false")
+    STATUS=$(docker inspect -f '{{.State.Status}}' "$CID" 2>/dev/null || echo "unknown")
+    if [ "$RUNNING" = "true" ] || [ "$STATUS" = "running" ]; then
+      echo "ok 1 - $SERVICE service is running"
+    else
+      echo "not ok 1 - $SERVICE service is not running (Status=$STATUS Running=$RUNNING)"
+      exit 1
+    fi
+- The "service is running" check must always be TAP assertion #1. All subsequent checks (endpoint reachability, tool presence, etc.) use sequentially increasing numbers (ok 2, ok 3, …).
+- Endpoint reachability (`curl`) and in-container tool checks are corroborating signals that should be emitted as separate TAP assertions (for example `ok 2 - app port is reachable`, `ok 3 - required tools present`). Do NOT conflate them with the "service is running" TAP line or use their failure as the sole reason to report the service as not running.
+
 CRITICAL — safe final JSON emission:
 - The final JSON result object MUST be assembled entirely in Python, not via bash variable interpolation into Python source.
 - NEVER use an unquoted heredoc (`<<PY`) that embeds bash variables like `${FAILURES_JSON}` into Python code. Bash expansion injects raw control characters (tabs, newlines, backslashes from log tails) into the Python string literal, causing `json.decoder.JSONDecodeError`.
@@ -132,6 +157,47 @@ CRITICAL — grep-safe TAP counting under `set -e` / `pipefail`:
   - `awk '/pattern/ { count++ } END { print count+0 }' "$file"`
 - NEVER use bare `grep ... | wc -l` in a pipeline under `pipefail` — `grep` returning 1 (no match) will propagate through the pipe and trigger ERR/exit.
 - Test the all-pass case (zero `not ok` lines) mentally before finalizing the script.
+
+CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
+- Hardhat JSON-RPC (and any standard Ethereum node) returns a **JSON object**, not a JSON array.
+- Response shape: `{"jsonrpc":"2.0","id":1,"result":"0x1"}`.
+- NEVER index the response with a number (`jq '.[0]'`, `jq '.[1]'`, etc.) — that causes:
+    `jq: error (at <stdin>:1): Cannot index object with number`
+- ALWAYS read `.result` and validate it is a non-null string before asserting.
+- ALWAYS guard against non-JSON or empty responses before piping into `jq`.
+- Recommended startup probe pattern (use inside a retry loop):
+    RPC_URL="${RPC_URL:-http://localhost:8545}"
+    PAYLOAD='{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+    CHAIN_ID=""
+    RESP=""
+    for attempt in $(seq 1 30); do
+      RESP="$(curl -sf --max-time 2 -H 'Content-Type: application/json' \
+               -d "$PAYLOAD" "$RPC_URL" 2>/dev/null || true)"
+      if [ -z "$RESP" ]; then
+        echo "attempt $attempt: no response, retrying..."
+        sleep 1
+        continue
+      fi
+      if ! printf '%s' "$RESP" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        echo "attempt $attempt: non-JSON or not a JSON object: $RESP"
+        sleep 1
+        continue
+      fi
+      CHAIN_ID="$(printf '%s' "$RESP" | jq -r 'if has("result") and (.result != null) and (.result | type == "string") and (.result | length) > 0 then .result else empty end')"
+      if [ -z "$CHAIN_ID" ]; then
+        echo "attempt $attempt: missing/invalid .result; raw response: $RESP"
+        sleep 1
+        continue
+      fi
+      echo "RPC healthy: chainId=$CHAIN_ID"
+      break
+    done
+    if [ -z "${CHAIN_ID:-}" ]; then
+      echo "RPC did not become healthy within timeout; last response: ${RESP:-<none>}"
+      exit 1
+    fi
+- For `eth_blockNumber` probes, parse `.result` the same way (it is a hex string like `"0x0"`).
+- If the project uses Hardhat, Anvil, or Ganache as a local node, apply this exact pattern for the canary health check. Never assume an array-shaped response.
 
 CRITICAL — graceful shutdown container resolution:
 - After `docker compose stop <service>`, the container moves to `exited` state.
