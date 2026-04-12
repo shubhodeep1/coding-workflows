@@ -216,7 +216,10 @@ jobs:
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
     with:
       pr_number: ${{ github.event.inputs.pr_number || '' }}
-      allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || vars.ALLOW_WORKFLOW_EDITS != 'false' }}
+      pr_is_draft: ${{ github.event_name != 'workflow_dispatch' && github.event.pull_request.draft }}
+      pr_title: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.title) || '' }}
+      pr_body: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
+      allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && vars.ALLOW_WORKFLOW_EDITS != 'false') }}
     secrets: inherit
 ```
 

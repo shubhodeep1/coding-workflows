@@ -7,6 +7,21 @@ on:
         description: "Pull request number to process"
         required: false
         type: string
+      pr_is_draft:
+        description: "Whether the PR is a draft (passed by wrapper workflows)"
+        required: false
+        default: false
+        type: boolean
+      pr_title:
+        description: "PR title for [skip ai] gating (passed by wrapper workflows)"
+        required: false
+        default: ""
+        type: string
+      pr_body:
+        description: "PR body for [skip ai] gating (passed by wrapper workflows)"
+        required: false
+        default: ""
+        type: string
       allow_workflow_edits:
         description: "Allow AI/editor changes to .github/workflows files"
         required: false
@@ -49,7 +64,7 @@ jobs:
     concurrency:
       group: pr-autofix-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
       cancel-in-progress: true
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_call' && !github.event.pull_request.draft && !contains(format('{0}', github.event.pull_request.title), '[skip ai]') && !contains(format('{0}', github.event.pull_request.body), '[skip ai]')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_call' && !inputs.pr_is_draft && !contains(inputs.pr_title, '[skip ai]') && !contains(inputs.pr_body, '[skip ai]')) }}
 
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
