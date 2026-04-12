@@ -12,3 +12,4 @@ validation/*
 !validation/tests/
 validation/tests/*
 !validation/tests/*.sh
+validation/
