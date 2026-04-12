@@ -4790,24 +4790,21 @@ run_standalone_stall_recovery
 # Standalone PR conflict sweep
 # ---------------------------------------------------------------
 # The tracking-issue loop above only handles PRs linked to
-# orchestrator-managed issues.  Standalone AI PRs (created by the
-# pipeline without an orchestrator tracking issue) can also develop
-# merge conflicts when the base branch advances.  The review
-# workflow already has Codex-based conflict resolution, but it only
-# runs on PR synchronize events — no event fires when the *base*
-# branch moves forward.
+# orchestrator-managed issues. Standalone PRs can also develop merge
+# conflicts when the base branch advances. The review workflow already
+# has conflict resolution logic, but it only runs on PR synchronize
+# events — no event fires when the *base* branch moves forward.
 #
-# This section scans all open PRs on AI-generated branches
-# (ai/issue-*) that are not mergeable and resolves conflicts
-# directly using a dedicated Codex instance, then pushes so the
-# review workflow can trigger on a clean merge ref.
+# This section scans all eligible open PRs and, for any PR in
+# mergeable_state=dirty, first attempts update-branch and then falls
+# back to workflow_dispatch conflict handling.
 # ---------------------------------------------------------------
 echo ""
 echo "========================================"
 echo "Standalone PR conflict sweep"
 echo "========================================"
 
-# Collect all open PRs on ai/* branches with their mergeable status.
+# Collect open PR candidates with their refs.
 # gh pr list does not expose mergeable, so we fetch the full list and
 # then query each candidate via the REST API.
 STANDALONE_PRS="$(gh pr list \
@@ -4826,7 +4823,12 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
 	S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
 	S_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].baseRefName")"
-	if [ -z "${S_PR}" ] || [ -z "${S_HEAD}" ] || [ "${S_PR}" = "null" ] || [ "${S_HEAD}" = "null" ]; then
+	if [ -z "${S_PR}" ] || [ "${S_PR}" = "null" ]; then
+		continue
+	fi
+
+	if [ -z "${S_HEAD}" ] || [ "${S_HEAD}" = "null" ]; then
+		echo "::warning::Standalone PR #${S_PR} has no head ref. Skipping conflict sweep candidate."
 		continue
 	fi
 
@@ -4834,13 +4836,19 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		continue
 	fi
 
-	# Only process AI-generated branches (ai/issue-*)
-	if [[ "${S_HEAD}" != ai/issue-* ]]; then
+	# Check mergeable state via REST API (dirty == merge conflicts)
+	S_PR_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" 2>/dev/null || echo '{}')"
+	S_STATE="$(echo "${S_PR_JSON}" | jq -r '.state // ""')"
+	if [ "${S_STATE}" != "open" ]; then
 		continue
 	fi
 
-	# Check mergeable state via REST API (dirty == merge conflicts)
-	S_PR_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" 2>/dev/null || echo '{}')"
+	S_HEAD_REF="$(echo "${S_PR_JSON}" | jq -r '.head.ref // ""')"
+	if [ -z "${S_HEAD_REF}" ] || [ "${S_HEAD_REF}" = "null" ]; then
+		echo "::warning::Standalone PR #${S_PR} has unavailable head ref from API. Skipping conflict dispatch path."
+		continue
+	fi
+
 	S_MERGEABLE_STATE="$(echo "${S_PR_JSON}" | jq -r '.mergeable_state // ""')"
 	if [ -z "${S_MERGEABLE_STATE}" ] || [ "${S_MERGEABLE_STATE}" = "unknown" ]; then
 		continue
@@ -4850,7 +4858,7 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		continue
 	fi
 
-	echo "  PR #${S_PR} (${S_HEAD}) is in conflicted mergeable state. Running Codex conflict resolution..."
+	echo "  PR #${S_PR} (${S_HEAD_REF}) is in conflicted mergeable state. Attempting conflict recovery..."
 
 	# Stage 1: Try the GitHub API update-branch endpoint (clean merge)
 	S_HEAD_SHA="$(echo "${S_PR_JSON}" | jq -r '.head.sha // ""')"
@@ -4863,7 +4871,7 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 
 	# Stage 2: Dispatch review workflow for conflict resolution.
 	_dispatch_rc=0
-	_dispatch_review_for_conflicts "${S_PR}" "${S_HEAD}" || _dispatch_rc=$?
+	_dispatch_review_for_conflicts "${S_PR}" "${S_HEAD_REF}" || _dispatch_rc=$?
 	if [ "${_dispatch_rc}" -eq 0 ]; then
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
 		tg_send_msg "Standalone PR #${S_PR} has merge conflicts. Review workflow dispatched for resolution."$'\n'"PR: $(_gh_url "pull/${S_PR}")" "WARNING" >/dev/null 2>&1 || true
