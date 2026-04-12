@@ -22,6 +22,11 @@ on:
         required: false
         default: ""
         type: string
+      pr_skip_ai:
+        description: "Precomputed skip flag for [skip ai] gating"
+        required: false
+        default: false
+        type: boolean
       allow_workflow_edits:
         description: "Allow AI/editor changes to .github/workflows files"
         required: false
@@ -58,13 +63,41 @@ env:
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'high' }}
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.evaluate.outputs.should_run }}
+    steps:
+      - name: Evaluate review gate
+        id: evaluate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_IS_DRAFT: ${{ inputs.pr_is_draft }}
+          PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
+          PR_TITLE: ${{ inputs.pr_title }}
+          PR_BODY: ${{ inputs.pr_body }}
+        run: |
+          set -euo pipefail
+
+          SHOULD_RUN="true"
+          if [ "${EVENT_NAME}" = "workflow_call" ]; then
+            if [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
+              SHOULD_RUN="false"
+            elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
+              SHOULD_RUN="false"
+            fi
+          fi
+
+          echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
+
   codex-agent:
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:
       group: pr-autofix-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
       cancel-in-progress: true
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_call' && !inputs.pr_is_draft && !contains(inputs.pr_title, '[skip ai]') && !contains(inputs.pr_body, '[skip ai]')) }}
+    if: ${{ needs.gate.outputs.should_run == 'true' }}
 
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
