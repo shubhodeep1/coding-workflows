@@ -6,7 +6,8 @@ mode-validate-fix-harness.txt correctly handle:
 - Valid Hardhat JSON-RPC object responses (reads `.result`, never numeric indexes)
 - Missing `.result` field (fails gracefully with clear message)
 - Non-JSON / empty responses (fails gracefully with clear message)
-- Array responses (fails gracefully — Hardhat never returns an array)
+- Array responses (fails gracefully for this single-call probe, which expects
+  object responses with a `.result` field)
 
 These tests exercise the canonical bash snippet via subprocess so that regressions
 in the recommended pattern are caught before they reach generated harnesses.
@@ -41,12 +42,12 @@ _PROBE_SCRIPT = textwrap.dedent("""\
         exit 0
     fi
 
-    if ! echo "$RESP" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    if ! printf '%s' "$RESP" | jq -e 'type == "object"' >/dev/null 2>&1; then
         echo "RESULT:non_json_or_not_object:${RESP}"
         exit 0
     fi
 
-    CHAIN_ID="$(echo "$RESP" | jq -r 'if has("result") and (.result != null) and (.result | type == "string") and (.result | length) > 0 then .result else empty end')"
+    CHAIN_ID="$(printf '%s' "$RESP" | jq -r 'if has("result") and (.result != null) and (.result | type == "string") and (.result | length) > 0 then .result else empty end')"
     if [ -z "$CHAIN_ID" ]; then
         echo "RESULT:missing_result_field:${RESP}"
         exit 0

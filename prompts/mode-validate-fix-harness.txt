@@ -42,14 +42,14 @@ CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
         sleep 1
         continue
       fi
-      if ! echo "$RESP" | jq -e 'type == "object"' >/dev/null 2>&1; then
-        echo "attempt $attempt: non-JSON response: $RESP"
+      if ! printf '%s' "$RESP" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        echo "attempt $attempt: non-JSON or not an object; raw response: $RESP"
         sleep 1
         continue
       fi
-      CHAIN_ID="$(echo "$RESP" | jq -r 'if has("result") and (.result != null) and (.result | type == "string") and (.result | length) > 0 then .result else empty end')"
+      CHAIN_ID="$(printf '%s' "$RESP" | jq -r 'if has("result") and (.result != null) and (.result | type == "string") and (.result | length) > 0 then .result else empty end')"
       if [ -z "$CHAIN_ID" ]; then
-        echo "attempt $attempt: missing .result field; raw response: $RESP"
+        echo "attempt $attempt: missing/invalid .result; raw response: $RESP"
         sleep 1
         continue
       fi
