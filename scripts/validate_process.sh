@@ -246,7 +246,7 @@ set_tracking_phase_label()
       "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
       local _label_err
       _label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
-      if echo "${_label_err}" | grep -Eqi "['\"][^'\"]+['\"] not found|label[^[:alnum:]]+.*not found"; then
+      if echo "${_label_err}" | grep -Eqi "could not remove label:|['\"][[:alnum:]:._/-]+['\"] not found"; then
         echo "::warning::set_tracking_phase_label: non-fatal missing label while applying '${phase_label}' to #${TRACKING_ISSUE_NUM}: ${_label_err}" >&2
         rm -f "${_label_err_file}"
         return 0
