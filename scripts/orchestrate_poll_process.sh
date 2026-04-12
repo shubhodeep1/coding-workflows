@@ -330,12 +330,16 @@ fi
 post_tracking_comment() {
   local comment_body="$1"
   local payload_file
+  local payload_err_file
   payload_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload.XXXXXX")"
-  if ! jq -n --arg body "${comment_body}" '{body: $body}' > "${payload_file}"; then
-    echo "::warning::Failed to encode tracking comment JSON payload for issue #${TRACKING_NUM}" >&2
+  payload_err_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload_err.XXXXXX")"
+  if ! jq -n --arg body "${comment_body}" '{body: $body}' > "${payload_file}" 2>"${payload_err_file}"; then
+    echo "::warning::Failed to encode tracking comment JSON payload for issue #${TRACKING_NUM}: $(cat "${payload_err_file}" 2>/dev/null)" >&2
+    rm -f "${payload_err_file}"
     rm -f "${payload_file}"
     return 0
   fi
+  rm -f "${payload_err_file}"
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
     --method POST \
     --input "${payload_file}" >/dev/null || true

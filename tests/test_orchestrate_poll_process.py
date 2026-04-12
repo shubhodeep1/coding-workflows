@@ -1689,7 +1689,17 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 		except json.JSONDecodeError:
 			continue
 	assert any(payload.get("schema_version") == "orchestrate_state.v1" for payload in valid_payloads)
-	assert len(state_payloads) >= 3
+	comments = result["issues"]["192"]["comments"]
+	malformed_idx = next(i for i, c in enumerate(comments) if c.get("body") == malformed_latest)
+	following_payloads = _extract_state_payloads(comments[malformed_idx + 1 :])
+	assert following_payloads
+	following_valid_payloads = []
+	for raw_payload in following_payloads:
+		try:
+			following_valid_payloads.append(json.loads(raw_payload))
+		except json.JSONDecodeError:
+			continue
+	assert any(payload.get("schema_version") == "orchestrate_state.v1" for payload in following_valid_payloads)
 
 
 def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
@@ -1704,11 +1714,8 @@ def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
 	)
 	assert "No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #192. Attempting state reconstruction..." in result["stdout"]
 	assert "restored from older valid state and posted healed canonical state" not in result["stdout"]
-	assert (
-		"State reconstructed and posted for tracking issue #192." in result["stdout"]
-		or "State reconstruction failed for tracking issue #192, skipping." in result["stdout"]
-		or "State reconstruction produced invalid output for #192, skipping." in result["stdout"]
-	)
+	assert "State reconstructed and posted for tracking issue #192." in result["stdout"]
+	assert result["latest_state"]["schema_version"] == "orchestrate_state.v1"
 
 
 def test_truncated_comments_json_is_handled_gracefully():
