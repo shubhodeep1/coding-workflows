@@ -74,12 +74,23 @@ NO_SUMMARY_FALLBACK = """\
 def _overlap_gate_passes(summary: str) -> bool:
 	"""Return True if summary satisfies the overlap gate.
 
-	Mimics the shell check in review_autofix.yml:
-	  grep -qi 'Regression fingerprint:' ... && grep -qi 'Runtime failure path:' ...
+	Mimics the updated shell check in review_autofix.yml, which:
+	1. Checks for 'Regression fingerprint:' and 'Runtime failure path:' (case-insensitive).
+	2. If either is missing, allows the commit when a fallback marker is detected
+	   (grep -Eqi 'editor failed before producing a validated summary|unavailable (editor fallback)').
+	3. Blocks the commit only when metadata is missing AND no fallback marker is present.
 	"""
 	has_regression = bool(re.search(r'regression fingerprint:', summary, re.IGNORECASE))
 	has_runtime = bool(re.search(r'runtime failure path:', summary, re.IGNORECASE))
-	return has_regression and has_runtime
+	if has_regression and has_runtime:
+		return True
+	# Fallback mode: allow even without strict metadata headers
+	is_fallback = bool(re.search(
+		r'(?:editor failed before producing a validated summary|unavailable \(editor fallback\))',
+		summary,
+		re.IGNORECASE,
+	))
+	return is_fallback
 
 
 # ---------------------------------------------------------------------------
@@ -103,16 +114,46 @@ def test_no_summary_fallback_passes_overlap_gate():
 
 
 def test_summary_without_keys_fails_gate():
-	"""A summary lacking the required keys must fail the gate (regression guard)."""
+	"""A non-fallback summary lacking the required keys must fail the gate (regression guard)."""
 	incomplete_summary = """\
+          Changes made:
+          - fixed the bug in authentication logic
+
+          Ignored suggestions (with short reason):
+          - skipped cosmetic refactoring: out of scope
+"""
+	assert not _overlap_gate_passes(incomplete_summary), (
+		"A non-fallback summary without the required metadata keys should fail the overlap gate."
+	)
+
+
+def test_fallback_marker_alone_passes_gate():
+	"""A summary with the fallback marker but without metadata keys still passes (fallback mode)."""
+	marker_only_summary = """\
           Changes made:
           - none (editor failed before producing a validated summary)
 
           Ignored suggestions (with short reason):
           - editor failed after retries before final classification
 """
-	assert not _overlap_gate_passes(incomplete_summary), (
-		"A summary without the required metadata keys should fail the overlap gate."
+	assert _overlap_gate_passes(marker_only_summary), (
+		"A fallback summary (detected via marker) should pass the gate even without strict metadata keys."
+	)
+
+
+def test_unavailable_marker_alone_passes_gate():
+	"""A summary with 'unavailable (editor fallback)' marker passes even without explicit metadata keys."""
+	marker_summary = """\
+          Changes made:
+          - none (no editor summary output was generated)
+
+          Ignored suggestions (with short reason):
+          - no summary available from editor stage
+
+          Some key: unavailable (editor fallback)
+"""
+	assert _overlap_gate_passes(marker_summary), (
+		"A summary with 'unavailable (editor fallback)' marker should pass the gate in fallback mode."
 	)
 
 
