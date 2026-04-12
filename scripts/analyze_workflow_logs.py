@@ -22,7 +22,7 @@ DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_PROMPT_FILE = "prompts/mode-workflow-analysis.txt"
 DEFAULT_OUTPUT_DIR = "analysis"
 DEFAULT_INPUT_FILE = "workflow_log_report.json"
-SERENA_PLACEHOLDER_PATTERN = re.compile(r"{{SERENA_EFFICIENCY_BLOCK_[A-Z_]+}}")
+SERENA_PLACEHOLDER_PATTERN = re.compile(r"\{\{SERENA_EFFICIENCY_BLOCK_[A-Z_]+\}\}")
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
