@@ -96,13 +96,36 @@ jobs:
           # only updated after e2e tests pass — causes bootstrap failures).
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             script_ref="${{ github.sha }}"
+            SUPPORT_ROOT_DIR="$(pwd)"
+            SUPPORT_SCRIPTS_DIR="scripts"
+            SUPPORT_PROMPTS_DIR="prompts"
+            SUPPORT_SERENA_DIR=".serena"
+            SUPPORT_AI_MEMORY_DIR="ai-memory"
+            IS_WORKFLOW_SOURCE_REPO="true"
           else
             script_ref="stable"
+            SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
+            SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
+            SUPPORT_SERENA_DIR="${SUPPORT_ROOT_DIR}/.serena"
+            SUPPORT_AI_MEMORY_DIR="${SUPPORT_ROOT_DIR}/ai-memory"
+            IS_WORKFLOW_SOURCE_REPO="false"
           fi
+          mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_DIR}/schemas"
+          {
+            echo "SUPPORT_ROOT_DIR=${SUPPORT_ROOT_DIR}"
+            echo "SUPPORT_SCRIPTS_DIR=${SUPPORT_SCRIPTS_DIR}"
+            echo "SUPPORT_PROMPTS_DIR=${SUPPORT_PROMPTS_DIR}"
+            echo "SUPPORT_SERENA_DIR=${SUPPORT_SERENA_DIR}"
+            echo "SUPPORT_AI_MEMORY_DIR=${SUPPORT_AI_MEMORY_DIR}"
+            echo "IS_WORKFLOW_SOURCE_REPO=${IS_WORKFLOW_SOURCE_REPO}"
+            echo "SUPPORT_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_llm_system_instructions.md"
+            echo "SUPPORT_CODEX_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/codex_system_instructions.md"
+            echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
+          } >> "$GITHUB_ENV"
           # ALWAYS fetch canonical scripts from coding-workflows, even if the
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
-          mkdir -p scripts
           # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
           _rl_wait() {
             local _reset_ts _wait_secs
@@ -129,24 +152,23 @@ jobs:
             done; return 1
           }
           for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
-            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+            if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+              _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=main"
             fi
-            chmod +x "scripts/${f}"
+            chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
           done
           # Fetch AI memory schema files so consumer repos that lack
           # schemas on their default branch can bootstrap the ai-memory
           # branch (schemas are validated during memory operations).
-          mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
-            if [ ! -f "ai-memory/schemas/${sf}" ]; then
-              schema_tmp="ai-memory/schemas/${sf}.tmp"
+            if [ ! -f "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}" ]; then
+              schema_tmp="${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}.tmp"
               if _gh_api_fetch "${schema_tmp}" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}"; then
-                mv "${schema_tmp}" "ai-memory/schemas/${sf}"
+                mv "${schema_tmp}" "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}"
               else
                 rm -f "${schema_tmp}"
               fi
@@ -156,41 +178,41 @@ jobs:
           # Write to a temp file first so the redirect doesn't clobber the
           # local copy when the gh api call fails (the file doesn't exist on
           # the stable tag yet).
-          if _gh_api_fetch "scripts/codex_model_catalog.json.tmp" api -H 'Accept: application/vnd.github.raw+json' \
+          if _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json.tmp" api -H 'Accept: application/vnd.github.raw+json' \
             "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}"; then
-            mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
+            mv "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json.tmp" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           else
-            rm -f "scripts/codex_model_catalog.json.tmp"
+            rm -f "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json.tmp"
             echo "Model catalog not on ${script_ref} yet; using local copy."
           fi
           # Always use the canonical instruction files from coding-workflows
           # (must be outside the if-block so they're fetched even when the
           # caller repo ships its own scripts/ directory)
           for f in unattended_llm_system_instructions.md codex_system_instructions.md; do
-            if [ ! -f "${f}" ]; then
-              if ! _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+            target_path="${SUPPORT_ROOT_DIR}/${f}"
+            if [ ! -f "${target_path}" ]; then
+              if ! _gh_api_fetch "${target_path}" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                _gh_api_fetch "${target_path}" api -H 'Accept: application/vnd.github.raw+json' \
                   "repos/${wf_source}/contents/${f}?ref=main"
               fi
             fi
           done
           # Fetch judge prompt and Serena canonical block for review-blocked judge feature
-          mkdir -p prompts
-          if [ ! -f prompts/mode-judge-review-blocked.txt ]; then
-            if ! _gh_api_fetch "prompts/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
+            if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=${script_ref}"; then
               echo "::warning::mode-judge-review-blocked.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "prompts/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=main"
             fi
           fi
-          if [ ! -f prompts/serena-efficiency-block.txt ]; then
-            if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" ]; then
+            if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
               echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
             fi
           fi
@@ -264,9 +286,9 @@ jobs:
         run: |
           set +e
 
-          if [ -f scripts/memory_helpers.sh ]; then
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
             # shellcheck disable=SC1091
-            source scripts/memory_helpers.sh
+            source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
             memory_ensure_branch
             memory_record_run_event \
               --run-id "${GITHUB_RUN_ID}" \
@@ -287,7 +309,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.codex
-          CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
+          CATALOG_PATH="${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           {
             echo 'web_search = "disabled"'
             echo 'model_provider = "openrouter"'
@@ -322,13 +344,13 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          bash scripts/setup_serena.sh --mode editing --context codex
+          bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh" --mode editing --context codex
 
       - name: Pre-assemble static context (cacheable across runs)
         run: |
           set -euo pipefail
 
-          if [ ! -s unattended_llm_system_instructions.md ]; then
+          if [ ! -s "${SUPPORT_INSTRUCTIONS_FILE}" ]; then
             echo "Missing required unattended_llm_system_instructions.md"
             exit 1
           fi
@@ -338,19 +360,19 @@ jobs:
           # content (diffs, reviewer output, etc.) is kept separate and read after.
           {
             echo "=== UNATTENDED SYSTEM INSTRUCTIONS ==="
-            cat unattended_llm_system_instructions.md
+            cat "${SUPPORT_INSTRUCTIONS_FILE}"
             echo
-            if [ -f codex_system_instructions.md ]; then
+            if [ -f "${SUPPORT_CODEX_INSTRUCTIONS_FILE}" ]; then
               echo "=== CODEX SYSTEM INSTRUCTIONS (editor-trimmed) ==="
               # Keep only Serena tooling section and code style section.
-              awk '/^## Serena \(MCP\) Semantic Tooling/{flag=1} /^## 0\./{flag=0} flag{print}' codex_system_instructions.md
+              awk '/^## Serena \(MCP\) Semantic Tooling/{flag=1} /^## 0\./{flag=0} flag{print}' "${SUPPORT_CODEX_INSTRUCTIONS_FILE}"
               echo
-              awk '/^## 9\. Code Style/{flag=1} /^## 10\./{flag=0} flag{print}' codex_system_instructions.md
+              awk '/^## 9\. Code Style/{flag=1} /^## 10\./{flag=0} flag{print}' "${SUPPORT_CODEX_INSTRUCTIONS_FILE}"
               echo
             fi
-            if [ -f agents.md ]; then
+            if [ -f "${SUPPORT_AGENTS_FILE}" ]; then
               echo "=== AGENTS.MD ==="
-              cat agents.md
+              cat "${SUPPORT_AGENTS_FILE}"
               echo
             fi
             if [ -f README.md ]; then
@@ -365,9 +387,9 @@ jobs:
         run: |
           set +e
 
-          if [ -f scripts/memory_helpers.sh ]; then
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
             # shellcheck disable=SC1091
-            source scripts/memory_helpers.sh
+            source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
             memory_retrieve "${MEMORY_CONTEXT_FILE}" \
               --role reviewer \
               --pr-number "${PR_NUMBER}"
@@ -585,7 +607,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
           PR_BODY=$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")
 
@@ -656,7 +678,7 @@ jobs:
             exit 0
           fi
 
-          bash scripts/git_ref_health_check.sh repair
+          bash "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" repair
 
           CURRENT_BRANCH="$(git branch --show-current || true)"
           git fetch --no-tags --prune origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}"
@@ -714,7 +736,7 @@ jobs:
           set -euo pipefail
 
           echo "Generating reviewer diff context"
-          bash scripts/git_ref_health_check.sh repair
+          bash "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" repair
 
           PR_DIFF_ATTEMPTED_PATHS="${PR_DIFF_ATTEMPTED_PATHS:-gh_pr_diff:${PR_DIFF_FILE}}"
           if [ ! -s "${PR_DIFF_FILE}" ]; then
@@ -783,7 +805,7 @@ jobs:
           echo "SYMBOL_DIFF_SUMMARY_FILE=${SYMBOL_DIFF_SUMMARY_FILE}" >> "$GITHUB_ENV"
 
           if [ -s "${PR_DIFF_FILE}" ] || [ -s "${PR_CHANGED_FILES_FILE}" ]; then
-            PYTHONDONTWRITEBYTECODE=1 python3 scripts/generate_symbol_diff_summary.py \
+            PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/generate_symbol_diff_summary.py" \
               --diff-file "${PR_DIFF_FILE}" \
               --changed-files "${PR_CHANGED_FILES_FILE}" \
               --output "${SYMBOL_DIFF_SUMMARY_FILE}" \
@@ -1316,7 +1338,10 @@ jobs:
           __REVIEWER_PROMPT__
 
           reviewer_prompt_rendered="$(mktemp)"
-          bash scripts/render_prompt.sh "${REVIEWER_PROMPT_BODY_FILE}" > "${reviewer_prompt_rendered}"
+          (
+            cd "${SUPPORT_ROOT_DIR}"
+            bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${REVIEWER_PROMPT_BODY_FILE}"
+          ) > "${reviewer_prompt_rendered}"
           mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 
           {
@@ -1589,7 +1614,7 @@ jobs:
         run: |
           set +e
 
-          if [ ! -f scripts/memory_helpers.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
             echo "::warning::memory helper script missing; skipping consensus candidate record"
             exit 0
           fi
@@ -1600,7 +1625,7 @@ jobs:
           fi
 
           # shellcheck disable=SC1091
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           high_confidence_count="$({
             awk '
@@ -1983,7 +2008,10 @@ jobs:
           __EDITOR_PROMPT__
 
           editor_prompt_rendered="$(mktemp)"
-          bash scripts/render_prompt.sh "${EDITOR_PROMPT_BODY_FILE}" > "${editor_prompt_rendered}"
+          (
+            cd "${SUPPORT_ROOT_DIR}"
+            bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
+          ) > "${editor_prompt_rendered}"
           mv "${editor_prompt_rendered}" "${EDITOR_PROMPT_BODY_FILE}"
 
           diff_primary_usable=false
@@ -2288,9 +2316,9 @@ jobs:
             wc -c < "${EDITOR_SUMMARY_FILE}"
             echo "::endgroup::"
           fi
-          if [ -f .serena/tool_usage_stats.json ]; then
+          if [ -f "${SUPPORT_SERENA_DIR}/tool_usage_stats.json" ]; then
             echo "::group::Serena tool usage stats"
-            cat .serena/tool_usage_stats.json
+            cat "${SUPPORT_SERENA_DIR}/tool_usage_stats.json"
             echo "::endgroup::"
           else
             echo "No Serena tool usage stats found."
@@ -2311,7 +2339,7 @@ jobs:
             [ -f "$f" ] && extra_files+=("--extra-files" "$f")
           done
 
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_efficiency_report.py \
+          PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/serena_efficiency_report.py" \
             --scan-dir "${PREVIOUS_REVIEWS_DIR}" \
             "${extra_files[@]}" \
             --warn-threshold "${SERENA_WARN_THRESHOLD}" \
@@ -2381,18 +2409,26 @@ jobs:
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
-          if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
             git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
             git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
-          else
+          elif [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
             git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
             git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+          else
+            git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
           fi
 
           echo "Staged files before commit:"
-          git diff --cached --name-only | sed 's/^/ - /' || true
-          if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
+          STAGED_FILES="$(git diff --cached --name-only || true)"
+          printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
+          if printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
             echo "Error: .github/prompts or .github/scripts is staged"
+            exit 1
+          fi
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
+            echo "Error: workflow runtime/helper artifacts are staged in consumer repo"
             exit 1
           fi
 
@@ -2545,7 +2581,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
           if [ ! -s "${EDITOR_SUMMARY_FILE}" ]; then
             cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
@@ -2675,18 +2711,18 @@ jobs:
             done; return 1
           }
           for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh; do
-            if [ ! -f "scripts/${f}" ]; then
-              mkdir -p scripts
-              if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+            if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
+              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
+              if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
                   "repos/${wf_source}/contents/scripts/${f}?ref=main"
               fi
-              chmod +x "scripts/${f}"
+              chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
             fi
           done
-          bash scripts/git_ref_health_check.sh repair
+          bash "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" repair
           git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
 
           # Ensure committer identity is available — git merge (even with
@@ -2950,17 +2986,25 @@ jobs:
             git config user.name "codex-bot"
             git config user.email "codex@users.noreply.github.com"
             git rm -r --cached node_modules 2>/dev/null || true
-            if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
               git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
               git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
-            else
+            elif [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
               git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
               git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+            else
+              git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
             fi
             echo "Staged files before commit:"
-            git diff --cached --name-only | sed 's/^/ - /' || true
-            if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
+            STAGED_FILES="$(git diff --cached --name-only || true)"
+            printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
+            if printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
               echo "Error: .github/prompts or .github/scripts is staged"
+              exit 1
+            fi
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
+              echo "Error: workflow runtime/helper artifacts are staged in consumer repo"
               exit 1
             fi
             git commit -m "[ai-merge-resolve] resolve merge conflicts"
@@ -2980,8 +3024,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
-          source scripts/tg_helpers.sh
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           ISSUE_NUM="$(gh api graphql \
@@ -3008,10 +3052,10 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          if [ -f scripts/label_helpers.sh ]; then
-            source scripts/label_helpers.sh
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
+            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
           else
             # Fetched helper artifacts can be removed in caller repos during
             # commit cleanup; keep a local fallback for this late stage.
@@ -3072,8 +3116,8 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          if [ -f scripts/label_helpers.sh ] && source scripts/label_helpers.sh 2>/dev/null; then
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
             :
           else
             # Try to re-fetch the helper script if it was removed during cleanup.
@@ -3083,13 +3127,13 @@ jobs:
             else
               script_ref="stable"
             fi
-            mkdir -p scripts
+            mkdir -p "${SUPPORT_SCRIPTS_DIR}"
             if { gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "scripts/label_helpers.sh" 2>/dev/null || \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || \
                gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "scripts/label_helpers.sh" 2>/dev/null; } && \
-              [ -s "scripts/label_helpers.sh" ] && source scripts/label_helpers.sh 2>/dev/null; then
-              chmod +x "scripts/label_helpers.sh"
+                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; } && \
+              [ -s "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
+              chmod +x "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
             else
               # Last-resort inline fallback if fetch fails.
               ensure_label_exists() {
@@ -3199,8 +3243,11 @@ jobs:
             echo
             echo "=== REVIEW-BLOCKED JUDGE TASK ==="
             echo
-            if [ -f prompts/mode-judge-review-blocked.txt ]; then
-              bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+            if [ -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
+              (
+                cd "${SUPPORT_ROOT_DIR}"
+                bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+              )
             else
               echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."
             fi
@@ -3451,11 +3498,20 @@ jobs:
                     rm -rf prompts
                   fi
 
-                  git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+                  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+                    git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+                  else
+                    git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+                  fi
                   echo "Staged files before commit:"
-                  git diff --cached --name-only | sed 's/^/ - /' || true
-                  if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
+                  STAGED_FILES="$(git diff --cached --name-only || true)"
+                  printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
+                  if printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
                     echo "Error: .github/prompts or .github/scripts is staged"
+                    exit 1
+                  fi
+                  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
+                    echo "Error: workflow runtime/helper artifacts are staged in consumer repo"
                     exit 1
                   fi
                   if ! git diff --cached --quiet; then
@@ -3552,8 +3608,8 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          if [ -f scripts/label_helpers.sh ] && source scripts/label_helpers.sh 2>/dev/null; then
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
             :
           else
             wf_source="${{ github.repository_owner }}/coding-workflows"
@@ -3562,13 +3618,13 @@ jobs:
             else
               script_ref="stable"
             fi
-            mkdir -p scripts
+            mkdir -p "${SUPPORT_SCRIPTS_DIR}"
             if { gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "scripts/label_helpers.sh" 2>/dev/null || \
+              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || \
                gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "scripts/label_helpers.sh" 2>/dev/null; } && \
-              [ -s "scripts/label_helpers.sh" ] && source scripts/label_helpers.sh 2>/dev/null; then
-              chmod +x "scripts/label_helpers.sh"
+                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; } && \
+              [ -s "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
+              chmod +x "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
             else
               ensure_label_exists() {
                 local label_name="$1"
@@ -3623,7 +3679,7 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
           BODY="$(cat <<EOF
           **AI review/autofix blocked — needs human intervention**
@@ -3650,7 +3706,7 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
@@ -3706,7 +3762,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
           dispatched=false
 
@@ -3766,8 +3822,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
-          source scripts/tg_helpers.sh
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -3800,8 +3856,8 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
-          source scripts/tg_helpers.sh
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -3847,7 +3903,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
           if [ "${pr_state}" != "open" ]; then
             echo "PR #${PR_NUMBER} is ${pr_state} — skipping failure alerts."
@@ -3861,9 +3917,9 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          # Do not source scripts/label_helpers.sh in this failure path: the
+          # Do not source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" in this failure path: the
           # workflow can fail before support scripts are fetched.
           gh_retry gh label create "ai:review-blocked" --repo "${REPOSITORY}" \
             --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
@@ -3900,7 +3956,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -3925,8 +3981,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
-          source scripts/tg_helpers.sh
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
@@ -3957,9 +4013,9 @@ jobs:
         run: |
           set +e
 
-          if [ -f scripts/memory_helpers.sh ]; then
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
             # shellcheck disable=SC1091
-            source scripts/memory_helpers.sh
+            source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
             memory_record_run_event \
               --run-id "${GITHUB_RUN_ID}" \
               --workflow "review_autofix" \
@@ -3980,9 +4036,9 @@ jobs:
         run: |
           set +e
 
-          if [ -f scripts/memory_helpers.sh ]; then
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
             # shellcheck disable=SC1091
-            source scripts/memory_helpers.sh
+            source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
             memory_record_run_event \
               --run-id "${GITHUB_RUN_ID}" \
               --workflow "review_autofix" \
