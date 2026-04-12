@@ -15,6 +15,7 @@ in the recommended pattern are caught before they reach generated harnesses.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -59,8 +60,6 @@ def _run_probe(resp_value: str) -> str:
 
     Returns the RESULT: line emitted by the script (stripped).
     """
-    import os
-
     env = os.environ.copy()
     env["RESP"] = resp_value
 

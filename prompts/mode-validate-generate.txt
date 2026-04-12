@@ -143,6 +143,8 @@ CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
 - Recommended startup probe pattern (use inside a retry loop):
     RPC_URL="${RPC_URL:-http://localhost:8545}"
     PAYLOAD='{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+    CHAIN_ID=""
+    RESP=""
     for attempt in $(seq 1 30); do
       RESP="$(curl -sf --max-time 2 -H 'Content-Type: application/json' \
                -d "$PAYLOAD" "$RPC_URL" 2>/dev/null || true)"
