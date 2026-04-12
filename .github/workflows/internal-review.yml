@@ -25,8 +25,12 @@ jobs:
     uses: ./.github/workflows/review_autofix.yml
     with:
       pr_number: ${{ github.event.inputs.pr_number || '' }}
-      pr_is_draft: ${{ github.event_name != 'workflow_dispatch' && github.event.pull_request.draft }}
-      pr_title: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.title) || '' }}
-      pr_body: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
+      pr_is_draft: >-
+        ${{ github.event_name != 'workflow_dispatch' && github.event.pull_request.draft || false }}
+      pr_title: >-
+        ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.title) || '' }}
+      pr_body: >-
+        ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
+      pr_skip_ai: false
       allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && vars.ALLOW_WORKFLOW_EDITS != 'false') }}
     secrets: inherit
