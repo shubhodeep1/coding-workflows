@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: When `--max-log-runs` caps notable-run log downloads, what priority order should be used to choose runs?**\nChoices:\n- **A** \u2014 Prioritize in this order: failed runs first, then runs with `retries > 0`, then slow runs (top 10 by duration), with duplicates removed and final ties by newest `created_at` (RECOMMENDED)\n- **B** \u2014 Build the union of all notable runs, then take the newest `--max-log-runs` only\n- **C** \u2014 Build the union of all notable runs, then take the longest-duration `--max-log-runs` only\nReply: `Q1: A`\n**Q2: What should each `log_excerpts` entry include from the downloaded run log zip?**\nChoices:\n- **A** \u2014 Include one entry per step log file with a truncated excerpt (fixed max chars per step to control report size) (RECOMMENDED)\n- **B** \u2014 Include excerpts only for failed steps/jobs\n- **C** \u2014 Include full (untruncated) step log contents\nReply: `Q2: A`\n**Q3: For \u201cslow (top 10 by duration)\u201d, what is the ranking scope?**\nChoices:\n- **A** \u2014 Top 10 slowest runs across the full collected run set (all selected repos combined) (RECOMMENDED)\n- **B** \u2014 Top 10 slowest runs per repository\n- **C** \u2014 Top 10 slowest runs per workflow family\nReply: `Q3: A`",
+  "fingerprint": "199b5904adf63083e10f1e17cf185731c729fe077d5735a75e726bdc0bd4a03c",
+  "lineage": {
+    "issue_number": 767,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24301826084",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24301826084",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260412075305_4fe4da9c3d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 767,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24301826084"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #767 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-12T07:53:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
