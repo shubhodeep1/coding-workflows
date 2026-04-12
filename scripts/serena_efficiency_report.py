@@ -263,6 +263,12 @@ def main() -> None:
         required=True,
         help="Path to write the markdown report.",
     )
+    parser.add_argument(
+        "--warn-threshold",
+        type=float,
+        default=50,
+        help="Warn when Serena efficiency falls below this percentage (default: 50).",
+    )
     args = parser.parse_args()
 
     serena_counts, file_ops = scan_directory(args.scan_dir)
@@ -273,6 +279,9 @@ def main() -> None:
             file_ops += o
 
     report = format_report(serena_counts, file_ops, scan_dir=args.scan_dir)
+    total_serena = sum(serena_counts.values())
+    total_ops = total_serena + file_ops
+    efficiency = (total_serena / total_ops * 100) if total_ops > 0 else 0
 
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
@@ -280,6 +289,12 @@ def main() -> None:
 
     # Also print to stdout for workflow logs
     print(report)
+    if total_ops >= 5 and efficiency < args.warn_threshold:
+        print(
+            "::warning::Serena MCP adoption is low "
+            f"({file_ops} file-based fallback ops vs {total_serena} Serena tool calls; "
+            f"{efficiency:.0f}% efficiency below {args.warn_threshold:g}% threshold)."
+        )
 
 
 if __name__ == "__main__":

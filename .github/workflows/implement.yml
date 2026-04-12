@@ -947,6 +947,8 @@ jobs:
 
       - name: Generate Serena efficiency report
         if: env.SKIP_IMPLEMENT != 'true' && always()
+        env:
+          SERENA_WARN_THRESHOLD: ${{ vars.SERENA_WARN_THRESHOLD_IMPLEMENT || '50' }}
         run: |
           set -euo pipefail
           SERENA_REPORT_FILE="${RUNTIME_DIR}/serena_efficiency_report.md"
@@ -958,6 +960,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_efficiency_report.py \
             --scan-dir "${RUNTIME_DIR}" \
             "${extra_files[@]}" \
+            --warn-threshold "${SERENA_WARN_THRESHOLD}" \
             --output "${SERENA_REPORT_FILE}" || {
               echo "::warning::Serena efficiency report generation failed."
               echo "### Serena MCP efficiency" > "${SERENA_REPORT_FILE}"
