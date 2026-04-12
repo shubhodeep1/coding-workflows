@@ -73,6 +73,18 @@ def _extract_latest_state(comments: list[dict]) -> dict:
 	raise AssertionError("No ORCHESTRATOR_STATE_V1 comment found")
 
 
+def _extract_state_payloads(comments: list[dict]) -> list[str]:
+	payloads: list[str] = []
+	for comment in comments:
+		body = comment.get("body", "")
+		if "ORCHESTRATOR_STATE_V1" not in body:
+			continue
+		match = re.search(r"<!-- ORCHESTRATOR_STATE_V1\n(.*?)\nORCHESTRATOR_STATE_V1 -->", body, flags=re.S)
+		if match:
+			payloads.append(match.group(1))
+	return payloads
+
+
 def _run_poller(
 	*,
 	state: dict,
@@ -197,6 +209,7 @@ def parse_api():
 	jq = None
 	method = 'GET'
 	fields = []
+	input_file = None
 	i = 1
 	while i < len(args):
 		arg = args[i]
@@ -215,13 +228,21 @@ def parse_api():
 			method = args[i + 1]
 			i += 2
 			continue
+		if arg == '--method':
+			method = args[i + 1]
+			i += 2
+			continue
+		if arg == '--input':
+			input_file = args[i + 1]
+			i += 2
+			continue
 		if arg.startswith('-'):
 			i += 1
 			continue
 		if path is None:
 			path = arg
 		i += 1
-	return path, jq, method, fields
+	return path, jq, method, fields, input_file
 
 
 if not args:
@@ -394,7 +415,7 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
 	sys.exit(0)
 
 if args[0] == 'api':
-	path, jq, method, fields = parse_api()
+	path, jq, method, fields, input_file = parse_api()
 	if path is None:
 		print('{}')
 		sys.exit(0)
@@ -429,12 +450,22 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)/comments$', path)
-	if m and fields:
+	if m and (fields or input_file):
 		issue = get_issue(m.group(1))
 		body = ''
 		for f in fields:
 			if f.startswith('body='):
 				body = f.split('=', 1)[1]
+		if input_file:
+			if input_file == '-':
+				payload_raw = sys.stdin.read()
+			else:
+				payload_raw = Path(input_file).read_text(encoding='utf-8')
+			try:
+				payload_obj = json.loads(payload_raw)
+			except Exception:
+				payload_obj = {}
+			body = payload_obj.get('body', body)
 		cid = store['next_comment_id']
 		store['next_comment_id'] += 1
 		issue['comments'].append({'id': cid, 'body': body})
@@ -673,6 +704,8 @@ print(json.dumps(parsed))
 		result["tracking_labels"] = tracking_issue["labels"]
 		result["tracking_closed"] = tracking_issue.get("closed", False)
 		result["merge_calls"] = result.get("merge_calls", [])
+		result["stdout"] = proc.stdout
+		result["stderr"] = proc.stderr
 		return result
 
 
@@ -1633,6 +1666,56 @@ def test_state_extraction_with_special_chars_in_comment_bodies():
 	final_state = result["latest_state"]
 	assert final_state["schema_version"] == "orchestrate_state.v1"
 	assert final_state["status"] == "in_progress"
+
+
+def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state():
+	state = _base_state(status="in_progress")
+	malformed_latest = '<!-- ORCHESTRATOR_STATE_V1\n{"schema_version":"orchestrate_state.v1",\nORCHESTRATOR_STATE_V1 -->'
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[malformed_latest],
+		issue_labels={10: ["ai:implementing"]},
+	)
+	assert "restored from older valid state and posted healed canonical state" in result["stdout"]
+	assert result["latest_state"]["schema_version"] == "orchestrate_state.v1"
+	assert result["latest_state"]["status"] == "in_progress"
+	state_payloads = _extract_state_payloads(result["issues"]["192"]["comments"])
+	valid_payloads = []
+	for payload in state_payloads:
+		try:
+			valid_payloads.append(json.loads(payload))
+		except json.JSONDecodeError:
+			continue
+	assert any(payload.get("schema_version") == "orchestrate_state.v1" for payload in valid_payloads)
+	comments = result["issues"]["192"]["comments"]
+	malformed_idx = next(i for i, c in enumerate(comments) if c.get("body") == malformed_latest)
+	following_payloads = _extract_state_payloads(comments[malformed_idx + 1 :])
+	assert following_payloads
+	following_valid_payloads = []
+	for raw_payload in following_payloads:
+		try:
+			following_valid_payloads.append(json.loads(raw_payload))
+		except json.JSONDecodeError:
+			continue
+	assert any(payload.get("schema_version") == "orchestrate_state.v1" for payload in following_valid_payloads)
+
+
+def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
+	invalid_state = {"schema_version": "orchestrate_state.v1"}
+	malformed_latest = '<!-- ORCHESTRATOR_STATE_V1\n{"schema_version":"orchestrate_state.v1",\nORCHESTRATOR_STATE_V1 -->'
+	result = _run_poller(
+		state=invalid_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[malformed_latest],
+		issue_labels={10: ["ai:implementing"]},
+	)
+	assert "No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #192. Attempting state reconstruction..." in result["stdout"]
+	assert "restored from older valid state and posted healed canonical state" not in result["stdout"]
+	assert "State reconstructed and posted for tracking issue #192." in result["stdout"]
+	assert result["latest_state"]["schema_version"] == "orchestrate_state.v1"
 
 
 def test_truncated_comments_json_is_handled_gracefully():
