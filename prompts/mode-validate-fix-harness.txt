@@ -45,7 +45,7 @@ CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
         sleep 1
         continue
       fi
-      CHAIN_ID="$(echo "$RESP" | jq -r '.result // empty')"
+      CHAIN_ID="$(echo "$RESP" | jq -r 'if has("result") and (.result != null) and (.result | type == "string") and (.result | length) > 0 then .result else empty end')"
       if [ -z "$CHAIN_ID" ]; then
         echo "attempt $attempt: missing .result field; raw response: $RESP"
         sleep 1

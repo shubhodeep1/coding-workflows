@@ -44,7 +44,7 @@ _PROBE_SCRIPT = textwrap.dedent("""\
         exit 0
     fi
 
-    CHAIN_ID="$(echo "$RESP" | jq -r '.result // empty')"
+    CHAIN_ID="$(echo "$RESP" | jq -r 'if has("result") and (.result != null) and (.result | type == "string") and (.result | length) > 0 then .result else empty end')"
     if [ -z "$CHAIN_ID" ]; then
         echo "RESULT:missing_result_field:${RESP}"
         exit 0
@@ -59,9 +59,14 @@ def _run_probe(resp_value: str) -> str:
 
     Returns the RESULT: line emitted by the script (stripped).
     """
+    import os
+
+    env = os.environ.copy()
+    env["RESP"] = resp_value
+
     result = subprocess.run(
         ["bash", "-c", _PROBE_SCRIPT],
-        env={"RESP": resp_value, "PATH": "/usr/bin:/bin"},
+        env=env,
         capture_output=True,
         text=True,
         timeout=10,
@@ -129,6 +134,16 @@ class TestHardhatRpcProbe(unittest.TestCase):
     def test_null_result_field(self) -> None:
         """Response with null .result → treated as missing, fails gracefully."""
         resp = json.dumps({"jsonrpc": "2.0", "id": 1, "result": None})
+        line = _run_probe(resp)
+        self.assertTrue(line.startswith("RESULT:missing_result_field:"), line)
+
+    def test_empty_string_result_field(self) -> None:
+        """Response with empty-string .result → treated as invalid, fails gracefully.
+
+        Ethereum chain IDs are always non-empty hex strings. An empty string in
+        .result indicates a malformed response and should fail the health check.
+        """
+        resp = json.dumps({"jsonrpc": "2.0", "id": 1, "result": ""})
         line = _run_probe(resp)
         self.assertTrue(line.startswith("RESULT:missing_result_field:"), line)
 
