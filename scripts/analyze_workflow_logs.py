@@ -135,6 +135,12 @@ def build_parser() -> argparse.ArgumentParser:
 		help="OpenRouter model ID.",
 	)
 	parser.add_argument(
+		"--thinking-level",
+		choices=["xhigh", "high", "medium", "low"],
+		default="medium",
+		help="Reasoning effort for the OpenRouter request.",
+	)
+	parser.add_argument(
 		"--max-prompt-tokens",
 		"--prompt-token-budget",
 		dest="prompt_token_budget",
@@ -524,6 +530,7 @@ def call_openrouter(
 	max_tokens: int,
 	base_url: str,
 	request_timeout_seconds: int,
+	thinking_level: str | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
 	payload = {
 		"model": model,
@@ -531,6 +538,11 @@ def call_openrouter(
 		"temperature": temperature,
 		"max_tokens": max_tokens,
 	}
+	normalized_thinking_level = ""
+	if thinking_level is not None:
+		normalized_thinking_level = str(thinking_level).strip()
+	if normalized_thinking_level:
+		payload["reasoning"] = normalized_thinking_level
 	request_body = json.dumps(payload).encode("utf-8")
 	request = urllib.request.Request(
 		f"{base_url.rstrip('/')}/chat/completions",
@@ -688,6 +700,7 @@ def main(argv: list[str] | None = None) -> int:
 			max_tokens=args.max_output_tokens,
 			base_url=args.openrouter_base_url,
 			request_timeout_seconds=args.request_timeout_seconds,
+			thinking_level=args.thinking_level,
 		)
 	except RuntimeError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
