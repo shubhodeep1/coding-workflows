@@ -492,7 +492,14 @@ set_tracking_phase_label() {
     if ! gh_retry gh issue edit "${TRACKING_NUM}" \
       --repo "${GITHUB_REPOSITORY}" \
       "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
-      echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_NUM}: $(cat "${_label_err_file}" 2>/dev/null)" >&2
+      local _label_err
+      _label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
+      if echo "${_label_err}" | grep -Eq "'[^']+' not found"; then
+        echo "::warning::set_tracking_phase_label: non-fatal missing label while applying '${phase_label}' to #${TRACKING_NUM}: ${_label_err}" >&2
+        rm -f "${_label_err_file}"
+        return 0
+      fi
+      echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_NUM}: ${_label_err}" >&2
       rm -f "${_label_err_file}"
       return 1
     fi
