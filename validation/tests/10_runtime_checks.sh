@@ -7,7 +7,7 @@
 #
 # Usage: bash validation/tests/10_runtime_checks.sh
 
-set -uo pipefail
+set -euo pipefail
 
 TESTS_TOTAL=0
 TESTS_PASSED=0
