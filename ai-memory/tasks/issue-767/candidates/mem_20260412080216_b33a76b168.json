@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping used for this plan:\n\n- `Q1: A` -> Prioritize notable-run log downloads in this order: failed runs, then runs with `retries > 0`, then slow runs; de-duplicate across buckets; tie-break by newest `created_at`.\n- `Q2: A` -> `log_excerpts` should include one entry per step log file, with fixed-length truncation per step.\n- `Q3: B` -> \u201cslow top 10\u201d is per repository (not global across all repos).\n\nConflict notes:\n\n- Clarification answer `Q3: B` intentionally overrides the recommended/global interpretation from the clarification prompt.\n- Style guidance is mixed in-repo: `scripts/collect_workflow_logs.py` currently uses spaces, while `scripts/analyze_workflow_logs.py` and tests are tab-indented. Implementation should preserve each file\u2019s existing style to avoid churn.\n\nImplementation plan:\n\n1. Files likely to change\n- `scripts/collect_workflow_logs.py`\n- `scripts/analyze_workflow_logs.py`\n- `tests/test_collect_workflow_logs.py`\n- `tests/test_analyze_workflow_logs.py`\n- `README.md`\n\n2. Collector changes (`scripts/collect_workflow_logs.py`)\n- Extend CLI:\n  - Add `--max-log-runs` (int, default `15`) in `build_parser`.\n  - Validate as non-negative in `main` alongside existing numeric guards.\n- Add run-log download support:\n  - Introduce a binary-download helper for GitHub API log archives that reuses existing retry/backoff behavior and retry markers used by `gh_api_json`.\n  - Endpoint: `GET /repos/{owner}/{repo}/actions/runs/{run_id}/logs`.\n  - Expect ZIP bytes (note: API may return redirect; client may auto-follow and return ZIP body directly).\n- Add in-memory ZIP extraction:\n  - Parse ZIP via `io.BytesIO` + `zipfile.ZipFile`.\n  - Iterate step log files, decode safely (`utf-8`, replace errors), and truncate to fixed excerpt size.\n  - Build `log_excerpts` entries as `{\"step_name\": \"...\", \"excerpt\": \"...\"}`.\n- Select notable runs to download logs for:\n  - Compute notable sets from already-collected run metrics:\n    - failed runs\n    - `retries > 0`\n    - slow runs: top 10 by `duration_seconds` per repository (`Q3: B`)\n  - Merge in `Q1` priority order with de-duplication; tie-break by newest `created_at`.\n  - Apply `--max-log-runs` cap after ordering.\n- Attach excerpts to report rows:\n  - Add `log_excerpts` list to selected run metric entries (empty list for selected runs with no parsable files; non-selected runs can remain absent or be set empty consistently).\n- Error handling:\n  - If one run log download or unzip fails, append an `errors` entry (scope `logs`, include repo/run context) and continue.\n  - Never fail whole collection due to per-run log issues.\n- Keep `SCHEMA_VERSION` unchanged (`workflow_log_collector.v1`).\n\n3. Analyzer wiring (`scripts/analyze_workflow_logs.py`)\n- Update `load_input_data` behavior for `--input` collector report payloads (`dict` with `runs`):\n  - Extract each run\u2019s `log_excerpts` if present.\n  - Flatten into analyzer `deep_dive_logs` format:\n    - `{\"name\": \"<repo>/<run_id>/<step_name>\", \"excerpt\": \"...\"}`\n  - Keep existing support for explicit `deep_dive_logs` in non-collector bundle inputs.\n- Raise default output token cap:\n  - Change `--max-output-tokens` default from `4000` to `100000` in `build_parser`.\n- No renames/removals of existing args/functions/fields.\n\n4. Data structures affected\n- Collector output `runs[]` entries gain additive field:\n  - `log_excerpts: list[{\"step_name\": str, \"excerpt\": str}]`\n- Analyzer input normalization gains additional deep-dive source:\n  - Collector report `runs[].log_excerpts` flattened into `deep_dive_logs`.\n- `errors[]` may include additional `scope: \"logs\"` entries for run-log retrieval/extraction failures.\n\n5. API/interface changes\n- New collector CLI arg:\n  - `--max-log-runs` (default `15`).\n- Analyzer CLI default change:\n  - `--max-output-tokens` default becomes `100000`.\n- Collector/analyzer JSON contracts are additive only; no schema version bump and no breaking field removals.\n\n6. Risks and edge cases\n- GitHub logs endpoint redirect/expiry behavior can vary by client; binary helper should tolerate redirect-followed and direct body behavior.\n- ZIP contents may include non-step files or unexpected paths; filter and sanitize `step_name` extraction from filename/path.\n- Large logs can bloat prompt context; fixed per-step truncation is required to bound payload size.\n- Runs may lack valid `created_at`, `run_id`, or repo values; selection and flattening logic must handle missing values deterministically.\n- `--max-log-runs=0` should disable log downloads cleanly without side effects.\n\n7. Testing considerations\n- `tests/test_collect_workflow_logs.py`:\n  - Add test for notable-run prioritization + cap (`Q1` order + `Q3` per-repo slow ranking).\n  - Add test for in-memory ZIP extraction and truncation (`Q2` behavior).\n  - Extend/adjust integration-style `main` test to assert:\n    - log downloads attempted only for selected notable runs up to cap,\n    - `log_excerpts` attached on output rows,\n    - log download failure adds `errors` entry with `scope=\"logs\"` and collection still exits successfully.\n- `tests/test_analyze_workflow_logs.py`:\n  - Add test ensuring collector `--input` report with `runs[].log_excerpts` is flattened into `deep_dive_logs` name format `<repo>/<run_id>/<step_name>`.\n  - Add parser-default regression test for `--max-output-tokens == 100000`.\n- Run both script test files directly (current test harness style) and verify no regressions.\n\nTask checklist:\n- [ ] Add collector log-download capability with in-memory ZIP excerpt extraction.\n- [ ] Add `--max-log-runs` and enforce notable-run prioritization/cap rules from clarifications.\n- [ ] Wire collector `log_excerpts` into analyzer `deep_dive_logs` for `--input` collector reports.\n- [ ] Raise analyzer default `--max-output-tokens` to `100000`.\n- [ ] Update collector/analyzer tests for all new behavior.\n- [ ] Update `README.md` collector and analyzer I/O contract sections (new field/arg/default).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "756974d63e0c2c9a051bd2515e97dfaaeb803c9f950206185858adf54ab67b5f",
+  "lineage": {
+    "issue_number": 767,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24301904500",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24301904500",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/767"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260412080216_b33a76b168",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 767,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24301904500"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #767",
+  "timestamps": {
+    "created_at": "2026-04-12T08:02:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
