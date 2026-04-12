@@ -235,7 +235,7 @@ gh_api_json_to_file()
 	while [ "${attempt}" -le "${max_attempts}" ]; do
 		: > "${outfile}"
 		if "$@" > "${outfile}" 2>"${stderr_file}"; then
-			if jq empty "${outfile}" >/dev/null 2>&1; then
+			if [ -s "${outfile}" ] && jq empty "${outfile}" >/dev/null 2>&1; then
 				rm -f "${stderr_file}"
 				return 0
 			fi
