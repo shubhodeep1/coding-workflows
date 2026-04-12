@@ -36,7 +36,7 @@ echo "TAP version 13"
 # Assertion A: guide generation command succeeds
 # ---------------------------------------------------------------------------
 
-GENERATE_LOG_1=$(mktemp "${TMP_DIR}/generate-guide-first.XXXXXX.log")
+GENERATE_LOG_1=$(mktemp "${TMP_DIR}/generate-guide-first.XXXXXX")
 
 if npm run generate-guide >"${GENERATE_LOG_1}" 2>&1; then
   pass "guide generation command succeeds"
@@ -58,13 +58,18 @@ if [ "$FAILED" -eq 0 ]; then
     tail -n 20 "${GENERATE_LOG_1}" >&2
     echo "# --- end of output ---" >&2
   else
-    GUIDE_FIRST=$(mktemp "${TMP_DIR}/GUIDE.first.XXXXXX.md")
+    GUIDE_FIRST=$(mktemp "${TMP_DIR}/GUIDE.first.XXXXXX")
     cp GUIDE.md "${GUIDE_FIRST}"
 
-    GENERATE_LOG_2=$(mktemp "${TMP_DIR}/generate-guide-second.XXXXXX.log")
+    GENERATE_LOG_2=$(mktemp "${TMP_DIR}/generate-guide-second.XXXXXX")
 
     if npm run generate-guide >"${GENERATE_LOG_2}" 2>&1; then
-      if cmp -s GUIDE.md "${GUIDE_FIRST}"; then
+      if [ ! -f GUIDE.md ]; then
+        fail "second guide generation did not produce GUIDE.md"
+        echo "# --- second generate-guide output (last 20 lines) ---" >&2
+        tail -n 20 "${GENERATE_LOG_2}" >&2
+        echo "# --- end of output ---" >&2
+      elif cmp -s GUIDE.md "${GUIDE_FIRST}"; then
         pass "guide generation is deterministic"
       else
         fail "guide generation is non-deterministic"
