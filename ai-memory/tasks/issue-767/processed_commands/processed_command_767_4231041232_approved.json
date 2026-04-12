@@ -5,13 +5,26 @@
   "entry_id": "processed_command_767_4231041232_approved",
   "issue_number": 767,
   "metadata": {
+    "branch": "ai/issue-767",
+    "changed_files": [
+      "README.md",
+      "scripts/analyze_workflow_logs.py",
+      "scripts/collect_workflow_logs.py",
+      "tests/test_analyze_workflow_logs.py",
+      "tests/test_collect_workflow_logs.py"
+    ],
+    "issue_number": 767,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/767",
+    "pr_number": 770,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/770",
+    "run_attempt": "1",
+    "run_id": "24302025229",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24302025229"
   },
   "run_attempt": 1,
   "run_id": "24302025229",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-12T08:03:11Z",
+  "status": "completed",
+  "timestamp": "2026-04-12T08:11:53Z",
   "workflow": "implement"
 }
