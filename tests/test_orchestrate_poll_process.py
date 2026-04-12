@@ -105,6 +105,9 @@ def _run_poller(
 	issue_closed: dict[int, bool] | None = None,
 	issue_linked_prs: dict[int, int] | None = None,
 	timeline_fail_for_issues: list[int] | None = None,
+	update_branch_fail_for_prs: list[int] | None = None,
+	review_dispatch_fail_for_prs: list[int] | None = None,
+	active_autofix_runs: list[dict] | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -118,6 +121,9 @@ def _run_poller(
 	issue_closed = issue_closed or {}
 	issue_linked_prs = issue_linked_prs or {}
 	timeline_fail_for_issues = timeline_fail_for_issues or []
+	update_branch_fail_for_prs = update_branch_fail_for_prs or []
+	review_dispatch_fail_for_prs = review_dispatch_fail_for_prs or []
+	active_autofix_runs = active_autofix_runs or []
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -162,6 +168,7 @@ def _run_poller(
 			"issues": issues,
 			"next_comment_id": 2 + len(tracking_comments),
 			"validation_dispatches": [],
+			"review_dispatches": [],
 			"closed_issues": [],
 			"graphql_mode": gql_mode,
 			"graphql_labels": {str(k): list(v) for k, v in gql_labels.items()},
@@ -171,6 +178,10 @@ def _run_poller(
 			"default_branch": "main",
 			"prs": prs,
 			"existing_branches": existing_branches,
+			"update_branch_calls": [],
+			"update_branch_fail_for_prs": [int(x) for x in update_branch_fail_for_prs],
+			"review_dispatch_fail_for_prs": [int(x) for x in review_dispatch_fail_for_prs],
+			"active_autofix_runs": active_autofix_runs,
 			"merge_conflict_on_sync": merge_conflict_on_sync,
 			"merge_calls": [],
 			"blocked_check_shas": blocked_check_shas,
@@ -274,7 +285,47 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 		store['validation_dispatches'].append({'workflow': wf, 'tracking_issue': tracking, 'ref': ref})
 		save()
 		sys.exit(0)
+	if wf in ('ai-review.yml', 'internal-review.yml', 'review_autofix.yml'):
+		pr_number = None
+		ref = None
+		for i, arg in enumerate(args):
+			if arg == '--ref' and i + 1 < len(args):
+				ref = args[i + 1]
+			if arg == '-f' and i + 1 < len(args) and args[i + 1].startswith('pr_number='):
+				pr_number = int(args[i + 1].split('=', 1)[1])
+		if pr_number in set(store.get('review_dispatch_fail_for_prs', [])):
+			print('dispatch failed', file=sys.stderr)
+			sys.exit(1)
+		store['review_dispatches'].append({'workflow': wf, 'pr_number': pr_number, 'ref': ref})
+		save()
+		sys.exit(0)
 	sys.exit(1)
+
+if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
+	workflow = None
+	branch = None
+	jq_query = None
+	for i, arg in enumerate(args):
+		if arg == '--workflow' and i + 1 < len(args):
+			workflow = args[i + 1]
+		if arg == '--branch' and i + 1 < len(args):
+			branch = args[i + 1]
+		if arg == '--jq' and i + 1 < len(args):
+			jq_query = args[i + 1]
+	runs = []
+	for run in store.get('active_autofix_runs', []):
+		if workflow and run.get('workflow') != workflow:
+			continue
+		if branch and run.get('branch') != branch:
+			continue
+		runs.append({'status': run.get('status', 'queued')})
+	if jq_query:
+		import subprocess as _sp
+		p = _sp.run(['jq', '-r', jq_query], input=json.dumps(runs), capture_output=True, text=True)
+		print(p.stdout.rstrip())
+	else:
+		print(json.dumps(runs))
+	sys.exit(0)
 
 if args[0] == 'pr' and len(args) >= 2 and args[1] == 'list':
 	base = None
@@ -502,6 +553,17 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	m = re.search(r'/pulls/(\d+)$', path)
+	m_update = re.search(r'/pulls/(\d+)/update-branch$', path)
+	if m_update and method == 'PUT':
+		pr_num = int(m_update.group(1))
+		store.setdefault('update_branch_calls', []).append(pr_num)
+		save()
+		if pr_num in set(store.get('update_branch_fail_for_prs', [])):
+			print('update-branch failed', file=sys.stderr)
+			sys.exit(1)
+		print(json.dumps({'message': 'updated'}))
+		sys.exit(0)
+
 	if m:
 		pr_num = int(m.group(1))
 		pr = None
@@ -512,8 +574,9 @@ if args[0] == 'api':
 		if pr is None:
 			print('{}')
 			sys.exit(0)
+		pr_state = pr.get('stateFromApi', pr.get('state', 'open'))
 		if jq == '.state':
-			print(pr.get('state', 'open'))
+			print(pr_state)
 		elif jq == '.merged_at != null':
 			merged_at = pr.get('merged_at')
 			if merged_at is None and pr.get('merged') is True:
@@ -536,13 +599,19 @@ if args[0] == 'api':
 				print('null')
 		elif jq == '.head.sha':
 			print(pr.get('headSha', f'mocksha{pr_num}'))
+		elif jq == '.head.ref':
+			print(pr.get('headRefFromApi', pr.get('headRefName', '')))
 		else:
 			print(json.dumps({
-				'state': pr.get('state', 'open'),
+				'state': pr_state,
 				'mergeable': pr.get('mergeable', True),
+				'mergeable_state': pr.get('mergeable_state', ''),
 				'merged': pr.get('merged', False),
 				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
-				'head': {'sha': pr.get('headSha', f'mocksha{pr_num}'), 'ref': pr.get('headRefName', '')},
+				'head': {
+					'sha': pr.get('headSha', f'mocksha{pr_num}'),
+					'ref': pr.get('headRefFromApi', pr.get('headRefName', '')),
+				},
 			}))
 		sys.exit(0)
 
@@ -710,6 +779,8 @@ print(json.dumps(parsed))
 		result["tracking_labels"] = tracking_issue["labels"]
 		result["tracking_closed"] = tracking_issue.get("closed", False)
 		result["merge_calls"] = result.get("merge_calls", [])
+		result["review_dispatches"] = result.get("review_dispatches", [])
+		result["update_branch_calls"] = result.get("update_branch_calls", [])
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
 		return result
@@ -988,7 +1059,133 @@ def test_standalone_conflict_sweep_skips_integration_base_prs():
 		prs=prs,
 		existing_branches=["main", "orchestrator/project-192"],
 	)
-	assert result.get("merge_calls", []) == []
+	assert result["update_branch_calls"] == []
+	assert result["review_dispatches"] == []
+
+
+def test_standalone_conflict_sweep_handles_non_ai_branch_conflicts():
+	state = _base_state(status="complete")
+	prs = [
+		{
+			"number": 411,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "claude/issue-10",
+			"mergeable": False,
+			"mergeable_state": "dirty",
+			"headSha": "sha411",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		prs=prs,
+		update_branch_fail_for_prs=[411],
+	)
+	assert result["update_branch_calls"] == [411]
+	assert len(result["review_dispatches"]) == 1
+	assert result["review_dispatches"][0]["pr_number"] == 411
+	assert result["review_dispatches"][0]["ref"] == "claude/issue-10"
+
+
+def test_standalone_conflict_sweep_keeps_ai_issue_branch_behavior():
+	state = _base_state(status="complete")
+	prs = [
+		{
+			"number": 412,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"mergeable": False,
+			"mergeable_state": "dirty",
+			"headSha": "sha412",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		prs=prs,
+	)
+	assert result["update_branch_calls"] == [412]
+	assert result["review_dispatches"] == []
+
+
+def test_standalone_conflict_sweep_skips_closed_pr_on_detail_fetch():
+	state = _base_state(status="complete")
+	prs = [
+		{
+			"number": 413,
+			"state": "open",
+			"stateFromApi": "closed",
+			"baseRefName": "main",
+			"headRefName": "claude/issue-13",
+			"mergeable": False,
+			"mergeable_state": "dirty",
+			"headSha": "sha413",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		prs=prs,
+	)
+	assert result["update_branch_calls"] == []
+	assert result["review_dispatches"] == []
+
+
+def test_standalone_conflict_sweep_active_run_guard_skips_dispatch():
+	state = _base_state(status="complete")
+	prs = [
+		{
+			"number": 414,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "claude/issue-14",
+			"mergeable": False,
+			"mergeable_state": "dirty",
+			"headSha": "sha414",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		prs=prs,
+		update_branch_fail_for_prs=[414],
+		active_autofix_runs=[
+			{"workflow": "ai-review.yml", "branch": "claude/issue-14", "status": "in_progress"},
+		],
+	)
+	assert result["update_branch_calls"] == [414]
+	assert result["review_dispatches"] == []
+
+
+def test_standalone_conflict_sweep_missing_head_ref_logs_warning_and_continues():
+	state = _base_state(status="complete")
+	prs = [
+		{
+			"number": 415,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "claude/issue-15",
+			"headRefFromApi": "",
+			"mergeable": False,
+			"mergeable_state": "dirty",
+			"headSha": "sha415",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		prs=prs,
+	)
+	assert result["update_branch_calls"] == []
+	assert result["review_dispatches"] == []
+	assert "unavailable head ref" in (result["stdout"] + result["stderr"])
 
 
 

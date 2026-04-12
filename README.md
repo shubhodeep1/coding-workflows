@@ -361,13 +361,13 @@ jobs:
 ```
 
 > **Standalone PR conflict sweep** — After processing orchestrator-managed
-> tracking issues, the poller scans all open PRs on `ai/issue-*` branches for
-> merge conflicts. When a conflict is detected it attempts a GitHub API branch
+> tracking issues, the poller scans all eligible open PRs for merge conflicts
+> (`mergeable_state=dirty`). When a conflict is detected it attempts a GitHub API branch
 > update; if that fails (real conflicts), the poller dispatches the review
 > workflow via `workflow_dispatch` so its built-in Codex conflict resolver can
 > handle resolution on a dedicated runner with a clean environment. This
-> ensures standalone (non-orchestrator) AI PRs are not permanently blocked by
-> merge conflicts.
+> ensures standalone (non-orchestrator) PRs are not permanently blocked by
+> base-branch drift conflicts.
 
 **`.github/workflows/ai-validate.yml`** — Runs runtime validation (generate harness -> execute -> structured artifacts)
 ```yaml
