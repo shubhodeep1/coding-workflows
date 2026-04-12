@@ -293,7 +293,7 @@ def main() -> None:
         print(
             "::warning::Serena MCP adoption is low "
             f"({file_ops} file-based fallback ops vs {total_serena} Serena tool calls; "
-            f"{efficiency:.0f}% efficiency below {args.warn_threshold:g}% threshold)."
+            f"{efficiency:.0f}% efficiency below {args.warn_threshold:.0f}% threshold)."
         )
 
 

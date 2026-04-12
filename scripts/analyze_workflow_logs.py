@@ -22,7 +22,7 @@ DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_PROMPT_FILE = "prompts/mode-workflow-analysis.txt"
 DEFAULT_OUTPUT_DIR = "analysis"
 DEFAULT_INPUT_FILE = "workflow_log_report.json"
-SERENA_PLACEHOLDER_RE = re.compile(r"{{SERENA_EFFICIENCY_BLOCK_[A-Z_]+}}")
+SERENA_PLACEHOLDER_PATTERN = re.compile(r"{{SERENA_EFFICIENCY_BLOCK_[A-Z_]+}}")
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -614,13 +614,16 @@ def load_prompt_template(path: Path) -> str:
 		template = path.read_text(encoding="utf-8")
 	except (OSError, UnicodeDecodeError) as exc:
 		raise RuntimeError(f"unable to read prompt file {path}: {exc}") from exc
-	if not SERENA_PLACEHOLDER_RE.search(template):
+	if not SERENA_PLACEHOLDER_PATTERN.search(template):
 		return template
 
 	render_script = Path(__file__).resolve().with_name("render_prompt.sh")
 	if not render_script.is_file():
-		raise RuntimeError(f"prompt contains Serena placeholders but renderer is missing: {render_script}")
+		raise RuntimeError(
+			f"prompt contains Serena placeholders but renderer not found at expected location: {render_script}"
+		)
 
+	# scripts/render_prompt.sh is expected at <repo_root>/scripts/render_prompt.sh.
 	repo_root = render_script.parent.parent
 	try:
 		result = subprocess.run(

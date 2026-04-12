@@ -164,7 +164,7 @@ def test_load_input_data_rejects_malformed_json_input():
 			assert "invalid JSON" in str(exc)
 
 
-def test_load_prompt_template_returns_raw_without_placeholder():
+def test_load_prompt_template_returns_content_without_placeholders():
 	with tempfile.TemporaryDirectory(prefix="analyze-prompt-raw-") as td:
 		prompt_file = Path(td) / "prompt.txt"
 		prompt_file.write_text("You are a test analyzer.", encoding="utf-8")
