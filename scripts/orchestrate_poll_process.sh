@@ -512,6 +512,81 @@ has_label() {
   echo "${labels_json}" | jq -e --arg label "${label}" 'index($label) != null' >/dev/null 2>&1
 }
 
+validation_fix_issue_has_merged_pr_evidence() {
+  local issue_num="$1"
+  local timeline_json
+  local pr_urls
+  local pr_url
+  local pr_json
+  local lookup_failed="false"
+
+  if ! timeline_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null)"; then
+    return 2
+  fi
+
+  if ! echo "${timeline_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    return 2
+  fi
+
+  pr_urls="$(echo "${timeline_json}" | jq -r '[.[] | select(.event == "cross-referenced" and (.source.issue.pull_request.url? | type == "string")) | .source.issue.pull_request.url] | unique | .[]?' 2>/dev/null || true)"
+  if [ -z "${pr_urls}" ]; then
+    return 1
+  fi
+
+  while IFS= read -r pr_url; do
+    [ -n "${pr_url}" ] || continue
+
+    if ! pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)"; then
+      lookup_failed="true"
+      continue
+    fi
+
+    if ! echo "${pr_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      lookup_failed="true"
+      continue
+    fi
+
+    if echo "${pr_json}" | jq -e '(.merged_at != null) or (.merged == true)' >/dev/null 2>&1; then
+      return 0
+    fi
+  done <<< "${pr_urls}"
+
+  if [ "${lookup_failed}" = "true" ]; then
+    return 2
+  fi
+
+  return 1
+}
+
+backfill_validation_fix_issue_merged_label() {
+  local issue_num="$1"
+  local fix_labels
+  local edit_args=()
+  local _label_err_file
+
+  ensure_label_exists "ai:merged"
+
+  fix_labels="$(get_issue_labels_json "${issue_num}")"
+  if has_label "${fix_labels}" "ai:merged"; then
+    return 0
+  fi
+
+  edit_args+=(--add-label "ai:merged")
+  if has_label "${fix_labels}" "ai:closed"; then
+    edit_args+=(--remove-label "ai:closed")
+  fi
+
+  _label_err_file="$(mktemp)"
+  if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
+    rm -f "${_label_err_file}"
+    return 0
+  fi
+
+  echo "::warning::Validation fix-up label backfill failed for #${issue_num}: $(cat "${_label_err_file}" 2>/dev/null)" >&2
+  rm -f "${_label_err_file}"
+  return 1
+}
+
 add_healing_note() {
   local note="$1"
   [ -n "${note}" ] || return 0
@@ -2547,11 +2622,35 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     while IFS= read -r fix_num; do
       [ -n "${fix_num}" ] || continue
       FIX_LABELS="$(get_issue_labels_json "${fix_num}")"
-      if has_label "${FIX_LABELS}" "ai:closed"; then
+      FIX_IS_MERGED="false"
+
+      if has_label "${FIX_LABELS}" "ai:merged"; then
+        FIX_IS_MERGED="true"
+      else
+        if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
+          echo "Validation fix-up issue #${fix_num}: merged PR detected; backfilling ai:merged."
+          if backfill_validation_fix_issue_merged_label "${fix_num}"; then
+            echo "Validation fix-up issue #${fix_num}: ai:merged label backfilled."
+          else
+            echo "::warning::Validation fix-up issue #${fix_num}: merged PR detected but ai:merged backfill failed." >&2
+          fi
+          FIX_IS_MERGED="true"
+        else
+          EVIDENCE_STATUS="$?"
+          if [ "${EVIDENCE_STATUS}" -eq 1 ]; then
+            echo "Validation fix-up issue #${fix_num}: no merged PR evidence detected."
+          else
+            echo "::warning::Validation fix-up issue #${fix_num}: merged PR lookup failed; leaving labels unchanged this cycle." >&2
+          fi
+        fi
+      fi
+
+      if has_label "${FIX_LABELS}" "ai:closed" && [ "${FIX_IS_MERGED}" != "true" ]; then
         FIX_ANY_CLOSED="true"
         CLOSED_FIX_NUMS="${CLOSED_FIX_NUMS} #${fix_num}"
       fi
-      if ! has_label "${FIX_LABELS}" "ai:merged"; then
+
+      if [ "${FIX_IS_MERGED}" != "true" ]; then
         FIX_ALL_MERGED="false"
       fi
     done < <(echo "${ACTIVE_FIX_ISSUES_JSON}" | jq -r '.[]')
