@@ -1612,6 +1612,158 @@ def test_no_labels_open_issue_uses_bounded_recovery_policy():
 	assert issue_entry["status"] == "in_progress"
 
 
+def test_state_extraction_with_special_chars_in_comment_bodies():
+	"""State extraction succeeds when surrounding comments have backticks/quotes/markdown."""
+	state = _base_state(status="in_progress")
+	# Add comments with bodies that contain backticks, quotes, and multiline markdown.
+	# These should not confuse the jq state-extraction filter.
+	tricky_comments = [
+		"## Some `code` block\n\n```python\nprint('hello \"world\"')\n```",
+		'Issue body with "double quotes" and `backticks` and\nmultiline\ncontent',
+		"```json\n{\"key\": \"value with <!-- comment --> markers\"}\n```",
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=tricky_comments,
+		issue_labels={10: ["ai:implementing"]},
+	)
+	# State should still be extracted and the poller should run normally.
+	final_state = result["latest_state"]
+	assert final_state["schema_version"] == "orchestrate_state.v1"
+	assert final_state["status"] == "in_progress"
+
+
+def test_truncated_comments_json_is_handled_gracefully():
+	"""Poller exits cleanly when the comments API returns invalid/truncated JSON."""
+	with tempfile.TemporaryDirectory(prefix="poller-test-truncated-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		home_dir = tmp / "home"
+		runtime_dir = tmp / "runtime"
+		bin_dir.mkdir(parents=True)
+		home_dir.mkdir(parents=True)
+		runtime_dir.mkdir(parents=True)
+
+		tracking_num = 192
+
+		# Minimal gh mock: returns truncated JSON for comments endpoint,
+		# empty body for issue body (causes reconstruction to skip gracefully).
+		gh_mock = """\
+#!/usr/bin/env python3
+import json, re, sys
+args = sys.argv[1:]
+if not args:
+    sys.exit(0)
+if args[0] == 'api':
+    path = next((a for a in args if not a.startswith('-') and a != 'api'), '')
+    jq = None
+    i = 0
+    while i < len(args):
+        if args[i] == '--jq' and i + 1 < len(args):
+            jq = args[i + 1]
+        i += 1
+    # Comments endpoint: return truncated (invalid) JSON to simulate network cut
+    if re.search(r'/issues/\\d+/comments', path):
+        sys.stdout.write('[{"id":1,"body":"fragment...')
+        sys.exit(0)
+    # Issue body for state reconstruction
+    if re.search(r'/issues/\\d+$', path):
+        if jq == '.body':
+            print('')
+        elif jq == '.state':
+            print('open')
+        elif jq == '.title':
+            print('Test tracking')
+        else:
+            print(json.dumps({'body': '', 'state': 'open'}))
+        sys.exit(0)
+    # Repo default_branch
+    if re.match(r'repos/[^/]+/[^/]+$', path):
+        if jq == '.default_branch':
+            print('main')
+        else:
+            print(json.dumps({'default_branch': 'main'}))
+        sys.exit(0)
+    # Labels endpoint
+    if re.search(r'/issues/\\d+/labels', path):
+        if jq:
+            print('[]')
+        else:
+            print('[]')
+        sys.exit(0)
+    print('{}')
+    sys.exit(0)
+if args[0] == 'issue' and len(args) >= 2 and args[1] == 'list':
+    print('[]')
+    sys.exit(0)
+print('Unsupported: ' + ' '.join(args), file=sys.stderr)
+sys.exit(1)
+"""
+		(bin_dir / "gh").write_text(gh_mock)
+		(bin_dir / "gh").chmod(0o755)
+
+		# Minimal codex mock (should not be reached in this test)
+		(bin_dir / "codex").write_text(
+			"#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps({'status':'complete','justification':'','assessment':'','new_issues':[],'issues_to_revert':[]}))\n"
+		)
+		(bin_dir / "codex").chmod(0o755)
+
+		(runtime_dir / "tracking_issues.json").write_text(
+			json.dumps([{"number": tracking_num, "title": "Truncated JSON test"}]),
+			encoding="utf-8",
+		)
+
+		env = os.environ.copy()
+		env.update(
+			{
+				"HOME": str(home_dir),
+				"RUNTIME_DIR": str(runtime_dir),
+				"STATE_FILE": str(runtime_dir / "state.json"),
+				"JUDGE_PROMPT_FILE": str(runtime_dir / "judge_prompt.txt"),
+				"JUDGE_OUTPUT_FILE": str(runtime_dir / "judge_output.txt"),
+				"GH_TOKEN": "test-token",
+				"OPENROUTER_API_KEY": "test-key",
+				"GITHUB_REPOSITORY": "owner/repo",
+				"MODEL_EDITOR": "openai/gpt-5.3-codex",
+				"MODEL_REASONING_EFFORT_JUDGE": "xhigh",
+				"TG_BOT_SECRET": "",
+				"TG_ADMIN_CHAT_ID": "",
+				"TOOL_CALL_BUDGET_JUDGE": "60",
+				"SERENA_VERSION": "main",
+				"SERENA_LANGUAGES": "",
+				"SERENA_DISABLED": "true",
+				"SERENA_IGNORED_DIRS": "",
+				"MAX_REVIEW_BLOCKED_RETRIES": "2",
+				"MAX_VALIDATION_RECOVERY_ATTEMPTS": "0",
+				"ENABLE_VALIDATION": "false",
+				"MAX_VALIDATE_CYCLES": "3",
+				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			}
+		)
+
+		proc = subprocess.run(
+			["bash", str(POLLER_SCRIPT)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		# Poller must exit cleanly — not crash with a jq parse error
+		assert proc.returncode == 0, (
+			"Poller should handle truncated comments JSON gracefully (exit 0)\n"
+			f"stdout:\n{proc.stdout}\n"
+			f"stderr:\n{proc.stderr}"
+		)
+		# A warning about JSON validation failure should appear
+		combined = proc.stdout + proc.stderr
+		assert "failed validation" in combined or "warning" in combined.lower(), (
+			"Expected a warning about invalid JSON in poller output\n"
+			f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+		)
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
