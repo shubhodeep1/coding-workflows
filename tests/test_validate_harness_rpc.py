@@ -34,6 +34,7 @@ _PROBE_SCRIPT = textwrap.dedent("""\
     # RESP is injected by the test as a pre-set variable.
 
     CHAIN_ID=""
+    RESP="${RESP:-}"
 
     if [ -z "${RESP:-}" ]; then
         echo "RESULT:no_response"
