@@ -222,6 +222,39 @@ CRITICAL — graceful shutdown container resolution:
     fi
     echo "ok - app shut down gracefully with exit code 0"
 
+CRITICAL — robust synthetic env-var assertions in env_var_validation tests:
+- Docker Compose services declare synthetic test credentials with an override-or-default expression:
+    environment:
+      VALIDATION_TEST_API_KEY: "${VALIDATION_TEST_API_KEY:-validation-api-key}"
+- This means the container sees EITHER the value injected by the CI job environment OR the compose
+  default fallback. A test that hardcodes one fixed expected value will produce a false negative
+  whenever the other branch is active.
+- When asserting env var values inside the container, the test MUST accept BOTH branches:
+  1. An explicitly provided CI env override (the outer value of $VALIDATION_TEST_API_KEY if set), OR
+  2. The default fallback value defined in the compose file (e.g. `validation-api-key`).
+- NEVER hardcode a single expected string — that creates brittle false negatives.
+- Recommended pattern for a robust synthetic env-var assertion (POSIX-safe, set -euo pipefail compatible):
+    # Read the actual value from the running container
+    actual="$(docker compose -f "$COMPOSE_FILE" exec -T "$APP_SERVICE" \
+                /bin/sh -c 'printf "%s" "${VALIDATION_TEST_API_KEY:-}"')"
+    # Compute expected: honour the CI override when present, otherwise use the compose default.
+    # This mirrors exactly what Compose does with "${VALIDATION_TEST_API_KEY:-validation-api-key}".
+    if [ -n "${VALIDATION_TEST_API_KEY:-}" ]; then
+      expected="${VALIDATION_TEST_API_KEY}"
+    else
+      expected="validation-api-key"
+    fi
+    if [ "$actual" = "$expected" ]; then
+      echo "ok $ASSERTION - synthetic validation env vars are configured as expected"
+    else
+      echo "not ok $ASSERTION - synthetic validation env vars are not configured as expected (expected='$expected', got='$actual')"
+      exit 1
+    fi
+    ASSERTION=$((ASSERTION + 1))
+- Apply the same override-or-default pattern to VALIDATION_TEST_USERNAME and VALIDATION_TEST_PASSWORD,
+  using their respective compose default values.
+- Always include both expected and actual values in failure messages to aid debugging.
+
 Validation coverage (implement only when concretely applicable):
 1. Build verification
 2. Startup and health checks
