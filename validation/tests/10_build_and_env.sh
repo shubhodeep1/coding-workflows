@@ -44,6 +44,9 @@ ASSERTION=$((ASSERTION + 1))
 
 actual="$(docker compose -f "$COMPOSE_FILE" exec -T "$APP_SERVICE" \
             /bin/sh -c 'printf "%s" "${VALIDATION_TEST_API_KEY:-}"' 2>/dev/null || true)"
+# Note: single quotes around the printf argument are intentional — they
+# prevent host-side expansion so ${VALIDATION_TEST_API_KEY:-} expands
+# inside the container's shell, reflecting the container's actual env.
 
 # Compute expected: honour the explicit CI override when present, otherwise
 # fall back to the same default that the compose file uses.
