@@ -157,11 +157,17 @@ jobs:
         id: analyze
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || '' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
 
-          REPORT_FILE="$(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json)"
+          cmd=(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json)
+          if [ -n "${THINKING_LEVEL_ANALYSIS}" ]; then
+            cmd+=(--thinking-level "${THINKING_LEVEL_ANALYSIS}")
+          fi
+
+          REPORT_FILE="$("${cmd[@]}")"
 
           if [ -z "${REPORT_FILE}" ] || [ ! -f "${REPORT_FILE}" ]; then
             echo "::error::Analyzer did not produce a valid report file path."

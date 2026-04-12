@@ -68,6 +68,16 @@ def test_truncate_to_budget_drops_deep_dive_before_recent_runs():
 	assert trimmed["truncation"]["removed"]["recent_runs"] == 0
 
 
+def test_build_parser_thinking_level_defaults_to_medium():
+	args = analyzer.build_parser().parse_args([])
+	assert args.thinking_level == "medium"
+
+
+def test_build_parser_accepts_explicit_thinking_level():
+	args = analyzer.build_parser().parse_args(["--thinking-level", "high"])
+	assert args.thinking_level == "high"
+
+
 def test_call_openrouter_builds_payload_and_parses_response():
 	captured = {"url": "", "payload": {}, "headers": []}
 	orig_urlopen = analyzer.urllib.request.urlopen
@@ -109,6 +119,7 @@ def test_call_openrouter_builds_payload_and_parses_response():
 			max_tokens=123,
 			base_url="https://openrouter.ai/api/v1",
 			request_timeout_seconds=17,
+			thinking_level="high",
 		)
 	finally:
 		analyzer.urllib.request.urlopen = orig_urlopen
@@ -118,7 +129,56 @@ def test_call_openrouter_builds_payload_and_parses_response():
 	assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
 	assert captured["payload"]["model"] == "openai/gpt-5.3-codex"
 	assert captured["payload"]["max_tokens"] == 123
+	assert captured["payload"]["reasoning"] == "high"
 	assert any(k.lower() == "authorization" and v == "Bearer test-key" for k, v in captured["headers"])
+
+
+def test_call_openrouter_omits_reasoning_when_thinking_level_empty_or_none():
+	orig_urlopen = analyzer.urllib.request.urlopen
+
+	class FakeResponse:
+		def __init__(self, body: str):
+			self._body = body
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb):
+			return False
+
+		def read(self) -> bytes:
+			return self._body.encode("utf-8")
+
+	def run_case(thinking_level):
+		captured_payload: dict[str, object] = {}
+
+		def fake_urlopen(request, timeout=0):
+			del timeout
+			captured_payload.clear()
+			captured_payload.update(json.loads(request.data.decode("utf-8")))
+			return FakeResponse(json.dumps({"choices": [{"message": {"content": "# ok"}}]}))
+
+		analyzer.urllib.request.urlopen = fake_urlopen
+		content, usage = analyzer.call_openrouter(
+			api_key="test-key",
+			model="openai/gpt-5.3-codex",
+			messages=[{"role": "user", "content": "hello"}],
+			temperature=0.0,
+			max_tokens=123,
+			base_url="https://openrouter.ai/api/v1",
+			request_timeout_seconds=17,
+			thinking_level=thinking_level,
+		)
+		assert content == "# ok\n"
+		assert usage is None
+		assert "reasoning" not in captured_payload
+
+	try:
+		run_case("")
+		run_case("   ")
+		run_case(None)
+	finally:
+		analyzer.urllib.request.urlopen = orig_urlopen
 
 
 def test_call_openrouter_http_error_is_reported():

@@ -96,6 +96,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_CLARIFY` | `medium` | clarify | Reasoning effort for the clarification phase |
 | `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
 | `THINKING_LEVEL_IMPLEMENT` | `high` | implement | Reasoning effort for the implementation phase |
+| `THINKING_LEVEL_ANALYSIS` | `medium` | workflow-log-analysis | Reasoning effort for the workflow log analysis report generation. |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
@@ -607,6 +608,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `THINKING_LEVEL_CLARIFY` | `medium` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
 | `THINKING_LEVEL_PLAN` | `xhigh` | Reasoning effort for planning |
 | `THINKING_LEVEL_IMPLEMENT` | `high` | Reasoning effort for implementation |
+| `THINKING_LEVEL_ANALYSIS` | `medium` | Reasoning effort for workflow log analysis report generation |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | Reasoning effort for reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | Reasoning effort for editor model (applying fixes) |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
