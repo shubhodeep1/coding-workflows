@@ -190,7 +190,7 @@ def gh_api_bytes(
 
     for attempt in range(1, retries + 1):
         try:
-            proc = subprocess.run(cmd, capture_output=True, env=base_env, timeout=60)
+            proc = subprocess.run(cmd, capture_output=True, env=base_env, timeout=300)
         except subprocess.TimeoutExpired as exc:
             if attempt < retries:
                 time.sleep(backoff_seconds * attempt)
@@ -329,10 +329,12 @@ def _extract_step_name(log_file_name: str) -> str:
 
 def extract_log_excerpts(log_archive: bytes, max_chars: int = LOG_EXCERPT_MAX_CHARS) -> list[dict[str, str]]:
     excerpts: list[dict[str, str]] = []
+    read_limit = max(max_chars, 1) * 4
     with zipfile.ZipFile(io.BytesIO(log_archive)) as archive:
         names = sorted(name for name in archive.namelist() if not name.endswith("/"))
         for name in names:
-            raw = archive.read(name)
+            with archive.open(name, "r") as log_file:
+                raw = log_file.read(read_limit)
             text = raw.decode("utf-8", errors="replace")
             if not text:
                 continue
