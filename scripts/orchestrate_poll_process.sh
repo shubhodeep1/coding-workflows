@@ -329,8 +329,14 @@ fi
 
 post_tracking_comment() {
   local comment_body="$1"
-  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-    -f body="${comment_body}" >/dev/null || true
+  local payload_file
+  payload_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload.XXXXXX")"
+  if jq -n --arg body "${comment_body}" '{body: $body}' > "${payload_file}" 2>/dev/null; then
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+      --method POST \
+      --input "${payload_file}" >/dev/null || true
+  fi
+  rm -f "${payload_file}"
 }
 
 post_state_comment() {
@@ -338,8 +344,58 @@ post_state_comment() {
   state_comment="<!-- ORCHESTRATOR_STATE_V1
 $(cat "${STATE_FILE}")
 ORCHESTRATOR_STATE_V1 -->"
-  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-    -f body="${state_comment}" >/dev/null || true
+  post_tracking_comment "${state_comment}"
+}
+
+extract_orchestrator_state_payload() {
+  local comment_body="$1"
+  printf '%s' "${comment_body}" | sed -n '/^<!-- ORCHESTRATOR_STATE_V1$/,/^ORCHESTRATOR_STATE_V1 -->$/p' | sed '1d;$d'
+}
+
+is_valid_orchestrator_state_json() {
+  local state_json="$1"
+  printf '%s' "${state_json}" | jq -e '
+    type == "object" and
+    (.schema_version == "orchestrate_state.v1") and
+    (.status | type == "string") and
+    (.waves | type == "array") and
+    (.current_wave | type == "number") and
+    (.total_waves | type == "number") and
+    (.issue_number_map | type == "object") and
+    (.pending_issue_defs | type == "object")
+  ' >/dev/null 2>&1
+}
+
+extract_latest_valid_orchestrator_state() {
+  local comments_json="$1"
+  local candidate
+  local candidate_body
+  local candidate_state
+  local candidate_id
+  local latest_state_comment_id=""
+
+  EXTRACTED_STATE_JSON=""
+  EXTRACTED_STATE_FALLBACK_USED="false"
+  EXTRACTED_STATE_COMMENT_COUNT=0
+
+  while IFS= read -r candidate; do
+    [ -n "${candidate}" ] || continue
+    EXTRACTED_STATE_COMMENT_COUNT=$((EXTRACTED_STATE_COMMENT_COUNT + 1))
+    candidate_id="$(printf '%s' "${candidate}" | jq -r '.id // empty' 2>/dev/null || echo "")"
+    [ -n "${latest_state_comment_id}" ] || latest_state_comment_id="${candidate_id}"
+    candidate_body="$(printf '%s' "${candidate}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+    candidate_state="$(extract_orchestrator_state_payload "${candidate_body}")"
+    [ -n "${candidate_state}" ] || continue
+    if is_valid_orchestrator_state_json "${candidate_state}"; then
+      EXTRACTED_STATE_JSON="${candidate_state}"
+      if [ -n "${latest_state_comment_id}" ] && [ "${candidate_id}" != "${latest_state_comment_id}" ]; then
+        EXTRACTED_STATE_FALLBACK_USED="true"
+      fi
+      return 0
+    fi
+  done < <(printf '%s' "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse[]?' 2>/dev/null || true)
+
+  return 1
 }
 
 ensure_label_exists() {
@@ -1290,9 +1346,11 @@ run_standalone_stall_recovery() {
       if ! t_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${t_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
         t_comments='[]'
       fi
-      t_state_body="$(echo "${t_comments}" | jq -r '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | last | .body // ""' 2>/dev/null || echo "")"
-      t_state_json="$(printf '%s' "${t_state_body}" | sed -n '/^<!-- ORCHESTRATOR_STATE_V1$/,/^ORCHESTRATOR_STATE_V1 -->$/p' | sed '1d;$d')"
-      managed_nums="$(echo "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
+      t_state_json=""
+      if extract_latest_valid_orchestrator_state "${t_comments}"; then
+        t_state_json="${EXTRACTED_STATE_JSON}"
+      fi
+      managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
       if [ -n "${managed_nums}" ]; then
         orchestrator_managed_set="${orchestrator_managed_set}"$'\n'"${managed_nums}"
       fi
@@ -2272,17 +2330,29 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
   rm -f "${_comments_raw}"
 
-  # Find the latest state comment (search from the end)
-  STATE_JSON="$(printf '%s' "${COMMENTS}" | jq -r '
-    [.[] | select(.body | contains("ORCHESTRATOR_STATE_V1"))] | last |
-    .body |
-    split("<!-- ORCHESTRATOR_STATE_V1")[1] |
-    split("ORCHESTRATOR_STATE_V1 -->")[0] |
-    ltrimstr("\n") | rtrimstr("\n")
-  ' 2>/dev/null || echo "")"
+  STATE_JSON=""
+  STATE_COMMENT_COUNT=0
+  STATE_FALLBACK_USED="false"
+  if extract_latest_valid_orchestrator_state "${COMMENTS}"; then
+    STATE_JSON="${EXTRACTED_STATE_JSON}"
+    STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT}"
+    STATE_FALLBACK_USED="${EXTRACTED_STATE_FALLBACK_USED}"
+  else
+    STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT:-0}"
+  fi
+
+  if [ "${STATE_FALLBACK_USED}" = "true" ] && [ -n "${STATE_JSON}" ]; then
+    printf '%s\n' "${STATE_JSON}" > "${STATE_FILE}"
+    post_state_comment
+    echo "::warning::Detected malformed latest ORCHESTRATOR_STATE_V1 for issue #${TRACKING_NUM}; restored from older valid state and posted healed canonical state."
+  fi
 
   if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then
-    echo "::warning::No state found for tracking issue #${TRACKING_NUM}. Attempting state reconstruction..."
+    if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
+      echo "::warning::No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #${TRACKING_NUM}. Attempting state reconstruction..."
+    else
+      echo "::warning::No state found for tracking issue #${TRACKING_NUM}. Attempting state reconstruction..."
+    fi
 
     # ---------------------------------------------------------------
     # State reconstruction: the orchestrate.yml workflow created the
@@ -2338,11 +2408,8 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     fi
   fi
 
-  # Validate that STATE_JSON is a proper JSON object before writing to disk.
-  # This guards against edge cases where the state comment body contained
-  # content that caused jq's string split to return a non-JSON fragment.
-  if ! printf '%s' "${STATE_JSON}" | jq -e 'type == "object"' >/dev/null 2>&1; then
-    echo "::warning::STATE_JSON for issue #${TRACKING_NUM} is not a valid JSON object; skipping"
+  if ! is_valid_orchestrator_state_json "${STATE_JSON}"; then
+    echo "::warning::STATE_JSON for issue #${TRACKING_NUM} is not a valid orchestrator state object; skipping"
     continue
   fi
 
