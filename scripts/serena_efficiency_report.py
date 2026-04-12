@@ -173,7 +173,12 @@ def estimate_token_savings(serena_counts: Counter, file_ops: int) -> dict:
     }
 
 
-def format_report(serena_counts: Counter, file_ops: int, scan_dir: str = ".") -> str:
+def format_report(
+    serena_counts: Counter,
+    file_ops: int,
+    scan_dir: str = ".",
+    warn_threshold: float = 50,
+) -> str:
     """Return a markdown-formatted efficiency report."""
     total_serena = sum(serena_counts.values())
     total_ops = total_serena + file_ops
@@ -229,10 +234,10 @@ def format_report(serena_counts: Counter, file_ops: int, scan_dir: str = ".") ->
             "> Serena was not used this run. The LLM fell back to "
             "file-based operations (or Serena was unavailable)."
         )
-    elif efficiency < 50:
+    elif efficiency < warn_threshold:
         lines.append(
-            "> Low Serena adoption — the LLM used file-based operations "
-            "more often than Serena tools."
+            "> Serena adoption is below the configured warning threshold "
+            f"({efficiency:.0f}% < {warn_threshold:.0f}%)."
         )
     elif efficiency >= 90:
         lines.append(
@@ -278,7 +283,12 @@ def main() -> None:
             serena_counts += c
             file_ops += o
 
-    report = format_report(serena_counts, file_ops, scan_dir=args.scan_dir)
+    report = format_report(
+        serena_counts,
+        file_ops,
+        scan_dir=args.scan_dir,
+        warn_threshold=args.warn_threshold,
+    )
     total_serena = sum(serena_counts.values())
     total_ops = total_serena + file_ops
     efficiency = (total_serena / total_ops * 100) if total_ops > 0 else 0
@@ -291,7 +301,7 @@ def main() -> None:
     print(report)
     if total_ops >= 5 and efficiency < args.warn_threshold:
         print(
-            "::warning::Serena MCP adoption is low "
+            "::warning::Serena MCP adoption is below threshold "
             f"({file_ops} file-based fallback ops vs {total_serena} Serena tool calls; "
             f"{efficiency:.0f}% efficiency below {args.warn_threshold:.0f}% threshold)."
         )
