@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import subprocess
 import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -156,6 +158,63 @@ def test_list_jobs_for_run_paginates():
 	assert len(calls) == 3
 
 
+def test_extract_log_excerpts_decodes_and_truncates_per_step():
+	buffer = io.BytesIO()
+	with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+		archive.writestr("logs/01_setup.txt", "A" * 20)
+		archive.writestr("logs/02_run_tests.txt", "B" * 20)
+
+	excerpts = collector.extract_log_excerpts(buffer.getvalue(), max_chars=8)
+	assert excerpts == [
+		{"step_name": "setup", "excerpt": "AAAAAAAA"},
+		{"step_name": "run tests", "excerpt": "BBBBBBBB"},
+	]
+
+
+def test_select_notable_runs_for_logs_prioritizes_failed_then_retried_then_slow_per_repo():
+	runs = [
+		{
+			"repository": "owner/repo-a",
+			"run_id": 201,
+			"conclusion": "failure",
+			"retries": 0,
+			"duration_seconds": 100,
+			"created_at": "2026-04-10T11:00:00Z",
+		},
+		{
+			"repository": "owner/repo-a",
+			"run_id": 202,
+			"conclusion": "success",
+			"retries": 2,
+			"duration_seconds": 300,
+			"created_at": "2026-04-10T10:00:00Z",
+		},
+		{
+			"repository": "owner/repo-b",
+			"run_id": 301,
+			"conclusion": "success",
+			"retries": 0,
+			"duration_seconds": 900,
+			"created_at": "2026-04-10T09:00:00Z",
+		},
+		{
+			"repository": "owner/repo-a",
+			"run_id": 203,
+			"conclusion": "success",
+			"retries": 0,
+			"duration_seconds": 800,
+			"created_at": "2026-04-10T08:00:00Z",
+		},
+	]
+
+	selected = collector.select_notable_runs_for_logs(runs, max_log_runs=3)
+	assert [(item["repository"], item["run_id"]) for item in selected] == [
+		("owner/repo-a", 201),
+		("owner/repo-a", 202),
+		("owner/repo-b", 301),
+	]
+
+
 def test_main_partial_jobs_failure_still_emits_report_with_errors():
 	with tempfile.TemporaryDirectory(prefix="collector-test-") as td:
 		tmp = Path(td)
@@ -190,6 +249,17 @@ def test_main_partial_jobs_failure_still_emits_report_with_errors():
 						"updated_at": "2026-04-10T11:05:30Z",
 					},
 					{
+						"id": 104,
+						"name": "AI Clarify",
+						"path": ".github/workflows/clarify.yml",
+						"status": "completed",
+						"conclusion": "success",
+						"run_attempt": 1,
+						"created_at": "2026-04-10T12:00:00Z",
+						"run_started_at": "2026-04-10T12:00:10Z",
+						"updated_at": "2026-04-10T12:05:10Z",
+					},
+					{
 						"id": 103,
 						"name": "AI Validate",
 						"path": ".github/workflows/validate.yml",
@@ -217,6 +287,11 @@ def test_main_partial_jobs_failure_still_emits_report_with_errors():
 				}
 			},
 			"fail_jobs_for": [102],
+			"log_files": {
+				"101": {"01_plan.txt": "plan ok\n"},
+				"102": {"01_failure.txt": "failure details\n"},
+			},
+			"fail_logs_for": [104],
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -262,6 +337,21 @@ if m:
 	print(json.dumps({"jobs": run_pages.get(page, [])}))
 	sys.exit(0)
 
+m = re.search(r"/actions/runs/(\d+)/logs$", endpoint)
+if m:
+	run_id = int(m.group(1))
+	if run_id in store.get("fail_logs_for", []):
+		print("logs failed", file=sys.stderr)
+		sys.exit(1)
+	import io
+	import zipfile
+	buffer = io.BytesIO()
+	with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+		for filename, content in store.get("log_files", {}).get(str(run_id), {}).items():
+			archive.writestr(filename, content)
+	sys.stdout.buffer.write(buffer.getvalue())
+	sys.exit(0)
+
 print(json.dumps({}))
 '''
 		_write_exec(bin_dir / "gh", gh_mock)
@@ -284,6 +374,8 @@ print(json.dumps({}))
 				"7",
 				"--max-pages",
 				"2",
+				"--max-log-runs",
+				"3",
 				"--output",
 				str(report_file),
 			],
@@ -297,15 +389,20 @@ print(json.dumps({}))
 		report = json.loads(report_file.read_text(encoding="utf-8"))
 		assert report["schema_version"] == "workflow_log_collector.v1"
 		assert report["scope"]["workflow_families"] == ["clarify", "plan", "implement", "review_autofix"]
-		assert report["summary"]["total_runs"] == 2
-		assert report["summary"]["success_count"] == 1
+		assert report["summary"]["total_runs"] == 3
+		assert report["summary"]["success_count"] == 2
 		assert report["summary"]["failure_count"] == 1
 		assert report["summary"]["cancelled_count"] == 0
 		assert report["summary"]["other_count"] == 0
 		assert isinstance(report["summary"]["p50_duration_seconds"], float)
 		assert isinstance(report["summary"]["p95_duration_seconds"], float)
-		assert len(report["errors"]) == 1
-		assert report["errors"][0]["scope"] == "jobs"
+		assert len(report["errors"]) == 2
+		assert sorted(item["scope"] for item in report["errors"]) == ["jobs", "logs"]
+
+		by_run_id = {item["run_id"]: item for item in report["runs"]}
+		assert by_run_id[101]["log_excerpts"] == [{"step_name": "plan", "excerpt": "plan ok\n"}]
+		assert by_run_id[102]["log_excerpts"] == [{"step_name": "failure", "excerpt": "failure details\n"}]
+		assert "log_excerpts" not in by_run_id[104]
 
 
 # ---------------------------------------------------------------------------

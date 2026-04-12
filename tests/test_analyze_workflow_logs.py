@@ -224,6 +224,38 @@ def test_load_input_data_rejects_malformed_json_input():
 			assert "invalid JSON" in str(exc)
 
 
+def test_load_input_data_collects_deep_dive_logs_from_collector_runs():
+	with tempfile.TemporaryDirectory(prefix="analyze-input-runs-") as td:
+		input_file = Path(td) / "collector.json"
+		_write_json(
+			input_file,
+			{
+				"schema_version": "workflow_log_collector.v1",
+				"runs": [
+					{
+						"repository": "owner/repo",
+						"run_id": 55,
+						"log_excerpts": [
+							{"step_name": "build", "excerpt": "line1"},
+							{"step_name": "test", "excerpt": "line2"},
+						],
+					}
+				],
+			},
+		)
+		args = analyzer.build_parser().parse_args(["--input", str(input_file)])
+		loaded = analyzer.load_input_data(args)
+		assert loaded["deep_dive_logs"] == [
+			{"name": "owner/repo/55/build", "excerpt": "line1"},
+			{"name": "owner/repo/55/test", "excerpt": "line2"},
+		]
+
+
+def test_build_parser_max_output_tokens_default_100000():
+	args = analyzer.build_parser().parse_args([])
+	assert args.max_output_tokens == 100000
+
+
 def test_load_prompt_template_returns_content_without_placeholders():
 	with tempfile.TemporaryDirectory(prefix="analyze-prompt-raw-") as td:
 		prompt_file = Path(td) / "prompt.txt"

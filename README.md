@@ -528,25 +528,27 @@ Collector script: [`scripts/collect_workflow_logs.py`](scripts/collect_workflow_
   - `--repo` (repeatable)
   - window selector (exactly one): `--lookback-days` or `--since`
   - `--output` (default `workflow_log_report.json`)
-  - `--per-page`, `--max-pages`, `--max-runs`
+  - `--per-page`, `--max-pages`, `--max-runs`, `--max-log-runs` (default `15`)
 - Token handling in `main`: uses `GH_TOKEN` with `GITHUB_TOKEN` fallback.
+- For notable runs (failed, retries > 0, and top 10 slowest per repository), the collector also downloads raw run logs from `repos/{repo}/actions/runs/{run_id}/logs`, extracts ZIP contents in memory, and stores truncated per-step excerpts.
 
 Generated JSON report (`workflow_log_report.json`) includes:
 
 - `schema_version`
 - `generated_at`
 - `scope` (`repositories`, `workflow_families`, `source`)
-- `runs` (per-run metrics including `workflow_family`, `duration_seconds`, `retries`, and `failure_point`)
+- `runs` (per-run metrics including `workflow_family`, `duration_seconds`, `retries`, `failure_point`, and optional `log_excerpts` as `{step_name, excerpt}` entries for notable runs)
 - `summary` (`total_runs`, success/failure/cancelled/other counts, `avg_duration_seconds`, `p50_duration_seconds`, `p95_duration_seconds`)
-- `errors`
+- `errors` (includes `scope: "logs"` entries when run log download/extraction fails; collection continues)
 
 ### Analyzer input/output contract
 
 Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_logs.py)
 
 - Workflow invocation: `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json`
+- `--max-output-tokens` default is `100000`.
 - `load_input_data` accepts either:
-  - `--input` with a collector report (`runs` list), a combined bundle object (`run_metrics`, `summary_stats`, optional `deep_dive_logs`), or a JSON array of run metrics
+  - `--input` with a collector report (`runs` list; `runs[].log_excerpts` are flattened into `deep_dive_logs` as `{name: <repo>/<run_id>/<step_name>, excerpt}`), a combined bundle object (`run_metrics`, `summary_stats`, optional `deep_dive_logs`), or a JSON array of run metrics
   - `--data-dir` containing `workflow_log_report.json` or `run_metrics.json` + `summary_stats.json` (optionally `run_logs/`)
 - Output path behavior from `resolve_dated_output_path`:
   - default: `analysis/workflow-optimization-YYYY-MM-DD.md`
