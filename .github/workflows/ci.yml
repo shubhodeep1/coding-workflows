@@ -62,6 +62,11 @@ jobs:
           set -euo pipefail
           python3 tests/test_overlap_validation_fallback.py
 
+      - name: Validate harness RPC health-check unit tests
+        run: |
+          set -euo pipefail
+          python3 tests/test_validate_harness_rpc.py
+
       - name: Workflow log collector coverage gate
         run: |
           set -euo pipefail

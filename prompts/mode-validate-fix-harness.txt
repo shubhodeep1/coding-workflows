@@ -22,6 +22,47 @@ Fix strategy:
 - Prefer deterministic assertions over fragile output parsing.
 - If tests depend on infra readiness, add explicit retries/timeouts instead of brittle sleeps.
 
+CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
+- Hardhat JSON-RPC (and any standard Ethereum node) returns a **JSON object**, not a JSON array.
+- Response shape: `{"jsonrpc":"2.0","id":1,"result":"0x1"}`.
+- NEVER index the response with a number (`jq '.[0]'`, `jq '.[1]'`, etc.) — that causes:
+    `jq: error (at <stdin>:1): Cannot index object with number`
+- ALWAYS read `.result` and validate it is a non-null string before asserting.
+- ALWAYS guard against non-JSON or empty responses before piping into `jq`.
+- If the harness currently uses `jq '.[N]'` or `jq '.[N].field'` on a Hardhat/Ethereum RPC response, that is the bug — replace with `.result` parsing using this pattern:
+    RPC_URL="${RPC_URL:-http://localhost:8545}"
+    PAYLOAD='{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+    CHAIN_ID=""
+    RESP=""
+    for attempt in $(seq 1 30); do
+      RESP="$(curl -sf --max-time 2 -H 'Content-Type: application/json' \
+               -d "$PAYLOAD" "$RPC_URL" 2>/dev/null || true)"
+      if [ -z "$RESP" ]; then
+        echo "attempt $attempt: no response, retrying..."
+        sleep 1
+        continue
+      fi
+      if ! printf '%s' "$RESP" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        echo "attempt $attempt: non-JSON or not an object; raw response: $RESP"
+        sleep 1
+        continue
+      fi
+      CHAIN_ID="$(printf '%s' "$RESP" | jq -r 'if has("result") and (.result != null) and (.result | type == "string") and (.result | length) > 0 then .result else empty end')"
+      if [ -z "$CHAIN_ID" ]; then
+        echo "attempt $attempt: missing/invalid .result; raw response: $RESP"
+        sleep 1
+        continue
+      fi
+      echo "RPC healthy: chainId=$CHAIN_ID"
+      break
+    done
+    if [ -z "${CHAIN_ID:-}" ]; then
+      echo "RPC did not become healthy within timeout; last response: ${RESP:-<none>}"
+      exit 1
+    fi
+- For `eth_blockNumber` probes, parse `.result` the same way (it is a hex string like `"0x0"`).
+- When fixing a canary script that fails with `Cannot index object with number`, locate every `jq '.[N]'` call on an RPC response and replace with `.result`-based parsing above.
+
 CRITICAL — graceful shutdown container resolution:
 - After `docker compose stop <service>`, the container moves to `exited` state.
 - `docker compose ps -q <service>` only returns RUNNING containers and will return empty after stop.
