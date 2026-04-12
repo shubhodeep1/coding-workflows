@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for this issue\n\nClarification mapping\n- No Q<ID> clarification questions were asked in the clarify phase.\n- `/answer [auto-answered-by-clarify]` indicates there are no unresolved scope/behavior decisions blocking planning.\n\n1. Files likely to change\n- `.github/workflows/internal-review.yml`\n- `.github/workflows/review_autofix.yml`\n- `README.md` only if reusable-workflow input surface is expanded (documentation sync for new optional input)\n\n2. Functions/modules to implement\n- `internal-review.yml` caller mapping in `jobs.review.with`:\n- Replace unsupported ternary expressions (`? :`) for `pr_is_draft`, `pr_title`, and `pr_body` with GitHub Actions-compatible expressions.\n- Keep `workflow_dispatch` behavior (safe defaults) and `pull_request` behavior (real PR metadata).\n- `review_autofix.yml` reusable workflow gate in `jobs.review.if`:\n- Remove dependence on large raw PR text in expression evaluation where possible.\n- Add/consume a compact skip signal (boolean) for `[skip ai]` gating while preserving existing behavior.\n- `review_autofix.yml` `workflow_call.inputs`:\n- Preserve existing inputs for backward compatibility.\n- Add only optional input(s) needed to avoid expression-length failures.\n\n3. Data structures affected\n- Reusable workflow input contract for `review_autofix.yml`:\n- Existing: `pr_number`, `pr_is_draft`, `pr_title`, `pr_body`, `allow_workflow_edits`.\n- Planned addition: optional boolean skip flag (for example `pr_skip_ai`) with default `false`.\n- Caller-provided values in `internal-review.yml`:\n- `workflow_dispatch`: deterministic defaults (`false` / empty string / skip=false).\n- `pull_request`: values derived from PR payload without ternary syntax.\n\n4. API/interface changes\n- Backward-compatible only.\n- Do not remove or rename current `workflow_call` inputs.\n- If a new boolean skip input is added, keep legacy title/body-based path as fallback so existing callers continue to work unchanged.\n- No changes to trigger names, job names, labels, secrets, or repo variables.\n\n5. Potential risks and edge cases\n- `workflow_dispatch` has no `github.event.pull_request`; expressions must fully short-circuit before accessing PR fields.\n- Boolean/string coercion in Actions expressions can alter behavior if defaults are not typed carefully.\n- Very large PR body content can trigger parser/expression limits when used directly in job-level `if`.\n- Conflict to flag: the reported error location `review_autofix.yml:3117` points to a shell command line (no `${{ }}`), so parser diagnostics are likely misattributed; fix should target expression syntax and body-dependent gating first.\n- `[skip ai]` semantics must remain unchanged (title OR body match should skip AI review).\n\n6. Testing considerations\n- Validate workflow parsing in CI after edits (GitHub parser is the source of truth).\n- Event-path checks:\n- `pull_request` non-draft without skip marker runs review job.\n- `pull_request` draft skips review job.\n- `pull_request` with `[skip ai]` in title or body skips review job.\n- `workflow_dispatch` still runs and accepts `pr_number`/`allow_workflow_edits`.\n- Regression checks:\n- No `Unexpected symbol: '?'` errors.\n- No `Exceeded max expression length 21000` errors when called via internal wrapper.\n- Reusable workflow remains callable by existing wrappers/callers using current inputs.\n\nRepresentative pattern chosen for implementation\n- Use `.github/workflows/internal-validate.yml` as the wrapper reference pattern for safe `with:` forwarding and defaults, then apply the same style to `internal-review.yml`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "66ea6a8c06f5acc88931b24c40268813cbbe26fd802ad4eb1926593895a74e2d",
+  "lineage": {
+    "issue_number": 781,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24307329396",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24307329396",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/781"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260412131029_ca06cc4af5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 781,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24307329396"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #781",
+  "timestamps": {
+    "created_at": "2026-04-12T13:10:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
