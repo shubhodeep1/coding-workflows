@@ -610,8 +610,9 @@ def write_report_atomic(path: Path, content: str) -> None:
 
 
 def load_prompt_template(path: Path) -> str:
+	prompt_path = path.resolve()
 	try:
-		template = path.read_text(encoding="utf-8")
+		template = prompt_path.read_text(encoding="utf-8")
 	except (OSError, UnicodeDecodeError) as exc:
 		raise RuntimeError(f"unable to read prompt file {path}: {exc}") from exc
 	if not SERENA_PLACEHOLDER_PATTERN.search(template):
@@ -627,7 +628,7 @@ def load_prompt_template(path: Path) -> str:
 	repo_root = render_script.parent.parent
 	try:
 		result = subprocess.run(
-			["bash", str(render_script), str(path)],
+			["bash", str(render_script), str(prompt_path)],
 			check=True,
 			capture_output=True,
 			text=True,
