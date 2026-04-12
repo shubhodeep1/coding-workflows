@@ -5,9 +5,10 @@
 # with the GitHub API via the `gh` CLI or `curl`.
 #
 # Provides:
-#   gh_retry          — run a gh CLI command with rate-limit detection + retry
-#   gh_retry_to_file  — like gh_retry but captures stdout to a specified file
-#   curl_gh_api       — run a curl command against GitHub API with retry
+#   gh_retry             — run a gh CLI command with rate-limit detection + retry
+#   gh_retry_to_file     — like gh_retry but captures stdout to a specified file
+#   gh_api_json_to_file  — like gh_retry_to_file but also validates JSON output
+#   curl_gh_api          — run a curl command against GitHub API with retry
 #
 # Rate limit detection: on 403/429 "rate limit" responses the helper
 # queries GitHub's GET /rate_limit endpoint (not itself rate-limited)
@@ -206,6 +207,70 @@ _safe_gh_jq()
 		return 0
 	fi
 	rm -f "${_tmpf}"
+	return 1
+}
+
+# ---------------------------------------------------------------
+# gh_api_json_to_file — Fetch a GitHub API JSON response to a file,
+# with JSON validation and rate-limit-aware retry.
+#
+# Like gh_retry_to_file but additionally validates the response body
+# with `jq empty`.  If the API call succeeds but the response is not
+# valid JSON (e.g. truncated due to a network interruption), the
+# attempt is retried with exponential backoff.
+#
+# Usage:
+#   tmp="$(mktemp)"
+#   gh_api_json_to_file "$tmp" gh api repos/owner/repo/issues/1
+#   jq -r '.title' "$tmp"
+# ---------------------------------------------------------------
+gh_api_json_to_file()
+{
+	local outfile="$1"; shift
+	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
+	local attempt=1
+	local stderr_file
+	stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_api_json_stderr.XXXXXX")
+
+	while [ "${attempt}" -le "${max_attempts}" ]; do
+		: > "${outfile}"
+		if "$@" > "${outfile}" 2>"${stderr_file}"; then
+			if jq empty "${outfile}" >/dev/null 2>&1; then
+				rm -f "${stderr_file}"
+				return 0
+			fi
+			local wait_secs=$(( 2 ** (attempt - 1) ))
+			echo "::warning::gh api returned invalid JSON (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
+			echo "::group::Raw response (first 50 lines)" >&2
+			head -50 "${outfile}" >&2
+			echo "::endgroup::" >&2
+			sleep "${wait_secs}"
+		else
+			local stderr_content
+			stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
+
+			if _is_gh_rate_limit "${stderr_content}"; then
+				echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+				_gh_rate_limit_wait
+			else
+				local wait_secs=$(( 2 ** (attempt - 1) ))
+				echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
+				if [ -n "${stderr_content}" ]; then
+					echo "::warning::  stderr: ${stderr_content}" >&2
+				fi
+				sleep "${wait_secs}"
+			fi
+		fi
+
+		attempt=$(( attempt + 1 ))
+	done
+
+	echo "::error::gh api failed to return valid JSON after ${max_attempts} attempts: $*" >&2
+	if [ -s "${stderr_file}" ]; then
+		cat "${stderr_file}" >&2
+	fi
+	rm -f "${stderr_file}"
+	: > "${outfile}"
 	return 1
 }
 
