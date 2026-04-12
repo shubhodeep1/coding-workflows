@@ -331,11 +331,14 @@ post_tracking_comment() {
   local comment_body="$1"
   local payload_file
   payload_file="$(mktemp "${TMPDIR:-/tmp}/comment_payload.XXXXXX")"
-  if jq -n --arg body "${comment_body}" '{body: $body}' > "${payload_file}" 2>/dev/null; then
-    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-      --method POST \
-      --input "${payload_file}" >/dev/null || true
+  if ! jq -n --arg body "${comment_body}" '{body: $body}' > "${payload_file}"; then
+    echo "::warning::Failed to encode tracking comment JSON payload for issue #${TRACKING_NUM}" >&2
+    rm -f "${payload_file}"
+    return 0
   fi
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+    --method POST \
+    --input "${payload_file}" >/dev/null || true
   rm -f "${payload_file}"
 }
 
@@ -393,7 +396,7 @@ extract_latest_valid_orchestrator_state() {
       fi
       return 0
     fi
-  done < <(printf '%s' "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse[]?' 2>/dev/null || true)
+  done < <(printf '%s' "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' 2>/dev/null || true)
 
   return 1
 }
