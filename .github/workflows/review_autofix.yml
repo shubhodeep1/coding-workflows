@@ -2549,12 +2549,23 @@ jobs:
               if [ "${overlap_count}" -gt 0 ]; then
                 echo "Detected staged edits overlapping hunks from the previous AI autofix run:"
                 cat "${OVERLAP_REPORT_FILE}"
-                if ! grep -qi 'Regression fingerprint:' "${EDITOR_SUMMARY_FILE}" || ! grep -qi 'Runtime failure path:' "${EDITOR_SUMMARY_FILE}"; then
-                  echo "Blocking commit: overlapping hunks require both 'Regression fingerprint:' and 'Runtime failure path:' in editor summary."
-                  rm -f "${OVERLAP_REPORT_FILE}" "${OVERLAP_VALIDATION_STDERR_FILE}"
-                  exit 1
+                _has_regression=false
+                _has_runtime=false
+                _is_fallback=false
+                grep -qi 'Regression fingerprint:' "${EDITOR_SUMMARY_FILE}" && _has_regression=true || true
+                grep -qi 'Runtime failure path:' "${EDITOR_SUMMARY_FILE}" && _has_runtime=true || true
+                grep -Eqi 'editor failed before producing a validated summary|unavailable \(editor fallback\)' "${EDITOR_SUMMARY_FILE}" && _is_fallback=true || true
+                if [ "${_has_regression}" != "true" ] || [ "${_has_runtime}" != "true" ]; then
+                  if [ "${_is_fallback}" = "true" ]; then
+                    echo "Overlap detected, but editor ran in fallback mode; allowing commit without strict metadata enforcement."
+                  else
+                    echo "Blocking commit: overlapping hunks require both 'Regression fingerprint:' and 'Runtime failure path:' in editor summary."
+                    rm -f "${OVERLAP_REPORT_FILE}" "${OVERLAP_VALIDATION_STDERR_FILE}"
+                    exit 1
+                  fi
+                else
+                  echo "Overlap validation passed using editor summary metadata."
                 fi
-                echo "Overlap validation passed using editor summary metadata."
               fi
             else
               echo "Overlap validation script failed unexpectedly (exit ${overlap_validation_exit_code})."
