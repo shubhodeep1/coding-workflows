@@ -126,6 +126,13 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | orchestrate | Token usage warning threshold for orchestration |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | orchestrate_clarify_respond | Token usage warning threshold for auto-answering clarification questions |
 
+**Serena adoption warning thresholds** — when Serena efficiency falls below the threshold (and at least 5 total code operations are detected), workflows emit a non-blocking `::warning::` alert.
+
+| Variable | Default | Used By | Description |
+|---|---|---|---|
+| `SERENA_WARN_THRESHOLD_IMPLEMENT` | `50` | implement | Minimum Serena efficiency (%) before emitting low-adoption warning |
+| `SERENA_WARN_THRESHOLD_REVIEW` | `50` | review_autofix | Minimum Serena efficiency (%) before emitting low-adoption warning |
+
 ### 2. Create wrapper workflows
 
 Copy the ready-to-use templates from [`workflow-templates/`](workflow-templates/) into your repo's `.github/workflows/` directory. Reference implementations also live in [`.github/workflows/internal-*.yml`](.github/workflows/) in this repository.
@@ -624,6 +631,8 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
+| `SERENA_WARN_THRESHOLD_IMPLEMENT` | `50` | Minimum Serena efficiency (%) before implement emits low-adoption warning |
+| `SERENA_WARN_THRESHOLD_REVIEW` | `50` | Minimum Serena efficiency (%) before review_autofix emits low-adoption warning |
 
 ## Prompt Caching (OpenRouter + Codex)
 

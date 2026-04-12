@@ -164,6 +164,34 @@ def test_load_input_data_rejects_malformed_json_input():
 			assert "invalid JSON" in str(exc)
 
 
+def test_load_prompt_template_returns_content_without_placeholders():
+	with tempfile.TemporaryDirectory(prefix="analyze-prompt-raw-") as td:
+		prompt_file = Path(td) / "prompt.txt"
+		prompt_file.write_text("You are a test analyzer.", encoding="utf-8")
+		rendered = analyzer.load_prompt_template(prompt_file)
+		assert rendered == "You are a test analyzer."
+
+
+def test_load_prompt_template_renders_serena_placeholder():
+	with tempfile.TemporaryDirectory(prefix="analyze-prompt-render-") as td:
+		prompt_file = Path(td) / "prompt.txt"
+		prompt_file.write_text("Before\n{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}\nAfter\n", encoding="utf-8")
+		rendered = analyzer.load_prompt_template(prompt_file)
+		assert "SERENA MCP EFFICIENCY (MANDATORY):" in rendered
+		assert "{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}" not in rendered
+
+
+def test_load_prompt_template_errors_on_unresolved_placeholder():
+	with tempfile.TemporaryDirectory(prefix="analyze-prompt-error-") as td:
+		prompt_file = Path(td) / "prompt.txt"
+		prompt_file.write_text("{{SERENA_EFFICIENCY_BLOCK_UNKNOWN}}\n", encoding="utf-8")
+		try:
+			analyzer.load_prompt_template(prompt_file)
+			raise AssertionError("expected RuntimeError")
+		except RuntimeError as exc:
+			assert "unable to render prompt file" in str(exc)
+
+
 def test_main_missing_openrouter_api_key_returns_2():
 	original = os.environ.get("OPENROUTER_API_KEY")
 	try:

@@ -7,6 +7,8 @@ import argparse
 import copy
 import json
 import os
+import re
+import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -20,6 +22,7 @@ DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_PROMPT_FILE = "prompts/mode-workflow-analysis.txt"
 DEFAULT_OUTPUT_DIR = "analysis"
 DEFAULT_INPUT_FILE = "workflow_log_report.json"
+SERENA_PLACEHOLDER_PATTERN = re.compile(r"\{\{SERENA_EFFICIENCY_BLOCK_[A-Z_]+\}\}")
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -606,6 +609,40 @@ def write_report_atomic(path: Path, content: str) -> None:
 	tmp_path.replace(path)
 
 
+def load_prompt_template(path: Path) -> str:
+	prompt_path = path.resolve()
+	try:
+		template = prompt_path.read_text(encoding="utf-8")
+	except (OSError, UnicodeDecodeError) as exc:
+		raise RuntimeError(f"unable to read prompt file {path}: {exc}") from exc
+	if not SERENA_PLACEHOLDER_PATTERN.search(template):
+		return template
+
+	render_script = Path(__file__).resolve().with_name("render_prompt.sh")
+	if not render_script.is_file():
+		raise RuntimeError(
+			f"prompt contains Serena placeholders but renderer not found at expected location: {render_script}"
+		)
+
+	# scripts/render_prompt.sh is expected at <repo_root>/scripts/render_prompt.sh.
+	repo_root = render_script.parent.parent
+	try:
+		result = subprocess.run(
+			["bash", str(render_script), str(prompt_path)],
+			check=True,
+			capture_output=True,
+			text=True,
+			cwd=repo_root,
+		)
+	except OSError as exc:
+		raise RuntimeError(f"unable to execute prompt renderer for {path}: {exc}") from exc
+	except subprocess.CalledProcessError as exc:
+		stderr = (exc.stderr or "").strip()
+		detail = f": {stderr}" if stderr else ""
+		raise RuntimeError(f"unable to render prompt file {path}{detail}") from exc
+	return result.stdout
+
+
 def main(argv: list[str] | None = None) -> int:
 	parser = build_parser()
 	args = parser.parse_args(argv)
@@ -633,9 +670,9 @@ def main(argv: list[str] | None = None) -> int:
 
 	prompt_path = Path(args.prompt_file)
 	try:
-		prompt_template = prompt_path.read_text(encoding="utf-8")
-	except (OSError, UnicodeDecodeError) as exc:
-		print(f"ERROR: unable to read prompt file {prompt_path}: {exc}", file=sys.stderr)
+		prompt_template = load_prompt_template(prompt_path)
+	except RuntimeError as exc:
+		print(f"ERROR: {exc}", file=sys.stderr)
 		return 2
 
 	analysis_context = prepare_analysis_context(input_data)
