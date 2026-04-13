@@ -1096,6 +1096,16 @@ jobs:
             echo "Error: .github/prompts or .github/scripts is staged"
             exit 1
           fi
+          # If every Codex-produced change was filtered out by the path exclusions
+          # above (or stripped by the fetched-manifest cleanup earlier in this step),
+          # there is nothing to commit.  Treat this as a no-op rather than letting
+          # `git commit` fail — the "Handle no-op implementation" step below will
+          # re-label the issue and post an explanatory comment.
+          if [ -z "$(git diff --cached --name-only)" ]; then
+            echo "All Codex changes were filtered out (scripts/, .github/prompts/, .github/scripts/, or fetched-manifest cleanup); nothing to commit."
+            echo "did_commit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git commit -m "AI implementation for issue #${ISSUE_NUMBER}"
           echo "did_commit=true" >> "$GITHUB_OUTPUT"
 

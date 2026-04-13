@@ -895,6 +895,42 @@ jobs:
             echo "NEEDS_CLARIFICATION=false" >> "$GITHUB_ENV"
           fi
 
+      - name: Guard plans targeting template-owned paths
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          # Template-owned paths (scripts/, .github/prompts/, .github/scripts/) are
+          # fetched from coding-workflows templates at runtime and explicitly
+          # excluded from Codex commits in implement.yml.  A plan that targets
+          # those paths cannot be committed by the implementation step and would
+          # fall through to the no-op handler.  Reject such plans here so the
+          # issue is routed back to humans with a clear reason rather than
+          # producing a silent no-op PR downstream.
+          #
+          # We match backtick-wrapped path tokens only — the convention Codex
+          # uses in its "Files likely to change" section and inline file
+          # references. This avoids false positives on prose mentions.
+          EXCLUDED_RE='`(scripts/|\.github/prompts/|\.github/scripts/)'
+          if grep -nE "${EXCLUDED_RE}" "${CODEX_OUTPUT_FILE}" >/dev/null; then
+            echo "::error::Plan references template-owned paths (scripts/, .github/prompts/, .github/scripts/) which are excluded from Codex commits in implement.yml. Changes to those paths belong in the coding-workflows repository."
+            echo "Offending lines:"
+            grep -nE "${EXCLUDED_RE}" "${CODEX_OUTPUT_FILE}" || true
+            source scripts/gh_helpers.sh 2>/dev/null || true
+            type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+            # Clean up the progress comment so the failure comment (posted by
+            # the existing "Comment on issue failure" handler) is the only
+            # visible outcome.
+            if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
+              gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
+            fi
+            REJECTION_BODY=$'The generated plan targets template-owned paths (`scripts/`, `.github/prompts/`, or `.github/scripts/`) which are fetched from the `coding-workflows` repository at runtime and are excluded from Codex commits in `implement.yml`. Implementing this plan would produce a no-op PR.\n\nIf a change to those files is genuinely required, open an issue or PR directly against [`shubhodeep1/coding-workflows`](https://github.com/shubhodeep1/coding-workflows) instead.'
+            gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+              -f body="${REJECTION_BODY}" >/dev/null 2>&1 || true
+            exit 1
+          fi
+
       - name: Post clarification questions
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
         env:
