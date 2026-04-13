@@ -474,6 +474,17 @@ run_reviewer() {
 
   : > "${log_file}"
 
+  # Resolve codex binary before mutating PATH/CODEX_HOME. This keeps reviewer
+  # executions pinned to the workflow-installed codex CLI, even when each
+  # reviewer uses an isolated CODEX_HOME.
+  local codex_bin
+  codex_bin="$(command -v codex || true)"
+  if [ -z "${codex_bin}" ]; then
+    echo "Reviewer ${model} failed: codex CLI not found in PATH." | tee -a "${log_file}"
+    echo "failed" > "${status_file}"
+    return 0
+  fi
+
   # Each reviewer gets its own CODEX_HOME to prevent MCP server
   # conflicts (Serena, language servers) when running in parallel.
   # Avoid /tmp for CODEX_HOME because codex refuses helper binary setup there.
@@ -486,7 +497,6 @@ run_reviewer() {
   fi
   mkdir -p "${reviewer_codex_home}/bin"
   export CODEX_HOME="${reviewer_codex_home}"
-  export PATH="${reviewer_codex_home}/bin:${PATH}"
 
   while [ "${attempt}" -le 3 ]; do
     # Early exit if PR was closed/merged (detected by watchdog or another reviewer)
@@ -564,7 +574,7 @@ run_reviewer() {
     # Run codex in a wrapper subshell so we can capture its PID
     # for the watchdog to kill on timeout.
     (
-      exec codex exec --model "${model}" --full-auto "$(cat "${REVIEWER_PROMPT_FILE}")"
+      exec "${codex_bin}" exec --model "${model}" --full-auto "$(cat "${REVIEWER_PROMPT_FILE}")"
     ) > "${tmp_output}" 2> >(
       while IFS= read -r line || [ -n "$line" ]; do
         # Atomic heartbeat update: write to tmp then rename
