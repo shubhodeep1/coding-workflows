@@ -1850,6 +1850,7 @@ jobs:
           # real source code.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
             git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+            git checkout -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
           fi
 
           # Restore stashed dirs so Codex has its full environment.
