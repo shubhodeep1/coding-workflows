@@ -17,6 +17,25 @@ if [ -z "${SUPPORT_PROMPTS_DIR:-}" ] || [ ! -s "${SERENA_BLOCK_PATH}" ]; then
   exit 1
 fi
 
+# Pre-flight PR state check — short-circuit if the PR is already closed/merged
+# before paying for the parallel reviewer fan-out. This catches the common case
+# where the PR was closed between workflow dispatch and reviewer invocation
+# (e.g. while codex CLI/tool setup was still running earlier in the job).
+# Safe to skip on local/manual invocation where PR_NUMBER or REPOSITORY are
+# unset — downstream watchdog polling remains the fallback.
+if [ -n "${PR_NUMBER:-}" ] && [ -n "${REPOSITORY:-}" ] && command -v gh >/dev/null 2>&1; then
+  preflight_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+  if [ "${preflight_state}" != "open" ]; then
+    echo "Pre-flight: PR #${PR_NUMBER} is ${preflight_state} — skipping reviewer fan-out."
+    mkdir -p "${PREVIOUS_REVIEWS_DIR}"
+    touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
+    if [ -n "${GITHUB_ENV:-}" ] && [ -w "${GITHUB_ENV}" ]; then
+      echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+    fi
+    exit 0
+  fi
+fi
+
 mkdir -p "${PREVIOUS_REVIEWS_DIR}"
 
 PROMPT_ARTIFACT_PATH_HINT="$(printf '%s\n' \
@@ -527,17 +546,38 @@ run_reviewer() {
     local codex_pid_file
     codex_pid_file="$(mktemp /tmp/codex_pid_reviewer.XXXXXX)"
 
+    # Reason file — watchdog writes here before exit so the outer loop
+    # can distinguish idle timeout vs max wall vs PR-closed kill from a
+    # generic codex failure. Cleaned up alongside the heartbeat file.
+    local wd_reason_file
+    wd_reason_file="$(mktemp /tmp/reviewer_wd_reason.XXXXXX)"
+
     # Background watchdog for this reviewer attempt
     (
       wd_iter=$(( RANDOM % 9 ))  # jitter: stagger PR state checks across reviewers
       while true; do
         sleep 10
+
+        # Fast path: if another reviewer (or the pre-flight check) already
+        # detected PR closure, short-circuit immediately instead of waiting
+        # up to ~90s for our own gh api poll cycle.
+        if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+          echo "Reviewer ${model} aborted — PR close sentinel observed." | tee -a "${log_file}" >&2
+          printf 'pr_closed_sentinel' > "${wd_reason_file}"
+          local cpid
+          cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+          if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+          rm -f "${hb_file}"
+          exit 144
+        fi
+
         now="$(date +%s)"
         last="$(cat "${hb_file}" 2>/dev/null || echo "$now")"
         # Guard against empty/corrupt reads: if last is not numeric, treat as now
         if ! [[ "${last}" =~ ^[0-9]+$ ]]; then last="${now}"; fi
         if [ $(( now - last )) -ge "${reviewer_idle_timeout}" ]; then
           echo "Reviewer ${model} killed — no output for $(( now - last ))s (idle limit: ${reviewer_idle_timeout}s)." | tee -a "${log_file}" >&2
+          printf 'idle_timeout' > "${wd_reason_file}"
           # Actually kill the codex process
           local cpid
           cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
@@ -547,6 +587,7 @@ run_reviewer() {
         fi
         if [ $(( now - start_time )) -ge "${reviewer_max_wall}" ]; then
           echo "Reviewer ${model} killed — max wall time ${reviewer_max_wall}s exceeded." | tee -a "${log_file}" >&2
+          printf 'max_wall' > "${wd_reason_file}"
           local cpid
           cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
           if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
@@ -564,6 +605,7 @@ run_reviewer() {
           pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
           if [ "${pr_state}" != "open" ]; then
             echo "Reviewer ${model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
+            printf 'pr_closed_api' > "${wd_reason_file}"
             touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"
             local cpid
@@ -599,6 +641,26 @@ run_reviewer() {
     kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
     rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
 
+    # Pick up the watchdog termination reason (if any) before we delete it.
+    # Values: idle_timeout | max_wall | pr_closed_sentinel | pr_closed_api
+    local wd_reason=""
+    if [ -s "${wd_reason_file}" ]; then
+      wd_reason="$(cat "${wd_reason_file}" 2>/dev/null || true)"
+    fi
+    rm -f "${wd_reason_file}"
+
+    # Watchdog-induced PR-closed kill: do not retry, do not treat as failure.
+    case "${wd_reason}" in
+      pr_closed_sentinel|pr_closed_api)
+        cat "${tmp_stderr}" >> "${log_file}"
+        echo "Reviewer ${model} stopped — PR #${PR_NUMBER:-unknown} was closed/merged (reason: ${wd_reason})." | tee -a "${log_file}"
+        echo "pr_closed" > "${status_file}"
+        rm -f "${tmp_output}" "${tmp_stderr}"
+        rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+        return 0
+        ;;
+    esac
+
     if [ "${cmd_rc}" -eq 0 ]; then
       cat "${tmp_stderr}" >> "${log_file}"
       if [ -s "${tmp_output}" ]; then
@@ -612,7 +674,17 @@ run_reviewer() {
       echo "Reviewer ${model} produced empty output on attempt ${attempt}." | tee -a "${log_file}"
     else
       cat "${tmp_stderr}" >> "${log_file}"
-      echo "Reviewer ${model} execution failed on attempt ${attempt} (exit=${cmd_rc})." | tee -a "${log_file}"
+      case "${wd_reason}" in
+        idle_timeout)
+          echo "Reviewer ${model} killed by watchdog on attempt ${attempt} (idle timeout ${reviewer_idle_timeout}s, exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
+        max_wall)
+          echo "Reviewer ${model} killed by watchdog on attempt ${attempt} (max wall ${reviewer_max_wall}s, exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
+        *)
+          echo "Reviewer ${model} execution failed on attempt ${attempt} (exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
+      esac
     fi
 
     if [ -s "${tmp_stderr}" ]; then
