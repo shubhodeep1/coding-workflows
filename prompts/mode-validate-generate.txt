@@ -64,7 +64,7 @@ Docker Compose healthcheck YAML rules (CRITICAL):
 - Build/start via Docker Compose using the generated test file (`-f validation/docker-compose.test.yml`)
 - Health polling with explicit timeout
 - Execute generated scripts in `validation/tests/`
-- Capture logs under `validation/logs/`
+- Capture logs under `validation/logs/`, including a deterministic Compose log at `validation/logs/compose.log` (used by graceful-shutdown SIGTERM detection)
 - Always teardown via trap on EXIT using `docker compose -f validation/docker-compose.test.yml down -v --remove-orphans`
 - Exit 0 on pass and non-zero on failure
 - Emit a final machine-parseable JSON result object as the last line on stdout
@@ -204,23 +204,36 @@ CRITICAL — graceful shutdown container resolution:
 - `docker compose ps -q <service>` only returns RUNNING containers and will return empty after stop.
 - To resolve a stopped container's ID, use: `docker compose ps -q --status exited <service>` or `docker compose ps -aq --filter "status=exited" <service>`.
 - To check the exit code, use: `docker inspect --format='{{.State.ExitCode}}' <container_id>`.
-- The test should assert the container exited with code 0 (clean shutdown), not just that it stopped.
+- A harness-initiated `docker compose stop` sends SIGTERM to PID 1. Any of the following outcomes is a graceful shutdown and MUST be treated as pass:
+    1. Exit code 0 — PID 1 handled SIGTERM and returned cleanly.
+    2. Exit code 143 (= 128 + SIGTERM) — PID 1 was terminated by SIGTERM without a custom handler; this is the documented signal-exit convention.
+    3. Exit code 1 when PID 1 is an `npm` / `yarn` / `pnpm` wrapper AND the compose log contains a wrapper SIGTERM marker (for example `npm ERR! signal SIGTERM` or `Command failed with signal "SIGTERM"`) for the wrapped command. npm translates signal-termination of its child into exit code 1 instead of propagating 143; this is a wrapper artifact, NOT an application crash.
+- NEVER hardcode a strict `EXIT_CODE == 0` check when the service is launched via an `npm` / `yarn` / `pnpm` script — you will get false failures on every clean `docker stop` because of (3) above.
 - Recommended pattern:
-    docker compose -f validation/docker-compose.test.yml stop -t 5 app
-    CID=$(docker compose -f validation/docker-compose.test.yml ps -q --status exited app)
+    COMPOSE_FILE="validation/docker-compose.test.yml"
+    COMPOSE_LOG="validation/logs/compose.log"
+    docker compose -f "$COMPOSE_FILE" stop -t 5 app
+    CID=$(docker compose -f "$COMPOSE_FILE" ps -q --status exited app | head -n1 || true)
     if [ -z "$CID" ]; then
-      CID=$(docker ps -aq --filter "status=exited" --filter "name=app")
+      CID=$(docker ps -aq --filter "status=exited" --filter "label=com.docker.compose.service=app" | head -n1 || true)
     fi
     if [ -z "$CID" ]; then
       echo "not ok - app container id unavailable after stop"
       exit 1
     fi
-    EXIT_CODE=$(docker inspect --format='{{.State.ExitCode}}' "$CID")
-    if [ "$EXIT_CODE" != "0" ]; then
-      echo "not ok - app exited with code $EXIT_CODE (expected 0)"
+    EXIT_CODE=$(docker inspect --format='{{.State.ExitCode}}' "$CID" 2>/dev/null || echo unknown)
+    docker compose -f "$COMPOSE_FILE" logs --no-color app > "$COMPOSE_LOG" 2>&1 || true
+    NPM_SIGTERM=0
+    if [ "$EXIT_CODE" = "1" ] && [ -f "$COMPOSE_LOG" ] \
+       && grep -qiE '((npm|yarn|pnpm).*signal.*SIGTERM|Command failed with signal.*SIGTERM)' "$COMPOSE_LOG"; then
+      NPM_SIGTERM=1
+    fi
+    if [ "$EXIT_CODE" = "0" ] || [ "$EXIT_CODE" = "143" ] || [ "$NPM_SIGTERM" = "1" ]; then
+      echo "ok - app shut down gracefully (exit=$EXIT_CODE npm_sigterm=$NPM_SIGTERM)"
+    else
+      echo "not ok - app exited with code $EXIT_CODE (expected 0, 143, or npm-wrapped SIGTERM)"
       exit 1
     fi
-    echo "ok - app shut down gracefully with exit code 0"
 
 CRITICAL — robust synthetic env-var assertions in env_var_validation tests:
 - Docker Compose services declare synthetic test credentials with an override-or-default expression:

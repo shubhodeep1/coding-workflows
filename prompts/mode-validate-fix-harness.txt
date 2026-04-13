@@ -68,7 +68,12 @@ CRITICAL — graceful shutdown container resolution:
 - `docker compose ps -q <service>` only returns RUNNING containers and will return empty after stop.
 - To resolve a stopped container's ID, use: `docker compose ps -q --status exited <service>` or `docker compose ps -aq --filter "status=exited" <service>`.
 - To check the exit code, use: `docker inspect --format='{{.State.ExitCode}}' <container_id>`.
-- The test should assert the container exited with code 0 (clean shutdown), not just that it stopped.
+- A harness-initiated `docker compose stop` sends SIGTERM to PID 1. The test MUST treat ALL of the following as a graceful shutdown (pass):
+    1. Exit code 0 (clean return from a SIGTERM handler).
+    2. Exit code 143 = 128 + SIGTERM (signal-exit convention).
+    3. Exit code 1 when PID 1 is an `npm` / `yarn` / `pnpm` wrapper AND `validation/logs/compose.log` (captured via `docker compose ... logs`) contains a wrapper SIGTERM marker (for example `npm ERR! signal SIGTERM` or `Command failed with signal "SIGTERM"`) for the wrapped command. npm translates signal termination of its child into exit 1 rather than propagating 143; this is a wrapper artifact, not an application crash.
+- If a graceful shutdown test fails with `app exited with code 1 (expected 0)` AND the compose log shows a wrapper SIGTERM marker for the wrapped command (e.g. `sh -c hardhat node ...`), the bug is in the assertion, not the app. Fix by broadening the accept-list above rather than by changing the app or the container entrypoint.
+- If `validation/logs/compose.log` is missing at assertion time, fix the harness to write `docker compose ... logs` output to that path before running the wrapper-SIGTERM grep.
 - If a graceful shutdown test fails with "app container id unavailable after stop", this is almost certainly caused by using `docker compose ps -q <service>` (without `--status exited` or `--all`) after stop. Fix by switching to the `--status exited` or `--all` variant.
 
 Output contract:
