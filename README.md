@@ -506,16 +506,21 @@ This repository includes [`.github/workflows/workflow-log-analysis.yml`](.github
 
 ### How to run
 
-Run **Actions -> Workflow Log Analysis -> Run workflow**.
+Run **Actions -> Workflow Log Analysis -> Run workflow**, or let the built-in schedule fire automatically.
+
+Triggers:
+
+- `workflow_dispatch` (manual).
+- `schedule`: `cron: "0 6 */2 * *"` — runs every other day (1, 3, 5, ...) at 06:00 UTC, approximating an every-48h cadence. Day-of-month `*/2` drifts at month boundaries (occasional 1-day or 2-day gap).
 
 `workflow_dispatch` inputs:
 
 | Input | Default | Description |
 |---|---|---|
-| `lookback_days` | `"7"` | Days of workflow runs to collect. Passed to `scripts/collect_workflow_logs.py --lookback-days`. |
+| `lookback_days` | `"7"` | Days of workflow runs to collect. Passed to `scripts/collect_workflow_logs.py --lookback-days`. On scheduled runs this falls back to `"2"` to match the 48h cadence; manual dispatch keeps the `"7"` default unless overridden. |
 | `repos_override` | `""` | Optional comma-separated `owner/repo` list. Each item is validated with `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`; invalid values fail the run. |
 
-Repository selection behavior:
+Repository selection behavior (applies to both manual and scheduled runs):
 
 1. If `repos_override` is set, only those repositories are used.
 2. Otherwise, the workflow reads `.github/ai/consumer_repos.json` (if present) and also includes `${GITHUB_REPOSITORY}`.
