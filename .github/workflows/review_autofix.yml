@@ -1219,6 +1219,16 @@ jobs:
           SERENA_REPORT_FILE="${RUNTIME_DIR}/serena_efficiency_report.md"
           echo "SERENA_REPORT_FILE=${SERENA_REPORT_FILE}" >> "$GITHUB_ENV"
 
+          # When the PR closed/merged mid-run the reviewers aborted before
+          # doing meaningful semantic work, so the Serena adoption counters
+          # are unrepresentative. Keep the report (it's still useful for
+          # post-mortem) but drop the warn threshold to 0 so we don't emit
+          # a misleading ::warning:: on a closed-PR short-circuit.
+          if [ "${PR_CLOSED:-}" = "true" ]; then
+            echo "PR_CLOSED=true — zeroing SERENA_WARN_THRESHOLD to suppress unrepresentative adoption warning."
+            SERENA_WARN_THRESHOLD=0
+          fi
+
           # Collect editor stderr files for scanning
           extra_files=()
           for f in "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err; do

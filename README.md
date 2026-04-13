@@ -127,7 +127,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | orchestrate | Token usage warning threshold for orchestration |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | orchestrate_clarify_respond | Token usage warning threshold for auto-answering clarification questions |
 
-**Serena adoption warning thresholds** — when Serena efficiency falls below the threshold (and at least 5 total code operations are detected), workflows emit a non-blocking `::warning::` alert.
+**Serena adoption warning thresholds** — when Serena efficiency falls below the threshold (and at least 5 total code operations are detected), workflows emit a non-blocking `::warning::` alert. `review_autofix` automatically forces the threshold to `0` when the PR closed/merged mid-run, because in that case reviewers are short-circuited before doing meaningful semantic work and the adoption counters are not representative.
 
 | Variable | Default | Used By | Description |
 |---|---|---|---|
