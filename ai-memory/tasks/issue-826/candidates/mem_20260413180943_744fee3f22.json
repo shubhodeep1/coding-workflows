@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness pre-flight error; failure_summary=Validation pre-flight checks failed. See validation_preflight.log artifact.",
+  "fingerprint": "ad7c9ed730daff52ed2cbb70425d7f7ce0cc8dcb5b35e2a4699c7542b51142b4",
+  "lineage": {
+    "issue_number": 826,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24358387075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24358387075",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260413180943_744fee3f22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 826,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24358387075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness pre-flight error",
+  "timestamps": {
+    "created_at": "2026-04-13T18:09:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
