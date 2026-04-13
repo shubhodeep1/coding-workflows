@@ -961,6 +961,7 @@ jobs:
           INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
+          PREV_LABELS=""
           RATE_LIMIT_BACKOFF=0
 
           gh_api_safe() {
@@ -1001,15 +1002,19 @@ jobs:
 
             CUR_STATE="labels=${LABELS};poller=${POLLER_STATUS};conclusion=${POLLER_CONCLUSION}"
 
-            # Reset inactivity timer on any state change
-            if [ "$CUR_STATE" != "$PREV_STATE" ]; then
-              if [ -n "$PREV_STATE" ]; then
-                echo "  ↻ Activity detected (state changed) — resetting inactivity timer"
+            # Reset inactivity timer only when LABELS change (not poller
+            # status alone — poller runs starting/completing would otherwise
+            # reset the timer indefinitely while labels remain stuck).
+            if [ "$LABELS" != "$PREV_LABELS" ]; then
+              if [ -n "$PREV_LABELS" ]; then
+                echo "  ↻ Label change detected — resetting inactivity timer"
               fi
               LAST_ACTIVITY=$NOW
               IDLE=0
-              PREV_STATE="$CUR_STATE"
+              PREV_LABELS="$LABELS"
             fi
+            # Still track full state for debug logging
+            PREV_STATE="$CUR_STATE"
 
             # Success: label changed from ai:review-blocked to something else
             if ! echo "$LABELS" | grep -q 'ai:review-blocked'; then
