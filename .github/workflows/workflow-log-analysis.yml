@@ -13,6 +13,10 @@ on:
         required: false
         default: ""
         type: string
+  schedule:
+    # Approximates an every-48h cadence: runs on even days of the month at 06:00 UTC.
+    # Note: day-of-month `*/2` drifts at month boundaries (occasional 1-day or 3-day gap).
+    - cron: "0 6 */2 * *"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -109,7 +113,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          LOOKBACK_DAYS="${{ github.event.inputs.lookback_days || '7' }}"
+          LOOKBACK_DAYS="${{ github.event.inputs.lookback_days || (github.event_name == 'schedule' && '2' || '7') }}"
           mapfile -t REPOS < /tmp/workflow-analysis-repos.txt
 
           COLLECT_ARGS=(
