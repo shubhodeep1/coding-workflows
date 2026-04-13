@@ -38,7 +38,7 @@ name: Test & Mark Stable Release
           longer than this value.
         required: false
         type: number
-        default: 15
+        default: 30
       review_timeout:
         description: >
           Max minutes of *inactivity* before the review & autofix phase
@@ -122,8 +122,8 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
-      PHASE_TIMEOUT: ${{ inputs.phase_timeout || 15 }}
-      REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 20 }}
+      PHASE_TIMEOUT: ${{ inputs.phase_timeout || 30 }}
+      REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 30 }}
       POLL_INTERVAL: 10
 
     steps:
