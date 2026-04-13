@@ -215,7 +215,7 @@ CRITICAL — graceful shutdown container resolution:
     docker compose -f "$COMPOSE_FILE" stop -t 5 app
     CID=$(docker compose -f "$COMPOSE_FILE" ps -q --status exited app | head -n1 || true)
     if [ -z "$CID" ]; then
-      CID=$(docker ps -aq --filter "status=exited" --filter "name=app" | head -n1 || true)
+      CID=$(docker ps -aq --filter "status=exited" --filter "label=com.docker.compose.service=app" | head -n1 || true)
     fi
     if [ -z "$CID" ]; then
       echo "not ok - app container id unavailable after stop"
