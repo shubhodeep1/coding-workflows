@@ -491,22 +491,18 @@ run_reviewer() {
     return 0
   fi
 
-  # DIAGNOSTIC (debug-reviewer-failures): the per-reviewer CODEX_HOME copy
-  # below is temporarily disabled to test whether the "No such file or
-  # directory (os error 2)" failures from codex-cli v0.114.0 originate from
-  # the copied CODEX_HOME (stale MCP command paths, missing helper under
-  # bin/, etc.). While disabled, all reviewers share the workflow-level
-  # CODEX_HOME=~/.codex that was prepared by the "Create Codex config" +
-  # "Setup Serena MCP server" steps. Re-enable by un-commenting.
+  # Each reviewer gets its own CODEX_HOME to prevent MCP server
+  # conflicts (Serena, language servers) when running in parallel.
+  # Avoid /tmp for CODEX_HOME because codex refuses helper binary setup there.
   local reviewer_codex_root reviewer_codex_home
   reviewer_codex_root="${RUNNER_TEMP:-${HOME}/.cache}/codex_home_reviewers"
   mkdir -p "${reviewer_codex_root}"
   reviewer_codex_home="$(mktemp -d "${reviewer_codex_root}/reviewer.${safe_name}.XXXXXX")"
-  # if [ -d "${CODEX_HOME:-}" ]; then
-  #   cp -r "${CODEX_HOME}/." "${reviewer_codex_home}/"
-  # fi
-  # mkdir -p "${reviewer_codex_home}/bin"
-  # export CODEX_HOME="${reviewer_codex_home}"
+  if [ -d "${CODEX_HOME:-}" ]; then
+    cp -r "${CODEX_HOME}/." "${reviewer_codex_home}/"
+  fi
+  mkdir -p "${reviewer_codex_home}/bin"
+  export CODEX_HOME="${reviewer_codex_home}"
 
   while [ "${attempt}" -le 3 ]; do
     # Early exit if PR was closed/merged (detected by watchdog or another reviewer)
@@ -583,11 +579,8 @@ run_reviewer() {
 
     # Run codex in a wrapper subshell so we can capture its PID
     # for the watchdog to kill on timeout.
-    # Diagnostic: RUST_BACKTRACE=1 + RUST_LOG=debug force codex-cli to emit
-    # full backtraces and the actual path behind "No such file or directory
-    # (os error 2)" so reviewer failures can be root-caused from workflow logs.
     (
-      exec env RUST_BACKTRACE=1 RUST_LOG=debug "${codex_bin}" exec --model "${model}" --full-auto "$(cat "${REVIEWER_PROMPT_FILE}")"
+      exec "${codex_bin}" exec --model "${model}" --full-auto "$(cat "${REVIEWER_PROMPT_FILE}")"
     ) > "${tmp_output}" 2> >(
       while IFS= read -r line || [ -n "$line" ]; do
         # Atomic heartbeat update: write to tmp then rename
