@@ -745,6 +745,31 @@ jobs:
           echo "CAN_PUSH=true" >> "$GITHUB_ENV"
           echo "TARGET_BRANCH=${HEAD_REF}" >> "$GITHUB_ENV"
 
+      - name: "Preflight: Warn if protected paths are tracked in consumer repo"
+        # Defensive check: in consumer repos, the workflow's runtime helpers
+        # (scripts/, prompts/, .serena/, .github/scripts/, .github/prompts/,
+        # ai-memory/) should never be tracked — they are fetched at runtime
+        # from coding-workflows.  If a prior buggy run leaked them into the
+        # consumer's history, every merge with the base branch will re-stage
+        # them in the conflict-resolver step and trip the downstream guard.
+        # We can't fix the leak from here, but we surface it immediately so
+        # the operator can clean it up, instead of discovering it after the
+        # full reviewer+editor cycle has already run.  This step NEVER fails
+        # the job — it is purely informational.
+        if: success() && env.CAN_PUSH == 'true' && env.IS_WORKFLOW_SOURCE_REPO != 'true'
+        run: |
+          set -euo pipefail
+
+          leaked_paths="$(git ls-files -- 'scripts/' 'prompts/' '.serena/' '.github/scripts/' '.github/prompts/' 'ai-memory/' 2>/dev/null || true)"
+          if [ -n "${leaked_paths}" ]; then
+            leaked_count="$(printf '%s\n' "${leaked_paths}" | sed '/^$/d' | wc -l | tr -d ' ')"
+            echo "::warning::Consumer repo tracks ${leaked_count} workflow runtime/helper artifact(s) under scripts/, prompts/, .serena/, .github/scripts/, .github/prompts/, or ai-memory/. These will be auto-unstaged before commit, but please remove them from the repo (git rm -r --cached + commit) to prevent repeated friction on every merge with the base branch."
+            echo "Tracked protected paths found on ${TARGET_BRANCH:-HEAD}:"
+            printf '%s\n' "${leaked_paths}" | sed '/^$/d; s/^/ - /'
+          else
+            echo "No tracked workflow runtime/helper artifacts on ${TARGET_BRANCH:-HEAD}."
+          fi
+
       - name: Count autofix iterations
         id: retrigger_guard
         env:
@@ -1319,13 +1344,27 @@ jobs:
           echo "Staged files before commit:"
           STAGED_FILES="$(git diff --cached --name-only || true)"
           printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
+          # Soft guardrail: if workflow runtime/helper artifacts leaked into
+          # the staging area (e.g. the editor wrote to a protected path, or
+          # the consumer branch has leaked tracked copies from an older run),
+          # unstage them and continue.  A previous hard `exit 1` here silently
+          # threw away reviewer+editor work on what is usually a recoverable
+          # condition.
+          PROTECTED_LEAKED=false
           if printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
-            echo "Error: .github/prompts or .github/scripts is staged"
-            exit 1
+            echo "::warning::.github/prompts or .github/scripts was staged; unstaging protected paths and continuing."
+            git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
+            PROTECTED_LEAKED=true
           fi
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
-            echo "Error: workflow runtime/helper artifacts are staged in consumer repo"
-            exit 1
+            echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
+            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+            PROTECTED_LEAKED=true
+          fi
+          if [ "${PROTECTED_LEAKED}" = "true" ]; then
+            STAGED_FILES="$(git diff --cached --name-only || true)"
+            echo "Staged files after protected-path reset:"
+            printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
           fi
 
           if git diff --cached --quiet; then
@@ -1808,6 +1847,22 @@ jobs:
 
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
 
+          # Defensive: `git merge --no-commit` auto-stages merged hunks (and
+          # conflict-marked hunks) into the index for every path both sides
+          # touched, including protected paths (scripts/, prompts/, .serena/,
+          # .github/scripts/, .github/prompts/, ai-memory/) when the consumer
+          # repo has leaked tracked copies of workflow runtime helpers from an
+          # older buggy run.  The downstream `git add -u -- ':!scripts' …`
+          # exclusion does NOT unstage already-indexed paths, so without this
+          # reset the merge commit would carry protected-path changes and
+          # trip the commit-gate guard, wasting the whole review run.
+          # Skipped on the workflow source repo itself, where these paths are
+          # real source code.
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
+            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+            git checkout -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+          fi
+
           # Restore stashed dirs so Codex has its full environment.
           for d in scripts .serena prompts ai-memory; do
             if [ -d "${RESOLVE_STASH}/${d}" ]; then
@@ -1906,13 +1961,37 @@ jobs:
             echo "Staged files before commit:"
             STAGED_FILES="$(git diff --cached --name-only || true)"
             printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
+            # Soft guardrail: if workflow runtime/helper artifacts leaked into
+            # the staging area (e.g. merge auto-stage of conflicted paths,
+            # codex exec writing to a protected path, or leaked tracked files
+            # on the consumer branch), unstage them and continue.  A previous
+            # hard `exit 1` here silently threw away reviewer+editor work on
+            # what is usually a recoverable condition.
+            PROTECTED_LEAKED=false
             if printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
-              echo "Error: .github/prompts or .github/scripts is staged"
-              exit 1
+              echo "::warning::.github/prompts or .github/scripts was staged; unstaging protected paths and continuing."
+              git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
+              PROTECTED_LEAKED=true
             fi
             if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
-              echo "Error: workflow runtime/helper artifacts are staged in consumer repo"
-              exit 1
+              echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
+              git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+              PROTECTED_LEAKED=true
+            fi
+            if [ "${PROTECTED_LEAKED}" = "true" ]; then
+              STAGED_FILES="$(git diff --cached --name-only || true)"
+              echo "Staged files after protected-path reset:"
+              printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
+              if git diff --cached --quiet; then
+                echo "No repository changes remain after protected-path reset; skipping merge-resolve commit."
+                echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+                exit 0
+              fi
+            fi
+            if git diff --cached --quiet; then
+              echo "No staged merge resolution changes remain; skipping merge-resolve commit."
+              echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+              exit 0
             fi
             git commit -m "[ai-merge-resolve] resolve merge conflicts"
             git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}
