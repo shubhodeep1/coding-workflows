@@ -511,7 +511,7 @@ Run **Actions -> Workflow Log Analysis -> Run workflow**, or let the built-in sc
 Triggers:
 
 - `workflow_dispatch` (manual).
-- `schedule`: `cron: "0 6 */2 * *"` — runs on even days of the month at 06:00 UTC, approximating an every-48h cadence. Day-of-month `*/2` drifts at month boundaries (occasional 1-day or 3-day gap).
+- `schedule`: `cron: "0 6 */2 * *"` — runs every other day (1, 3, 5, ...) at 06:00 UTC, approximating an every-48h cadence. Day-of-month `*/2` drifts at month boundaries (occasional 1-day or 3-day gap).
 
 `workflow_dispatch` inputs:
 

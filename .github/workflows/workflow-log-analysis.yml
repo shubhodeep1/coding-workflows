@@ -14,7 +14,7 @@ on:
         default: ""
         type: string
   schedule:
-    # Approximates an every-48h cadence: runs on even days of the month at 06:00 UTC.
+    # Approximates an every-48h cadence: runs every other day (1, 3, 5, ...) at 06:00 UTC.
     # Note: day-of-month `*/2` drifts at month boundaries (occasional 1-day or 3-day gap).
     - cron: "0 6 */2 * *"
 
