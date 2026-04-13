@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -13,6 +14,58 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+
+# Upper bound for a single poller invocation under test. The mocked poller
+# should complete in a few seconds; anything longer indicates a hang (e.g. an
+# infinite loop in the script-under-test or a subprocess the mock never
+# releases). Bounding the wait lets a hang surface as a test failure with
+# captured output in a few minutes, instead of silently stalling the CI job
+# until the workflow-level `timeout-minutes` kills it.
+POLLER_SUBPROCESS_TIMEOUT_SEC = 180.0
+
+
+def _run_poller_subprocess(
+	cmd: list,
+	*,
+	cwd: str,
+	env: dict,
+) -> subprocess.CompletedProcess:
+	"""Run the poller with a bounded timeout, reaping the whole process group.
+
+	The poller spawns a tree of bash/sleep helpers. Using ``start_new_session``
+	puts every descendant in its own process group so a timeout can kill the
+	entire tree via ``killpg`` rather than leaking orphan children that keep
+	the CI runner alive.
+	"""
+	proc = subprocess.Popen(
+		cmd,
+		cwd=cwd,
+		env=env,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+		text=True,
+		start_new_session=True,
+	)
+	try:
+		stdout, stderr = proc.communicate(timeout=POLLER_SUBPROCESS_TIMEOUT_SEC)
+	except subprocess.TimeoutExpired:
+		# Kill the entire process group, not just the direct child, so the
+		# bash -> bash -> sleep descendants observed in hung jobs get reaped.
+		try:
+			os.killpg(proc.pid, signal.SIGKILL)
+		except ProcessLookupError:
+			pass
+		try:
+			stdout, stderr = proc.communicate(timeout=5)
+		except subprocess.TimeoutExpired:
+			stdout, stderr = "", ""
+		raise AssertionError(
+			"poller did not exit within "
+			f"{POLLER_SUBPROCESS_TIMEOUT_SEC:.0f}s; process group killed\n"
+			f"stdout:\n{stdout}\n"
+			f"stderr:\n{stderr}"
+		)
+	return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
 def test_judge_reasoning_effort_logic_is_adaptive_after_cycle_three():
@@ -759,12 +812,10 @@ print(json.dumps(parsed))
 			}
 		)
 
-		proc = subprocess.run(
+		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],
 			cwd=str(REPO_ROOT),
 			env=env,
-			capture_output=True,
-			text=True,
 		)
 		if proc.returncode != 0:
 			raise AssertionError(
@@ -2094,12 +2145,10 @@ sys.exit(1)
 			}
 		)
 
-		proc = subprocess.run(
+		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],
 			cwd=str(REPO_ROOT),
 			env=env,
-			capture_output=True,
-			text=True,
 		)
 		# Poller must exit cleanly — not crash with a jq parse error
 		assert proc.returncode == 0, (
@@ -2121,6 +2170,16 @@ sys.exit(1)
 
 
 def main() -> int:
+	# Force line-buffered stdout so PASS/FAIL messages surface to CI logs as
+	# each test completes, instead of sitting in Python's default block buffer
+	# (which, under a pipe on GitHub Actions, hides all progress until the
+	# process exits and can make a running suite look like a silent hang).
+	try:
+		import sys
+		sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
 	failed = 0
@@ -2128,13 +2187,13 @@ def main() -> int:
 		name = func.__name__
 		try:
 			func()
-			print(f"  PASS  {name}")
+			print(f"  PASS  {name}", flush=True)
 			passed += 1
 		except Exception as e:
-			print(f"  FAIL  {name}: {e}")
+			print(f"  FAIL  {name}: {e}", flush=True)
 			failed += 1
 
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
 	return 1 if failed > 0 else 0
 
 
