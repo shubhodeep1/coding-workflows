@@ -454,10 +454,16 @@ set_tracking_phase_label() {
   fi
 
   local phase_changes
-  if ! phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>/dev/null)"; then
-    echo "::warning::set_tracking_phase_label: resolve-phase failed for '${phase_label}' using ${contract_file}." >&2
+  local _resolve_err_file
+  _resolve_err_file="$(mktemp)"
+  if ! phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "${phase_label}" 2>"${_resolve_err_file}")"; then
+    local _resolve_err
+    _resolve_err="$(tr '\n' ' ' < "${_resolve_err_file}" 2>/dev/null || true)"
+    rm -f "${_resolve_err_file}"
+    echo "::warning::set_tracking_phase_label: resolve-phase failed for '${phase_label}' using ${contract_file}: ${_resolve_err:-<no stderr captured>}" >&2
     return 1
   fi
+  rm -f "${_resolve_err_file}"
 
   # Fetch current labels on the issue so we only attempt to remove labels
   # that are actually present.  Trying to remove a label that does not
