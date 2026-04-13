@@ -224,7 +224,7 @@ CRITICAL — graceful shutdown container resolution:
     EXIT_CODE=$(docker inspect --format='{{.State.ExitCode}}' "$CID" 2>/dev/null || echo unknown)
     NPM_SIGTERM=0
     if [ "$EXIT_CODE" = "1" ] && [ -f "$COMPOSE_LOG" ] \
-       && grep -qiE '(npm( ERR!)?.*signal.*SIGTERM|Command failed with signal "SIGTERM")' "$COMPOSE_LOG"; then
+       && grep -qiE '((npm|yarn|pnpm).*signal.*SIGTERM|Command failed with signal.*SIGTERM)' "$COMPOSE_LOG"; then
       NPM_SIGTERM=1
     fi
     if [ "$EXIT_CODE" = "0" ] || [ "$EXIT_CODE" = "143" ] || [ "$NPM_SIGTERM" = "1" ]; then
