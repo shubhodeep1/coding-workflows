@@ -948,7 +948,7 @@ jobs:
           abs_path() {
             local p="$1"
             if [ -z "${p}" ]; then
-              printf '%s\n' "${p}"
+              printf '%s\n' "$(pwd)"
             elif [[ "${p}" = /* ]]; then
               printf '%s\n' "${p}"
             else
@@ -983,8 +983,8 @@ jobs:
             local abs
             abs="$(abs_path "${path}")"
             if [ ! -s "${path}" ]; then
-              echo "MISSING: ${abs}"
-              missing+=("${abs}")
+              echo "MISSING_OR_EMPTY: ${abs}"
+              missing+=("${abs} (missing or empty)")
             fi
           }
 
