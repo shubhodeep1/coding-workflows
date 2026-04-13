@@ -948,11 +948,12 @@ jobs:
           abs_path() {
             local p="$1"
             if [ -z "${p}" ]; then
-              printf '%s\n' "$(pwd)"
-            elif [[ "${p}" = /* ]]; then
-              printf '%s\n' "${p}"
+              p="."
+            fi
+            if [[ "${p}" = /* ]]; then
+              realpath -m "${p}"
             else
-              printf '%s\n' "$(pwd)/${p}"
+              realpath -m "$(pwd)/${p}"
             fi
           }
 
@@ -1017,8 +1018,9 @@ jobs:
           check_required_file "${HOME}/.codex/config.toml"
 
           if ! codex_bin="$(command -v codex 2>/dev/null)"; then
-            echo "MISSING: codex binary (not found in PATH)"
-            missing+=("codex binary (not found in PATH)")
+            codex_missing_message="codex binary (not found in PATH)"
+            echo "MISSING: ${codex_missing_message}"
+            missing+=("${codex_missing_message}")
           else
             echo "Found codex binary: ${codex_bin}"
           fi
