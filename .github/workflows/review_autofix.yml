@@ -357,7 +357,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.codex
-          CATALOG_PATH="${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+          # Compute absolute CATALOG_PATH correctly whether SUPPORT_SCRIPTS_DIR is absolute or relative
+          if [[ "${SUPPORT_SCRIPTS_DIR}" = /* ]]; then
+            CATALOG_PATH="${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+          else
+            CATALOG_PATH="${GITHUB_WORKSPACE}/${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+          fi
           {
             echo 'web_search = "disabled"'
             echo 'model_provider = "openrouter"'
