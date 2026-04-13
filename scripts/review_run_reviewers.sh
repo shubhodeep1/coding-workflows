@@ -11,6 +11,12 @@ if [ ! -s "${LAST_RUN_CHANGED_FILES_FILE}" ]; then
   echo "No previous AI autofix changed files are available." > "${LAST_RUN_CHANGED_FILES_FILE}"
 fi
 
+SERENA_BLOCK_PATH="${SUPPORT_PROMPTS_DIR:-}/serena-efficiency-block.txt"
+if [ -z "${SUPPORT_PROMPTS_DIR:-}" ] || [ ! -s "${SERENA_BLOCK_PATH}" ]; then
+  echo "FATAL: serena-efficiency-block.txt missing at ${SERENA_BLOCK_PATH}" >&2
+  exit 1
+fi
+
 mkdir -p "${PREVIOUS_REVIEWS_DIR}"
 
 PROMPT_ARTIFACT_PATH_HINT="$(printf '%s\n' \

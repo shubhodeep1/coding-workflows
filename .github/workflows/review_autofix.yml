@@ -940,6 +940,107 @@ jobs:
             [ -f "${GITHUB_STEP_SUMMARY:-}" ] && cat "${GITHUB_STEP_SUMMARY}" || true
           } > "${RUNTIME_CONTEXT_DIR}/run_logs_best_effort.txt" || true
 
+      - name: "Preflight: Verify required files before reviewer invocation"
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        run: |
+          set -euo pipefail
+
+          abs_path() {
+            local p="$1"
+            if [ -z "${p}" ]; then
+              p="."
+            fi
+            if [[ "${p}" = /* ]]; then
+              realpath -m "${p}"
+            else
+              realpath -m "$(pwd)/${p}"
+            fi
+          }
+
+          declare -a missing=()
+
+          check_required_dir() {
+            local path="$1"
+            local abs
+            abs="$(abs_path "${path}")"
+            if [ ! -d "${path}" ]; then
+              echo "MISSING: ${abs}"
+              missing+=("${abs}")
+            fi
+          }
+
+          check_required_file() {
+            local path="$1"
+            local abs
+            abs="$(abs_path "${path}")"
+            if [ ! -f "${path}" ]; then
+              echo "MISSING: ${abs}"
+              missing+=("${abs}")
+            fi
+          }
+
+          check_required_nonempty_file() {
+            local path="$1"
+            local abs
+            abs="$(abs_path "${path}")"
+            if [ ! -s "${path}" ]; then
+              echo "MISSING_OR_EMPTY: ${abs}"
+              missing+=("${abs} (missing or empty)")
+            fi
+          }
+
+          check_soft_file() {
+            local path="$1"
+            local abs
+            abs="$(abs_path "${path}")"
+            if [ ! -f "${path}" ]; then
+              echo "::warning::SOFT_MISSING: ${abs}"
+            fi
+          }
+
+          check_required_dir "${RUNTIME_DIR}"
+          check_required_dir "${PREVIOUS_REVIEWS_DIR}"
+          check_required_dir "${RUNTIME_CONTEXT_DIR}"
+          check_required_dir "${SUPPORT_SCRIPTS_DIR}"
+          check_required_dir "${SUPPORT_PROMPTS_DIR}"
+
+          check_required_file "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
+          check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh"
+          check_required_nonempty_file "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt"
+          check_required_nonempty_file "${SUPPORT_INSTRUCTIONS_FILE}"
+          check_required_file "./pre_assembled_static.txt"
+          check_required_file "${PR_DIFF_FILE}"
+          check_required_file "${ORIGINAL_PR_DIFF_FILE}"
+          check_required_file "${PR_CHANGED_FILES_FILE}"
+          check_required_file "${PR_ALL_COMMENTS_CONTEXT_FILE}"
+          check_required_file "${SYMBOL_DIFF_SUMMARY_FILE}"
+          check_required_file "${MEMORY_CONTEXT_FILE}"
+          check_required_file "${HOME}/.codex/config.toml"
+
+          if ! codex_bin="$(command -v codex 2>/dev/null)"; then
+            codex_missing_message="codex binary (not found in PATH)"
+            echo "MISSING: ${codex_missing_message}"
+            missing+=("${codex_missing_message}")
+          else
+            echo "Found codex binary: ${codex_bin}"
+          fi
+
+          check_soft_file "${SUPPORT_CODEX_INSTRUCTIONS_FILE}"
+          check_soft_file "${SUPPORT_AGENTS_FILE}"
+          check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+          check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+          check_soft_file "${LAST_RUN_DIFF_FILE}"
+          check_soft_file "${LAST_RUN_CHANGED_FILES_FILE}"
+          check_soft_file "${LAST_RUN_DIFF_STAT_FILE}"
+          check_soft_file "${LAST_COMMIT_STAT_FILE}"
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Preflight check FAILED: ${#missing[@]} required file(s) missing:"
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "Preflight check PASSED: all required files present."
+
       - name: Run reviewer models
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
         id: reviewers
