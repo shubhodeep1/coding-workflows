@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nInterpreted clarification answers:\n- `Q1: A` \u2192 supersede detection must use strict tree equality (`integration^{tree} == default^{tree}`), not ancestry or compare-file diff heuristics.\n- `Q2: A` \u2192 when superseded is active, re-check each poll; auto-clear when trees diverge; then resume normal sync attempts.\n\nConflict check:\n- No factual mismatch found between issue text and code. The referenced sync function (`scripts/orchestrate_poll_process.sh`, around `903`) and call path (around `2892`) match current code locations/behavior.\n\nImplementation plan:\n\n1. Files likely to change\n- `scripts/orchestrate_poll_process.sh` (primary logic changes).\n- `tests/test_orchestrate_poll_process.py` (new deterministic regression coverage).\n- `scripts/orchestrate_lib.py` (optional but recommended: initialize/rebuild default supersede state fields for visibility consistency).\n- `README.md` (document new superseded sync-state behavior and dedupe semantics).\n\n2. Functions/modules to implement\n- In `scripts/orchestrate_poll_process.sh`, add helper(s) to:\n  - Resolve branch head commit SHA.\n  - Resolve commit tree SHA.\n  - Determine \u201csuperseded-by-main\u201d via tree equality.\n  - Read/set/clear superseded marker in `STATE_FILE` with transition-aware behavior.\n- Harden `sync_default_into_integration_branch()`:\n  - Keep current merge attempt first for normal path.\n  - On merge failure, keep transient-error handling for non-409/conflict errors.\n  - On 409/conflict, run deterministic tree-equality check.\n  - If equal, persist superseded marker and emit tracking comment + Telegram only on transition into active superseded state.\n  - If not equal, keep existing conflict warning behavior unchanged.\n- Update the poll loop call path near current sync invocation:\n  - If superseded marker is active, re-evaluate tree equality before retrying merge.\n  - If still equal, skip merge API call and skip warning/comment (dedupe).\n  - If no longer equal, clear marker and continue with normal sync flow.\n- Use existing in-file transition/dedupe pattern as reference (validation dispatch state-transition gating around `dispatch_validation_if_needed` and related state fields).\n\n3. Data structures affected\n- Orchestrator state JSON (`ORCHESTRATOR_STATE_V1` payload in tracking comments) gains a new optional integration-sync block/marker, e.g.:\n```json\n{\n  \"integration_sync\": {\n    \"state\": \"superseded-by-main\",\n    \"active\": true,\n    \"integration_branch\": \"orchestrator/project-866\",\n    \"default_branch\": \"main\",\n    \"integration_tree\": \"<sha>\",\n    \"default_tree\": \"<sha>\"\n  }\n}\n```\n- Marker is transition-driven:\n  - Set when conflict + tree equality first detected.\n  - Retained while equality holds.\n  - Cleared automatically when equality no longer holds.\n- No env var/interface rename, no backward-incompatible schema removal.\n\n4. API/interface changes\n- External behavior:\n  - Prevent repeated sync warning spam for persistent conflicted-but-equivalent branch state.\n  - Preserve existing behavior for non-superseded conflicts.\n- GitHub REST calls used for deterministic check:\n  - `GET /repos/{owner}/{repo}/git/ref/heads/{branch}` (branch head commit SHA).\n  - `GET /repos/{owner}/{repo}/git/commits/{commit_sha}` (tree SHA via `.tree.sha`).\n  - Existing `POST /repos/{owner}/{repo}/merges` remains sync mechanism.\n- No CLI/env var changes expected.\n\n5. Risks and edge cases\n- Tree-lookup API failures during conflict handling must be treated as transient (must not incorrectly set superseded).\n- Must avoid state-comment churn: only persist/post on marker transitions (set/clear), not on every poll.\n- Ensure branch-missing failure path still takes precedence and remains unchanged.\n- Ensure superseded marker does not block future valid sync once tree equality breaks.\n\n6. Testing considerations\n- Add/extend tests in `tests/test_orchestrate_poll_process.py` for:\n  - Conflict + equal trees: marker set + exactly one warning/comment on first transition.\n  - Next poll with same equal trees and active marker: no merge retry, no new warning/comment.\n  - Active marker + trees diverged: marker auto-cleared and merge path retried.\n  - Transient compare/tree lookup failure: no marker set, no false supersede.\n  - Regression: existing non-superseded conflict behavior unchanged.\n- Extend GH mock in `_run_poller` test harness to support tree-resolution endpoints (`/git/ref/heads/*`, `/git/commits/*`) and deterministic tree fixtures.\n\nNotes:\n- No MongoDB collections/contracts are involved for this issue, so `/db/contracts/*` updates are not expected.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f644cea4331b21e00ee9907a45bb4de387a99302427c3e14b993671160c3c398",
+  "lineage": {
+    "issue_number": 922,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24389281858",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24389281858",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/922"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414084226_7fdd8dd527",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 922,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24389281858"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #922",
+  "timestamps": {
+    "created_at": "2026-04-14T08:42:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
