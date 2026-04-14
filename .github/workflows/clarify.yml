@@ -312,7 +312,7 @@ jobs:
                 | .key
               ]
               | last // ""
-            ' "${ISSUE_COMMENTS_FILE}")"
+            ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
 
             PRIOR_QUESTIONS=""
             PRIOR_ANSWER_BODY=""
@@ -326,14 +326,14 @@ jobs:
                   | .key
                 ]
                 | last // ""
-              ' "${ISSUE_COMMENTS_FILE}")"
+              ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
 
               if [ -n "${PRIOR_ANSWER_INDEX}" ] && [ "${PRIOR_ANSWER_INDEX}" != "null" ]; then
                 PRIOR_ANSWER_RAW="$(jq -r --argjson answer_idx "${PRIOR_ANSWER_INDEX}" '
                   .[$answer_idx].body // ""
-                ' "${ISSUE_COMMENTS_FILE}")"
+                ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
 
-                PRIOR_ANSWER_BODY="$(printf '%s' "${PRIOR_ANSWER_RAW}" | perl -0777 -pe 's/^\s*\/answer\b\s*//is')"
+                PRIOR_ANSWER_BODY="$(printf '%s' "${PRIOR_ANSWER_RAW}" | perl -0777 -pe 's/^\s*\/answer\b\s*//is' 2>/dev/null || true)"
                 if [ -z "${PRIOR_ANSWER_BODY}" ]; then
                   PRIOR_ANSWER_BODY="(No content provided after /answer.)"
                 fi
@@ -346,7 +346,7 @@ jobs:
                       ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required|\\*\\*Q[0-9]+:|QUESTIONS:"; "i"))
                     ))
                   | if length > 0 then .[0].body // "" else "" end
-                ' "${ISSUE_COMMENTS_FILE}")"
+                ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
 
                 if [ -z "${PRIOR_QUESTIONS}" ]; then
                   PRIOR_QUESTIONS="(Unable to parse prior clarification questions from comments.)"
