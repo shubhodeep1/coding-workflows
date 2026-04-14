@@ -1966,13 +1966,57 @@ jobs:
             fi
           } > "${UNTRACKED_CONTEXT_FILE}"
 
-          DIAGNOSE_MODE_PROMPT="prompts/mode-implement-diagnose.txt"
-          if [ ! -f "${DIAGNOSE_MODE_PROMPT}" ]; then
-            DIAGNOSE_MODE_PROMPT="${RUNTIME_DIR}/mode-implement-diagnose.fallback.txt"
-            cat > "${DIAGNOSE_MODE_PROMPT}" <<'EOF'
+          wf_source="${{ github.repository_owner }}/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
+
+          ensure_diagnose_asset() {
+            local local_path="$1"
+            local remote_path="$2"
+            [ -s "${local_path}" ] && return 0
+
+            mkdir -p "$(dirname "${local_path}")"
+            if ! gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${remote_path}?ref=${script_ref}" > "${local_path}" 2>/dev/null; then
+              echo "::warning::${remote_path} not found on ${script_ref}; falling back to main"
+              if ! gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${remote_path}?ref=main" > "${local_path}" 2>/dev/null; then
+                rm -f "${local_path}"
+                return 1
+              fi
+            fi
+
+            case "${local_path}" in
+              *.sh|*.py)
+                chmod +x "${local_path}" || true
+                ;;
+            esac
+            return 0
+          }
+
+          DIAGNOSE_MODE_PROMPT_TEMPLATE="prompts/mode-implement-diagnose.txt"
+          if ! ensure_diagnose_asset "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" "prompts/mode-implement-diagnose.txt"; then
+            DIAGNOSE_MODE_PROMPT_TEMPLATE="${RUNTIME_DIR}/mode-implement-diagnose.fallback.txt"
+            cat > "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" <<'EOF'
           Diagnose this implementation failure and return a single JSON object with keys:
           status (needs_fixes|harness_error|infeasible), diagnosis, fix_issues, harness_fixes.
           EOF
+          fi
+
+          DIAGNOSE_MODE_PROMPT="${DIAGNOSE_MODE_PROMPT_TEMPLATE}"
+          if ensure_diagnose_asset "scripts/render_prompt.sh" "scripts/render_prompt.sh" && \
+            ensure_diagnose_asset "prompts/serena-efficiency-block.txt" "prompts/serena-efficiency-block.txt"; then
+            DIAGNOSE_RENDERED_PROMPT="${RUNTIME_DIR}/mode-implement-diagnose.rendered.txt"
+            if bash scripts/render_prompt.sh "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" > "${DIAGNOSE_RENDERED_PROMPT}"; then
+              DIAGNOSE_MODE_PROMPT="${DIAGNOSE_RENDERED_PROMPT}"
+            else
+              echo "::warning::Failed to render ${DIAGNOSE_MODE_PROMPT_TEMPLATE}; using raw prompt."
+            fi
+          else
+            echo "::warning::Diagnose prompt render assets unavailable; using raw prompt."
           fi
 
           {
