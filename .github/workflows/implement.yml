@@ -89,6 +89,7 @@ jobs:
             echo "ISSUE_SUMMARY_PROMPT_FILE=${RUNTIME_DIR}/issue_summary_prompt.txt"
             echo "ISSUE_SUMMARY_FILE=${RUNTIME_DIR}/issue_summary.md"
             echo "IMPLEMENTATION_CONTEXT_FILE=${RUNTIME_DIR}/implementation_context.txt"
+            echo "RECENT_CHANGES_FILE=${RUNTIME_DIR}/recent_changes.txt"
             echo "DB_CONTRACTS_RELEVANT_FILE=${RUNTIME_DIR}/db_contracts_relevant.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
@@ -168,7 +169,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         uses: actions/checkout@v5
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
 
       - name: Configure git auth for memory helper clones
@@ -562,6 +563,39 @@ jobs:
             | map(select(.user.type == "User" and ((.body // "") | test("(?i)^\\s*/answer\\b"))))
             | if length == 0 then "None" else .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n" end' "${ISSUE_COMMENTS_FILE}" > "${CLARIFICATION_ANSWERS_FILE}"
 
+      - name: Collect recent changes in targeted files
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+
+          tmp_candidates="$(mktemp)"
+          tmp_unique="$(mktemp)"
+          trap 'rm -f "${tmp_candidates}" "${tmp_unique}"' EXIT
+
+          perl -nE '
+            while (m{((?:[[:alnum:]_.-]+/)*[[:alnum:]_.-]+\.(?:c|cc|cpp|cs|css|go|h|hpp|html|java|js|json|jsx|mjs|md|py|rb|rs|sh|sql|tf|toml|ts|tsx|txt|xml|yaml|yml))}g) {
+              say $1;
+            }
+          ' "${PLAN_FILE}" > "${tmp_candidates}" || true
+
+          awk 'NF && !seen[$0]++ { print; if (++count >= 20) exit }' "${tmp_candidates}" > "${tmp_unique}" || true
+
+          : > "${RECENT_CHANGES_FILE}"
+          if [ ! -s "${tmp_unique}" ]; then
+            echo "none detected" > "${RECENT_CHANGES_FILE}"
+            exit 0
+          fi
+
+          while IFS= read -r target_path; do
+            [ -n "${target_path}" ] || continue
+            case "${target_path}" in /*|../*|*/../*) continue ;; esac
+            {
+              printf '### %s\n' "${target_path}"
+              git log --oneline -n 10 -- "${target_path}" || true
+              printf '\n'
+            } >> "${RECENT_CHANGES_FILE}"
+          done < "${tmp_unique}"
+
       - name: Extract relevant DB contracts
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -602,6 +636,9 @@ jobs:
             echo
             echo "ISSUE COMMENTS"
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
+            echo
+            echo "=== RECENT CHANGES IN TARGET FILES ==="
+            cat "${RECENT_CHANGES_FILE}"
           } > "${IMPLEMENTATION_CONTEXT_FILE}"
 
       - name: Create Codex config
