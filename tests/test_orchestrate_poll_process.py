@@ -90,11 +90,17 @@ def _rewrite_cmd_for_sandbox(cmd: list, sandbox: Path) -> list:
 	they exec the sandbox's copy instead.
 	"""
 	rewritten: list = []
-	repo_root_str = str(REPO_ROOT)
 	for arg in cmd:
-		if isinstance(arg, str) and arg.startswith(repo_root_str + os.sep):
-			rel = Path(arg).resolve().relative_to(REPO_ROOT)
-			rewritten.append(str(sandbox / rel))
+		if isinstance(arg, (str, os.PathLike)):
+			arg_str = os.fspath(arg)
+			if os.path.isabs(arg_str):
+				try:
+					rel = Path(arg_str).resolve().relative_to(REPO_ROOT)
+					rewritten.append(str(sandbox / rel))
+					continue
+				except (OSError, ValueError):
+					pass
+			rewritten.append(arg_str)
 		else:
 			rewritten.append(arg)
 	return rewritten
