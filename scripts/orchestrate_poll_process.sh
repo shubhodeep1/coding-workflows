@@ -308,6 +308,20 @@ if ! [[ "${MAX_STALL_RECOVERIES_PER_ISSUE}" =~ ^[0-9]+$ ]] || [ "${MAX_STALL_REC
   MAX_STALL_RECOVERIES_PER_ISSUE="5"
 fi
 
+# Stall judge trigger configuration
+STALL_JUDGE_TRIGGER_COUNT="${STALL_JUDGE_TRIGGER_COUNT:-0}"
+if ! [[ "${STALL_JUDGE_TRIGGER_COUNT}" =~ ^[0-9]+$ ]] || [ "${STALL_JUDGE_TRIGGER_COUNT}" -lt 0 ]; then
+  echo "::warning::STALL_JUDGE_TRIGGER_COUNT must be a non-negative integer; defaulting to 0"
+  STALL_JUDGE_TRIGGER_COUNT="0"
+fi
+
+ENABLE_STALL_JUDGE="${ENABLE_STALL_JUDGE:-false}"
+if is_truthy "${ENABLE_STALL_JUDGE}"; then
+  ENABLE_STALL_JUDGE="true"
+else
+  ENABLE_STALL_JUDGE="false"
+fi
+
 ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
 if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
   ENABLE_STANDALONE_STALL_RECOVERY="true"
@@ -4082,6 +4096,9 @@ fi
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
     fi
+      _stall_check_args+=(--stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}")
+      _stall_check_args+=(--enable-stall-judge "${ENABLE_STALL_JUDGE}")
+
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
 

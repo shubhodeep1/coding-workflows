@@ -454,6 +454,10 @@ def detect_stalls(
 	minutes.  Phases not present in the dict fall back to
 	*threshold_minutes*.
 
+	When *enable_stall_judge* is true and *stall_judge_trigger_count* is
+	reached (but still below *max_recoveries*), recovery action is
+	overridden to RUN_STALL_JUDGE_ACTION for non-dedicated phases.
+
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
 		stall_duration_minutes, stall_recovery_count
@@ -1000,8 +1004,12 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 	now_ts = int(args.now_ts) if args.now_ts else int(time.time())
 	threshold = int(args.threshold_minutes)
 	max_recoveries = int(args.max_recoveries)
-	stall_judge_trigger_count = int(args.stall_judge_trigger_count)
-	enable_stall_judge = args.enable_stall_judge.lower() == "true"
+	stall_judge_trigger_count = int(getattr(args, "stall_judge_trigger_count", 0))
+	enable_stall_judge_raw = getattr(args, "enable_stall_judge", "false")
+	if isinstance(enable_stall_judge_raw, bool):
+		enable_stall_judge = enable_stall_judge_raw
+	else:
+		enable_stall_judge = str(enable_stall_judge_raw).lower() == "true"
 
 	phase_thresholds: dict[str, int] | None = None
 	if args.phase_thresholds_json:
