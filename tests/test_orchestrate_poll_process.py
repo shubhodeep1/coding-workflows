@@ -226,6 +226,7 @@ def _run_poller(
 			"graphql_mode": gql_mode,
 			"graphql_labels": {str(k): list(v) for k, v in gql_labels.items()},
 			"graphql_calls": 0,
+			"label_batch_graphql_calls": 0,
 			"issue_label_calls": {},
 			"fail_validation_dispatch": fail_validation_dispatch,
 			"default_branch": "main",
@@ -530,14 +531,26 @@ if args[0] == 'api':
 	if path == 'graphql':
 		mode = store.get('graphql_mode', 'full')
 		store['graphql_calls'] = int(store.get('graphql_calls', 0)) + 1
-		save()
-		if mode == 'error':
-			print('graphql failed', file=sys.stderr)
-			sys.exit(1)
 		query = ''
 		for f in fields:
 			if f.startswith('query='):
 				query = f.split('=', 1)[1]
+		# Classify the query so tests can count wave-label-batch attempts
+		# independently of unrelated GraphQL callers (standalone-stall
+		# marker search, candidate details batch). The wave label batch
+		# uses aliased issue(number:N) selectors and requests only labels —
+		# no comments(last:) and no search(query:).
+		is_label_batch = (
+			bool(re.search(r'i\d+\s*:\s*issue\(number:\s*\d+\)', query))
+			and 'comments(last:' not in query
+			and 'search(query:' not in query
+		)
+		if is_label_batch:
+			store['label_batch_graphql_calls'] = int(store.get('label_batch_graphql_calls', 0)) + 1
+		save()
+		if mode == 'error':
+			print('graphql failed', file=sys.stderr)
+			sys.exit(1)
 		aliases = []
 		for _, issue_num in re.findall(r'i(\d+)\s*:\s*issue\(number:\s*(\d+)\)', query):
 			aliases.append(int(issue_num))
@@ -851,7 +864,7 @@ def test_label_batch_graphql_error_falls_back_to_rest():
 		issue_labels={10: ["ai:implementing"]},
 		gql_mode="error",
 	)
-	assert result["graphql_calls"] == 1
+	assert result["label_batch_graphql_calls"] == 1
 	assert result["issue_label_calls"].get("10", 0) > 0
 
 
@@ -864,7 +877,7 @@ def test_label_batch_graphql_partial_falls_back_to_rest():
 		issue_labels={10: ["ai:implementing"]},
 		gql_mode="partial",
 	)
-	assert result["graphql_calls"] == 1
+	assert result["label_batch_graphql_calls"] == 1
 	assert result["issue_label_calls"].get("10", 0) > 0
 
 
@@ -877,7 +890,7 @@ def test_label_batch_graphql_full_skips_rest_fallback():
 		issue_labels={10: ["ai:implementing"]},
 		gql_mode="full",
 	)
-	assert result["graphql_calls"] == 1
+	assert result["label_batch_graphql_calls"] == 1
 	assert result["issue_label_calls"].get("10", 0) == 0
 
 
