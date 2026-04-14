@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue `w6-batch-api-memory-maintenance-workflow-analysis`\n\nClarification mapping\n- Q1: **B** \u2192 only `workflow-log-analysis` gets real async batch execution now; `memory_maintenance` stays functionally unchanged with compatibility plumbing only.\n- Q2: **B** \u2192 keep `OPENROUTER_API_KEY` credential contract; `BATCH_API_PROVIDER` is a routing hint, not native provider credentials.\n- Q3: **A** \u2192 persist pending batch metadata in Actions artifacts and resume polling from latest artifact in later runs.\n\nConflicts detected\n- The issue text says to convert both workflows, but repo inspection shows `.github/workflows/memory_maintenance.yml` currently has no LLM call path (only `python3 scripts/ai_memory.py compact`).\n- Acceptance criteria mention submit/poll behavior for `memory_maintenance`, which conflicts with clarified answer Q1:B. Plan below follows Q1:B and calls this out in docs.\n\n1. Files likely to change\n- `.github/workflows/workflow-log-analysis.yml`\n- `.github/workflows/memory_maintenance.yml` (compatibility/no-op plumbing only)\n- `scripts/analyze_workflow_logs.py`\n- `README.md`\n- `agents.md`\n- `tests/test_analyze_workflow_logs.py`\n\n2. Functions/modules to implement\n- In `scripts/analyze_workflow_logs.py`:\n  - Add batch-mode request/poll helpers around existing prompt construction.\n  - Add structured logging helper for submission/poll/completion/fallback events.\n  - Add provider-hint resolution for `BATCH_API_PROVIDER=auto|openai|anthropic`.\n  - Add fallback decision logic: unsupported batch capability, submission/poll failure, timeout.\n- In `.github/workflows/workflow-log-analysis.yml`:\n  - Add submit-or-poll control flow:\n    - load latest pending batch artifact metadata from prior runs via GitHub API,\n    - poll if pending,\n    - submit new background request if none pending,\n    - run sync fallback when required,\n    - only commit report when report file exists.\n  - Upload/update pending batch metadata artifact on submit/pending states.\n- In `.github/workflows/memory_maintenance.yml`:\n  - Add env defaults and structured compatibility log only; keep compaction behavior unchanged.\n\n3. Data structures affected\n- New artifact payload file (example: `workflow_log_analysis_batch_state.json`) with fields:\n  - `schema_version`\n  - `batch_id`\n  - `status`\n  - `submitted_at`\n  - `provider_hint`\n  - `model`\n  - `poll_timeout_hours`\n  - `source_workflow`\n  - `source_run_id`\n- Structured log events (JSON-ish key/value) for:\n  - `batch_submit`\n  - `batch_poll`\n  - `batch_complete`\n  - `batch_fallback`\n  - `batch_noop` (memory maintenance compatibility)\n\n4. API/interface changes\n- New repo variables with defaults (no existing names changed):\n  - `BATCH_API_DISABLED=false`\n  - `BATCH_API_PROVIDER=auto`\n  - `BATCH_API_POLL_TIMEOUT_HOURS=24`\n- OpenRouter API usage details to implement:\n  - `POST /api/v1/responses` with `background=true`, `model`, input payload, optional `reasoning`, optional `provider` preferences.\n  - Polling for response completion by response id (inference from runtime behavior): `GET /api/v1/responses/{id}` and evaluate `status` (`queued|in_progress|completed|incomplete|failed|cancelled`).\n  - Capability preflight for provider/model compatibility: `GET /api/v1/models/{author}/{slug}/endpoints` and inspect endpoint parameter support.\n- No breaking changes to existing workflow inputs, outputs, or existing env var names/defaults.\n\n5. Potential risks and edge cases\n- OpenRouter schema/doc mismatch risk for response polling endpoint; must harden with fallback to sync path.\n- Pending artifact missing/expired/corrupt; treat as no pending and safely resubmit or sync fallback.\n- Timeout behavior: if pending state age exceeds `BATCH_API_POLL_TIMEOUT_HOURS`, emit warning and run sync path.\n- Provider hint unsupported for chosen model; warn with `reason/provider/model` and fall back sync.\n- Avoid duplicate work: use existing workflow concurrency and single-latest pending artifact resolution.\n- Ensure non-blocking submit run exits successfully without trying to commit a report.\n\n6. Testing considerations\n- Extend `tests/test_analyze_workflow_logs.py` to cover:\n  - batch submit payload construction,\n  - poll status transitions,\n  - fallback decisions and warning reasons,\n  - timeout-driven fallback,\n  - unchanged synchronous path behavior.\n- Validate workflow YAML behavior paths:\n  - first run submits and exits cleanly,\n  - subsequent run polls pending state,\n  - completion path writes/commits report,\n  - unsupported batch path falls back to sync without failure.\n- Run existing test suite under `tests/` and ensure no regressions.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7a128f335099b0ad23800f1f6d9e410455760f220527e6a93a1f4b3c72a3841c",
+  "lineage": {
+    "issue_number": 887,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24380172082",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24380172082",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/887"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414040844_dc1f790305",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 887,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24380172082"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #887",
+  "timestamps": {
+    "created_at": "2026-04-14T04:08:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
