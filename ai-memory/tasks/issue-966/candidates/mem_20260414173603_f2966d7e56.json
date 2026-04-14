@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: On `orchestrator/project-857`, the referenced guard/function is not present. How should this issue proceed?**\nChoices:\n- **A** \u2014 Treat this as already fixed on this branch; perform no code changes and close as not reproducible.\n- **B** \u2014 Implement a new narrowly-scoped managed-artifact guard in current `scripts/validate_process.sh` to satisfy the stated contract anyway **(RECOMMENDED)**.\n- **C** \u2014 The issue targets a different branch/commit; provide the correct target so changes can be applied there.\nReply: `Q1: B`",
+  "fingerprint": "680a853802c1033f67171956d898eb83ace82912d2647d21ce510fad006875fb",
+  "lineage": {
+    "issue_number": 966,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24413637771",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24413637771",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260414173603_f2966d7e56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 966,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24413637771"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #966 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-14T17:36:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
