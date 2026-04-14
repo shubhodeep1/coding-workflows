@@ -422,10 +422,9 @@ case "${RB_ACTION}" in
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
             rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
             rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py
-            rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh
+            rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh
             rm -rf ai-memory
             rm -rf .serena
-            rm -rf prompts
             ;;
         esac
         unset _rb_origin_url
@@ -531,4 +530,3 @@ ${RB_FIX_DESC}"
     echo "::warning::Unknown review-blocked judge action: ${RB_ACTION} — falling back to manual intervention."
     ;;
 esac
-

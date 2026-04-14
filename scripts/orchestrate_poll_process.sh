@@ -4514,8 +4514,8 @@ sys.exit(1)
                   rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
                   rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
                     scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
-                    scripts/codex_model_catalog.json scripts/orchestrate_poll_process.sh scripts/orchestrate_lib.py
-                  rm -rf .serena prompts
+                    scripts/codex_model_catalog.json
+                  rm -rf .serena
                   rm -f .github/ai/orchestrate_schema.v1.json
                   ;;
               esac
