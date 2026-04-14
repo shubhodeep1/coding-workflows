@@ -2215,19 +2215,28 @@ jobs:
               # On failure: skip the merge-resolve commit and exit 1 so
               # the run goes to ai:review-blocked instead of pushing a
               # broken commit that breaks every subsequent autofix run.
-              if [ -f "${CONFLICTED_PATHS_FILE:-/nonexistent}" ] && \
-                 [ -x "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" ]; then
-                if ! "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
-                    --conflicted-set "${CONFLICTED_PATHS_FILE}" \
-                    --touched-set    "${RESOLVER_TOUCHED_FILE}" \
-                    --repo-root      "${PWD}"; then
-                  echo "::error::Conflict resolver output failed validation; skipping [ai-merge-resolve] commit."
-                  echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
-                  rm -f "${RESOLVER_TOUCHED_FILE}"
-                  exit 1
-                fi
-              else
-                echo "::warning::check_resolver_diff.sh or conflicted-paths snapshot missing; skipping resolver guard."
+              if [ ! -f "${CONFLICTED_PATHS_FILE:-/nonexistent}" ]; then
+                echo "::error::Conflicted-paths snapshot missing; refusing to create [ai-merge-resolve] commit without resolver validation."
+                echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+                rm -f "${RESOLVER_TOUCHED_FILE}"
+                exit 1
+              fi
+
+              if [ ! -x "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" ]; then
+                echo "::error::check_resolver_diff.sh is missing or not executable; refusing to create [ai-merge-resolve] commit without resolver validation."
+                echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+                rm -f "${RESOLVER_TOUCHED_FILE}"
+                exit 1
+              fi
+
+              if ! "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
+                  --conflicted-set "${CONFLICTED_PATHS_FILE}" \
+                  --touched-set    "${RESOLVER_TOUCHED_FILE}" \
+                  --repo-root      "${PWD}"; then
+                echo "::error::Conflict resolver output failed validation; skipping [ai-merge-resolve] commit."
+                echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+                rm -f "${RESOLVER_TOUCHED_FILE}"
+                exit 1
               fi
 
               # Stage the editor's conflict resolutions on top of the
