@@ -397,7 +397,6 @@ PY
 is_validation_harness_runnable()
 {
 	if [ -f validation/docker-compose.test.yml ] \
-		&& [ -f validation/validate.env ] \
 		&& [ -f validation/tests/00_canary.sh ] \
 		&& find validation/tests -maxdepth 1 -type f -name '*.sh' -print -quit | grep -q .; then
 		GENERATED_VALIDATE_SCRIPT_PATH=""
@@ -754,10 +753,7 @@ run_preflight_checks()
 	fi
 
 	if [ ! -f validation/validate.env ]; then
-		echo "Missing validation/validate.env" >> "${PRE_FLIGHT_LOG_FILE}"
-		PRE_FLIGHT_STATUS="fail"
-		_emit_preflight_tail "validation/validate.env missing"
-		return 1
+		echo "validation/validate.env not found; runtime validation driver defaults will be used." >> "${PRE_FLIGHT_LOG_FILE}"
 	fi
 
 	if [ ! -f validation/tests/00_canary.sh ]; then
@@ -1252,7 +1248,7 @@ for attempt in 1 2; do
 done
 
 if [ "${GENERATE_SUCCESS}" != "true" ]; then
-  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum)."
+  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml and validation/tests/00_canary.sh at minimum)."
   post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for generation logs."
   set_tracking_phase_label "ai:validation-failed"
   write_result_files "error" "Validation harness generation failed" "${local_failure_summary}"
