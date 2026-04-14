@@ -344,37 +344,37 @@ STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
 	"no_labels": [
 		"retrigger_pipeline",
 		"retrigger_pipeline",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:clarification": [
 		"auto_respond_clarify",
 		"auto_respond_clarify",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:planning": [
 		"retrigger_plan",
 		"retrigger_plan",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:awaiting-approval": [
 		"auto_approve",
 		"auto_approve",
-		"auto_approve",
+		"escalate_human",
 	],
 	"ai:implementing": [
 		"retrigger_implement",
 		"retrigger_implement",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:done": [
 		"retrigger_review",
 		"retrigger_review",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:ready-to-merge": [
 		"attempt_merge",
 		"attempt_merge",
-		"attempt_merge",
+		"escalate_human",
 	],
 }
 
