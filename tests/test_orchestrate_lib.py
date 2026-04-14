@@ -206,6 +206,48 @@ def _run_check_wave_status(state: dict, labels: dict[str, list[str]]) -> dict:
 		os.unlink(state_path)
 
 
+def _run_check_stalls(
+	state: dict,
+	labels: dict[str, list[str]],
+	threshold_minutes: int = 60,
+	now_ts: int = 2000,
+	max_recoveries: int = 5,
+	phase_thresholds_json: str | None = None,
+	stall_judge_trigger_count: int = 0,
+	enable_stall_judge: str = "false",
+) -> dict:
+	"""Run check-stalls via the CLI and return parsed JSON."""
+	with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+		json.dump(state, f)
+		state_path = f.name
+
+	import io
+	from contextlib import redirect_stdout
+
+	try:
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			orchestrate_lib.cmd_check_stalls(
+				type(
+					"Args",
+					(),
+					{
+						"state_file": state_path,
+						"labels_json": json.dumps(labels),
+						"threshold_minutes": str(threshold_minutes),
+						"max_recoveries": str(max_recoveries),
+						"phase_thresholds_json": phase_thresholds_json,
+						"now_ts": str(now_ts),
+						"stall_judge_trigger_count": str(stall_judge_trigger_count),
+						"enable_stall_judge": enable_stall_judge,
+					},
+				)()
+			)
+		return json.loads(buf.getvalue())
+	finally:
+		os.unlink(state_path)
+
+
 def test_check_wave_status_all_merged():
 	state = _make_state()
 	labels = {"10": ["ai:merged"], "11": ["ai:merged"]}
@@ -332,6 +374,260 @@ def test_check_wave_status_mixed_null_and_real_issues():
 	issues_by_id = {i["id"]: i for i in result["issues"]}
 	assert issues_by_id["task-a"]["status"] == "merged"
 	assert issues_by_id["task-b"]["status"] == "not_created"
+
+def test_detect_stalls_selects_run_stall_judge_at_trigger_threshold():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["github_issue"] == 10
+	assert stalls[0]["recovery_action"] == "run_stall_judge"
+
+
+def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_planning_phase():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=False,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "close_and_reissue"
+
+
+def test_detect_stalls_max_recoveries_still_skips_with_judge_enabled():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 5
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "skip"
+
+
+def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigger_override():
+	captured: dict[str, object] = {}
+	original_detect_stalls = orchestrate_lib.detect_stalls
+
+	def _fake_detect_stalls(
+		state: dict,
+		issue_labels: dict[str, list[str]],
+		threshold_minutes: int,
+		now_ts: int,
+		max_recoveries: int = 5,
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 2,
+		enable_stall_judge: bool = True,
+	) -> list[dict[str, object]]:
+		captured["state"] = state
+		captured["issue_labels"] = issue_labels
+		captured["threshold_minutes"] = threshold_minutes
+		captured["now_ts"] = now_ts
+		captured["max_recoveries"] = max_recoveries
+		captured["phase_thresholds"] = phase_thresholds
+		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
+		captured["enable_stall_judge"] = enable_stall_judge
+		return []
+
+	orchestrate_lib.detect_stalls = _fake_detect_stalls
+	try:
+		state = _make_state()
+		labels = {"10": ["ai:planning"], "11": ["ai:planning"]}
+		_ = _run_check_stalls(
+			state,
+			labels,
+			threshold_minutes=45,
+			now_ts=777,
+			max_recoveries=6,
+			phase_thresholds_json='{"ai:planning": 90}',
+			stall_judge_trigger_count=3,
+			enable_stall_judge="true",
+		)
+	finally:
+		orchestrate_lib.detect_stalls = original_detect_stalls
+
+	assert captured["threshold_minutes"] == 45
+	assert captured["now_ts"] == 777
+	assert captured["max_recoveries"] == 6
+	assert captured["phase_thresholds"] == {"ai:planning": 90}
+	assert captured["stall_judge_trigger_count"] == 3
+	assert captured["enable_stall_judge"] is True
+
+
+def test_detect_stalls_returns_run_stall_judge_at_trigger():
+	now_ts = 5000
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{
+					"id": "issue-1",
+					"github_issue": 10,
+					"status": "pending",
+					"status_since_ts": 1000,
+					"stall_recovery_count": 2,
+				}
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:planning"]}
+	result = orchestrate_lib.detect_stalls(
+		state,
+		labels,
+		threshold_minutes=1,
+		now_ts=now_ts,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+	assert len(result) == 1
+	assert result[0]["recovery_action"] == "run_stall_judge"
+
+
+def test_detect_stalls_still_skips_at_or_above_max_recoveries():
+	now_ts = 5000
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{
+					"id": "issue-1",
+					"github_issue": 10,
+					"status": "pending",
+					"status_since_ts": 1000,
+					"stall_recovery_count": 5,
+				}
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:planning"]}
+	result = orchestrate_lib.detect_stalls(
+		state,
+		labels,
+		threshold_minutes=1,
+		now_ts=now_ts,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+	assert len(result) == 1
+	assert result[0]["recovery_action"] == "skip"
+
+
+def test_detect_stalls_uses_ladder_when_stall_judge_disabled():
+	now_ts = 5000
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{
+					"id": "issue-1",
+					"github_issue": 10,
+					"status": "pending",
+					"status_since_ts": 1000,
+					"stall_recovery_count": 1,
+				}
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:planning"]}
+	result = orchestrate_lib.detect_stalls(
+		state,
+		labels,
+		threshold_minutes=1,
+		now_ts=now_ts,
+		max_recoveries=5,
+		stall_judge_trigger_count=0,
+		enable_stall_judge=False,
+	)
+	assert len(result) == 1
+	assert result[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:planning"][1]
+
+
+def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls():
+	captured: dict[str, object] = {}
+	original_detect_stalls = orchestrate_lib.detect_stalls
+
+	def _fake_detect_stalls(
+		state: dict,
+		issue_labels: dict[str, list[str]],
+		threshold_minutes: int,
+		now_ts: int,
+		max_recoveries: int = 5,
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 0,
+		enable_stall_judge: bool = False,
+	) -> list[dict[str, object]]:
+		captured["state"] = state
+		captured["issue_labels"] = issue_labels
+		captured["threshold_minutes"] = threshold_minutes
+		captured["now_ts"] = now_ts
+		captured["max_recoveries"] = max_recoveries
+		captured["phase_thresholds"] = phase_thresholds
+		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
+		captured["enable_stall_judge"] = enable_stall_judge
+		return []
+
+	orchestrate_lib.detect_stalls = _fake_detect_stalls
+	try:
+		state = _make_state()
+		labels = {"10": ["ai:planning"], "11": ["ai:planning"]}
+		_ = _run_check_stalls(
+			state,
+			labels,
+			threshold_minutes=45,
+			now_ts=777,
+			max_recoveries=6,
+			phase_thresholds_json='{"ai:planning": 90}',
+			stall_judge_trigger_count=3,
+			enable_stall_judge="true",
+		)
+	finally:
+		orchestrate_lib.detect_stalls = original_detect_stalls
+
+	assert captured["threshold_minutes"] == 45
+	assert captured["now_ts"] == 777
+	assert captured["max_recoveries"] == 6
+	assert captured["phase_thresholds"] == {"ai:planning": 90}
+	assert captured["stall_judge_trigger_count"] == 3
+	assert captured["enable_stall_judge"] is True
 
 
 # ---------------------------------------------------------------------------
