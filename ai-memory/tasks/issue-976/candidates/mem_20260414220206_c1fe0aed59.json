@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping used for this plan:\n\n- Q1: **A** \u2192 Use `shubhodeep1/digital_pa` (Node) and `shubhodeep1/fun-token-multi-chain` (Hardhat).\n- Q2: **A** \u2192 Baseline is this repo\u2019s **pre-driver-split** behavior (commit immediately before `scripts/validate_driver.sh` was introduced).\n- Q3: **A** \u2192 If discrepancies are found, fix only in `coding-workflows` (not in consumer repos).\n\nRepresentative implementation pattern to follow (single end-to-end reference):  \n`.github/workflows/validate.yml` \u2192 `scripts/validate_process.sh` \u2192 `scripts/validate_driver.sh` (+ wrapper contract in `workflow-templates/ai-validate.yml`).\n\n1. Files likely to change\n\n- `scripts/validate_driver.sh` (runtime semantics: TAP counting, failure accumulation, trap/finalization, env-default behavior)\n- `scripts/validate_process.sh` (result extraction/normalization, preflight behavior, fallback runtime driver behavior)\n- `.github/workflows/validate.yml` (only if artifact/output collection or dispatch contract needs correction)\n- `docs/validation-phase-spec.md` and `README.md` (only if behavior changes are required to satisfy compatibility)\n\n2. Functions/modules to implement or adjust\n\n- In `scripts/validate_driver.sh`:\n  - `run_preflight_checks`\n  - `wait_for_health`\n  - `run_single_test`\n  - `append_failure`\n  - `emit_result`\n  - `finalize`\n- In `scripts/validate_process.sh`:\n  - `run_preflight_checks`\n  - `ensure_runtime_validation_driver`\n  - `extract_last_json_with_key`\n  - `write_status_file`\n  - `write_metadata_file`\n  - `write_result_files`\n- Validation dispatch/collection flow (existing orchestrator + validate workflow integration):\n  - Keep `ai-validate.yml` wrapper input contract unchanged (`tracking_issue`, `compose_file`, `validation_timeout`)\n  - Use existing dispatch path and artifact collection path, no interface expansion\n\n3. Data structures affected\n\n- Validation result JSON contract (`validation_result.json` and terminal JSON emitted in logs):\n  - `result`, `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures`, `duration_seconds`\n- Status artifact (`validation_status.json`):\n  - `status`, `summary`, `failure_summary`, `tracking_issue`\n- Metadata artifact (`validation_metadata.json`):\n  - includes `validation_result`, `diagnosis`, `artifact_paths`, `hints_source`, `harness_mode`, `pre_flight_status`, etc.\n- Runtime counters/accumulators:\n  - TAP `ok`/`not ok` aggregation and unexpected-error handling\n  - failure accumulator array entries (`test`, `error`, `log_tail`)\n\n4. API/interface changes\n\n- **No intentional interface changes** (backward-compatibility requirement).\n- Execution for evidence collection will use existing GitHub Actions APIs via `gh`:\n  - `POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches`\n  - `GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs`\n  - `GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts`\n  - `GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}`\n- Keep wrapper filename/inputs unchanged in consumer repos (`.github/workflows/ai-validate.yml`).\n\n5. Potential risks and edge cases\n\n- **Conflict detected:** issue expects missing/partial `validation/validate.env` to remain valid with defaults, but current `scripts/validate_process.sh` preflight currently hard-fails when `validation/validate.env` is missing; this likely requires a compatibility fix.\n- Baseline retrieval risk: current local checkout is shallow; implementation must ensure full history to resolve pre-split baseline commit.\n- Byte-level comparison risk: dynamic fields (for example `duration_seconds`, log-tail content) vary run-to-run; compatibility check must enforce byte-level key/shape/serialization behavior where deterministic and semantic equivalence where values are inherently dynamic.\n- EXIT trap/finalization risk: duplicate or missing terminal JSON emission if trap paths race with explicit exits.\n- TAP parsing edge cases: whitespace/format variants, tests exiting non-zero without `not ok`, and canary-only failures.\n\n6. Testing considerations\n\n- Run compatibility matrix on both selected repos:\n  - `shubhodeep1/digital_pa` (Node)\n  - `shubhodeep1/fun-token-multi-chain` (Hardhat)\n- For each repo:\n  - Dispatch `ai-validate.yml`\n  - Wait for completion\n  - Download artifacts and extract `validation_result.json`, `validation_status.json`, `validation_metadata.json`, `validation.log`, `validation_preflight.log`\n- Baseline comparison:\n  - Identify pre-split commit and capture baseline contract/semantics from that revision\n  - Compare output key set/order, TAP rollups, failure accumulator behavior, and finalization semantics\n- Missing/partial env verification:\n  - Re-run driver semantics in controlled temp workspace using artifacts with missing/partial `validation/validate.env` and confirm valid output with defaults\n- `.ai/validate.yml` hint flow:\n  - Verify absent-hints path still behaves correctly in both selected repos (both currently have no `.ai/validate.yml`)\n  - Confirm metadata/hints source and generation/discovery behavior remain consistent with current contract\n- Acceptance gate:\n  - Do not close issue until both repos pass compatibility checks and any discovered discrepancies are fixed in this repo.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1cb5e01833fae539fcd4a2c067e78b0d74d0a5626bcc578f442b5696c62b46e0",
+  "lineage": {
+    "issue_number": 976,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24424670417",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24424670417",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/976"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414220206_c1fe0aed59",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 976,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24424670417"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #976",
+  "timestamps": {
+    "created_at": "2026-04-14T22:02:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
