@@ -268,6 +268,16 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
+## 14. Semantic Cache Scope
+
+- Semantic cache integration is allowed only in `clarify` and `orchestrate_clarify_respond`.
+- Do NOT add semantic cache hooks to `implement`, `review_autofix`, `validate`, `plan`, or `orchestrate` unless explicitly approved.
+- Cache key basis must use issue body + full issue thread history.
+- Cache hit audit logs must include: `phase`, `similarity`, `cached_at`, `original_issue_id`.
+- Any semantic cache failure must fail open (warning + continue normal OpenRouter/Codex execution).
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**
