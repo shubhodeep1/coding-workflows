@@ -46,6 +46,7 @@ jobs:
           python3 -m py_compile scripts/ai_labels.py
           python3 -m py_compile scripts/collect_workflow_logs.py
           python3 -m py_compile scripts/analyze_workflow_logs.py
+          python3 -m py_compile scripts/semantic_cache.py
           python3 -m py_compile scripts/check_workflow_script_refs.py
 
       - name: Orchestrate lib unit tests
@@ -171,6 +172,13 @@ jobs:
           set -euo pipefail
           pip install -q ruff
           ruff check --select E,F --ignore E501 scripts/*.py
+
+      - name: Semantic cache unit tests
+        run: |
+          set -euo pipefail
+          python3 -m coverage erase
+          python3 -m coverage run tests/test_semantic_cache.py
+          python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
 
       - name: Script-workflow cross-reference
         # Canonical check used by both CI and the inline post-resolver
