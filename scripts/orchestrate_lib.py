@@ -522,12 +522,6 @@ def detect_stalls(
 			actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
 			action_idx = min(recovery_count, len(actions) - 1)
 			action = actions[action_idx]
-			if (
-				enable_stall_judge
-				and phase not in DEDICATED_HANDLER_PHASES
-				and stall_judge_trigger_count <= recovery_count < max_recoveries
-			):
-				action = RUN_STALL_JUDGE_ACTION
 
 		stalled.append({
 			"id": issue["id"],
@@ -1020,6 +1014,8 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 	threshold = int(args.threshold_minutes)
 	max_recoveries = int(args.max_recoveries)
 	stall_judge_trigger_count = int(getattr(args, "stall_judge_trigger_count", 2))
+	if stall_judge_trigger_count < 1:
+		raise OrchestrateError(f"stall_judge_trigger_count must be a positive integer, got {stall_judge_trigger_count!r}")
 	enable_stall_judge_raw = getattr(args, "enable_stall_judge", "true")
 	if isinstance(enable_stall_judge_raw, bool):
 		enable_stall_judge = enable_stall_judge_raw

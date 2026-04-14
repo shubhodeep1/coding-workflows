@@ -2339,7 +2339,7 @@ invoke_stall_judge() {
   fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
 
   local comments_issue_num="${issue_num}"
-  if [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
+  if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
     comments_issue_num="${TRACKING_NUM}"
   fi
 
@@ -2540,7 +2540,7 @@ invoke_stall_judge() {
 ${diagnostics}
 \`\`\`
 "
-  if [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
+  if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
     post_tracking_comment "${judge_comment}"
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${judge_comment}" >/dev/null 2>&1 || true
