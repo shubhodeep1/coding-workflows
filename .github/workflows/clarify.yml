@@ -119,7 +119,7 @@ jobs:
             done; return 1
           }
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py semantic_cache.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -186,6 +186,7 @@ jobs:
             echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
             echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
             echo "ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/issue_context.txt"
+            echo "THREAD_HISTORY_FILE=${RUNTIME_DIR}/thread_history.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
             echo "QUESTIONS_FILE=${RUNTIME_DIR}/questions.txt"
@@ -290,12 +291,13 @@ jobs:
       - name: Build context file
         run: |
           set -euo pipefail
+          jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}" > "${THREAD_HISTORY_FILE}"
           {
             echo "ISSUE DESCRIPTION"
             printf '%s\n\n' "$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
             echo "ISSUE COMMENTS"
             # Comments are already in chronological order (direction=asc fetch).
-            jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
+            cat "${THREAD_HISTORY_FILE}"
           } > "${ISSUE_CONTEXT_FILE}"
 
       - name: Create Codex config
@@ -418,7 +420,49 @@ jobs:
             --issue-title "${ISSUE_TITLE}" \
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
 
+      - name: Semantic cache lookup
+        id: semantic_cache_lookup
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
+          SEMANTIC_CACHE_TTL_DAYS: ${{ vars.SEMANTIC_CACHE_TTL_DAYS || '14' }}
+          SEMANTIC_CACHE_SIMILARITY_THRESHOLD: ${{ vars.SEMANTIC_CACHE_SIMILARITY_THRESHOLD || '0.92' }}
+          SEMANTIC_CACHE_REDIS_URL: ${{ vars.SEMANTIC_CACHE_REDIS_URL || '' }}
+          SEMANTIC_CACHE_SQLITE_PATH: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
+          SEMANTIC_CACHE_EMBEDDING_MODEL: ${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          LOOKUP_JSON="${RUNTIME_DIR}/semantic_cache_lookup.json"
+          if python3 scripts/semantic_cache.py lookup \
+            --phase "clarify" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \
+            --thread-history-file "${THREAD_HISTORY_FILE}" \
+            --output-file "${CODEX_OUTPUT_FILE}" > "${LOOKUP_JSON}"; then
+            :
+          else
+            echo "::warning::Semantic cache lookup command failed; continuing with live Codex run"
+            printf '{"ok":false,"hit":false,"error":"lookup_command_failed"}\n' > "${LOOKUP_JSON}"
+          fi
+
+          if jq -e '.ok == true and .hit == true' "${LOOKUP_JSON}" >/dev/null 2>&1; then
+            echo "cache_hit=true" >> "$GITHUB_OUTPUT"
+            SIMILARITY="$(jq -r '.similarity // ""' "${LOOKUP_JSON}")"
+            CACHED_AT="$(jq -r '.cached_at // ""' "${LOOKUP_JSON}")"
+            ORIGINAL_ISSUE_ID="$(jq -r '.original_issue_id // ""' "${LOOKUP_JSON}")"
+            AUDIT_JSON="$(jq -cn --arg phase "clarify" --arg similarity "${SIMILARITY}" --arg cached_at "${CACHED_AT}" --arg original_issue_id "${ORIGINAL_ISSUE_ID}" '{event:"semantic_cache_hit",phase:$phase,similarity:($similarity|tonumber? // 0),cached_at:$cached_at,original_issue_id:$original_issue_id}')"
+            echo "::notice::${AUDIT_JSON}"
+          else
+            echo "cache_hit=false" >> "$GITHUB_OUTPUT"
+            if jq -e '.ok == false' "${LOOKUP_JSON}" >/dev/null 2>&1; then
+              echo "::warning::Semantic cache lookup fail-open: $(jq -r '.error // "unknown_error"' "${LOOKUP_JSON}")"
+            fi
+          fi
+
       - name: Run Codex
+        id: run_codex
+        if: steps.semantic_cache_lookup.outputs.cache_hit != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY || '15' }}
@@ -615,6 +659,33 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Semantic cache store
+        if: success() && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
+          SEMANTIC_CACHE_TTL_DAYS: ${{ vars.SEMANTIC_CACHE_TTL_DAYS || '14' }}
+          SEMANTIC_CACHE_SIMILARITY_THRESHOLD: ${{ vars.SEMANTIC_CACHE_SIMILARITY_THRESHOLD || '0.92' }}
+          SEMANTIC_CACHE_REDIS_URL: ${{ vars.SEMANTIC_CACHE_REDIS_URL || '' }}
+          SEMANTIC_CACHE_SQLITE_PATH: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
+          SEMANTIC_CACHE_EMBEDDING_MODEL: ${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          STORE_JSON="${RUNTIME_DIR}/semantic_cache_store.json"
+          if python3 scripts/semantic_cache.py store \
+            --phase "clarify" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \
+            --thread-history-file "${THREAD_HISTORY_FILE}" \
+            --response-file "${CODEX_OUTPUT_FILE}" > "${STORE_JSON}"; then
+            if jq -e '.ok == false' "${STORE_JSON}" >/dev/null 2>&1; then
+              echo "::warning::Semantic cache store fail-open: $(jq -r '.error // "unknown_error"' "${STORE_JSON}")"
+            fi
+          else
+            echo "::warning::Semantic cache store command failed; continuing"
+          fi
 
       - name: Write run summary
         if: always()
