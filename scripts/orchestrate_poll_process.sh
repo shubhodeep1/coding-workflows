@@ -1130,6 +1130,7 @@ evaluate_sync_superseded_by_main() {
   SYNC_SUPERSEDED_REASON=""
   SYNC_SUPERSEDED_AFFECTED_PATHS_JSON='[]'
   SYNC_SUPERSEDED_CONFLICT_PATHS_JSON='[]'
+  SYNC_SUPERSEDED_CONFIDENT="true"
 
   issue_numbers="$(jq -r '[.waves[]?.issues[]? | .github_issue // empty | tostring] | unique[]' "${STATE_FILE}" 2>/dev/null || true)"
   if [ -z "${issue_numbers}" ]; then
@@ -1143,9 +1144,12 @@ evaluate_sync_superseded_by_main() {
 
   while IFS= read -r issue_num; do
     [ -n "${issue_num}" ] || continue
-    timeline_prs="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+    if ! timeline_prs="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | unique | .[]' \
-      2>/dev/null || true)"
+      2>/dev/null)"; then
+      SYNC_SUPERSEDED_CONFIDENT="false"
+      return 0
+    fi
     while IFS= read -r pr_num; do
       [[ "${pr_num}" =~ ^[0-9]+$ ]] || continue
       if [ -z "${pr_seen["${pr_num}"]+x}" ]; then
@@ -1164,6 +1168,7 @@ evaluate_sync_superseded_by_main() {
 	pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
 	pr_merged="$(_jq_field "${pr_json}" '.merged_at != null' 'true|false')"
 	if [ -z "${pr_state}" ] || [ -z "${pr_merged}" ]; then
+	  SYNC_SUPERSEDED_CONFIDENT="false"
 	  echo "  [superseded-check] Skipping PR #${pr_num}: unable to fetch state." >&2
 	  continue
 	fi
@@ -1173,6 +1178,7 @@ evaluate_sync_superseded_by_main() {
 
     if ! pr_files_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}/files?per_page=100" 2>/dev/null \
       | jq -sc '[.[]? | .[]? | .filename] | unique' 2>/dev/null)"; then
+      SYNC_SUPERSEDED_CONFIDENT="false"
       echo "  [superseded-check] Skipping PR #${pr_num}: unable to fetch changed files." >&2
       continue
     fi
@@ -1193,9 +1199,11 @@ evaluate_sync_superseded_by_main() {
   SYNC_SUPERSEDED_AFFECTED_PATHS_JSON="$(printf '%s\n' "${affected_paths[@]}" | jq -Rsc 'split("\n") | map(select(length > 0)) | unique')"
 
   if ! default_ref="$(resolve_branch_analysis_ref "${default_branch}")"; then
+    SYNC_SUPERSEDED_CONFIDENT="false"
     return 0
   fi
   if ! integration_ref="$(resolve_branch_analysis_ref "${integration_branch}")"; then
+    SYNC_SUPERSEDED_CONFIDENT="false"
     return 0
   fi
 
@@ -1591,6 +1599,11 @@ The integration branch \`${integration_branch}\` is marked as **superseded-by-ma
 
 Runbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
       fi
+      return 0
+    fi
+
+    if [ "${SYNC_SUPERSEDED_CONFIDENT:-true}" != "true" ]; then
+      echo "::warning::Unable to revalidate superseded-by-main state due to transient API/read errors; keeping sync paused for now." >&2
       return 0
     fi
 
