@@ -13,9 +13,10 @@ Before generating artifacts, analyze the repository to identify the app type, en
 
 Required outputs:
 1. `validation/docker-compose.test.yml`
-2. `validation/validate.sh`
-3. `validation/tests/*` (one or more scripts, each emitting TAP-like output with `ok N` / `not ok N` for individual tests)
-4. Optional: `validation/mocks/*` for inbound payload simulation only
+2. `validation/validate.env`
+3. `validation/tests/00_canary.sh` followed by `validation/tests/NN_*.sh` scripts (each emitting TAP-like output with `ok N` / `not ok N` for individual tests)
+4. Optional: `validation/Dockerfile.app` when the compose harness builds a custom app image
+5. Optional: `validation/mocks/*` for inbound payload simulation only
 
 Mandatory rules:
 - Do not require human interaction.
@@ -26,7 +27,11 @@ Mandatory rules:
 - Use synthetic/test credentials only.
 - Keep runtime within a 10-minute validation budget.
 - Ensure all generated `.sh` files are executable (for example, with `chmod +x`).
-- If no Dockerfile exists for the app, generate a minimal Dockerfile for validation and wire it into `validation/docker-compose.test.yml`.
+
+`validation/validate.env` requirements:
+- Include only synthetic defaults for local validation; never reference production credentials.
+- Preserve env var names consumed by runtime (`VALIDATION_TEST_USERNAME`, `VALIDATION_TEST_PASSWORD`, `VALIDATION_TEST_API_KEY`).
+- Use simple `KEY=VALUE` lines compatible with Docker Compose `env_file`.
 
 Docker build-context path rules (CRITICAL):
 - `docker compose` resolves `build.context` relative to the compose file's directory, NOT the working directory.
@@ -79,88 +84,14 @@ Docker Compose variable interpolation rules (CRITICAL):
 - After generating the compose file, mentally render every string field and confirm that no unescaped `$` references a shell variable that should be evaluated in the container.
 - The same rule applies to any Compose `${VAR}` you want passed through literally (e.g. `$${VAR}`), but prefer rewriting to avoid this whenever possible.
 
-`validation/validate.sh` requirements:
-- Bash shell with `set -euo pipefail`
-- Include `#!/usr/bin/env bash` as the first line
-- Pre-flight checks
-- Build/start via Docker Compose using the generated test file (`-f validation/docker-compose.test.yml`)
-- Health polling with explicit timeout
-- Execute generated scripts in `validation/tests/`
-- Capture logs under `validation/logs/`, including a deterministic Compose log at `validation/logs/compose.log` (used by graceful-shutdown SIGTERM detection)
-- Always teardown via trap on EXIT using `docker compose -f validation/docker-compose.test.yml down -v --remove-orphans`
-- Exit 0 on pass and non-zero on failure
-- Emit a final machine-parseable JSON result object as the last line on stdout
-- The final JSON result must include: `result` (`pass` or `fail`), `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures` (array of objects with `test`, `error`, and `log_tail`), and `duration_seconds`
-- Keep each `log_tail` concise (for example, the last 30 lines)
-- Use `docker compose -f "$COMPOSE_FILE" config -q` (already in pre-flight) as the canonical compose-file lint. Do NOT use `python3 -c 'import yaml; ...'` to validate compose files — PyYAML is not installed on the GitHub Actions runner image and the import will raise `ModuleNotFoundError: No module named 'yaml'`.
-
-CRITICAL — final JSON must be emitted on EVERY exit path:
-- The upstream parser fails with `Unable to parse validation result JSON` whenever `validate.sh` exits without printing the final result object on stdout. This is treated as a harness error and blocks the validation pipeline.
-- Therefore `validate.sh` MUST emit the final JSON result object on EVERY exit path, including all early/abort paths, not just the "tests completed" path. The set of paths that historically miss this includes:
-  1. Pre-flight tool checks (`docker`, `docker compose`) missing
-  2. Compose file missing (`[ ! -f "$COMPOSE_FILE" ]`)
-  3. `docker compose -f "$COMPOSE_FILE" config` invalid
-  4. `docker compose -f "$COMPOSE_FILE" up -d --build` failure
-  5. Health-poll deadline exceeded ("service did not become healthy within timeout")
-  6. Canary script missing or not executable
-  7. Canary infrastructure gating fails (already covered today, but must remain covered)
-  8. Trap-driven teardown after an unexpected `set -e` abort
-  9. Normal end of run (pass or fail)
-- The recommended pattern is to centralize result emission in a single shell function, install it on `EXIT`, and replace every bare `exit N` in pre-flight/health code with a call that records a structured failure and exits via the function. This way no future edit can accidentally bypass JSON emission.
-- Recommended pattern:
-    PHASE="${PHASE:-validate}"
-    RESULT_EMITTED=0
-    emit_result() {
-      # Idempotent — safe to call from both fail paths and the EXIT trap.
-      if [ "$RESULT_EMITTED" = "1" ]; then return 0; fi
-      RESULT_EMITTED=1
-      local duration=$(( $(date +%s) - START_TS ))
-      local failures_json
-      failures_json="$(cat "$FAILURES_FILE" 2>/dev/null || printf '[]')"
-      RESULT="${RESULT:-fail}" PHASE="$PHASE" \
-        TOTAL_TESTS="$TOTAL_TESTS" PASSED_TESTS="$PASSED_TESTS" FAILED_TESTS="$FAILED_TESTS" \
-        DURATION="$duration" FAILURES_JSON="$failures_json" \
-        python3 -c '
-    import json, os
-    print(json.dumps({
-        "result": os.environ["RESULT"],
-        "phase": os.environ["PHASE"],
-        "total_tests": int(os.environ["TOTAL_TESTS"]),
-        "passed_tests": int(os.environ["PASSED_TESTS"]),
-        "failed_tests": int(os.environ["FAILED_TESTS"]),
-        "failures": json.loads(os.environ["FAILURES_JSON"]),
-        "duration_seconds": int(os.environ["DURATION"]),
-    }))
-    '
-    }
-    fail_fast() {
-      # $1 = test_name, $2 = error_msg, $3 = optional log file path
-      local test_name="$1" error_msg="$2" log_file="${3:-/dev/null}"
-      append_failure "$test_name" "$error_msg" "$log_file"
-      FAILED_TESTS=$((FAILED_TESTS + 1))
-      RESULT="fail"
-      emit_result
-      exit 1
-    }
-    # Belt-and-braces: also emit on any unexpected EXIT before normal path runs.
-    on_exit() {
-      local rc=$?
-      teardown
-      if [ "$RESULT_EMITTED" != "1" ]; then
-        RESULT="fail"
-        emit_result
-      fi
-      exit $rc
-    }
-    trap on_exit EXIT
-- With this pattern in place:
-  - Replace `echo "docker compose configuration is invalid" >&2; exit 1` with `fail_fast "preflight_compose_config" "docker compose configuration is invalid"`.
-  - Replace `echo "failed to build/start compose services" >&2; exit 1` with `fail_fast "preflight_compose_up" "failed to build/start compose services" "$COMPOSE_LOG"`.
-  - Replace `echo "service did not become healthy within timeout" >&2; exit 1` with `fail_fast "startup_health_timeout" "service did not become healthy within HEALTH_TIMEOUT seconds" "$COMPOSE_LOG"`.
-  - Replace `echo "canary test missing or not executable: $CANARY" >&2; exit 1` with `fail_fast "canary_missing" "canary test missing or not executable: $CANARY"`.
-  - Apply the same substitution to every other pre-flight check.
-- The normal end-of-run path must still call `emit_result` exactly once and then `exit 0` (pass) or `exit 1` (fail).
-- Verification: before finalizing the script, mentally walk every `exit` keyword in `validate.sh` and confirm `emit_result` (or `fail_fast`, which calls it) ran on the way out. The `EXIT` trap is the safety net, NOT a substitute for explicit emission.
+Test script contract (MANDATORY):
+- `validation/tests/00_canary.sh` must be the first script, followed by zero-padded `NN_*.sh` scripts in execution order.
+- Every script must include `#!/usr/bin/env bash`, use `set -euo pipefail`, and be executable.
+- Every script must emit TAP-style assertions: `ok N - <description>` / `not ok N - <description>`.
+- Assertion numbers must start at 1 and increase sequentially within each script.
+- On failure, print at least one `not ok` line before exiting non-zero.
+- The canonical runtime driver assembles final validation JSON; do not emit an aggregate final-result JSON object from test scripts.
+- Keep failure diagnostics concise and machine-readable where practical (for example deterministic single-line messages that can be included in failure tails).
 
 Canary requirement (mandatory):
 - The first test script in `validation/tests/` MUST be a canary infrastructure test (for example `validation/tests/00_canary.sh`).
@@ -203,20 +134,6 @@ CRITICAL — shell-mode parity between canary tool checks and test invocations:
 - Before finalizing `validation/tests/*.sh`, mentally diff every `docker compose exec` line: the flag set used in `00_canary.sh` to verify a binary's presence MUST match the flag set used everywhere that binary is subsequently invoked.
 - When the consumer repo uses Foundry (`forge`/`cast`/`anvil`/`chisel`), the recommended Dockerfile shape is `ENV PATH=/root/.foundry/bin:$PATH` combined with `/bin/sh -c` invocations (NOT `-lc`). Do not rely on `~/.bashrc` additions written by `foundryup`; those only apply to interactive shells.
 
-CRITICAL — safe final JSON emission:
-- The final JSON result object MUST be assembled entirely in Python, not via bash variable interpolation into Python source.
-- NEVER use an unquoted heredoc (`<<PY`) that embeds bash variables like `${FAILURES_JSON}` into Python code. Bash expansion injects raw control characters (tabs, newlines, backslashes from log tails) into the Python string literal, causing `json.decoder.JSONDecodeError`.
-- Instead, pass accumulated data to Python via environment variables or command-line arguments, and read them with `os.environ` or `sys.argv` inside the Python script.
-- Preferred pattern:
-    FAILURES_JSON="$FAILURES_JSON" python3 -c '
-    import json, os
-    failures = json.loads(os.environ["FAILURES_JSON"])
-    payload = {"result": ..., "failures": failures, ...}
-    print(json.dumps(payload))
-    '
-- Alternatively, write `FAILURES_JSON` to a temporary file and read it from Python.
-- If using a heredoc for Python, always quote it (`<<'PY'`) to suppress bash expansion, and pass all shell variables via env/argv.
-
 CRITICAL — deterministic MongoDB / mongosh assertions:
 - NEVER parse raw `mongosh` stdout text with `grep`, `awk`, or string matching for assertions. Shell output formatting varies across mongosh versions and environments (whitespace, BSON decorators, cursor metadata, banners).
 - ALWAYS use the `--quiet` flag with `mongosh` to suppress connection banners and prompts.
@@ -248,14 +165,6 @@ CRITICAL — deterministic MongoDB / mongosh assertions:
 - If `mongosh` is unavailable in the container, use `python3` with `pymongo` or a direct HTTP health-check as a fallback.
 - ALWAYS add a brief retry/sleep loop (e.g. 5 attempts, 1s apart) before the assertion to tolerate async write propagation. The HTTP 202 response only means the request was accepted, not that the write has landed.
 
-CRITICAL — grep-safe TAP counting under `set -e` / `pipefail`:
-- `grep` exits with code 1 when zero lines match. Under `set -e` or `pipefail`, this kills the script even when zero matches is the expected (all-pass) outcome.
-- When counting TAP `ok` / `not ok` lines, always use patterns that return exit code 0 on zero matches. Preferred approaches:
-  - `grep -c 'pattern' "$file" || true`
-  - `{ grep 'pattern' "$file" || true; } | wc -l`
-  - `awk '/pattern/ { count++ } END { print count+0 }' "$file"`
-- NEVER use bare `grep ... | wc -l` in a pipeline under `pipefail` — `grep` returning 1 (no match) will propagate through the pipe and trigger ERR/exit.
-- Test the all-pass case (zero `not ok` lines) mentally before finalizing the script.
 
 CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
 - Hardhat JSON-RPC (and any standard Ethereum node) returns a **JSON object**, not a JSON array.
