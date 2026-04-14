@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for Item 15 (`item-15-validate-diagnose-inline-harness`)\n\nClarification interpretation:\n- No Q-ID clarification questions were asked.\n- `/answer [auto-answered-by-clarify]` and orchestrator recovery note indicate the issue description is sufficient.\n- Proceeding without additional clarification.\n\n1. Files likely to change\n- `scripts/validate_process.sh`\n- No DB contract files are expected to change (no MongoDB/query/index behavior involved).\n\n2. Functions/modules to implement\n- Add a reusable harness-inlining helper in `scripts/validate_process.sh` (used by prompt builders) that:\n  - emits `=== EXISTING HARNESS FILES ===`\n  - iterates `validation/` files excluding `validation/logs/*`, sorted\n  - includes text files only\n  - enforces a global inline budget of about 200 KB for total included content\n  - emits explicit skip markers for non-text / over-budget files\n  - emits per-file headers and line-numbered file content so diagnosis can cite exact locations.\n- Reuse this helper in the existing fix-harness prompt path (current \u201cexisting harness files\u201d logic) so behavior is shared rather than duplicated.\n- In Phase 4 diagnose prompt assembly, inject the harness section immediately before `=== STRUCTURED VALIDATION FAILURE JSON ===`.\n\n3. Data structures affected\n- Prompt content in `DIAGNOSE_PROMPT_FILE` gains a new harness section.\n- Likely new local variables/constants in shell:\n  - global byte cap (around `200000`)\n  - running total bytes included\n  - per-file size / remaining budget bookkeeping.\n- No schema changes to `validation_result.json`, `validation_diagnosis.json`, metadata/status contracts, or labels.\n\n4. API/interface changes\n- No external API changes.\n- No env var contract changes required.\n- No changes to validation phase transitions, labels, or diagnosis JSON output structure.\n\n5. Risks and edge cases\n- Prompt-size growth from many files:\n  - mitigate with global cap and deterministic skip messages.\n- Non-text detection ambiguity:\n  - keep fail-open behavior and skip safely with reason.\n- Single very large text file:\n  - skip safely (or stop inclusion once budget is exhausted) without failing pipeline.\n- File path safety:\n  - preserve quoted paths and `while IFS= read -r` pattern.\n\n6. Testing considerations\n- Run a failing validation cycle and inspect `validate_diagnose_prompt.txt`:\n  - contains `=== EXISTING HARNESS FILES ===`\n  - section appears before structured failure JSON\n  - file headers + line-numbered content are present.\n- Add/verify cases in `validation/`:\n  - binary file (skipped),\n  - oversized file (skipped),\n  - enough files to exceed global cap (graceful truncation/skip markers).\n- Regression checks:\n  - diagnose still fail-open,\n  - no phase/label behavior changes,\n  - fix-harness prompt path still works with shared helper.\n\nConflict detection:\n- Operational conflict noted in issue comments: in some consumer-repo implement flows, edits to template-owned paths (`scripts/`, `.github/prompts/`, `.github/scripts/`) are excluded and can produce a no-op PR.\n- Implementation must target the template source repo flow that allows committing `scripts/validate_process.sh`; otherwise this plan will not materialize in PR output.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1fa7f2a5f960e12b7bfed84ea5127be17eaee099736658ff4df25ee9981e8f76",
+  "lineage": {
+    "issue_number": 844,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24378235930",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24378235930",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/844"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414025119_158894df9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 844,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24378235930"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #844",
+  "timestamps": {
+    "created_at": "2026-04-14T02:51:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
