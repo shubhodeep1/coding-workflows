@@ -1311,6 +1311,43 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+
+          # On the workflow source repo, snapshot the working-tree state before
+          # the editor runs.  The "Commit changes" step below uses this snapshot
+          # to stage ONLY files the editor actually wrote to (computed by
+          # hashing each file pre/post plus executable-bit changes), instead of
+          # relying on hardcoded
+          # ':!scripts/<helper>' pathspec excludes that cannot unstage files
+          # already in the index.  This lets any script — including former
+          # "canonical helpers" like review_apply_fixes.sh — be legitimately
+          # modified, while still blocking files the editor never touched from
+          # riding along in the commit.
+          # Consumer repos are unchanged: they continue to use the ':!scripts'
+          # full-directory exclusion, which already blocks script leaks there.
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+            PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
+            : > "${PRE_EDITOR_STATE_FILE}"
+            # `sort -zu` dedupes: in an active merge state, `git ls-files -z`
+            # emits conflicted paths once per index stage (1/2/3).  The
+            # autofix step should never run in merge state, but the guard is
+            # cheap and makes the snapshot reusable from the resolver step.
+            while IFS= read -r -d '' snap_path; do
+              [ -f "${snap_path}" ] || continue
+              snap_exec=0
+              [ -x "${snap_path}" ] && snap_exec=1
+              printf 'T\t%s\t%s\t%s\n' \
+                "$(git hash-object -- "${snap_path}")" \
+                "${snap_exec}" \
+                "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
+            done < <(git ls-files -z | sort -zu)
+            while IFS= read -r snap_path; do
+              [ -n "${snap_path}" ] && \
+                printf 'U\t%s\n' "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
+            done < <(git ls-files --others --exclude-standard)
+            echo "PRE_EDITOR_STATE_FILE=${PRE_EDITOR_STATE_FILE}" >> "$GITHUB_ENV"
+            echo "Pre-editor snapshot captured: $(wc -l < "${PRE_EDITOR_STATE_FILE}") entries"
+          fi
+
           bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"
       - name: Log token usage and Serena stats
         if: always()
@@ -1424,12 +1461,77 @@ jobs:
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
-          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-            git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
-          elif [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-            git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+            # On the workflow source repo, commit ONLY files the editor
+            # actually wrote to.  Compared to the old pathspec-exclusion list,
+            # this lets any script — including former "canonical helpers"
+            # (memory_helpers.sh, review_run_reviewers.sh, etc.) — be modified
+            # when legitimate, while still blocking files that git merge,
+            # reviewer side-effects, or anything else happened to auto-stage
+            # with content the editor never touched.
+            CODEX_TOUCHED_FILE="${RUNTIME_DIR}/codex_touched_autofix.txt"
+            : > "${CODEX_TOUCHED_FILE}"
+            if [ -f "${PRE_EDITOR_STATE_FILE:-/nonexistent}" ]; then
+              PRE_UNTRACKED_LIST="$(mktemp)"
+              POST_UNTRACKED_LIST="$(mktemp)"
+              while IFS=$'\t' read -r diff_kind diff_a diff_b diff_c; do
+                case "${diff_kind}" in
+                  T)
+                    old_sha="${diff_a}"
+                    old_exec="${diff_b}"
+                    diff_path="${diff_c}"
+                    [ -z "${diff_path}" ] && continue
+                    if [ ! -e "${diff_path}" ]; then
+                      printf '%s\n' "${diff_path}" >> "${CODEX_TOUCHED_FILE}"
+                      continue
+                    fi
+                    new_sha="$(git hash-object -- "${diff_path}" 2>/dev/null || true)"
+                    if [ -x "${diff_path}" ]; then
+                      new_exec=1
+                    else
+                      new_exec=0
+                    fi
+                    if { [ -n "${new_sha}" ] && [ "${new_sha}" != "${old_sha}" ]; } || [ "${new_exec}" != "${old_exec}" ]; then
+                      printf '%s\n' "${diff_path}" >> "${CODEX_TOUCHED_FILE}"
+                    fi
+                    ;;
+                  U)
+                    printf '%s\n' "${diff_a}" >> "${PRE_UNTRACKED_LIST}"
+                    ;;
+                esac
+              done < "${PRE_EDITOR_STATE_FILE}"
+              git ls-files --others --exclude-standard > "${POST_UNTRACKED_LIST}" || true
+              sort -o "${PRE_UNTRACKED_LIST}" "${PRE_UNTRACKED_LIST}"
+              sort -o "${POST_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
+              comm -13 "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}" >> "${CODEX_TOUCHED_FILE}"
+              rm -f "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
+            else
+              echo "::warning::pre-editor snapshot missing; falling back to git diff HEAD."
+              git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
+              git ls-files --others --exclude-standard >> "${CODEX_TOUCHED_FILE}" || true
+            fi
+            sort -u -o "${CODEX_TOUCHED_FILE}" "${CODEX_TOUCHED_FILE}"
+            touched_count="$(wc -l < "${CODEX_TOUCHED_FILE}" | tr -d '[:space:]')"
+            echo "Editor-touched files (${touched_count}):"
+            sed 's/^/ - /' "${CODEX_TOUCHED_FILE}" || true
+            # Rebuild the index so it contains HEAD + only editor-touched
+            # files.  This discards any path that entered the index for
+            # other reasons (reviewer artifacts, lingering merge state from
+            # earlier retries, etc.).
+            git read-tree HEAD
+            git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
+            while IFS= read -r touched_path; do
+              [ -z "${touched_path}" ] && continue
+              case "${touched_path}" in
+                node_modules|node_modules/*) continue ;;
+              esac
+              if [ -e "${touched_path}" ]; then
+                git add -- "${touched_path}" 2>/dev/null || true
+              else
+                git rm -q -- "${touched_path}" 2>/dev/null || true
+              fi
+            done < "${CODEX_TOUCHED_FILE}"
+            rm -f "${CODEX_TOUCHED_FILE}"
           else
             git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
             git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
@@ -2006,6 +2108,35 @@ jobs:
           - brief explanation if any resolution required choosing one side
           __CONFLICT_RESOLVER_PROMPT__
 
+          # On the workflow source repo, snapshot the post-merge working-tree
+          # state before Codex resolves conflicts.  The commit logic below
+          # uses it to stage ONLY files Codex actually wrote during resolution,
+          # including executable-bit-only updates,
+          # discarding files that git merge auto-staged but Codex never
+          # touched.  The auto-merged hunks will replay naturally when the PR
+          # is eventually merged into BASE, so skipping them here is safe.
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+            PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
+            : > "${PRE_RESOLVER_STATE_FILE}"
+            # `sort -zu` dedupes: after `git merge --no-commit`, conflicted
+            # paths appear once per index stage (1/2/3) in `git ls-files -z`.
+            # We only need to hash each working-tree file once.
+            while IFS= read -r -d '' snap_path; do
+              [ -f "${snap_path}" ] || continue
+              snap_exec=0
+              [ -x "${snap_path}" ] && snap_exec=1
+              printf 'T\t%s\t%s\t%s\n' \
+                "$(git hash-object -- "${snap_path}")" \
+                "${snap_exec}" \
+                "${snap_path}" >> "${PRE_RESOLVER_STATE_FILE}"
+            done < <(git ls-files -z | sort -zu)
+            while IFS= read -r snap_path; do
+              [ -n "${snap_path}" ] && \
+                printf 'U\t%s\n' "${snap_path}" >> "${PRE_RESOLVER_STATE_FILE}"
+            done < <(git ls-files --others --exclude-standard)
+            echo "Pre-resolver snapshot captured: $(wc -l < "${PRE_RESOLVER_STATE_FILE}") entries"
+          fi
+
           attempt=1
           while [ "${attempt}" -le 3 ]; do
             tmp_output="$(mktemp)"
@@ -2042,12 +2173,75 @@ jobs:
             git config user.name "codex-bot"
             git config user.email "codex@users.noreply.github.com"
             git rm -r --cached node_modules 2>/dev/null || true
-            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-              git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
-            elif [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-              git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+              # On the workflow source repo, commit ONLY files Codex actually
+              # wrote during conflict resolution.  Auto-merged hunks are
+              # dropped — they will replay when the PR is really merged into
+              # BASE.  This avoids committing files the editor never touched
+              # just because git merge happened to auto-stage them.
+              RESOLVER_TOUCHED_FILE="${RUNTIME_DIR}/codex_touched_resolver.txt"
+              : > "${RESOLVER_TOUCHED_FILE}"
+              if [ -f "${PRE_RESOLVER_STATE_FILE:-/nonexistent}" ]; then
+                PRE_UNTRACKED_LIST="$(mktemp)"
+                POST_UNTRACKED_LIST="$(mktemp)"
+                while IFS=$'\t' read -r diff_kind diff_a diff_b diff_c; do
+                  case "${diff_kind}" in
+                    T)
+                      old_sha="${diff_a}"
+                      old_exec="${diff_b}"
+                      diff_path="${diff_c}"
+                      [ -z "${diff_path}" ] && continue
+                      if [ ! -e "${diff_path}" ]; then
+                        printf '%s\n' "${diff_path}" >> "${RESOLVER_TOUCHED_FILE}"
+                        continue
+                      fi
+                      new_sha="$(git hash-object -- "${diff_path}" 2>/dev/null || true)"
+                      if [ -x "${diff_path}" ]; then
+                        new_exec=1
+                      else
+                        new_exec=0
+                      fi
+                      if { [ -n "${new_sha}" ] && [ "${new_sha}" != "${old_sha}" ]; } || [ "${new_exec}" != "${old_exec}" ]; then
+                        printf '%s\n' "${diff_path}" >> "${RESOLVER_TOUCHED_FILE}"
+                      fi
+                      ;;
+                    U)
+                      printf '%s\n' "${diff_a}" >> "${PRE_UNTRACKED_LIST}"
+                      ;;
+                  esac
+                done < "${PRE_RESOLVER_STATE_FILE}"
+                git ls-files --others --exclude-standard > "${POST_UNTRACKED_LIST}" || true
+                sort -o "${PRE_UNTRACKED_LIST}" "${PRE_UNTRACKED_LIST}"
+                sort -o "${POST_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
+                comm -13 "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}" >> "${RESOLVER_TOUCHED_FILE}"
+                rm -f "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
+              else
+                echo "::warning::pre-resolver snapshot missing; falling back to full status."
+                git ls-files --modified --others --exclude-standard >> "${RESOLVER_TOUCHED_FILE}" || true
+              fi
+              sort -u -o "${RESOLVER_TOUCHED_FILE}" "${RESOLVER_TOUCHED_FILE}"
+              touched_count="$(wc -l < "${RESOLVER_TOUCHED_FILE}" | tr -d '[:space:]')"
+              echo "Resolver-touched files (${touched_count}):"
+              sed 's/^/ - /' "${RESOLVER_TOUCHED_FILE}" || true
+              # Drop the merge state so the commit we're about to make is a
+              # regular commit containing ONLY the resolver's edits, not a
+              # merge commit that carries every auto-merged hunk.  The real
+              # merge-into-BASE will replay those hunks naturally later.
+              git read-tree HEAD
+              git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
+              rm -f .git/MERGE_HEAD .git/MERGE_MSG .git/MERGE_MODE .git/AUTO_MERGE 2>/dev/null || true
+              while IFS= read -r touched_path; do
+                [ -z "${touched_path}" ] && continue
+                case "${touched_path}" in
+                  node_modules|node_modules/*) continue ;;
+                esac
+                if [ -e "${touched_path}" ]; then
+                  git add -- "${touched_path}" 2>/dev/null || true
+                else
+                  git rm -q -- "${touched_path}" 2>/dev/null || true
+                fi
+              done < "${RESOLVER_TOUCHED_FILE}"
+              rm -f "${RESOLVER_TOUCHED_FILE}"
             else
               git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
               git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
