@@ -97,7 +97,10 @@ gh_retry()
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
 	local attempt=1
 	local stderr_file
-	stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stderr.XXXXXX")
+	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stderr.XXXXXX" 2>/dev/null); then
+		echo "::error::gh_retry: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		return 1
+	fi
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
 		if "$@" 2>"${stderr_file}"; then
@@ -146,7 +149,10 @@ gh_retry_to_file()
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
 	local attempt=1
 	local stderr_file
-	stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stderr.XXXXXX")
+	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stderr.XXXXXX" 2>/dev/null); then
+		echo "::error::gh_retry_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		return 1
+	fi
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
 		if "$@" > "${outfile}" 2>"${stderr_file}"; then
@@ -200,7 +206,10 @@ gh_retry_to_file()
 _safe_gh_jq()
 {
 	local _tmpf
-	_tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX")
+	if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then
+		echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $*" >&2
+		return 1
+	fi
 	if gh api "$@" > "${_tmpf}"; then
 		cat "${_tmpf}"
 		rm -f "${_tmpf}"
@@ -230,7 +239,10 @@ gh_api_json_to_file()
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
 	local attempt=1
 	local stderr_file
-	stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_api_json_stderr.XXXXXX")
+	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_api_json_stderr.XXXXXX" 2>/dev/null); then
+		echo "::error::gh_api_json_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		return 1
+	fi
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
 		: > "${outfile}"
@@ -292,8 +304,15 @@ curl_gh_api()
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
 	local attempt=1
 	local body_file header_file
-	body_file=$(mktemp "${TMPDIR:-/tmp}/curl_gh_body.XXXXXX")
-	header_file=$(mktemp "${TMPDIR:-/tmp}/curl_gh_hdr.XXXXXX")
+	if ! body_file=$(mktemp "${TMPDIR:-/tmp}/curl_gh_body.XXXXXX" 2>/dev/null); then
+		echo "::error::curl_gh_api: failed to create body temp file (mktemp failed); aborting without calling curl" >&2
+		return 1
+	fi
+	if ! header_file=$(mktemp "${TMPDIR:-/tmp}/curl_gh_hdr.XXXXXX" 2>/dev/null); then
+		echo "::error::curl_gh_api: failed to create header temp file (mktemp failed); aborting without calling curl" >&2
+		rm -f "${body_file}"
+		return 1
+	fi
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
 		: > "${body_file}"
