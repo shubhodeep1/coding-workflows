@@ -72,6 +72,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `STALL_THRESHOLD_DONE_MINUTES` | No | `120` | orchestrate_poll | Stall threshold for `ai:done` phase (review/autofix). |
 | `STALL_THRESHOLD_READY_TO_MERGE_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for `ai:ready-to-merge` phase. |
 | `MAX_STALL_RECOVERIES_PER_ISSUE` | No | `5` | orchestrate_poll | Maximum stall recovery attempts per individual issue. After exhausting this limit the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion. |
+| `STALL_JUDGE_TRIGGER_COUNT` | No | `0` | orchestrate_poll | Number of stall recovery attempts after which an issue is escalated to the wave judge (bypassing normal recovery actions). |
+| `ENABLE_STALL_JUDGE` | No | `false` | orchestrate_poll | When true, stalled issues at or above the trigger count are escalated to the judge for resolution. |
 | `ENABLE_STANDALONE_STALL_RECOVERY` | No | `true` | orchestrate_poll | Enable stall detection and auto-recovery for standalone AI issues (issues not managed by an active orchestrator tracking state). |
 | `MAX_RECOVERY_ATTEMPTS` | No | `3` | orchestrate_poll | Maximum project-level recovery cycles when the judge declares failure. Replaces the previous single-shot `recovery_attempted` boolean with a configurable counter. |
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | No | `2` | orchestrate_poll | Maximum times the poller transitions a validation-failed project back to the judge for re-evaluation before marking it as terminally failed. Set to `0` to disable (immediate terminal failure on first validation failure, matching pre-recovery behavior). |
@@ -608,6 +610,8 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `STALL_THRESHOLD_DONE_MINUTES` | `120` | Stall threshold for review/autofix phase |
 | `STALL_THRESHOLD_READY_TO_MERGE_MINUTES` | `60` | Stall threshold for ready-to-merge phase |
 | `MAX_STALL_RECOVERIES_PER_ISSUE` | `5` | Max stall recovery attempts per issue before skipping |
+| `STALL_JUDGE_TRIGGER_COUNT` | `0` | Number of stall recovery attempts before escalating to judge (bypassing normal recovery actions). |
+| `ENABLE_STALL_JUDGE` | `false` | When true, stalled issues at or above the trigger count are escalated to the wave judge for resolution. |
 | `ENABLE_STANDALONE_STALL_RECOVERY` | `true` | Enable standalone AI issue stall recovery in the poller |
 | `MAX_RECOVERY_ATTEMPTS` | `3` | Max project-level recovery cycles (judge failure → auto-fix) |
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | `2` | Max validation-failure → judge re-evaluation cycles before terminal failure |

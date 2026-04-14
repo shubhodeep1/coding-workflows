@@ -308,6 +308,20 @@ if ! [[ "${MAX_STALL_RECOVERIES_PER_ISSUE}" =~ ^[0-9]+$ ]] || [ "${MAX_STALL_REC
   MAX_STALL_RECOVERIES_PER_ISSUE="5"
 fi
 
+# Stall judge trigger configuration
+STALL_JUDGE_TRIGGER_COUNT="${STALL_JUDGE_TRIGGER_COUNT:-0}"
+if ! [[ "${STALL_JUDGE_TRIGGER_COUNT}" =~ ^[0-9]+$ ]] || [ "${STALL_JUDGE_TRIGGER_COUNT}" -lt 0 ]; then
+  echo "::warning::STALL_JUDGE_TRIGGER_COUNT must be a non-negative integer; defaulting to 0"
+  STALL_JUDGE_TRIGGER_COUNT="0"
+fi
+
+ENABLE_STALL_JUDGE="${ENABLE_STALL_JUDGE:-false}"
+if is_truthy "${ENABLE_STALL_JUDGE}"; then
+  ENABLE_STALL_JUDGE="true"
+else
+  ENABLE_STALL_JUDGE="false"
+fi
+
 ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
 if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
   ENABLE_STANDALONE_STALL_RECOVERY="true"
@@ -2168,6 +2182,12 @@ STALL_EOF
       # already handles this each poll cycle, so just log for diagnostics.
       echo "  Issue #${issue_num} stuck at ready-to-merge. Main merge loop will retry."
       tg_notify "Stall recovery: issue #${issue_num} stuck at ready-to-merge for ${stall_minutes}m (attempt $((recovery_count + 1))). Merge loop will retry."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+      ;;
+
+    run_stall_judge)
+      echo "  Escalating stalled issue #${issue_num} to wave judge."
+      INVOKE_JUDGE_FOR_STUCK=true
+      tg_notify "Stall recovery: escalating issue #${issue_num} to wave judge after ${stall_minutes}m in '${phase}'."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       ;;
 
     close_and_reissue)
@@ -4076,6 +4096,9 @@ fi
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
     fi
+      _stall_check_args+=(--stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}")
+      _stall_check_args+=(--enable-stall-judge "${ENABLE_STALL_JUDGE}")
+
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
 
@@ -4146,7 +4169,9 @@ with open('${STATE_FILE}', 'w') as f:
       post_healing_summary_comment
     fi
 
-    continue
+    if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
+      continue
+    fi
     fi  # end: INVOKE_JUDGE_FOR_STUCK != true
   fi
 
