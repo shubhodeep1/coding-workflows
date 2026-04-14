@@ -361,7 +361,6 @@ STALL_RECOVERY_SHOULD_INCREMENT="false"
 STALL_RECOVERY_EFFECTIVE_ACTION=""
 STALL_JUDGE_TARGET_PR=""
 STALL_JUDGE_HEAD_REF=""
-
 # ---------------------------------------------------------------
 # Integration-branch self-healing knobs
 # ---------------------------------------------------------------
@@ -1023,7 +1022,6 @@ ensure_eager_final_pr() {
   fi
 
   [[ "${discovered}" =~ ^[0-9]+$ ]] || discovered=""
-
   if [ -n "${discovered}" ]; then
     jq --argjson final_pr "${discovered}" '.final_merge_pr = $final_pr' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -1395,9 +1393,6 @@ finalize_integration_merge_if_needed() {
   # the primary fix for the #832-style stall: previously this code path
   # set final_merge_status=conflict and halted with no recovery.
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "false" ]; then
-    jq --argjson final_pr "${final_pr}" \
-      '.status = "merge_conflict" | .final_merge_pr = $final_pr | .final_merge_status = "conflict"' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     echo "  [final-merge] PR #${final_pr} is not mergeable; invoking self-healing flow."
     heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "final PR #${final_pr} mergeable=false" || true
     return 1
@@ -1441,9 +1436,6 @@ finalize_integration_merge_if_needed() {
   # GitHub despite our pre-merge mergeability check (race with a push
   # to default). Hand off to the healing flow instead of halting.
   if [ "${pr_mergeable}" = "false" ]; then
-    jq --argjson final_pr "${final_pr}" \
-      '.status = "merge_conflict" | .final_merge_pr = $final_pr | .final_merge_status = "conflict"' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     echo "  [final-merge] Post-attempt mergeability=false on PR #${final_pr}; invoking self-healing flow."
     heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "final PR #${final_pr} became unmergeable during merge" || true
     return 1

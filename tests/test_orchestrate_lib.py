@@ -375,9 +375,6 @@ def test_check_wave_status_mixed_null_and_real_issues():
 	assert issues_by_id["task-a"]["status"] == "merged"
 	assert issues_by_id["task-b"]["status"] == "not_created"
 
-
-
-
 def test_detect_stalls_selects_run_stall_judge_at_trigger_threshold():
 	state = _make_state()
 	state["waves"][0]["issues"][0]["status"] = "in_progress"
