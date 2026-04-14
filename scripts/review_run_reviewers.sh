@@ -43,7 +43,6 @@ normalize_openrouter_usage() {
   PYTHONDONTWRITEBYTECODE=1 python3 - "$log_file" "$call_label" "$model_name" <<'PY'
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -60,10 +59,12 @@ cache_enabled = "false" if os.getenv("OPENROUTER_PROMPT_CACHE_DISABLED", "false"
 usage = normalize_usage(None)
 if log_path.exists():
 	text = log_path.read_text(encoding="utf-8", errors="replace")
-	matches = re.findall(r"\{\s*\"usage\"\s*:\s*\{.*?\}\s*\}", text, flags=re.DOTALL)
-	for raw in matches:
+	decoder = json.JSONDecoder()
+	for index, char in enumerate(text):
+		if char != "{":
+			continue
 		try:
-			payload = json.loads(raw)
+			payload, _ = decoder.raw_decode(text[index:])
 		except json.JSONDecodeError:
 			continue
 		if not isinstance(payload, dict):
@@ -91,6 +92,16 @@ run_cache_probe() {
   local probe_model
   probe_model="$(printf '%s\n' "${REVIEWER_MODELS}" | sed '/^$/d' | head -n1)"
   if [ -z "${probe_model}" ]; then
+    return 0
+  fi
+  case "${OPENROUTER_PROMPT_CACHE_DISABLED:-false}" in
+    1|true|TRUE|yes|YES|on|ON|y|Y)
+      echo "INFO: cache probe skipped because OPENROUTER_PROMPT_CACHE_DISABLED=${OPENROUTER_PROMPT_CACHE_DISABLED}."
+      return 0
+      ;;
+  esac
+  if [[ "${probe_model}" == google/* ]]; then
+    echo "INFO: cache probe skipped for Gemini-family reviewer model ${probe_model}."
     return 0
   fi
   local probe_prompt_file probe_prompt probe_log_one probe_log_two probe_home probe_out
