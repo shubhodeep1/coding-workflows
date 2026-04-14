@@ -920,7 +920,7 @@ integration_branch_exists() {
   [ -n "${branch_name}" ] || return 1
   local branch_ref
   local gh_error
-  branch_ref="$(printf '%s' "${branch_name}" | jq -sRr '@uri | gsub("%2F"; "/")')"
+  branch_ref="$(printf '%s' "${branch_name}" | jq -sRr '@uri')"
 
   if gh_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" 2>&1 >/dev/null)"; then
     return 0
@@ -1638,6 +1638,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
       "status": "active",
       "superseded_notified": false,
       "superseded_reason": "",
+      "superseded_at": "",
       "last_sync_outcome": "active",
       "affected_paths": []
     })' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
