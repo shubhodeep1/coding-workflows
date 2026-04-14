@@ -1349,8 +1349,15 @@ invoke_judge_for_integration_conflict() {
 
   local prompt_file
   local output_file
+  local judge_static_file
   prompt_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_prompt.XXXXXX")"
   output_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_output.XXXXXX")"
+  judge_static_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_static.XXXXXX")"
+
+  if ! assemble_judge_static_context "${judge_static_file}"; then
+    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
+    return 1
+  fi
 
   local pr_diff
   local pr_files
@@ -1360,6 +1367,10 @@ invoke_judge_for_integration_conflict() {
   retries="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
 
   {
+    cat "${judge_static_file}"
+    echo
+    echo "=== INTEGRATION CONFLICT JUDGE TASK ==="
+    echo
     echo "You are the orchestrator final-merge judge. The automated resolver"
     echo "pipeline has attempted to sync \`${default_branch}\` into"
     echo "\`${integration_branch}\` ${retries} times without producing a"
@@ -1372,6 +1383,8 @@ invoke_judge_for_integration_conflict() {
     echo "${integration_branch}, and then verify GitHub reports the final"
     echo "PR as mergeable=true. Do NOT merge the PR yourself — the poller"
     echo "will do that once mergeability is restored."
+    echo
+    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
     echo "Context:"
     echo "- Tracking issue: #${TRACKING_NUM}"
@@ -1398,12 +1411,12 @@ invoke_judge_for_integration_conflict() {
 
   if cat "${prompt_file}" | codex exec --model "${MODEL_EDITOR:-openai/gpt-5.3-codex}" --full-auto > "${output_file}" 2>&1; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
-    rm -f "${prompt_file}" "${output_file}"
+    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
     return 0
   fi
 
   echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
-  rm -f "${prompt_file}" "${output_file}"
+  rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
   return 1
 }
 
