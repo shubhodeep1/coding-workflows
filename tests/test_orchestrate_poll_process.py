@@ -992,6 +992,15 @@ def test_missing_integration_branch_marks_failed():
 
 
 def test_final_merge_conflict_sets_merge_conflict_status():
+	# Regression coverage for the self-healing flow introduced in PR #918
+	# (issue #832). When the final integration->default PR is unmergeable,
+	# finalize_integration_merge_if_needed must NOT halt the project with
+	# status=merge_conflict (the legacy stall behavior). Instead it must
+	# route the PR through heal_integration_branch_conflict, which
+	# dispatches the review/autofix workflow against the final PR and
+	# leaves the project status=in_progress so the next poll tick can
+	# retry the merge after automated conflict resolution. The historical
+	# test name is preserved per CLAUDE.md §6 (Naming Immutability).
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
 	prs = [
@@ -1012,9 +1021,38 @@ def test_final_merge_conflict_sets_merge_conflict_status():
 		prs=prs,
 		existing_branches=["main", "orchestrator/project-192"],
 	)
-	assert result["latest_state"]["status"] == "merge_conflict"
-	assert result["latest_state"]["final_merge_status"] == "conflict"
+	# Project must NOT halt with status=merge_conflict anymore — the
+	# self-healing flow keeps the project in_progress so finalize can
+	# retry on the next poll tick.
+	assert result["latest_state"]["status"] == "in_progress"
+	# The final PR is still recorded (eager final-PR handling) but its
+	# merge is deferred to the next tick (final_merge_status=pending),
+	# not flagged as a terminal "conflict".
 	assert result["latest_state"]["final_merge_pr"] == 351
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	# finalize_integration_merge_if_needed must report that it routed
+	# the unmergeable PR through the self-healing flow rather than
+	# halting the project. This stdout marker is the contract that the
+	# new mergeability gate fired (scripts/orchestrate_poll_process.sh
+	# ~L1377).
+	assert "[final-merge] PR #351 is not mergeable; invoking self-healing flow." in result["stdout"], (
+		f"expected self-healing flow log line in poller stdout; got tail:\n"
+		f"{result['stdout'][-2000:]}"
+	)
+	# A review/autofix workflow_dispatch was issued against final PR #351
+	# for automated conflict resolution. The standalone PR conflict sweep
+	# attempts update-branch first (which the mock returns success for)
+	# and only falls back to dispatch on update-branch failure, so the
+	# only path that can produce a dispatch entry for #351 in this test
+	# is heal_integration_branch_conflict -> _dispatch_review_for_conflicts.
+	dispatched_for_final = [
+		d for d in result["review_dispatches"] if d.get("pr_number") == 351
+	]
+	assert dispatched_for_final, (
+		f"expected a review workflow dispatch for final PR #351 "
+		f"(via heal_integration_branch_conflict), "
+		f"got: {result['review_dispatches']}"
+	)
 
 
 def test_final_merge_waits_for_required_checks_before_merging():
