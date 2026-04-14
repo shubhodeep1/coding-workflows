@@ -61,6 +61,8 @@ env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'high' }}
+  REVIEW_REASONING_SCHEDULE: ${{ vars.REVIEW_REASONING_SCHEDULE || 'xhigh,high,medium' }}
+  REVIEW_AUTODOWNGRADE_DISABLED: ${{ vars.REVIEW_AUTODOWNGRADE_DISABLED || 'false' }}
 
 jobs:
   gate:
@@ -685,6 +687,7 @@ jobs:
 
           if [ "$IS_SMOKE" = "true" ]; then
             echo "🔬 Smoke test PR detected — switching to low reasoning effort and reduced reviewer set"
+            echo "REVIEW_SMOKE_OVERRIDE_ACTIVE=true" >> "$GITHUB_ENV"
             echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             # Use only 2 fast models for smoke tests
@@ -699,6 +702,7 @@ jobs:
               sed -i 's/model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
             fi
           else
+            echo "REVIEW_SMOKE_OVERRIDE_ACTIVE=false" >> "$GITHUB_ENV"
             echo "Standard PR — using default LLM settings"
           fi
 
@@ -807,6 +811,83 @@ jobs:
           done < <(git log --format='%s' 2>/dev/null || true)
           echo "Judge-fix commits in history: ${judge_fix_count}"
           echo "judge_fix_count=${judge_fix_count}" >> "$GITHUB_OUTPUT"
+
+      - name: Select reviewer reasoning effort for current cycle
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        run: |
+          set -euo pipefail
+
+          autofix_iteration="${{ steps.retrigger_guard.outputs.autofix_iteration }}"
+          cycle_index=$((autofix_iteration + 1))
+
+          base_reviewer_reasoning="${REVIEWER_REASONING_EFFORT:-xhigh}"
+
+          smoke_override=false
+          case "${REVIEW_SMOKE_OVERRIDE_ACTIVE:-false}" in
+            true|TRUE|True|1|yes|YES|on|ON)
+              smoke_override=true
+              ;;
+          esac
+
+          kill_switch_enabled=false
+          case "${REVIEW_AUTODOWNGRADE_DISABLED:-false}" in
+            true|TRUE|True|1|yes|YES|on|ON)
+              kill_switch_enabled=true
+              ;;
+          esac
+
+          selected_reasoning="${base_reviewer_reasoning}"
+          schedule_source="fallback_default"
+          schedule_csv="${REVIEW_REASONING_SCHEDULE:-xhigh,high,medium}"
+
+          if [ "${smoke_override}" = "true" ]; then
+            selected_reasoning="low"
+            schedule_source="smoke_override"
+          elif [ "${kill_switch_enabled}" = "true" ]; then
+            selected_reasoning="${base_reviewer_reasoning}"
+            schedule_source="kill_switch_disabled_schedule"
+          else
+            IFS=',' read -r -a raw_schedule <<< "${schedule_csv}"
+            normalized_schedule=()
+            invalid_schedule_entries=()
+
+            for entry in "${raw_schedule[@]}"; do
+              normalized="$(echo "${entry}" | tr '[:upper:]' '[:lower:]' | xargs)"
+              if [ -z "${normalized}" ]; then
+                continue
+              fi
+
+              case "${normalized}" in
+                xhigh|high|medium|low)
+                  normalized_schedule+=("${normalized}")
+                  ;;
+                *)
+                  invalid_schedule_entries+=("${normalized}")
+                  ;;
+              esac
+            done
+
+            if [ "${#invalid_schedule_entries[@]}" -gt 0 ] || [ "${#normalized_schedule[@]}" -eq 0 ]; then
+              selected_reasoning="${base_reviewer_reasoning}"
+              schedule_source="fallback_default"
+              echo "::warning::Invalid REVIEW_REASONING_SCHEDULE='${schedule_csv}'. Falling back to REVIEWER_REASONING_EFFORT='${selected_reasoning}'."
+            else
+              schedule_index=$((cycle_index - 1))
+              if [ "${schedule_index}" -ge "${#normalized_schedule[@]}" ]; then
+                schedule_index=$((${#normalized_schedule[@]} - 1))
+              fi
+              selected_reasoning="${normalized_schedule[${schedule_index}]}"
+              schedule_source="schedule"
+            fi
+          fi
+
+          echo "REVIEWER_REASONING_EFFORT=${selected_reasoning}" >> "$GITHUB_ENV"
+
+          if [ -f "${HOME}/.codex/config.toml" ]; then
+            sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${selected_reasoning}\"/" "${HOME}/.codex/config.toml"
+          fi
+
+          echo "reviewer_reasoning_selection: {\"cycle_index\":${cycle_index},\"selected_reasoning_level\":\"${selected_reasoning}\",\"schedule_source\":\"${schedule_source}\",\"kill_switch_enabled\":${kill_switch_enabled},\"smoke_override\":${smoke_override},\"configured_schedule\":\"${schedule_csv}\"}"
 
       - name: Generate diff context
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
@@ -1207,8 +1288,8 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
-          sed -i "s/model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
-          echo "Updated reasoning effort from ${REVIEWER_REASONING_EFFORT} to ${EDITOR_REASONING_EFFORT} for editor phase"
+          sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
+          echo "Updated reasoning effort to ${EDITOR_REASONING_EFFORT} for editor phase"
 
       - name: Apply fixes with editor model
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
