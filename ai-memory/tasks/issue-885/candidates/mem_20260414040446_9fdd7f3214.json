@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue `w2-reviewer-reasoning-autodowngrade`\n\nClarification mapping:\n- No Q-IDs were asked in clarify; `/answer [auto-answered-by-clarify]` means proceed with the issue scope and defaults as written.\n\nRepresentative pattern to follow:\n- Reuse the existing judge downgrade approach in `scripts/orchestrate_poll_process.sh` (cycle-aware reasoning downgrade) as the model for reviewer-cycle scheduling logic in `review_autofix`.\n\n1. Files likely to change\n- `.github/workflows/review_autofix.yml`\n- `README.md`\n- `tests/test_review_autofix_reasoning_schedule.py` (new) or an equivalent existing `tests/test_review_autofix_*.py` update\n- `agents.md` only if this repo keeps reviewer-reasoning env docs mirrored there (verify first; skip if no relevant section exists)\n\n2. Functions/modules/steps to implement\n- In `review_autofix.yml`, add new workflow env defaults:\n- `REVIEW_REASONING_SCHEDULE: ${{ vars.REVIEW_REASONING_SCHEDULE || 'xhigh,high,medium' }}`\n- `REVIEW_AUTODOWNGRADE_DISABLED: ${{ vars.REVIEW_AUTODOWNGRADE_DISABLED || 'false' }}`\n- Keep `THINKING_LEVEL_REVIEWER` and `THINKING_LEVEL_EDITOR` unchanged.\n- Add a new step after `Count autofix iterations` and before `Run reviewer models` to select reviewer reasoning per cycle:\n- Compute cycle index as `autofix_iteration + 1`\n- Resolve selected level with precedence:\n- smoke-test override (`[E2E Smoke Test]`) => `low`\n- else if kill switch enabled => fixed `REVIEWER_REASONING_EFFORT`\n- else schedule-driven selection from `REVIEW_REASONING_SCHEDULE` (cycle 1 -> first entry, cycle 2 -> second, cycle 3+ -> last entry)\n- Normalize/validate schedule entries (`xhigh|high|medium|low`), fallback safely to fixed reviewer level if invalid.\n- Emit structured per-cycle log including: cycle index, selected level, schedule source, kill-switch state (plus smoke flag).\n- Patch `~/.codex/config.toml` with selected reviewer reasoning before reviewer execution.\n- Keep editor behavior unchanged, but make editor switch robust:\n- update sed replacement to replace any current `model_reasoning_effort` value with `EDITOR_REASONING_EFFORT` (so scheduled reviewer values do not break the handoff).\n\n3. Data structures affected\n- New workflow-level runtime configuration (string/bool env vars):\n- `REVIEW_REASONING_SCHEDULE` (CSV string)\n- `REVIEW_AUTODOWNGRADE_DISABLED` (`true|false`)\n- New derived runtime fields (env/log only):\n- cycle index (`autofix_iteration + 1`)\n- selected reviewer reasoning level\n- selection source (`smoke_override`, `schedule`, `kill_switch_disabled_schedule`, `fallback_default`)\n- normalized kill-switch flag\n\n4. API/interface changes\n- Repository variables interface expands with:\n- `REVIEW_REASONING_SCHEDULE` (default `xhigh,high,medium`)\n- `REVIEW_AUTODOWNGRADE_DISABLED` (default `false`)\n- No renames/removals of existing vars (`THINKING_LEVEL_REVIEWER`, `THINKING_LEVEL_EDITOR`, `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` remain intact).\n- README updates:\n- Add new vars to tables\n- Clarify precedence with smoke-test override explicitly.\n- If `agents.md` has env-var docs, mirror the same additions there.\n\n5. Potential risks and edge cases\n- Off-by-one cycle mapping: `autofix_iteration=0` must map to cycle 1.\n- Schedule parsing pitfalls: empty tokens, whitespace, invalid values, uppercase values.\n- Short schedules: cycle 3+ should consistently use the last provided value.\n- Kill switch parsing: handle case-insensitive truthy values robustly.\n- Precedence regression: smoke-test low-effort must always win over schedule and kill switch.\n- Editor handoff regression if sed expects a specific prior reviewer value.\n\n6. Testing considerations\n- Add targeted workflow-text tests validating:\n- new env vars/defaults are present\n- cycle selection step exists and uses `autofix_iteration + 1`\n- schedule and kill-switch branches exist\n- smoke override precedence is explicit\n- structured log fields are emitted\n- editor reasoning switch still occurs and is not tied to a single prior reviewer value.\n- Run `pytest tests/` (or at minimum existing review_autofix tests + new tests) and ensure all pass.\n\nConflict notes detected\n- The issue\u2019s \u201clikely files\u201d mention `scripts/review_run_reviewers.sh` as possible reasoning-selection location, but current codebase applies reasoning selection in `.github/workflows/review_autofix.yml` via Codex config creation/editing; `review_run_reviewers.sh` consumes that config and does not currently own reasoning policy. The plan keeps changes localized to the workflow reasoning-selection path accordingly.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b69f2c62ca043469569794119e687c479fbbe1d6aada4bd71f4175ca1706396e",
+  "lineage": {
+    "issue_number": 885,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24380165709",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24380165709",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/885"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414040446_9fdd7f3214",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 885,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24380165709"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #885",
+  "timestamps": {
+    "created_at": "2026-04-14T04:04:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
