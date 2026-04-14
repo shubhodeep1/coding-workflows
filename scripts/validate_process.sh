@@ -80,6 +80,8 @@ PRIOR_CONTAINER_LOGS_FILE="${RUNTIME_DIR}/prior_container_logs_tail.txt"
 HINTS_SOURCE="none"
 HARNESS_MODE="generate"
 PRE_FLIGHT_STATUS="not_run"
+CANONICAL_VALIDATE_DRIVER_REL="scripts/validate_process.sh"
+CANONICAL_VALIDATE_HARNESS_REL="validation/validate.sh"
 
 mkdir -p "${RUNTIME_DIR}"
 printf 'null\n' > "${NULL_JSON_FILE}"
@@ -146,6 +148,60 @@ fi
 is_tracking_run()
 {
   [ "${TRACKING_ISSUE_NUM}" -gt 0 ]
+}
+
+enforce_canonical_driver_path()
+{
+  local script_source="${BASH_SOURCE[0]:-$0}"
+  case "${script_source}" in
+    "${CANONICAL_VALIDATE_DRIVER_REL}"|"./${CANONICAL_VALIDATE_DRIVER_REL}"|*/"${CANONICAL_VALIDATE_DRIVER_REL}")
+      return 0
+      ;;
+    *)
+      echo "Refusing to run validate driver from non-canonical path '${script_source}'. Expected ${CANONICAL_VALIDATE_DRIVER_REL}." >&2
+      return 1
+      ;;
+  esac
+}
+
+ensure_validation_harness_not_tracked()
+{
+  if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+    return 0
+  fi
+
+  if git ls-files --error-unmatch -- "${CANONICAL_VALIDATE_HARNESS_REL}" >/dev/null 2>&1; then
+    echo "${CANONICAL_VALIDATE_HARNESS_REL} is tracked by git; it must remain transient." >&2
+    return 1
+  fi
+
+  if git diff --cached --name-only -- "${CANONICAL_VALIDATE_HARNESS_REL}" | grep -q .; then
+    echo "${CANONICAL_VALIDATE_HARNESS_REL} is staged in git; it must remain unstaged/untracked." >&2
+    return 1
+  fi
+
+  return 0
+}
+
+enforce_no_renamed_driver_artifacts()
+{
+  if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+    return 0
+  fi
+
+  local unexpected_driver_files
+  unexpected_driver_files="$({
+    git ls-files -- 'scripts/validate*.sh'
+    git ls-files --others --exclude-standard -- 'scripts/validate*.sh'
+  } 2>/dev/null | awk '$0 != "scripts/validate_process.sh" && $0 != "scripts/validate_driver.sh"' | sort -u)"
+
+  if [ -n "${unexpected_driver_files}" ]; then
+    echo "Found non-canonical validate driver artifacts in scripts/:" >&2
+    echo "${unexpected_driver_files}" >&2
+    return 1
+  fi
+
+  return 0
 }
 
 post_tracking_comment()
@@ -259,6 +315,14 @@ set_tracking_phase_label()
   fi
   return 0
 }
+
+if ! enforce_canonical_driver_path; then
+  exit 1
+fi
+
+if ! enforce_no_renamed_driver_artifacts; then
+  exit 1
+fi
 
 extract_last_json_with_key()
 {
@@ -753,38 +817,19 @@ fi
 # ---------------------------------------------------------------
 set_tracking_phase_label "ai:validating"
 
-# Ensure validation/ is git-ignored so no workflow accidentally commits it.
-# If validation/ was previously committed to the repo, untrack and remove it
-# so the ownership-marker check below does not hard-fail on a stale checkout.
-# Changes are committed and pushed so the fix is permanent (one-time).
 if command -v git >/dev/null 2>&1 && [ -d .git ]; then
-  _vd_needs_commit=false
-
-  if ! grep -qxF 'validation/' .gitignore 2>/dev/null; then
-    echo 'validation/' >> .gitignore
-    _vd_needs_commit=true
+  if ! grep -qxF 'validation/' .git/info/exclude 2>/dev/null; then
+    echo 'validation/' >> .git/info/exclude
   fi
+fi
 
-  if [ -n "$(git ls-files -- validation/ 2>/dev/null)" ]; then
-    echo "Untracking previously committed validation/ directory."
-    git rm -r --cached -- validation/ >/dev/null 2>&1 || true
-    rm -rf validation
-    _vd_needs_commit=true
-  fi
-
-  if [ "${_vd_needs_commit}" = true ]; then
-    git add .gitignore 2>/dev/null || true
-    git \
-      -c user.name="ai-workflow[bot]" \
-      -c user.email="ai-workflow[bot]@users.noreply.github.com" \
-      commit -m "chore: gitignore validation/ and remove from tracking
-
-The validation/ directory is a transient workspace used by the
-AI validation workflow and must not be committed." >/dev/null 2>&1 || true
-    if ! git push >/dev/null 2>&1; then
-      echo "Note: could not push validation/ cleanup commit (branch protection or permissions). Fix applied locally for this run."
-    fi
-  fi
+if ! ensure_validation_harness_not_tracked; then
+  local_failure_summary="${CANONICAL_VALIDATE_HARNESS_REL} is tracked in git. Runtime validation harness must remain untracked."
+  post_tracking_comment "## ⚠️ Runtime validation harness tracking violation\n\n${local_failure_summary}\n\nRemove it from git tracking in the consumer repository and rerun validation."
+  set_tracking_phase_label "ai:validation-failed"
+  write_result_files "error" "Validation harness tracking violation" "${local_failure_summary}"
+  tg_notify "Validation harness tracking violation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+  exit 1
 fi
 
 if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then
@@ -961,6 +1006,15 @@ fi
 
 find validation -type f -name '*.sh' -exec chmod +x {} +
 
+if ! ensure_validation_harness_not_tracked; then
+  local_failure_summary="${CANONICAL_VALIDATE_HARNESS_REL} became tracked/staged after harness generation."
+  post_tracking_comment "## ⚠️ Runtime validation harness tracking violation\n\n${local_failure_summary}\n\nValidation harness files must remain transient and untracked."
+  set_tracking_phase_label "ai:validation-failed"
+  write_result_files "error" "Validation harness tracking violation" "${local_failure_summary}"
+  tg_notify "Validation harness tracking violation after generation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+  exit 1
+fi
+
 
 # ---------------------------------------------------------------
 # Phase 2: Pre-flight checks for generated harness
@@ -997,7 +1051,7 @@ VALIDATION_IDLE_KILLED=0
 
 set +e
 # Run validation in background, tee output to log file
-bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1 &
+bash "${CANONICAL_VALIDATE_HARNESS_REL}" > "${VALIDATION_LOG_FILE}" 2>&1 &
 VALIDATION_PID=$!
 
 # Monitor the log file for activity; kill if idle too long
