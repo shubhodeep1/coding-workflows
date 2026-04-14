@@ -2279,6 +2279,7 @@ jobs:
           # functions of RUNTIME_DIR.
           PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
           CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
+          RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
 
           attempt=1
           while [ "${attempt}" -le 3 ]; do
