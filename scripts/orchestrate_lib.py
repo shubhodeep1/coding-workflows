@@ -446,12 +446,13 @@ def resolve_stall_recovery_action(
 
 	action_idx = min(recovery_count, len(actions) - 1)
 	fallback_action = actions[action_idx]
+	allowed_actions = set(actions)
 
 	if judged_action is None:
 		return fallback_action
 
 	candidate = str(judged_action).strip()
-	if candidate in VALID_STALL_RECOVERY_ACTIONS:
+	if candidate in VALID_STALL_RECOVERY_ACTIONS and candidate in allowed_actions:
 		return candidate
 	return fallback_action
 
@@ -582,11 +583,15 @@ def detect_stalls(
 		if elapsed < threshold_secs:
 			continue
 
-		recovery_count = issue.get("stall_recovery_count", 0)
+		recovery_count_raw = issue.get("stall_recovery_count", 0)
+		try:
+			recovery_count = int(recovery_count_raw)
+		except (TypeError, ValueError):
+			recovery_count = 0
 
 		action = resolve_stall_recovery_action(
 			phase=phase,
-			recovery_count=int(recovery_count),
+			recovery_count=recovery_count,
 			max_recoveries=max_recoveries,
 			allow_human_terminalization=allow_human_terminalization,
 		)

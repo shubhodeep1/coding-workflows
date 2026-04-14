@@ -2908,7 +2908,7 @@ PY
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 <!-- ai:stall-human-escalation -->
 
-Standalone stall recovery escalation: automated retries were exhausted for this issue and human intervention is now required.
+Standalone stall recovery escalation: terminal human escalation is being applied for this issue under the configured policy. Human intervention is now required (recovery attempt $((recovery_count + 1))/${MAX_STALL_RECOVERIES_PER_ISSUE}).
 STALL_EOF
 )" >/dev/null 2>&1 || true
         tg_notify_issue "${issue_num}" "Standalone stall recovery escalated to human intervention (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "CRITICAL"
@@ -3372,7 +3372,7 @@ REISSUE_EOF
         -f body="$(cat <<'STALL_EOF'
 <!-- ai:stall-human-escalation -->
 
-Orchestrator stall recovery escalation: automated retries were exhausted for this issue and human intervention is now required.
+Orchestrator stall recovery escalation: terminal human intervention is being applied for this issue under the configured escalation policy. Current recovery attempt: $((recovery_count + 1)) of ${MAX_STALL_RECOVERIES_PER_ISSUE}. No further automated retries will be attempted.
 STALL_EOF
 )" >/dev/null 2>&1 || true
       tg_notify "Stall recovery: escalated issue #${issue_num} for human intervention (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "CRITICAL"
