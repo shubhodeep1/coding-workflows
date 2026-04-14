@@ -1173,10 +1173,20 @@ def main(argv: list[str] | None = None) -> int:
 	if batch_mode in {"auto", "poll"} and has_pending_state:
 		batch_id = str(state.get("batch_id") or "").strip()
 		submitted_at = _parse_iso8601(str(state.get("submitted_at") or ""))
-		if batch_id and submitted_at is not None:
-			timeout_at = submitted_at + timedelta(hours=int(args.batch_poll_timeout_hours))
-			if now >= timeout_at:
-				return run_sync("batch_poll_timeout")
+		if batch_id:
+			if submitted_at is not None:
+				timeout_at = submitted_at + timedelta(hours=int(args.batch_poll_timeout_hours))
+				if now >= timeout_at:
+					return run_sync("batch_poll_timeout")
+			else:
+				_batch_log(
+					"batch_poll",
+					severity="WARNING",
+					status="submitted_at_invalid",
+					batch_id=batch_id,
+					provider=provider_hint,
+					model=model,
+				)
 			try:
 				status, batch_status, _response_payload, report_content, usage = poll_openrouter_batch(
 					api_key=api_key,
