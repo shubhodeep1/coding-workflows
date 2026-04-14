@@ -550,7 +550,7 @@ jobs:
               jq -r '
                 [
                   .[]
-                  | select((.body // "") | test("(^|\\n)Implementation Plan(\\n|$)"; "m"))
+                  | select((.body // "") | test("(^|\\n)Implementation Plan(\\n|$)"; "mi"))
                 ]
                 | sort_by(.updated_at // .created_at // "")
                 | last
