@@ -61,6 +61,9 @@ env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'high' }}
+  OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+  REVIEW_REASONING_SCHEDULE: ${{ vars.REVIEW_REASONING_SCHEDULE || 'xhigh,high,medium' }}
+  REVIEW_AUTODOWNGRADE_DISABLED: ${{ vars.REVIEW_AUTODOWNGRADE_DISABLED || 'false' }}
 
 jobs:
   gate:
@@ -199,7 +202,7 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh; do
             # Defensive: when neither fetch succeeds we MUST NOT abort the
             # bootstrap with `set -e`.  A single missing helper script used
             # to crash the whole job (PR #912 hallucination), which then
@@ -714,6 +717,7 @@ jobs:
 
           if [ "$IS_SMOKE" = "true" ]; then
             echo "🔬 Smoke test PR detected — switching to low reasoning effort and reduced reviewer set"
+            echo "REVIEW_SMOKE_OVERRIDE_ACTIVE=true" >> "$GITHUB_ENV"
             echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             # Use only 2 fast models for smoke tests
@@ -728,6 +732,7 @@ jobs:
               sed -i 's/model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
             fi
           else
+            echo "REVIEW_SMOKE_OVERRIDE_ACTIVE=false" >> "$GITHUB_ENV"
             echo "Standard PR — using default LLM settings"
           fi
 
@@ -836,6 +841,96 @@ jobs:
           done < <(git log --format='%s' 2>/dev/null || true)
           echo "Judge-fix commits in history: ${judge_fix_count}"
           echo "judge_fix_count=${judge_fix_count}" >> "$GITHUB_OUTPUT"
+
+      - name: Select reviewer reasoning effort for current cycle
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        run: |
+          set -euo pipefail
+
+          autofix_iteration="${{ steps.retrigger_guard.outputs.autofix_iteration }}"
+          if ! [[ "${autofix_iteration}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Invalid autofix iteration '${autofix_iteration}'. Falling back to 0."
+            autofix_iteration=0
+          fi
+          cycle_index=$((autofix_iteration + 1))
+
+          base_reviewer_reasoning="${REVIEWER_REASONING_EFFORT:-xhigh}"
+
+          smoke_override=false
+          case "${REVIEW_SMOKE_OVERRIDE_ACTIVE:-false}" in
+            true|TRUE|True|1|yes|YES|on|ON)
+              smoke_override=true
+              ;;
+          esac
+
+          kill_switch_enabled=false
+          case "${REVIEW_AUTODOWNGRADE_DISABLED:-false}" in
+            true|TRUE|True|1|yes|YES|on|ON)
+              kill_switch_enabled=true
+              ;;
+          esac
+
+          selected_reasoning="${base_reviewer_reasoning}"
+          schedule_source="fallback_default"
+          schedule_csv="${REVIEW_REASONING_SCHEDULE:-xhigh,high,medium}"
+
+          if [ "${smoke_override}" = "true" ]; then
+            selected_reasoning="low"
+            schedule_source="smoke_override"
+          elif [ "${kill_switch_enabled}" = "true" ]; then
+            selected_reasoning="${base_reviewer_reasoning}"
+            schedule_source="kill_switch_disabled_schedule"
+          else
+            IFS=',' read -r -a raw_schedule <<< "${schedule_csv}"
+            normalized_schedule=()
+            invalid_schedule_entries=()
+
+            for entry in "${raw_schedule[@]}"; do
+              normalized="$(echo "${entry}" | tr '[:upper:]' '[:lower:]' | xargs)"
+              if [ -z "${normalized}" ]; then
+                continue
+              fi
+
+              case "${normalized}" in
+                xhigh|high|medium|low)
+                  normalized_schedule+=("${normalized}")
+                  ;;
+                *)
+                  invalid_schedule_entries+=("${normalized}")
+                  ;;
+              esac
+            done
+
+            if [ "${#invalid_schedule_entries[@]}" -gt 0 ] || [ "${#normalized_schedule[@]}" -eq 0 ]; then
+              selected_reasoning="${base_reviewer_reasoning}"
+              schedule_source="fallback_default"
+              echo "::warning::Invalid REVIEW_REASONING_SCHEDULE='${schedule_csv}'. Falling back to REVIEWER_REASONING_EFFORT='${selected_reasoning}'."
+            else
+              schedule_index=${autofix_iteration}
+              if [ "${schedule_index}" -ge "${#normalized_schedule[@]}" ]; then
+                schedule_index=$((${#normalized_schedule[@]} - 1))
+              fi
+              selected_reasoning="${normalized_schedule[${schedule_index}]}"
+              schedule_source="schedule"
+            fi
+          fi
+
+          echo "REVIEWER_REASONING_EFFORT=${selected_reasoning}" >> "$GITHUB_ENV"
+
+          if [ -f "${HOME}/.codex/config.toml" ]; then
+            sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${selected_reasoning}\"/" "${HOME}/.codex/config.toml"
+          fi
+
+          reviewer_reasoning_selection_json="$(jq -cn \
+            --argjson cycle_index "${cycle_index}" \
+            --arg selected_reasoning_level "${selected_reasoning}" \
+            --arg schedule_source "${schedule_source}" \
+            --argjson kill_switch_enabled "${kill_switch_enabled}" \
+            --argjson smoke_override "${smoke_override}" \
+            --arg configured_schedule "${schedule_csv}" \
+            '{cycle_index:$cycle_index,selected_reasoning_level:$selected_reasoning_level,schedule_source:$schedule_source,kill_switch_enabled:$kill_switch_enabled,smoke_override:$smoke_override,configured_schedule:$configured_schedule}'
+          )"
+          echo "reviewer_reasoning_selection: ${reviewer_reasoning_selection_json}"
 
       - name: Generate diff context
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
@@ -1107,11 +1202,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
+          TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
       - name: Filter reviewer issues by consensus
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        env:
+          TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
           set -euo pipefail
 
@@ -1237,14 +1335,15 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
-          sed -i "s/model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
-          echo "Updated reasoning effort from ${REVIEWER_REASONING_EFFORT} to ${EDITOR_REASONING_EFFORT} for editor phase"
+          sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
+          echo "Updated reasoning effort to ${EDITOR_REASONING_EFFORT} for editor phase"
 
       - name: Apply fixes with editor model
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
+          TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
           set -euo pipefail
 
@@ -1745,7 +1844,7 @@ jobs:
           # git merge later tries to write the same path from origin/BASE_BRANCH.
           # In the source repo these files are tracked, so git reset --hard HEAD
           # will restore them after this removal — no data loss occurs.
-          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh 2>/dev/null || true
+          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh 2>/dev/null || true
           git reset --hard HEAD
           # Use -ffdx: double-force clears nested git repos (-ff), and -x also
           # removes files matching .gitignore (e.g. .serena/) so nothing
@@ -1965,7 +2064,18 @@ jobs:
           # collide with files from origin/BASE_BRANCH during the merge.
           # First, explicitly remove known CI-generated files that may be
           # untracked in consumer repos (see "Detect merge conflicts" step).
-          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh 2>/dev/null || true
+          # Skipped on the workflow source repo, where these paths are
+          # tracked source files — removing them here would leave them
+          # missing for the rest of this step because the consumer-repo
+          # restore block below (git reset/checkout on 'scripts' etc.) is
+          # intentionally skipped when IS_WORKFLOW_SOURCE_REPO=true, and
+          # `git merge --no-commit` does not rewrite paths whose content
+          # is identical between HEAD and BASE.  Downstream
+          # check_workflow_script_refs.py then fails the [ai-merge-resolve]
+          # commit because the referenced scripts are missing from disk.
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
+            rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh 2>/dev/null || true
+          fi
           RESOLVE_STASH="$(mktemp -d)"
           for d in scripts .serena prompts ai-memory; do
             if [ -d "${d}" ]; then
@@ -2906,7 +3016,7 @@ jobs:
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
-            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh
+            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh
             rm -rf .serena prompts
             rm -f .github/ai/orchestrate_schema.v1.json
           fi

@@ -1718,7 +1718,7 @@ finalize_integration_merge_if_needed() {
   local sync_status
   sync_status="$(jq -r '.sync.status // "active"' "${STATE_FILE}")"
   if [ "${sync_status}" = "superseded-by-main" ]; then
-    jq --arg reason "$(jq -r '.sync.superseded_reason // "Integration branch superseded by main; final merge intentionally skipped."' "${STATE_FILE}")" \
+    jq --arg reason "$(jq -r --arg default_branch "${default_branch}" '.sync.superseded_reason // ("Integration branch superseded by " + $default_branch + "; final merge intentionally skipped.")' "${STATE_FILE}")" \
       '.final_merge_status = "superseded-by-main" | .final_merge_error = $reason' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
@@ -4647,11 +4647,11 @@ json.dump(result, sys.stdout)
       {
         cat "${RUNTIME_DIR}/judge_static.txt"
         echo
-        echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
-        echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
         bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+        echo
+        echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
         echo "=== ISSUE #${rb_issue} (original requirement) ==="
         echo
@@ -5593,11 +5593,11 @@ ${PR_DIFF}
   {
     cat "${RUNTIME_DIR}/judge_static.txt"
     echo
-    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
-    echo
     echo "=== JUDGE TASK ==="
     echo
     bash scripts/render_prompt.sh prompts/mode-judge.txt
+    echo
+    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
     echo "=== PROJECT SPEC ==="
     echo
