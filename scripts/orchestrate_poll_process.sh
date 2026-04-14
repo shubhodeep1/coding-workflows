@@ -331,6 +331,13 @@ else
   ENABLE_STALL_JUDGE="false"
 fi
 
+ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
+if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
+  ENABLE_STALL_HUMAN_TERMINALIZATION="true"
+else
+  ENABLE_STALL_HUMAN_TERMINALIZATION="false"
+fi
+
 ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
 if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
   ENABLE_STANDALONE_STALL_RECOVERY="true"
@@ -2826,6 +2833,16 @@ invoke_stall_judge() {
 
   local fallback_action
   fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+  if [ "${fallback_action}" = "escalate_human" ] && [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ]; then
+    local fallback_count=$((recovery_count - 1))
+    if [ "${fallback_count}" -lt 0 ]; then
+      fallback_count=0
+    fi
+    fallback_action="$(recovery_action_for_phase "${phase}" "${fallback_count}")"
+    if [ "${fallback_action}" = "escalate_human" ]; then
+      fallback_action="retrigger_pipeline"
+    fi
+  fi
 
   local comments_issue_num="${issue_num}"
   if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
@@ -5933,6 +5950,7 @@ fi
       --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}"
       --stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}"
       --enable-stall-judge "${ENABLE_STALL_JUDGE}"
+      --allow-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
     )
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")

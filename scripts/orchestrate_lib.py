@@ -451,6 +451,7 @@ def detect_stalls(
 	phase_thresholds: dict[str, int] | None = None,
 	stall_judge_trigger_count: int = 2,
 	enable_stall_judge: bool = True,
+	allow_human_terminalization: bool = False,
 ) -> list[dict[str, Any]]:
 	"""Detect stalled issues in the current wave.
 
@@ -466,6 +467,10 @@ def detect_stalls(
 	When *enable_stall_judge* is true and *stall_judge_trigger_count* is
 	reached (but still below *max_recoveries*), recovery action is
 	overridden to RUN_STALL_JUDGE_ACTION for non-dedicated phases.
+
+	When *allow_human_terminalization* is false, declarative ladder
+	recovery never emits ``escalate_human`` and instead falls back to the
+	last non-human ladder action.
 
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
@@ -525,6 +530,9 @@ def detect_stalls(
 			actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
 			action_idx = min(recovery_count, len(actions) - 1)
 			action = actions[action_idx]
+			if action == "escalate_human" and not allow_human_terminalization:
+				non_human_actions = [candidate for candidate in actions if candidate != "escalate_human"]
+				action = non_human_actions[-1] if non_human_actions else "retrigger_pipeline"
 
 		stalled.append({
 			"id": issue["id"],
@@ -1024,6 +1032,11 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 		enable_stall_judge = enable_stall_judge_raw
 	else:
 		enable_stall_judge = str(enable_stall_judge_raw).lower() == "true"
+	allow_human_terminalization_raw = getattr(args, "allow_human_terminalization", "false")
+	if isinstance(allow_human_terminalization_raw, bool):
+		allow_human_terminalization = allow_human_terminalization_raw
+	else:
+		allow_human_terminalization = str(allow_human_terminalization_raw).lower() == "true"
 
 	phase_thresholds: dict[str, int] | None = None
 	if args.phase_thresholds_json:
@@ -1036,6 +1049,7 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 		phase_thresholds=phase_thresholds,
 		stall_judge_trigger_count=stall_judge_trigger_count,
 		enable_stall_judge=enable_stall_judge,
+		allow_human_terminalization=allow_human_terminalization,
 	)
 	_print_json({"ok": True, "stalls": stalls, "count": len(stalls)})
 	return 0
@@ -1105,6 +1119,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
 	p_stalls.add_argument("--stall-judge-trigger-count", default="2", help="Recovery-count threshold to switch stall recovery to run_stall_judge")
 	p_stalls.add_argument("--enable-stall-judge", default="true", choices=("true", "false"), help="Enable/disable stall judge escalation action")
+	p_stalls.add_argument("--allow-human-terminalization", default="false", choices=("true", "false"), help="Allow declarative stall ladder to terminalize at escalate_human")
 	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
 	p_stalls.set_defaults(func=cmd_check_stalls)
 

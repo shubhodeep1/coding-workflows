@@ -306,6 +306,7 @@ def _run_poller(
 	mock_stall_judge_json: dict | None = None,
 	enable_stall_judge: str = "true",
 	stall_judge_trigger_count: str = "2",
+	enable_stall_human_terminalization: str = "false",
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -1018,6 +1019,7 @@ print(json.dumps(parsed))
 				"MAX_VALIDATION_RECOVERY_ATTEMPTS": "0",
 				"ENABLE_STALL_JUDGE": enable_stall_judge,
 				"STALL_JUDGE_TRIGGER_COUNT": stall_judge_trigger_count,
+				"ENABLE_STALL_HUMAN_TERMINALIZATION": enable_stall_human_terminalization,
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"GH_MOCK_STORE": str(store_file),
@@ -2497,6 +2499,49 @@ def test_stall_judge_escalate_human_issue_not_redetected_after_needs_human():
 	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert not any("/approved" in body or "/reclarify" in body for body in issue_comments)
 	assert not any("Stall Judge — Issue #10" in body for body in tracking_comments)
+
+
+def test_stall_recovery_disables_human_terminalization_by_default():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_judge="false",
+		stall_judge_trigger_count="9",
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert any("/approved" in body for body in issue_comments)
+
+
+def test_stall_recovery_allows_human_terminalization_when_enabled():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_judge="false",
+		stall_judge_trigger_count="9",
+		enable_stall_human_terminalization="true",
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
 
 
 
