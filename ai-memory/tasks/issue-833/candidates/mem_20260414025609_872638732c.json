@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nInterpreted clarification answers:\n- `Q1 -> A`: use `actions/cache` with `hashFiles(...)`-based keys.\n\nConflict check:\n- Prior bot feedback correctly notes that template-owned paths (`scripts/`, `.github/prompts/`, `.github/scripts/`) are filtered in consumer repos by `implement.yml`.\n- This issue is in `shubhodeep1/coding-workflows`, so changing those paths in this repo is valid and not a no-op.\n\nImplementation plan:\n\n1. Files likely to change\n- `scripts/build_repo_overview.sh` (new)\n- `.github/actions/setup-runtime/action.yml`\n- `.github/workflows/clarify.yml`\n- `.github/workflows/plan.yml`\n- `.github/workflows/implement.yml`\n- `.github/workflows/review_autofix.yml`\n- `.github/workflows/orchestrate.yml`\n- `.github/workflows/orchestrate_poll.yml`\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `.gitignore`\n- `README.md` (document runtime artifact behavior)\n\n2. Functions/modules to implement\n- New script `scripts/build_repo_overview.sh` with deterministic generation logic:\n- Compute `inputs_hash` from the required input set:\n- `**/package.json`\n- `**/pyproject.toml`\n- `**/go.mod`\n- `**/Cargo.toml`\n- `.pre-commit-config.yaml`\n- `**/Dockerfile`\n- `.github/workflows/*.yml`\n- Read current `repo_overview.txt` header; if `inputs_hash` matches, exit `0` without touching file.\n- On change, regenerate file atomically with sections in exact required order.\n- `tree` optional behavior:\n- Use `tree` when available.\n- Fallback to `find . -maxdepth 2 -type d` with pruning when unavailable.\n- Keep output small and deterministic (`LC_ALL=C`, sorted lists, stable formatting).\n- Setup-runtime wiring:\n- Add cache restore/save (`actions/cache`) keyed by `hashFiles(...)` (Q1 decision).\n- Execute overview script during runtime setup so setup-runtime users get artifact automatically.\n- Non-setup Codex workflows wiring (representative pattern: current `pre_assembled_static.txt` assembly blocks in `clarify.yml`/`plan.yml`):\n- Ensure `build_repo_overview.sh` is fetched with other support scripts.\n- Add cache step with the same key strategy.\n- Invoke `bash scripts/build_repo_overview.sh` before static prompt assembly (or before poller script entrypoint where prompt assembly is inside helper script).\n\n3. Data structures affected\n- New runtime artifact file contract: `repo_overview.txt` at repo root (not committed).\n- Header metadata in section 1:\n- `generated_at`\n- `generator_version`\n- `inputs_hash`\n- Body sections exactly:\n- `=== REPO OVERVIEW ===`\n- `=== TREE (depth 2, pruned) ===`\n- `=== LANGUAGES ===`\n- `=== PACKAGE FILES ===`\n- `=== TEST RUNNER ===`\n- `=== LINT/FORMAT ===`\n- `=== CONTAINERS ===`\n- `=== CI WORKFLOWS ===`\n- `=== DB CONTRACTS ===`\n- `=== PROTECTED PATHS ===`\n\n4. API/interface changes\n- No external API changes.\n- Workflow runtime interface change:\n- Codex workflows gain a guaranteed runtime artifact `repo_overview.txt`.\n- Cache key interface is standardized to the required `hashFiles(...)` inputs across setup-runtime and direct-wired workflows.\n- Repo hygiene change:\n- Add/confirm ignore rule for `repo_overview.txt` in `.gitignore`.\n\n5. Risks and edge cases\n- `tree` missing on runner: must not fail job; fallback path required.\n- Cache key/hash drift: script\u2019s `inputs_hash` source set must match workflow cache input set to avoid stale/noisy behavior.\n- Over-size artifact: keep output concise to satisfy `< 8 KB` on this repo.\n- Fail-open constraint: script and workflow wiring should degrade gracefully (warnings/empty sections) rather than breaking Codex phases.\n- Consumer repo safety: fetched runtime support script must be included in each non-setup workflow fetch list to avoid \u201cscript not found\u201d at runtime.\n\n6. Testing considerations\n- Script behavior checks:\n- `bash scripts/build_repo_overview.sh` creates `repo_overview.txt`.\n- Second run without input change exits `0` and does not modify file.\n- Input change causes regeneration and `inputs_hash` update.\n- Missing `tree` simulation confirms fallback does not fail.\n- `wc -c repo_overview.txt` remains `< 8192` bytes on this repo.\n- Workflow wiring checks:\n- Verify all 8 Codex-calling workflows execute overview generation path:\n- `clarify.yml`\n- `plan.yml`\n- `implement.yml`\n- `review_autofix.yml`\n- `orchestrate.yml`\n- `orchestrate_poll.yml`\n- `orchestrate_clarify_respond.yml`\n- `validate.yml` (via setup-runtime)\n- Verify artifact remains uncommitted due `.gitignore` and existing staging exclusions behavior.\n\nImplementation checklist (mapped to issue requirements):\n- [ ] Add `scripts/build_repo_overview.sh`.\n- [ ] Generate exact required section order and metadata.\n- [ ] Add `tree` optional fallback logic.\n- [ ] Add hash-based no-op rewrite behavior.\n- [ ] Wire generation through `.github/actions/setup-runtime/action.yml`.\n- [ ] Wire direct invocation for non-setup Codex workflows before prompt/static assembly.\n- [ ] Add `actions/cache` restore/save with required `hashFiles` inputs.\n- [ ] Add/confirm ignore handling for `repo_overview.txt`.\n- [ ] Update README runtime docs for the new artifact and cache behavior.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3f4e2131b3cfff27958bb80e34bd03059bbc0cd5f4c9e187e166ac8a2462511e",
+  "lineage": {
+    "issue_number": 833,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24378232534",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24378232534",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/833"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414025609_872638732c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 833,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24378232534"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #833",
+  "timestamps": {
+    "created_at": "2026-04-14T02:56:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
