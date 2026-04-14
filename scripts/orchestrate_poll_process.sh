@@ -1154,16 +1154,22 @@ heal_integration_branch_conflict() {
   dispatch_count="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
   local unresolved_ticks
   unresolved_ticks="$(jq -r '.integration_conflict_unresolved_ticks // 0' "${STATE_FILE}")"
-  unresolved_ticks=$((unresolved_ticks + 1))
 
-  jq --arg err "${error_msg}" --argjson ticks "${unresolved_ticks}" \
+  jq --arg err "${error_msg}" \
     '.integration_sync_status = "conflict" |
-     .integration_sync_last_error = $err |
-     .integration_conflict_unresolved_ticks = $ticks' \
+     .integration_sync_last_error = $err' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-  # Circuit breaker: after MAX retries, escalate to judge.
-  if [ "${unresolved_ticks}" -gt "${INTEGRATION_CONFLICT_MAX_RETRIES}" ]; then
+  # Cooldown gate: don't re-dispatch resolver too frequently.
+  local elapsed=$((now_ts - last_ts))
+  if [ "${last_ts}" -gt 0 ] && [ "${elapsed}" -lt "${CONFLICT_DISPATCH_COOLDOWN_SECS}" ]; then
+    echo "  [integration-heal] Dispatch cooldown active (${elapsed}s < ${CONFLICT_DISPATCH_COOLDOWN_SECS}s); deferring resolver dispatch for PR #${final_pr}."
+    return 0
+  fi
+
+  # Circuit breaker: after MAX retries, escalate to judge instead of
+  # dispatching one more resolver run.
+  if [ "${unresolved_ticks}" -ge "${INTEGRATION_CONFLICT_MAX_RETRIES}" ]; then
     if invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}"; then
       # Reset unresolved ticks so the resolver loop can resume after
       # the judge's push. Keep dispatch_count as audit trail.
@@ -1184,16 +1190,20 @@ heal_integration_branch_conflict() {
     return 1
   fi
 
-  # Cooldown gate: don't re-dispatch resolver too frequently.
-  local elapsed=$((now_ts - last_ts))
-  if [ "${last_ts}" -gt 0 ] && [ "${elapsed}" -lt "${CONFLICT_DISPATCH_COOLDOWN_SECS}" ]; then
-    echo "  [integration-heal] Dispatch cooldown active (${elapsed}s < ${CONFLICT_DISPATCH_COOLDOWN_SECS}s); deferring resolver dispatch for PR #${final_pr}."
-    return 0
-  fi
-
   # Dispatch the existing review/autofix workflow against the final PR.
   local dispatch_rc=0
   _dispatch_review_for_conflicts "${final_pr}" "${integration_branch}" || dispatch_rc=$?
+
+  if [ "${dispatch_rc}" -eq 2 ]; then
+    echo "  [integration-heal] Resolver already in flight for PR #${final_pr}; skipping dispatch this tick."
+    return 0
+  fi
+
+  unresolved_ticks=$((unresolved_ticks + 1))
+  jq --argjson ticks "${unresolved_ticks}" \
+    '.integration_conflict_unresolved_ticks = $ticks' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
   case "${dispatch_rc}" in
     0)
       dispatch_count=$((dispatch_count + 1))
@@ -1209,9 +1219,6 @@ heal_integration_branch_conflict() {
         post_tracking_comment "## 🔧 Integration self-healing started\n\nDetected a real merge conflict while syncing \`${default_branch}\` into \`${integration_branch}\`. Dispatched the review/autofix workflow against final PR #${final_pr} for automated resolution. Will retry up to ${INTEGRATION_CONFLICT_MAX_RETRIES} times before escalating to the judge."
       fi
       tg_notify "🔧 Integration conflict on #${TRACKING_NUM}: dispatched resolver for PR #${final_pr} (attempt ${dispatch_count}, unresolved_ticks=${unresolved_ticks})." "WARNING"
-      ;;
-    2)
-      echo "  [integration-heal] Resolver already in flight for PR #${final_pr}; skipping dispatch this tick."
       ;;
     *)
       echo "::warning::[integration-heal] Could not dispatch review workflow for PR #${final_pr}."
