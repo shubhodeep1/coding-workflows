@@ -516,6 +516,21 @@ def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow
 		"Destructive guard block must not trigger fix-up issue generation"
 	)
 
+	capture_block = _step_block_text("Capture post-Codex validation errors")
+	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''" in capture_block, (
+		"Captured validation diagnostics must not run for destructive-blocked failures"
+	)
+
+	diagnose_block = _step_block_text("Diagnose post-Codex failure and create fix-up issues")
+	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''" in diagnose_block, (
+		"Diagnose/fix-up automation must be skipped for destructive-blocked runs"
+	)
+
+	wf = _workflow_text()
+	assert "FIX_COUNT=\"$(jq -r '(.fix_issues // []) | if type == \"array\" then length else 0 end' \"${IMPLEMENT_DIAGNOSE_RESULT_FILE}\")\"" in wf, (
+		"needs_fixes handling must tolerate non-array fix_issues without aborting"
+	)
+
 
 
 def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
