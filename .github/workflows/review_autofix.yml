@@ -1973,6 +1973,23 @@ jobs:
           done
           rm -rf "${RESOLVE_STASH}"
 
+          # Enumerate the unmerged paths git is currently tracking so the
+          # resolver prompt can name every conflicted file explicitly.  Without
+          # this enumeration Codex tends to discover and fix only one file per
+          # invocation, leaving the rest of the conflicts to subsequent
+          # workflow runs.  Listing them up-front and requiring all of them be
+          # resolved in a single pass turns the resolver back into a one-shot
+          # operation.
+          CONFLICTED_FILES_RAW="$(git diff --name-only --diff-filter=U 2>/dev/null || true)"
+          if [ -n "${CONFLICTED_FILES_RAW}" ]; then
+            CONFLICTED_FILES_COUNT="$(printf '%s\n' "${CONFLICTED_FILES_RAW}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+            CONFLICTED_FILES_LIST="$(printf '%s\n' "${CONFLICTED_FILES_RAW}" | sed '/^$/d; s/^/          - /')"
+          else
+            CONFLICTED_FILES_COUNT="0"
+            CONFLICTED_FILES_LIST="          (git did not report any unmerged paths; scan the working tree for conflict markers and resolve every file that contains them)"
+          fi
+          echo "Conflict resolver: ${CONFLICTED_FILES_COUNT} unmerged path(s) to resolve in this run."
+
           cat > "${CONFLICT_RESOLVER_PROMPT_FILE}" <<__CONFLICT_RESOLVER_PROMPT__
           Repository task: Resolve merge conflicts.
 
@@ -1985,10 +2002,15 @@ jobs:
           other code
           [conflict-end] branch
 
+          Conflicted files reported by \`git diff --name-only --diff-filter=U\` (${CONFLICTED_FILES_COUNT} total):
+          ${CONFLICTED_FILES_LIST}
+
           Your task:
           Resolve merge conflicts safely.
 
           Rules:
+          - You MUST resolve EVERY conflicted file listed above in this single run. Do not stop after fixing only one file or a subset.
+          - Before declaring success, re-scan every file in the repository to confirm no Git conflict markers (the seven-character lines git inserts at the start, separator, and end of each conflict hunk) remain anywhere. If any remain, keep resolving until none are left.
           - Only resolve conflicts.
           - Do not introduce new functionality.
           - Do not refactor unrelated code.
