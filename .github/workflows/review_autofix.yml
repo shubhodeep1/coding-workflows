@@ -1900,7 +1900,8 @@ jobs:
             LINKED_ISSUE_BODY_CAPPED="none"
           fi
 
-          cat > "${CONFLICT_RESOLVER_PROMPT_FILE}" <<__CONFLICT_RESOLVER_PROMPT__
+          {
+            cat <<'__PROMPT_HEAD__'
           Repository task: Resolve merge conflicts.
 
           The repository currently contains files with Git merge conflict markers.
@@ -1916,9 +1917,10 @@ jobs:
           Resolve merge conflicts safely.
 
           === PR INTENT ===
-          Title: ${PR_INTENT_TITLE}
-          Body: ${PR_INTENT_BODY_CAPPED}
-          Linked issue: ${LINKED_ISSUE_BODY_CAPPED}
+          __PROMPT_HEAD__
+            printf '          Title: %s\n          Body: %s\n          Linked issue: %s\n\n' \
+              "${PR_INTENT_TITLE}" "${PR_INTENT_BODY_CAPPED}" "${LINKED_ISSUE_BODY_CAPPED}"
+            cat <<'__PROMPT_TAIL__'
 
           Rules:
           - Only resolve conflicts.
@@ -1944,7 +1946,8 @@ jobs:
 
           Notes:
           - brief explanation if any resolution required choosing one side
-          __CONFLICT_RESOLVER_PROMPT__
+          __PROMPT_TAIL__
+          } > "${CONFLICT_RESOLVER_PROMPT_FILE}"
 
           attempt=1
           while [ "${attempt}" -le 3 ]; do
