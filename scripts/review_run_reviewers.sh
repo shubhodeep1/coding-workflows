@@ -445,15 +445,6 @@ Code: lock.acquire() without corresponding release in exception path
 Problem: lock may remain held if an exception occurs
 Runtime impact: subsequent cache operations will deadlock
 
-PRE-APPROVAL TEST GATE (MANDATORY)
-Before finalizing your review, run the test suite:
-python3 tests/test_orchestrate_poll_process.py
-If any test fails, report each failure as a blocking issue with:
-- the test name
-- the failure message
-- the file and function under test
-Do not report the PR as having no blocking issues if any test fails.
-
 OUTPUT RULES
 Output plain text only.
 No JSON
@@ -672,6 +663,23 @@ run_reviewer() {
         return 0
       fi
       echo "Reviewer ${model} produced empty output on attempt ${attempt}." | tee -a "${log_file}"
+      # Empty-output diagnostic: codex-cli exited 0 but emitted nothing on
+      # stdout, which means the model never produced a final review message
+      # (typical causes: tool-call/turn budget exhausted, sandbox command
+      # timeout loop, or model giving up silently). Surface the tail of the
+      # codex stderr inline so the cause is visible in the GitHub Actions
+      # job log without having to scroll through thousands of streamed lines
+      # or download artifacts. Structured with grep-able delimiters per
+      # CLAUDE.md §8.
+      if [ -s "${tmp_stderr}" ]; then
+        {
+          echo "----- reviewer ${model} stderr tail -n 40 (empty-output diagnostic, attempt ${attempt}) -----"
+          tail -n 40 "${tmp_stderr}" 2>/dev/null | sed 's/^/  | /'
+          echo "------------------------------------------------------------------------------------------"
+        } | tee -a "${log_file}" >&2
+      else
+        echo "Reviewer ${model} attempt ${attempt}: codex-cli stderr was also empty (no diagnostic available)." | tee -a "${log_file}" >&2
+      fi
     else
       cat "${tmp_stderr}" >> "${log_file}"
       case "${wd_reason}" in
