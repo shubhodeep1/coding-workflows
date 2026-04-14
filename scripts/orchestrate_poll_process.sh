@@ -900,9 +900,139 @@ mark_integration_branch_missing_failed() {
   tg_cleanup_msgs "${TRACKING_NUM}"
 }
 
+resolve_branch_head_sha() {
+  local branch_name="$1"
+  local branch_ref
+  local head_sha
+
+  [ -n "${branch_name}" ] || return 1
+  branch_ref="$(printf '%s' "${branch_name}" | jq -sRr @uri)"
+  head_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" --jq '.object.sha // empty' || echo "")"
+  if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
+    return 1
+  fi
+
+  printf '%s' "${head_sha}"
+}
+
+resolve_commit_tree_sha() {
+  local commit_sha="$1"
+  local tree_sha
+
+  [ -n "${commit_sha}" ] || return 1
+  tree_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/commits/${commit_sha}" --jq '.tree.sha // empty' || echo "")"
+  if [ -z "${tree_sha}" ] || [ "${tree_sha}" = "null" ]; then
+    return 1
+  fi
+
+  printf '%s' "${tree_sha}"
+}
+
+resolve_branch_tree_sha() {
+  local branch_name="$1"
+  local head_sha
+
+  head_sha="$(resolve_branch_head_sha "${branch_name}")" || return 1
+  resolve_commit_tree_sha "${head_sha}"
+}
+
+integration_sync_trees_equal() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local integration_tree
+  local default_tree
+
+  INTEGRATION_SYNC_INTEGRATION_TREE_SHA=""
+  INTEGRATION_SYNC_DEFAULT_TREE_SHA=""
+
+  integration_tree="$(resolve_branch_tree_sha "${integration_branch}")" || return 2
+  default_tree="$(resolve_branch_tree_sha "${default_branch}")" || return 2
+
+  INTEGRATION_SYNC_INTEGRATION_TREE_SHA="${integration_tree}"
+  INTEGRATION_SYNC_DEFAULT_TREE_SHA="${default_tree}"
+
+  if [ "${integration_tree}" = "${default_tree}" ]; then
+    return 0
+  fi
+
+  return 1
+}
+
+integration_sync_superseded_active() {
+  local integration_branch="$1"
+  local default_branch="$2"
+
+  jq -e \
+    --arg integration_branch "${integration_branch}" \
+    --arg default_branch "${default_branch}" \
+    '(.integration_sync.active // false) == true and
+     (.integration_sync.state // "") == "superseded-by-main" and
+     (.integration_sync.integration_branch // "") == $integration_branch and
+     (.integration_sync.default_branch // "") == $default_branch' \
+    "${STATE_FILE}" >/dev/null 2>&1
+}
+
+set_integration_sync_superseded_active() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local integration_tree="$3"
+  local default_tree="$4"
+
+  jq \
+    --arg integration_branch "${integration_branch}" \
+    --arg default_branch "${default_branch}" \
+    --arg integration_tree "${integration_tree}" \
+    --arg default_tree "${default_tree}" \
+    '.integration_sync = {
+      "state": "superseded-by-main",
+      "active": true,
+      "integration_branch": $integration_branch,
+      "default_branch": $default_branch,
+      "integration_tree": $integration_tree,
+      "default_tree": $default_tree
+    }' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+}
+
+clear_integration_sync_superseded_active() {
+  jq 'del(.integration_sync)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+}
+
+should_skip_integration_sync_retry() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local tree_check_rc
+
+  if ! integration_sync_superseded_active "${integration_branch}" "${default_branch}"; then
+    return 1
+  fi
+
+  if ! integration_branch_exists "${integration_branch}"; then
+    mark_integration_branch_missing_failed "${integration_branch}"
+    return 2
+  fi
+
+  integration_sync_trees_equal "${integration_branch}" "${default_branch}"
+  tree_check_rc=$?
+  if [ "${tree_check_rc}" -eq 0 ]; then
+    return 0
+  fi
+
+  if [ "${tree_check_rc}" -eq 1 ]; then
+    clear_integration_sync_superseded_active
+    post_state_comment
+    return 1
+  fi
+
+  echo "::warning::Unable to verify whether '${integration_branch}' remains superseded by '${default_branch}' due to transient GitHub API error; keeping superseded state and skipping sync retry this cycle." >&2
+  return 0
+}
+
 sync_default_into_integration_branch() {
   local integration_branch="$1"
   local default_branch="$2"
+  local tree_check_rc
+  local superseded_was_active
 
   if [ -z "${integration_branch}" ]; then
     return 0
@@ -918,12 +1048,46 @@ sync_default_into_integration_branch() {
     -f base="${integration_branch}" \
     -f head="${default_branch}" \
     -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >/dev/null)"; then
+    if integration_sync_superseded_active "${integration_branch}" "${default_branch}"; then
+      clear_integration_sync_superseded_active
+      post_state_comment
+    fi
     return 0
   fi
 
   if ! printf '%s' "${merge_error}" | grep -Eqi '(HTTP 409|status code 409|merge conflict|conflict)'; then
     echo "::warning::Unable to sync '${default_branch}' into '${integration_branch}' due to transient GitHub API error; will retry next poll." >&2
     return 0
+  fi
+
+  integration_sync_trees_equal "${integration_branch}" "${default_branch}"
+  tree_check_rc=$?
+  if [ "${tree_check_rc}" -eq 0 ]; then
+    superseded_was_active="false"
+    if integration_sync_superseded_active "${integration_branch}" "${default_branch}"; then
+      superseded_was_active="true"
+    fi
+    set_integration_sync_superseded_active \
+      "${integration_branch}" \
+      "${default_branch}" \
+      "${INTEGRATION_SYNC_INTEGRATION_TREE_SHA}" \
+      "${INTEGRATION_SYNC_DEFAULT_TREE_SHA}"
+    if [ "${superseded_was_active}" != "true" ]; then
+      post_state_comment
+      post_tracking_comment "## ⚠️ Integration sync superseded by default branch\n\nAutomatic sync from \`${default_branch}\` into \`${integration_branch}\` is currently reporting merge conflicts, but both branches have identical trees. Sync retries and alerts are paused until branch trees diverge."
+      tg_notify "⚠️ Sync superseded for #${TRACKING_NUM}: '${integration_branch}' currently matches '${default_branch}' tree; retry alerts paused."
+    fi
+    return 0
+  fi
+
+  if [ "${tree_check_rc}" -eq 2 ]; then
+    echo "::warning::Unable to verify tree equality for '${default_branch}' and '${integration_branch}' after merge conflict; treating as transient and retrying next poll." >&2
+    return 0
+  fi
+
+  if integration_sync_superseded_active "${integration_branch}" "${default_branch}"; then
+    clear_integration_sync_superseded_active
+    post_state_comment
   fi
 
   post_tracking_comment "## ⚠️ Integration sync warning\n\nUnable to sync \`${default_branch}\` into \`${integration_branch}\`. This is usually a merge conflict. The project can continue, but final merge may require manual conflict resolution."
@@ -2889,12 +3053,25 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     && [ "${PROJECT_STATUS}" != "failed" ] \
     && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
     && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
-    if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+    SYNC_SKIP_RC=1
+    if should_skip_integration_sync_retry "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+      SYNC_SKIP_RC=0
+    else
+      SYNC_SKIP_RC=$?
+    fi
+
+    if [ "${SYNC_SKIP_RC}" -eq 2 ]; then
       continue
     fi
-    PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
-    if [ "${PROJECT_STATUS}" = "failed" ]; then
-      continue
+
+    if [ "${SYNC_SKIP_RC}" -ne 0 ]; then
+      if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+        continue
+      fi
+      PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+      if [ "${PROJECT_STATUS}" = "failed" ]; then
+        continue
+      fi
     fi
   fi
 

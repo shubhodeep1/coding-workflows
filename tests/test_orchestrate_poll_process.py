@@ -153,6 +153,9 @@ def _run_poller(
 	prs: list[dict] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
+	branch_heads: dict[str, str] | None = None,
+	commit_trees: dict[str, str] | None = None,
+	fail_git_commit_shas: list[str] | None = None,
 	blocked_check_shas: list[str] | None = None,
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
@@ -169,6 +172,9 @@ def _run_poller(
 	gql_labels = gql_labels or {}
 	prs = prs or []
 	existing_branches = existing_branches or ["main"]
+	branch_heads = branch_heads or {}
+	commit_trees = commit_trees or {}
+	fail_git_commit_shas = fail_git_commit_shas or []
 	blocked_check_shas = blocked_check_shas or []
 	validation_workflow_runs = validation_workflow_runs or []
 	issue_closed = issue_closed or {}
@@ -238,6 +244,9 @@ def _run_poller(
 			"active_autofix_runs": active_autofix_runs,
 			"merge_conflict_on_sync": merge_conflict_on_sync,
 			"merge_calls": [],
+			"branch_heads": {str(k): str(v) for k, v in branch_heads.items()},
+			"commit_trees": {str(k): str(v) for k, v in commit_trees.items()},
+			"fail_git_commit_shas": [str(x) for x in fail_git_commit_shas],
 			"blocked_check_shas": blocked_check_shas,
 			"validation_workflow_runs": validation_workflow_runs,
 			"issue_linked_prs": {str(k): int(v) for k, v in issue_linked_prs.items()},
@@ -690,10 +699,10 @@ if args[0] == 'api':
 			if f.startswith('head='):
 				head = f.split('=', 1)[1]
 		store.setdefault('merge_calls', []).append({'base': base, 'head': head})
+		save()
 		if store.get('merge_conflict_on_sync'):
 			print('conflict', file=sys.stderr)
 			sys.exit(1)
-		save()
 		print(json.dumps({'merged': True}))
 		sys.exit(0)
 
@@ -703,7 +712,33 @@ if args[0] == 'api':
 		from urllib.parse import unquote
 		branch = unquote(encoded_branch)
 		if branch in store.get('existing_branches', ['main']):
-			print(json.dumps({'ref': f'refs/heads/{branch}', 'object': {'sha': 'mocksha'}}))
+			sha = store.get('branch_heads', {}).get(branch, f'mocksha-{branch.replace('/', '-')}')
+			payload = {'ref': f'refs/heads/{branch}', 'object': {'sha': sha}}
+			if jq:
+				import subprocess
+				jq_result = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+				print(jq_result.stdout.rstrip())
+			else:
+				print(json.dumps(payload))
+			sys.exit(0)
+		print('not found', file=sys.stderr)
+		sys.exit(1)
+
+	m = re.search(r'/git/commits/([^/]+)$', path)
+	if m:
+		commit_sha = m.group(1)
+		if commit_sha in set(store.get('fail_git_commit_shas', [])):
+			print('tree lookup failed', file=sys.stderr)
+			sys.exit(1)
+		tree_sha = store.get('commit_trees', {}).get(commit_sha)
+		if tree_sha:
+			payload = {'sha': commit_sha, 'tree': {'sha': tree_sha}}
+			if jq:
+				import subprocess
+				jq_result = subprocess.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
+				print(jq_result.stdout.rstrip())
+			else:
+				print(json.dumps(payload))
 			sys.exit(0)
 		print('not found', file=sys.stderr)
 		sys.exit(1)
@@ -897,12 +932,22 @@ def test_label_batch_graphql_full_skips_rest_fallback():
 def test_complete_verdict_enters_validation_mode_when_enabled():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
+	branch_heads = {
+		"orchestrator/project-192": "sha-int",
+		"main": "sha-main",
+	}
+	commit_trees = {
+		"sha-int": "tree-int",
+		"sha-main": "tree-main",
+	}
 	result = _run_poller(
 		state=state,
 		enable_validation="true",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
+		branch_heads=branch_heads,
+		commit_trees=commit_trees,
 	)
 	assert result["latest_state"]["status"] == "validating"
 	assert result["latest_state"]["judge_cycle"] == 1
@@ -914,6 +959,7 @@ def test_complete_verdict_enters_validation_mode_when_enabled():
 	assert result["merge_calls"]
 	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
 	assert result["merge_calls"][0]["head"] == "main"
+	assert result["latest_state"].get("integration_sync") is None
 
 
 def test_complete_verdict_enters_validation_mode_when_enable_validation_is_mixed_case_truthy():
@@ -950,6 +996,14 @@ def test_complete_verdict_redispatches_validation_when_previous_dispatch_cycle_e
 def test_complete_verdict_keeps_open_when_validation_disabled():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
+	branch_heads = {
+		"orchestrator/project-192": "sha-int",
+		"main": "sha-main",
+	}
+	commit_trees = {
+		"sha-int": "tree-int",
+		"sha-main": "tree-main",
+	}
 	prs = [
 		{
 			"number": 350,
@@ -967,6 +1021,8 @@ def test_complete_verdict_keeps_open_when_validation_disabled():
 		issue_labels={10: ["ai:merged"]},
 		prs=prs,
 		existing_branches=["main", "orchestrator/project-192"],
+		branch_heads=branch_heads,
+		commit_trees=commit_trees,
 	)
 	assert result["latest_state"]["status"] == "complete"
 	assert result["tracking_closed"] is False
@@ -989,6 +1045,154 @@ def test_missing_integration_branch_marks_failed():
 	assert result["latest_state"]["status"] == "failed"
 	assert result["latest_state"]["final_merge_status"] == "failed"
 	assert "final_merge_error" in result["latest_state"]
+
+
+def test_sync_conflict_equal_trees_sets_superseded_once_and_dedupes_alerts():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	branch_heads = {
+		"orchestrator/project-192": "sha-int",
+		"main": "sha-main",
+	}
+	commit_trees = {
+		"sha-int": "tree-same",
+		"sha-main": "tree-same",
+	}
+
+	first = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		branch_heads=branch_heads,
+		commit_trees=commit_trees,
+	)
+
+	latest_first = first["latest_state"]
+	sync_state = latest_first.get("integration_sync", {})
+	assert sync_state.get("state") == "superseded-by-main"
+	assert sync_state.get("active") is True
+	assert sync_state.get("integration_tree") == "tree-same"
+	assert sync_state.get("default_tree") == "tree-same"
+	tracking_bodies_first = [c.get("body", "") for c in first["issues"]["192"]["comments"]]
+	assert sum("Integration sync superseded by default branch" in body for body in tracking_bodies_first) == 1
+	assert len(first["merge_calls"]) >= 1
+
+	second = _run_poller(
+		state=latest_first,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		branch_heads=branch_heads,
+		commit_trees=commit_trees,
+	)
+
+	latest_second = second["latest_state"]
+	assert latest_second.get("integration_sync", {}).get("state") == "superseded-by-main"
+	assert second["merge_calls"] == []
+	tracking_bodies_second = [c.get("body", "") for c in second["issues"]["192"]["comments"]]
+	assert sum("Integration sync superseded by default branch" in body for body in tracking_bodies_second) == 0
+
+
+def test_superseded_state_clears_and_retries_sync_when_trees_diverge():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_sync"] = {
+		"state": "superseded-by-main",
+		"active": True,
+		"integration_branch": "orchestrator/project-192",
+		"default_branch": "main",
+		"integration_tree": "tree-old",
+		"default_tree": "tree-old",
+	}
+	branch_heads = {
+		"orchestrator/project-192": "sha-int",
+		"main": "sha-main",
+	}
+	commit_trees = {
+		"sha-int": "tree-int",
+		"sha-main": "tree-main",
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		branch_heads=branch_heads,
+		commit_trees=commit_trees,
+	)
+
+	assert len(result["merge_calls"]) >= 1
+	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
+	assert result["latest_state"].get("integration_sync") is None
+
+
+def test_superseded_state_tree_lookup_failure_skips_retry_without_clearing():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_sync"] = {
+		"state": "superseded-by-main",
+		"active": True,
+		"integration_branch": "orchestrator/project-192",
+		"default_branch": "main",
+		"integration_tree": "tree-old",
+		"default_tree": "tree-old",
+	}
+	branch_heads = {
+		"orchestrator/project-192": "sha-int",
+		"main": "sha-main",
+	}
+	commit_trees = {
+		"sha-int": "tree-int",
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		branch_heads=branch_heads,
+		commit_trees=commit_trees,
+		fail_git_commit_shas=["sha-main"],
+	)
+
+	assert result["merge_calls"] == []
+	assert result["latest_state"].get("integration_sync", {}).get("state") == "superseded-by-main"
+	assert "keeping superseded state and skipping sync retry" in result["stderr"]
+
+
+def test_sync_conflict_tree_lookup_failure_is_transient_and_not_superseded():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	branch_heads = {
+		"orchestrator/project-192": "sha-int",
+		"main": "sha-main",
+	}
+	commit_trees = {
+		"sha-int": "tree-int",
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		branch_heads=branch_heads,
+		commit_trees=commit_trees,
+		fail_git_commit_shas=["sha-main"],
+	)
+
+	assert len(result["merge_calls"]) >= 1
+	assert result["latest_state"].get("integration_sync") is None
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert not any("Integration sync superseded by default branch" in body for body in tracking_bodies)
+	assert not any("Integration sync warning" in body for body in tracking_bodies)
 
 
 def test_final_merge_conflict_sets_merge_conflict_status():
