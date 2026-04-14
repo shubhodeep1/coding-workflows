@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- No Q<ID> items were asked in Clarify.\n- `/answer [auto-answered-by-clarify]` means proceed directly with planning using the issue scope as-is.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/orchestrate_lib.py`\n- `tests/test_orchestrate_lib.py`\n\n2. Functions/modules to implement\n- In `scripts/orchestrate_lib.py`, add `RUN_STALL_JUDGE_ACTION = \"run_stall_judge\"` in the stall-recovery constants area.\n- Extend `detect_stalls(...)` signature additively with optional params:\n  - `stall_judge_trigger_count: int` (defaulted for backward compatibility)\n  - `enable_stall_judge: bool` (default `False`)\n- Keep existing skip precedence unchanged:\n  - If `recovery_count >= max_recoveries`, action must remain `\"skip\"` regardless of stall-judge settings.\n- Add override logic in `detect_stalls(...)` after normal ladder selection:\n  - If `enable_stall_judge` is true\n  - And `stall_judge_trigger_count <= recovery_count < max_recoveries`\n  - And phase is not in `DEDICATED_HANDLER_PHASES`\n  - Then set `recovery_action` to `RUN_STALL_JUDGE_ACTION`.\n- Do not edit `STALL_RECOVERY_ACTIONS`.\n- Update `cmd_check_stalls(...)` to parse/pass the new inputs into `detect_stalls(...)`.\n- Update `build_parser()` for `check-stalls` with additive flags:\n  - `--stall-judge-trigger-count <int>`\n  - `--enable-stall-judge <true|false>`\n\n3. Data structures affected\n- Stall detector output objects (`stalls`) may now return `\"run_stall_judge\"` in `recovery_action`.\n- No state schema changes and no collection/index changes.\n\n4. API/interface changes\n- Python API: `detect_stalls(...)` gets two new optional parameters, preserving existing callers.\n- CLI: `check-stalls` gets two optional additive flags; existing arguments remain unchanged and valid.\n\n5. Risks and edge cases\n- Boundary conditions:\n  - Trigger at exactly `recovery_count == stall_judge_trigger_count` should activate override.\n  - `recovery_count == max_recoveries` must still yield `\"skip\"`.\n- Ensure dedicated phases never use stall-judge action.\n- Ensure disabled mode (`enable_stall_judge=false`) strictly preserves current declarative ladder behavior.\n- Bool parsing for `--enable-stall-judge` should be strict (`true|false`) to avoid accidental truthiness.\n\n6. Testing considerations\n- Use existing test style in `tests/test_orchestrate_lib.py` (representative pattern: `_run_check_wave_status` + CLI command invocation/captured JSON output).\n- Add focused unit tests for:\n  - `detect_stalls()` returns `\"run_stall_judge\"` when `recovery_count >= trigger` and `< max_recoveries`.\n  - `detect_stalls()` still returns `\"skip\"` when `recovery_count >= max_recoveries`.\n  - `detect_stalls()` returns normal ladder action when stall judge is disabled.\n  - `cmd_check_stalls()` forwards new CLI flag values into `detect_stalls()` (via call interception/monkeypatch capture).\n- Validation commands:\n  - `python3 -m pytest -q tests/test_orchestrate_lib.py`\n  - `python3 -m py_compile scripts/orchestrate_lib.py`\n\nConflict check against codebase\n- No factual conflicts found between issue requirements and current code structure.\n- Requirement to keep declarative ladders unchanged aligns with current `STALL_RECOVERY_ACTIONS` design and can be satisfied by local override logic in `detect_stalls()`.\n\nTask checklist\n- [ ] Add `RUN_STALL_JUDGE_ACTION` constant.\n- [ ] Extend `detect_stalls()` inputs (additive only).\n- [ ] Implement stall-judge override logic with skip-precedence preserved.\n- [ ] Keep `STALL_RECOVERY_ACTIONS` unchanged.\n- [ ] Add parser flags and `cmd_check_stalls()` forwarding.\n- [ ] Add/adjust unit tests for all four required scenarios.\n- [ ] Run pytest and py_compile validation commands.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a67972d56a0e412503a58b57362241fc74a51b4d454a20da2c147b867c93a6d7",
+  "lineage": {
+    "issue_number": 867,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24379211763",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24379211763",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/867"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414032607_9e1864bbf7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 867,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24379211763"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #867",
+  "timestamps": {
+    "created_at": "2026-04-14T03:26:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
