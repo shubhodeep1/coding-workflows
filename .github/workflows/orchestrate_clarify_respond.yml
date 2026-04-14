@@ -304,7 +304,12 @@ jobs:
             else
               echo "::warning::Semantic cache thread-history fetch failed; forcing cache bypass for this run (fail-open)"
               MAX_CHARS="${SEMANTIC_CACHE_MAX_CANONICAL_CHARS}"
-              if ! [[ "${MAX_CHARS}" =~ ^[0-9]+$ ]] || [ "${MAX_CHARS}" -le 0 ]; then
+              if [[ "${MAX_CHARS}" =~ ^[0-9]+$ ]]; then
+                MAX_CHARS=$((10#${MAX_CHARS}))
+              else
+                MAX_CHARS=50000
+              fi
+              if [ "${MAX_CHARS}" -le 0 ]; then
                 MAX_CHARS=50000
               fi
               head -c "$((MAX_CHARS + 1))" /dev/zero | tr '\0' 'x' > "${THREAD_HISTORY_FILE}"
@@ -340,6 +345,7 @@ jobs:
           SEMANTIC_CACHE_REDIS_URL: ${{ vars.SEMANTIC_CACHE_REDIS_URL || '' }}
           SEMANTIC_CACHE_SQLITE_PATH: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           SEMANTIC_CACHE_EMBEDDING_MODEL: ${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}
+          SEMANTIC_CACHE_MAX_CANONICAL_CHARS: ${{ vars.SEMANTIC_CACHE_MAX_CANONICAL_CHARS || '50000' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -540,6 +546,7 @@ jobs:
           SEMANTIC_CACHE_REDIS_URL: ${{ vars.SEMANTIC_CACHE_REDIS_URL || '' }}
           SEMANTIC_CACHE_SQLITE_PATH: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           SEMANTIC_CACHE_EMBEDDING_MODEL: ${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}
+          SEMANTIC_CACHE_MAX_CANONICAL_CHARS: ${{ vars.SEMANTIC_CACHE_MAX_CANONICAL_CHARS || '50000' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
