@@ -864,6 +864,9 @@ jobs:
             echo "=== AI MEMORY CONTEXT ==="
             cat "${MEMORY_CONTEXT_FILE}"
             echo
+            echo "=== PROTECTED PATHS (do not modify) ==="
+            sed '/^[[:space:]]*$/d' scripts/protected_paths.txt
+            echo
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo "TOKEN_BUDGET_HINT: ${TOKEN_BUDGET_HINT}"

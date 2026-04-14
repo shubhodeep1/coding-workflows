@@ -206,7 +206,11 @@ jobs:
               _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=main"
             fi
-            chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
+            case "${f}" in
+              *.sh|*.py)
+                chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
+                ;;
+            esac
           done
           # Fetch AI memory schema files so consumer repos that lack
           # schemas on their default branch can bootstrap the ai-memory
@@ -1912,7 +1916,11 @@ jobs:
                 _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
                   "repos/${wf_source}/contents/scripts/${f}?ref=main"
               fi
-              chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
+              case "${f}" in
+                *.sh|*.py)
+                  chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
+                  ;;
+                esac
             fi
           done
           bash "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" repair
