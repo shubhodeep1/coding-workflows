@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan (source-of-truth: current repo implementation only)\n\nClarification mapping:\n- Q1: A interpreted as: document only behaviors/names that exist now; do not introduce `ENABLE_STALL_JUDGE`, `STALL_JUDGE_TRIGGER_COUNT`, or `run_stall_judge` in docs yet.\n\nFactual conflicts detected:\n- The issue requests new names (`ENABLE_STALL_JUDGE`, `STALL_JUDGE_TRIGGER_COUNT`, `run_stall_judge`) that do not exist in code.\n- Current implementation uses declarative stall actions (`STALL_RECOVERY_ACTIONS`) plus max-attempt skip behavior; judge escalation exists for integration-conflict retries, not as a `run_stall_judge` recovery action.\n\n1. Files likely to change\n- `README.md` only.\n- Update all stall-recovery/operator-doc locations in README (both env-var tables and orchestration behavior narrative sections) to keep duplicated docs in sync.\n\n2. Functions/modules to align docs against\n- `scripts/orchestrate_lib.py`\n- `STALL_RECOVERY_ACTIONS` (actual recovery ladder)\n- `detect_stalls` / `cmd_check_stalls` (threshold + action selection logic)\n- `DEFAULT_PHASE_STALL_THRESHOLDS` (phase defaults)\n- `scripts/orchestrate_poll_process.sh`\n- `recovery_action_for_phase` and `recover_stalled_issue` (runtime action execution)\n- `sync_default_into_integration_branch`, `heal_integration_branch_conflict`, `finalize_integration_merge_if_needed` (real-conflict handling and judge escalation path)\n- `_dispatch_review_for_conflicts` (dispatcher name to document for conflict path)\n- env parsing/defaults for `STALL_THRESHOLD_*`, `MAX_STALL_RECOVERIES_PER_ISSUE`, `ENABLE_STANDALONE_STALL_RECOVERY`, `MAX_RECOVERY_ATTEMPTS`, `CONFLICT_DISPATCH_COOLDOWN_SECS`, `INTEGRATION_CONFLICT_MAX_RETRIES`\n- `.github/workflows/orchestrate_poll.yml` for workflow-level default wiring.\n\n3. Data structures affected\n- Documentation-only changes.\n- No runtime schema/state changes, but docs should accurately describe existing state fields used by stall logic (`stall_recovery_count`, `status_since_ts`) and integration conflict counters (`integration_conflict_unresolved_ticks`, dispatch counters) at a high level.\n\n4. API/interface changes\n- No code/API behavior changes.\n- Docs changes:\n- Describe current stall recovery ladder trigger/action selection.\n- Describe current fallback behavior when recovery budget is exhausted (`skip`/`ai:closed`, then judge evaluates at wave completion).\n- Clarify real merge-conflict route: update branch attempt first, then `_dispatch_review_for_conflicts` if conflict persists.\n- Add backward-compatibility note using existing knobs only (effectively ladder-only behavior today).\n- Explicitly avoid documenting unimplemented env vars/action names from the issue.\n\n5. Potential risks/edge cases\n- README has duplicated variable/reference tables; updating one section only will leave contradictions.\n- Easy to conflate two distinct paths: stall recovery ladder vs integration-conflict judge escalation.\n- Incorrectly documenting non-existent knobs would create operator confusion and break trust in docs.\n\n6. Testing/validation considerations\n- Cross-check every documented default/value against script constants and workflow defaults.\n- Verify documented action names exactly match `STALL_RECOVERY_ACTIONS` and `recover_stalled_issue` handling.\n- Verify conflict-routing text matches `sync_default_into_integration_branch`/`heal_integration_branch_conflict` flow and `_dispatch_review_for_conflicts`.\n- Final sanity check: repo-wide search should show no newly documented references to unimplemented `ENABLE_STALL_JUDGE`, `STALL_JUDGE_TRIGGER_COUNT`, or `run_stall_judge`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b6d0bc7161fb18799ca8cea9414b543602411adae04ba87e08a480379bc037b8",
+  "lineage": {
+    "issue_number": 953,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24406037245",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24406037245",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/953"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414145853_15adc87716",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 953,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24406037245"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #953",
+  "timestamps": {
+    "created_at": "2026-04-14T14:58:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
