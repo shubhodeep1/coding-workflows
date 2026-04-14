@@ -266,24 +266,21 @@ Only modify previously changed lines if:
 • the code would fail at runtime
 • the code clearly violates correctness
 
-When you modify any previously changed hunk, include both fields in Changes made:
-• Regression fingerprint: <stable file/symbol/failure key>
-• Runtime failure path: <specific execution path and failure outcome>
+When you modify any previously changed hunk, populate the top-level
+"Regression fingerprint:" and "Runtime failure path:" sections below
+with concrete values (not the "- n/a" default).
 
 FINAL RESPONSE FORMAT
 Plain text only.
 Output exactly these sections in this order:
 Changes made:
-IMPORTANT: If ANY bullet under "Changes made:" touches a line that was
-also modified in the LAST RUN DIFF, you MUST include these two fields
-in that bullet (the commit will be rejected otherwise):
-  • Regression fingerprint: <file:symbol or failure key>
-  • Runtime failure path: <execution path that fails>
 Already satisfied (suggested but already present):
 Ignored suggestions (with short reason):
 Reviewer files processed:
 Review file issue audit:
 PR comment audit:
+Regression fingerprint:
+Runtime failure path:
 Under Reviewer files processed: include one bullet per manifest file with:
 - exact file path
 - checksum
@@ -299,6 +296,16 @@ Under PR comment audit: include one bullet per bot PR review/review_comment entr
 - path and line (if available)
 - disposition: applied / already satisfied / ignored
 - short reason for the disposition
+Under Regression fingerprint: and Runtime failure path:
+- ALWAYS emit both sections, even when no previously changed hunk was
+  touched. Each section must contain at least one bullet. The commit
+  will be rejected if either header is missing.
+- If ANY bullet under "Changes made:" touches a line that was also
+  modified in the LAST RUN DIFF, list concrete values (file:symbol or
+  failure key for the fingerprint; the specific execution path that
+  fails for the runtime path).
+- If no previously changed hunk was modified, write exactly:
+  - n/a (no prior-hunk overlap)
 Each section must contain bullet points.
 If a section has no items, write:
 - none
