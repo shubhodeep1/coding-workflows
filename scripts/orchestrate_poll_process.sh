@@ -3125,6 +3125,7 @@ fi
 # ---------------------------------------------------------------
 TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+FEATURE_SWEEP_DONE="false"
 
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
@@ -4050,45 +4051,48 @@ json.dump(result, sys.stdout)
   #
   # This pass is bounded per poll tick via --limit 100 and does not
   # dispatch review workflows; it only attempts update-branch.
-  echo "  [feature-sweep] Scanning open ai/issue-* PRs for base-branch drift..."
-  _FEATURE_SWEEP_JSON="$(gh pr list \
-    --repo "${GITHUB_REPOSITORY}" \
-    --state open \
-    --json number,headRefName,baseRefName,mergeable,mergeStateStatus \
-    --limit 100 2>/dev/null || echo "[]")"
-  if [ -n "${_FEATURE_SWEEP_JSON}" ] && [ "${_FEATURE_SWEEP_JSON}" != "[]" ]; then
-    echo "${_FEATURE_SWEEP_JSON}" | jq -c '.[]' | while read -r _fs_pr; do
-      _fs_num="$(echo "${_fs_pr}" | jq -r '.number // empty')"
-      _fs_head="$(echo "${_fs_pr}" | jq -r '.headRefName // empty')"
-      _fs_state="$(echo "${_fs_pr}" | jq -r '.mergeStateStatus // empty' | tr '[:upper:]' '[:lower:]')"
-      _fs_mergeable="$(echo "${_fs_pr}" | jq -r '.mergeable // empty' | tr '[:upper:]' '[:lower:]')"
-      [[ "${_fs_num}" =~ ^[0-9]+$ ]] || continue
-      case "${_fs_head}" in
-        ai/issue-*) ;;
-        *) continue ;;
-      esac
-      # Skip dirty PRs — those go through the proper conflict loop
-      # above so the resolver workflow can be dispatched.
-      if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "conflicting" ]; then
-        continue
-      fi
-      # Only act on PRs that are actually behind base.
-      if [ "${_fs_state}" != "behind" ]; then
-        continue
-      fi
-      _fs_head_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}" --jq '.head.sha' 2>/dev/null || echo "")"
-      if [ -z "${_fs_head_sha}" ]; then
-        echo "  [feature-sweep] PR #${_fs_num}: cannot resolve head sha; skipping."
-        continue
-      fi
-      echo "  [feature-sweep] PR #${_fs_num} (${_fs_head}) is behind base; calling update-branch..."
-      if gh api "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}/update-branch" \
-        -X PUT -f expected_head_sha="${_fs_head_sha}" >/dev/null 2>&1; then
-        echo "  [feature-sweep] PR #${_fs_num} fast-forwarded."
-      else
-        echo "  [feature-sweep] PR #${_fs_num}: update-branch failed (likely real conflict). The in-progress conflict loop will handle it on the next tick."
-      fi
-    done
+  if [ "${FEATURE_SWEEP_DONE}" != "true" ]; then
+    echo "  [feature-sweep] Scanning open ai/issue-* PRs for base-branch drift..."
+    _FEATURE_SWEEP_JSON="$(gh pr list \
+      --repo "${GITHUB_REPOSITORY}" \
+      --state open \
+      --json number,headRefName,baseRefName,mergeable,mergeStateStatus \
+      --limit 100 2>/dev/null || echo "[]")"
+    if [ -n "${_FEATURE_SWEEP_JSON}" ] && [ "${_FEATURE_SWEEP_JSON}" != "[]" ]; then
+      echo "${_FEATURE_SWEEP_JSON}" | jq -c '.[]' | while read -r _fs_pr; do
+        _fs_num="$(echo "${_fs_pr}" | jq -r '.number // empty')"
+        _fs_head="$(echo "${_fs_pr}" | jq -r '.headRefName // empty')"
+        _fs_state="$(echo "${_fs_pr}" | jq -r '.mergeStateStatus // empty' | tr '[:upper:]' '[:lower:]')"
+        _fs_mergeable="$(echo "${_fs_pr}" | jq -r '.mergeable // empty' | tr '[:upper:]' '[:lower:]')"
+        [[ "${_fs_num}" =~ ^[0-9]+$ ]] || continue
+        case "${_fs_head}" in
+          ai/issue-*) ;;
+          *) continue ;;
+        esac
+        # Skip dirty PRs — those go through the proper conflict loop
+        # above so the resolver workflow can be dispatched.
+        if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "conflicting" ]; then
+          continue
+        fi
+        # Only act on PRs that are actually behind base.
+        if [ "${_fs_state}" != "behind" ]; then
+          continue
+        fi
+        _fs_head_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}" --jq '.head.sha' 2>/dev/null || echo "")"
+        if [ -z "${_fs_head_sha}" ]; then
+          echo "  [feature-sweep] PR #${_fs_num}: cannot resolve head sha; skipping."
+          continue
+        fi
+        echo "  [feature-sweep] PR #${_fs_num} (${_fs_head}) is behind base; calling update-branch..."
+        if gh api "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}/update-branch" \
+          -X PUT -f expected_head_sha="${_fs_head_sha}" >/dev/null 2>&1; then
+          echo "  [feature-sweep] PR #${_fs_num} fast-forwarded."
+        else
+          echo "  [feature-sweep] PR #${_fs_num}: update-branch failed (likely real conflict). The in-progress conflict loop will handle it on the next tick."
+        fi
+      done
+    fi
+    FEATURE_SWEEP_DONE="true"
   fi
 
   # ---------------------------------------------------------------
@@ -4563,6 +4567,7 @@ ${RB_FIX_DESC}" || true
                     && { [ "${BASE_REF}" = "${DEFAULT_BRANCH:-main}" ] || [ "${BASE_REF}" = "main" ]; }; then
                     echo "::warning::Refusing follow-up PR creation for merged PR #${RB_PR}: integration branch '${RB_INTEGRATION_BRANCH}' is active but computed base is '${BASE_REF}'."
                     tg_notify "Refused merged follow-up PR creation for review-blocked issue #${rb_issue} (PR #${RB_PR}): integration branch '${RB_INTEGRATION_BRANCH}' is active but computed base was '${BASE_REF}'."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+                    RB_FOLLOWUP_REFUSED="true"
                     REVIEW_BLOCKED_STATE_CHANGED=true
                   elif git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
@@ -4639,10 +4644,12 @@ ${RB_FIX_DESC}
               git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
             fi
 
-            # Increment retry counter
-            jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
-              "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-            REVIEW_BLOCKED_STATE_CHANGED=true
+            # Increment retry counter only when a fix attempt was actually made.
+            if [ "${RB_FOLLOWUP_REFUSED}" != "true" ]; then
+              jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
+                "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+              REVIEW_BLOCKED_STATE_CHANGED=true
+            fi
           fi
           fi
           ;;

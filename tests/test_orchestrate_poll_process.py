@@ -1285,9 +1285,9 @@ def test_review_blocked_merged_fix_followup_refuses_when_integration_branch_inva
 
 def test_review_blocked_merged_fix_followup_keeps_default_base_without_integration_context():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	assert "if [ -n \"${RB_INTEGRATION_BRANCH}\" ] && [ \"${RB_INTEGRATION_BRANCH_VALID}\" != \"true\" ]; then" in script
+	assert "elif [ -n \"${RB_INTEGRATION_BRANCH}\" ] && [ \"${RB_INTEGRATION_BRANCH_VALID}\" != \"true\" ]; then" in script
 	assert "if [ \"${RB_INTEGRATION_BRANCH_VALID}\" = \"true\" ]" in script
-	assert "&& { [ \"${BASE_REF}\" = \"${DEFAULT_BRANCH:-main}\" ] || [ \"${BASE_REF}\" = \"main\" ]; }; then" in script
+	assert "&& { [ \"${BASE_REF}\" = \"${RB_DEFAULT_BASE_REF}\" ] || [ \"${BASE_REF}\" = \"main\" ]; }; then" in script
 
 
 def test_validation_fixing_backfills_ai_merged_from_linked_merged_pr_evidence():
