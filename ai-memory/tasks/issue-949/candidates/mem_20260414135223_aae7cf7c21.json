@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for docs update\n\nClarification mapping\n- No Q<ID> clarification questions were asked in this issue.\n- `/answer [auto-answered-by-clarify]` means proceed using the issue description as the full scope.\n\nConflict detected (must be tracked in plan)\n- The issue asks to document a new post-Codex pre-commit path with \u201cdiagnose mode\u201d + fix-up issues.\n- Current code paths show:\n- `implement.yml` marks no-change runs as `ai:implementation-failed`.\n- `orchestrate_poll_process.sh` handles that by closing/reissuing with added guidance and orchestrator metadata.\n- Destructive pre-commit guard uses `ai:destructive-blocked` (not `ai:implementation-failed`).\n- No explicit implement-phase \u201cdiagnose mode\u201d string/path was found.\n- Plan should document implemented behavior precisely and call out this terminology mismatch in the PR for reviewer confirmation.\n\n1. Files likely to change\n- `README.md` (orchestrator/recovery section near bullets for implementation-failed and validation-failure recovery).\n- `agents.md` only if it already contains repo-context implement-failure behavior docs (current scan suggests likely no change).\n\n2. Functions/modules to use as source of truth\n- `.github/workflows/implement.yml`\n- No-op handling (`did_commit=false` path) and `ai:implementation-failed` labeling/comment.\n- Destructive pre-commit guard behavior (`ai:destructive-blocked`).\n- Generic failure/cancelled fallback path (legacy behavior).\n- `scripts/orchestrate_poll_process.sh`\n- \u201cHandle implementation-failed issues: close and re-issue\u201d block.\n- Reissued issue body metadata format.\n- `scripts/label_helpers.sh` + `.github/ai/label_contract.v1.json` for exact label semantics.\n- `scripts/orchestrate_lib.py` for phase mapping semantics.\n\n3. Data structures affected\n- Documentation of issue labels and transitions: `ai:implementation-failed`, `ai:destructive-blocked`, `ai:clarification`, `ai:closed`, `ai:validation-recovery`, `ai:validation-failed`.\n- Documentation of orchestrator metadata fields used in reissued issues (`Tracking issue`, `Integration branch`, `Local ID`, `Managed by`).\n- No DB/schema/index contract changes.\n\n4. API/interface changes\n- Documentation-only change (no runtime behavior change).\n- Clarify trigger conditions and poller interaction for implementation-failed recovery.\n- Add the requested new bullet, but phrase it to match implemented behavior and distinguish targeted vs legacy failure flow.\n- Keep terminology/labels consistent with existing contracts; no new labels or contract changes.\n\n5. Risks/edge cases\n- Misdocumenting \u201cdiagnose mode\u201d if that term is not actually implemented in this repo.\n- Conflating `ai:implementation-failed` recovery with `ai:destructive-blocked` halt behavior.\n- Overstating fix-up issue generation mechanics versus actual reissue behavior.\n- README bullet numbering drift reducing clarity in the recovery section.\n\n6. Testing/verification considerations\n- Validate updated README wording directly against `implement.yml` and `orchestrate_poll_process.sh`.\n- Verify all label names/descriptions match `label_helpers.sh`/label contract exactly.\n- Ensure README explicitly states how this path interacts with existing poller recovery behavior.\n- Confirm `agents.md` remains unchanged unless a matching implement-failure behavior section already exists.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fcb44833d47be22331443e57c3edd9935792bdc04f9fb9ea1fa984bd9a9b1cd3",
+  "lineage": {
+    "issue_number": 949,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24402522619",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24402522619",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/949"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414135223_aae7cf7c21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 949,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24402522619"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #949",
+  "timestamps": {
+    "created_at": "2026-04-14T13:52:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
