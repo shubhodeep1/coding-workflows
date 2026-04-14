@@ -4201,7 +4201,7 @@ json.dump(result, sys.stdout)
       # REVIEW_BLOCKED_AUTO_UNSTICK (default "true") for emergency
       # kill-switch use.
       REVIEW_BLOCKED_AUTO_UNSTICK="${REVIEW_BLOCKED_AUTO_UNSTICK:-true}"
-      if [ "${REVIEW_BLOCKED_AUTO_UNSTICK}" = "true" ] && [ "${RB_PR_STATE}" = "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
+      if is_truthy "${REVIEW_BLOCKED_AUTO_UNSTICK}" && [ "${RB_PR_STATE}" = "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
         RB_PR_MERGEABLE="$(_jq_field "${_rb_pr_json}" '.mergeable' 'true|false')"
         RB_HEAD_REF_PRECHECK="$(echo "${_rb_pr_json}" | jq -r '.head.ref // ""')"
         RB_HEAD_SHA_PRECHECK="$(echo "${_rb_pr_json}" | jq -r '.head.sha // ""')"
@@ -4216,9 +4216,10 @@ json.dump(result, sys.stdout)
           _rb_head_author_login="$(echo "${_rb_head_commit_json}" | jq -r '.author.login // ""')"
           _rb_head_author_name="$(echo "${_rb_head_commit_json}" | jq -r '.commit.author.name // ""')"
           _rb_head_author_email="$(echo "${_rb_head_commit_json}" | jq -r '.commit.author.email // ""')"
+          # Default to external unless login matches known internal identity
+          RB_HEAD_IS_EXTERNAL="true"
           case "${_rb_head_author_login}" in
-            ""|github-actions|github-actions\[bot\]) : ;;
-            *) RB_HEAD_IS_EXTERNAL="true" ;;
+            codex-bot|github-actions|github-actions\[bot\]) RB_HEAD_IS_EXTERNAL="false" ;;
           esac
           # Keep authenticated GitHub login authoritative. Commit author
           # name/email are fallback hints only when login did not classify
@@ -4228,7 +4229,7 @@ json.dump(result, sys.stdout)
               codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
             esac
             case "${_rb_head_author_email}" in
-              codex@users.noreply.github.com|noreply@github.com|*@users.noreply.github.com\ \(actions\)) RB_HEAD_IS_EXTERNAL="false" ;;
+              codex@users.noreply.github.com|noreply@github.com|*@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
             esac
           fi
         fi
