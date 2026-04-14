@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` clarification questions were issued.\n- `/answer [auto-answered-by-clarify]` and `/answer [auto-answered-by-orchestrator]` both indicate the issue is sufficiently specified, so planning can proceed.\n\nConflict detection:\n- Prior thread comments note that edits to template-owned paths can be stripped in consumer repos.  \n- This plan assumes implementation is made in the source repo `shubhodeep1/coding-workflows` where [`scripts/orchestrate_poll_process.sh`](scripts/orchestrate_poll_process.sh) is authoritative. If run in a consumer repo, this would be a no-op by design.\n\n1. Files likely to change\n- [`scripts/orchestrate_poll_process.sh`](scripts/orchestrate_poll_process.sh)\n- [`tests/test_orchestrate_poll_process.py`](tests/test_orchestrate_poll_process.py)\n- Optional (only if repo policy requires behavior docs for state schema additions): [`README.md`](README.md)\n\n2. Functions/modules to implement\n- In poller main judge prompt assembly (around `=== ORCHESTRATOR STATE ===`), inject a new section:\n  - `=== PRIOR JUDGE DECISIONS (last 5) ===`\n  - Render up to 5 most recent history entries in chronological order.\n- After successful judge parse (where `JUDGE_STATUS` / `JUDGE_JUSTIFICATION` are extracted), append one record to state:\n  - `cycle` = current invocation cycle (`JUDGE_CYCLE + 1`)\n  - `action` = effective judge action used for handling\n  - `justification`\n  - `timestamp` (UTC ISO-8601)\n- Follow existing backward-compat pattern already used in this script (`//` fallbacks), so missing legacy keys are treated safely.\n- Scope remains the main orchestrator judge path (not review-blocked judge flow) unless explicitly expanded.\n\n3. Data structures affected\n- Additive state key in tracking state JSON:\n  - `judge_history: [ { cycle, action, justification, timestamp }, ... ]`\n- Backward compatibility behavior:\n  - If `judge_history` is missing, null, or wrong type, treat as `[]` when reading prompt context.\n  - Do not rename/remove existing keys (`judge_cycle`, `judge_stall_cycles`, etc.).\n- Storage behavior:\n  - Append-only in state; prompt uses only the last 5 entries (no breaking schema changes).\n\n4. API/interface changes\n- Internal prompt contract change for judge runs:\n  - New context block included every cycle.\n  - On first cycle/no history, block is present with no entries (or explicit \u201cnone\u201d line), fail-open.\n- No external API changes.\n- No CLI/env var changes.\n\n5. Potential risks / edge cases\n- Legacy state without `judge_history` must not fail prompt build.\n- Malformed `judge_history` type (non-array) must not crash `jq` under `set -euo pipefail`.\n- Multi-line or long justifications may degrade prompt readability; formatting should normalize safely.\n- Ensure the recorded `action` reflects the effective action used after any internal overrides.\n- State growth over many cycles is possible; prompt truncation to last 5 controls context size.\n\n6. Testing considerations\n- Add/extend tests in [`tests/test_orchestrate_poll_process.py`](tests/test_orchestrate_poll_process.py):\n  - Missing-history bootstrap: first cycle succeeds and creates `judge_history` entry.\n  - Prompt replay window: with 6+ preloaded entries, prompt contains only latest 5 in chronological order and excludes oldest.\n  - Append semantics: each successful judge cycle appends exactly one entry with required fields.\n- If needed, enhance `_run_poller` test helper to return generated judge prompt text for assertions.\n- Run targeted test file after implementation to verify no regressions in existing orchestrator poller behavior.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "192eea0a93177f542f74e7f691caa26227667ac0d30a917c5af0a4d48c3d0083",
+  "lineage": {
+    "issue_number": 840,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24378237975",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24378237975",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/840"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414025409_ea1ae17065",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 840,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24378237975"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #840",
+  "timestamps": {
+    "created_at": "2026-04-14T02:54:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
