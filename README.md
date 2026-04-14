@@ -480,6 +480,10 @@ jobs:
 > to keep your changes, either opt out or maintain your customizations after
 > each update.
 
+> Release-dispatch targets for wrapper refresh remain sourced from
+> `.github/ai/consumer_repos.json` in `mark-stable.yml` and
+> `test-and-mark-stable.yml`.
+
 > All internal wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
 
 ### 3. Open an issue
@@ -1002,12 +1006,41 @@ Use this after manual intervention (e.g. fixing a problematic issue, merging a s
 
 - Cycle 1 generates a new harness under `validation/`.
 - Cycle 2+ reuses and targeted-fixes the existing owned harness when `validation/` is present (for example, restored from artifacts); otherwise it safely falls back to full regeneration.
-- `validation/validate.sh` is generated as a thin wrapper that delegates to checked-in `scripts/validate_driver.sh`.
-- Canonical runtime harness behavior now lives in `scripts/validate_driver.sh` (pre-flight, compose startup/logging, health polling, canary gating, TAP-safe counting, result emission/finalization).
-- `scripts/validate_driver.sh` loads optional `validation/validate.env` and applies conservative defaults for supported knobs (including `APP_SERVICE`, `APP_URL`, `HEALTH_TIMEOUT`, `PHASE`).
+- Canonical validation drivers live in `coding-workflows/scripts/` and are fetched at runtime by the reusable wrapper workflow into the consumer workspace as `scripts/validate_process.sh` and `scripts/validate_driver.sh`.
+- `validation/validate.sh` may be generated transiently at runtime as a thin wrapper that delegates to `scripts/validate_driver.sh`; it must remain untracked/uncommitted in consumer repositories.
+- Canonical runtime harness behavior lives in `scripts/validate_driver.sh` (pre-flight, compose startup/logging, health polling, canary gating, TAP-safe counting, result emission/finalization).
 - Before execution, validation runs pre-flight checks (`docker compose config`, shell syntax, and compose build path resolution).
 - Pre-flight failures are classified as terminal `harness_error` for that run.
 - The first generated test must be a canary infrastructure check (`00_canary.sh` style); infra-only canary failures shortcut to `harness_error`, while app startup/crash signals continue to diagnosis.
+
+#### `validation/validate.env` contract
+
+`scripts/validate_driver.sh` loads `validation/validate.env` when present (or `VALIDATE_ENV_FILE` when overridden) and applies conservative defaults.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `APP_SERVICE` | `app` | Compose service name used for container-state checks. |
+| `APP_URL` | `http://localhost:8080/health` | HTTP health endpoint; set empty to skip URL polling. |
+| `HEALTH_TIMEOUT` | `120` | Health deadline in seconds; non-positive values are reset to `120`. |
+| `HEALTH_POLL_INTERVAL` | `2` | Health poll interval in seconds; non-positive values are reset to `2`. |
+| `PHASE` | `runtime_validation` | Default phase used in result emission. |
+| `COMPOSE_FILE` | `validation/docker-compose.test.yml` | Compose file used by runtime validation. |
+| `TEST_DIR` | `validation/tests` | Test script directory. |
+| `LOG_DIR` | `validation/logs` | Runtime log directory. |
+| `CANARY_PATTERN` | `00_canary*.sh` | Canary test filename pattern. |
+| `CANARY_REQUIRED` | `1` | Requires canary test before remaining tests. |
+| `VALIDATION_TEST_USERNAME` | `validation-user` | Synthetic validation credential default. |
+| `VALIDATION_TEST_PASSWORD` | `validation-password` | Synthetic validation credential default. |
+| `VALIDATION_TEST_API_KEY` | `validation-api-key` | Synthetic validation credential default. |
+| `TEST_USERNAME` | `${VALIDATION_TEST_USERNAME}` | Backward-compatible alias for username. |
+| `TEST_PASSWORD` | `${VALIDATION_TEST_PASSWORD}` | Backward-compatible alias for password. |
+| `TEST_API_KEY` | `${VALIDATION_TEST_API_KEY}` | Backward-compatible alias for API key. |
+
+#### Validation compatibility guarantees
+
+- Environment variable names used by the validation driver remain backward compatible; any future additions are additive and keep existing names working.
+- Validation result JSON emitted by the driver keeps these stable keys: `result`, `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures`, `duration_seconds`.
+- Existing structured validation log keys are preserved for operators and consumer automation; future changes are additive rather than renaming/removing current keys.
 
 ## Repository Structure
 

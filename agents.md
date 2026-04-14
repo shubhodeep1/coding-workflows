@@ -290,6 +290,18 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
+## 16. Validation Driver Runtime Contract
+
+- Canonical validation drivers live under `coding-workflows/scripts/` (`scripts/validate_process.sh`, `scripts/validate_driver.sh`).
+- Consumer wrapper workflows fetch these scripts at runtime; consumer repositories must not commit copied managed artifacts.
+- `validation/validate.sh` may be generated transiently at runtime as a thin delegating wrapper to `scripts/validate_driver.sh`; it must remain untracked/uncommitted in consumer repos.
+- `scripts/validate_driver.sh` loads optional `validation/validate.env` (or `VALIDATE_ENV_FILE`) with conservative defaults: `APP_SERVICE=app`, `APP_URL=http://localhost:8080/health`, `HEALTH_TIMEOUT=120`, `HEALTH_POLL_INTERVAL=2`, `PHASE=runtime_validation`, plus supported compose/test/log and synthetic credential knobs (`VALIDATION_TEST_*`, backward-compatible `TEST_*` aliases).
+- Validation result JSON key names are stable for compatibility: `result`, `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures`, `duration_seconds`.
+- Existing validation env names, JSON keys, and structured log keys are backward compatible; future evolution must be additive.
+- Wrapper release-dispatch target registry remains `.github/ai/consumer_repos.json` (see `mark-stable.yml` and `test-and-mark-stable.yml`).
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**
