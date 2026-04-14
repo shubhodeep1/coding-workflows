@@ -4951,7 +4951,7 @@ sys.exit(1)
                   rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
                     scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
                     scripts/codex_model_catalog.json
-                  rm -rf .serena
+                  rm -rf .serena prompts
                   rm -f .github/ai/orchestrate_schema.v1.json
                   ;;
               esac
