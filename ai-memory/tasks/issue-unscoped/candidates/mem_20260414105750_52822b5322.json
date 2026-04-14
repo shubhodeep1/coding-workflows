@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\n\nLow confidence files (mentioned by 1 reviewer):\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\n/tmp/codex-pr-24394897488-1-7869/previous_reviews/review_stepfun_step-3_5-flash.txt:**File:**\nprompts/mode-validate-generate.txt\nscripts/validate_process.sh,\nscripts/validate_process.sh,\nscripts/validate_process.sh,",
+  "fingerprint": "40e64bf38ba218de7291f6c2411c26b1171954bb70e0a5681457ee9f2e6f982e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 910,
+    "run_id": "24394897488",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24394897488",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414105750_52822b5322",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 910,
+    "run_id": "24394897488"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T10:57:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
