@@ -56,6 +56,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. |
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
+| `REVIEW_REASONING_SCHEDULE` | No | `xhigh,high,medium` | review_autofix | Reviewer-only cycle schedule for autofix rounds (cycle 1 uses first entry, cycle 2 second, cycle 3+ last). Accepted values: `xhigh`, `high`, `medium`, `low` (comma-separated). |
+| `REVIEW_AUTODOWNGRADE_DISABLED` | No | `false` | review_autofix | Kill switch for reviewer cycle schedule. When `true`, reviewer reasoning stays fixed at `THINKING_LEVEL_REVIEWER`. |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | No | `true` | review_autofix | When true, non-orchestrator PRs that exhaust autofix iterations invoke a judge (LLM) to decide: merge as-is, push a fix commit, or close and reissue. Orchestrator-managed PRs are skipped (handled by the poller). PRs without linked issues use the PR title/body as requirement context. |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | No | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge in non-orchestrator PRs (`xhigh`, `high`, `medium`, `low`). |
 | `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | review_autofix, orchestrate_poll | Maximum judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). Used by both the review_autofix judge (counts `[judge-fix]` commits) and the orchestrator poller. |
@@ -87,6 +89,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Disable the Serena MCP server |
 | `CONTEXT7_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Context7 MCP server |
 | `GIT_MCP_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Git MCP server setup (preloaded diff artifacts remain the fallback). |
+| `OPENROUTER_PROMPT_CACHE_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, workflow-log-analysis | Kill switch for OpenRouter prompt-cache instrumentation. `false` enables cache-friendly prompt ordering and cache telemetry logging; `true` disables explicit cache breakpoints and related instrumentation. |
 | `WORKFLOW_ORCHESTRATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | orchestrate, orchestrate_poll | Model override for orchestrator decomposer and judge |
 | `ORCHESTRATE_POLL_INTERVAL` | No | `5` | orchestrate | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
 | `ORCHESTRATE_POLL_CALLER_WORKFLOW` | No | `ai-orchestrate-poll.yml` | orchestrate_poll | Filename of the caller wrapper workflow to retrigger for continuous polling. The poller dispatches this workflow via `workflow_dispatch` at the end of each run when active tracking issues exist, so the next cycle starts immediately instead of waiting for the cron schedule. Set to empty string to disable self-retrigger. |
@@ -95,8 +98,11 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `EDITOR_MIN_ATTEMPT_SECS` | No | `300` | review_autofix | Minimum remaining job budget (seconds) required to start an editor attempt. Prevents futile retries near the job deadline. |
 | `BULK_DELETE_THRESHOLD` | No | `3` | implement | Maximum number of file deletions allowed in a single AI implementation commit before the destructive-commit guard blocks it. Set higher for legitimate large refactors, or bypass on a per-run basis via `ALLOW_BULK_DELETE=true`. See "Destructive-commit guard" below. |
 | `ALLOW_BULK_DELETE` | No | `false` | implement | When `true`, the destructive-commit guard ignores the `BULK_DELETE_THRESHOLD` rejection path. Canonical workflow-source file deletions are still blocked unless `ALLOW_WORKFLOW_EDITS=true`. Use for legitimate large refactors approved by a human. |
+| `BATCH_API_DISABLED` | No | `false` | workflow-log-analysis, memory_maintenance | Kill switch for async batch mode. When `true`, workflow log analysis always uses synchronous inference. Memory maintenance emits compatibility/no-op batch logs only. |
+| `BATCH_API_PROVIDER` | No | `auto` | workflow-log-analysis, memory_maintenance | Batch provider routing hint for OpenRouter Responses API capability checks/submission (`auto`, `openai`, `anthropic`). Unsupported hints fall back to sync with structured warnings. |
+| `BATCH_API_POLL_TIMEOUT_HOURS` | No | `24` | workflow-log-analysis, memory_maintenance | Maximum pending batch age before workflow-log-analysis falls back to synchronous generation. |
 
-**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. **E2E smoke test override:** when an issue title contains `[E2E Smoke Test]`, all phases (clarify, plan, implement, review/edit) automatically switch to `low` reasoning effort to reduce cost and latency during release validation.
+**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. In `review_autofix`, reviewer effort also auto-schedules by autofix cycle via `REVIEW_REASONING_SCHEDULE` (default: cycle 1 `xhigh`, cycle 2 `high`, cycle 3+ `medium`) unless `REVIEW_AUTODOWNGRADE_DISABLED=true`. **E2E smoke test override has highest precedence:** when an issue title contains `[E2E Smoke Test]`, review/edit still force `low` reasoning regardless of schedule/kill-switch so release smoke runs stay cheap and fast.
 
 | Variable | Default | Used By | Description |
 |---|---|---|---|
@@ -574,13 +580,23 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
   - default: `analysis/workflow-optimization-YYYY-MM-DD.md`
   - same-day collisions: `analysis/workflow-optimization-YYYY-MM-DD-2.md`, `-3.md`, etc.
 - `main` prints the final report path on stdout and exits non-zero on API/write/input errors.
+- Batch mode uses OpenRouter Responses API with deferred polling and state file support:
+  - `--batch-mode` (`auto|submit|poll|sync`)
+  - `--batch-state-file` path for persisted batch metadata
+  - `--batch-provider` (`auto|openai|anthropic`) provider hint
+  - `--batch-api-disabled` kill switch
+  - `--batch-poll-timeout-hours` timeout before sync fallback
+- Analyzer exits with code `3` when batch remains pending; workflow treats this as success and defers completion to future runs.
 
 ### Workflow outputs
 
 - Artifact upload: `workflow-log-report` containing `workflow_log_report.json` (retention 7 days).
 - Repository commit: generated markdown report is committed/pushed to `${{ github.ref_name }}`.
 - No-op behavior: if the report file has no diff, commit/push is skipped (`No report changes to commit.`).
-- Telegram summary: when configured, sends completion message with report URL and workflow run URL.
+- Telegram summary: when configured, sends either a pending-batch message or a completion message with report URL and workflow run URL.
+- Deferred artifact contract: pending batch metadata is uploaded as artifact `workflow-log-analysis-batch-state` containing `workflow_log_analysis_batch_state.json`; later runs fetch latest non-expired artifact and continue polling.
+- Structured logs are emitted for batch decisions and lifecycle (`batch_submit`, `batch_poll`, `batch_complete`, `batch_fallback`).
+- `memory_maintenance.yml` remains functionally unchanged (no LLM path in current repo) and now emits structured `batch_noop` compatibility logging with batch env values.
 - Low-data windows are valid: the analyzer still writes a report when input data is sparse.
 
 ## Required Secrets
@@ -601,6 +617,8 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ALLOW_WORKFLOW_EDITS` | `true` | Allow AI edits to workflow files and automatic wrapper updates |
 | `ENABLE_AUTO_MERGE` | `true` | Auto-merge PRs (squash) when review passes and checks are green |
 | `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before marking `ai:review-blocked` |
+| `REVIEW_REASONING_SCHEDULE` | `xhigh,high,medium` | Reviewer autofix-cycle reasoning schedule (`cycle1,cycle2,cycle3+`) |
+| `REVIEW_AUTODOWNGRADE_DISABLED` | `false` | Disable reviewer cycle schedule and keep fixed `THINKING_LEVEL_REVIEWER` |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | `true` | Enable review-blocked judge for non-orchestrator PRs |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | Reasoning effort for review-blocked judge |
 | `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum judge retries for review-blocked PRs (both review_autofix and orchestrate_poll) |
@@ -637,6 +655,8 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `THINKING_LEVEL_ANALYSIS` | `medium` | Reasoning effort for workflow log analysis report generation |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | Reasoning effort for reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | Reasoning effort for editor model (applying fixes) |
+| `REVIEW_REASONING_SCHEDULE` | `xhigh,high,medium` | Reviewer autofix-cycle schedule override (`xhigh|high|medium|low`, comma-separated) |
+| `REVIEW_AUTODOWNGRADE_DISABLED` | `false` | Reviewer schedule kill switch (`true` keeps fixed reviewer effort) |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
 | `TOOL_CALL_BUDGET_PLAN` | `40` | Tool call budget for planning |
 | `TOOL_CALL_BUDGET_IMPLEMENT` | `50` | Tool call budget for implementation |
@@ -651,6 +671,9 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `EDITOR_IDLE_TIMEOUT` | `1200` | Editor watchdog idle timeout (seconds); killed if no output and no active network connections |
 | `EDITOR_MAX_WALL` | `3300` | Max wall-clock seconds per editor attempt; auto-capped to remaining job budget |
 | `EDITOR_MIN_ATTEMPT_SECS` | `300` | Minimum job budget (seconds) required to start an editor attempt |
+| `BATCH_API_DISABLED` | `false` | Kill switch for async batch mode in workflow-log-analysis (`true` forces sync fallback) |
+| `BATCH_API_PROVIDER` | `auto` | Batch provider hint (`auto`, `openai`, `anthropic`) for OpenRouter responses routing checks |
+| `BATCH_API_POLL_TIMEOUT_HOURS` | `24` | Maximum pending batch age before synchronous fallback |
 | `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | Tool call budget for decomposer |
 | `TOOL_CALL_BUDGET_JUDGE` | `60` | Tool call budget for judge (needs deep repo inspection) |
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |
@@ -659,10 +682,72 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
+| `SEMANTIC_CACHE_BACKEND` | `none` | Semantic cache backend selector for clarification workloads: `none`, `redis`, `sqlite-vec` |
+| `SEMANTIC_CACHE_TTL_DAYS` | `14` | Cache TTL (days) for semantic cache entries |
+| `SEMANTIC_CACHE_SIMILARITY_THRESHOLD` | `0.92` | Minimum cosine similarity to treat a semantic cache lookup as a hit |
+| `SEMANTIC_CACHE_SQLITE_PATH` | `/tmp/semantic_cache.sqlite3` | SQLite cache file path when `SEMANTIC_CACHE_BACKEND=sqlite-vec` |
+| `SEMANTIC_CACHE_REDIS_URL` | _(empty)_ | Redis connection URL when `SEMANTIC_CACHE_BACKEND=redis` |
+| `SEMANTIC_CACHE_REDIS_KEY_NAMESPACE` | _(empty)_ | Redis key namespace for cross-repo isolation; defaults to `GITHUB_REPOSITORY` (sanitized + stable hash suffix) on GitHub runners, else empty |
+| `SEMANTIC_CACHE_EMBEDDING_MODEL` | `openai/text-embedding-3-small` | OpenRouter embedding model used for semantic cache keys |
+| `SEMANTIC_CACHE_EMBEDDING_BASE_URL` | `https://openrouter.ai/api/v1` | Base URL for embedding API requests |
+| `SEMANTIC_CACHE_MAX_CANONICAL_CHARS` | `50000` | Maximum canonical input length for cache key generation (longer inputs skip cache lookup/store) |
 | `SERENA_WARN_THRESHOLD_IMPLEMENT` | `50` | Minimum Serena efficiency (%) before implement emits low-adoption warning |
 | `SERENA_WARN_THRESHOLD_REVIEW` | `50` | Minimum Serena efficiency (%) before review_autofix emits low-adoption warning |
 
+## Semantic Cache (Clarification Only)
+
+An embedding-based semantic cache is available only for high-repetition clarification workloads.
+
+- Cached phases:
+  - `clarify`
+  - `orchestrate_clarify_respond`
+- Explicitly not cached:
+  - `implement`
+  - `review_autofix`
+  - `validate`
+  - `plan`
+  - `orchestrate`
+
+Cache key input is a canonical text built from:
+
+- issue body
+- issue thread history (chronological comments)
+
+Operational behavior:
+
+- `SEMANTIC_CACHE_BACKEND=none` keeps full passthrough behavior (default).
+- `SEMANTIC_CACHE_BACKEND=redis` requires the Python `redis` package on runner hosts (installed automatically in built-in clarify workflows).
+- Redis cache keys are namespaced by `SEMANTIC_CACHE_REDIS_KEY_NAMESPACE` (defaults to `GITHUB_REPOSITORY` on GitHub runners, sanitized + stable hash suffix) to prevent cross-repo collisions from normalization conflicts.
+- SQLite cache is persisted across workflow runs via GitHub Actions `actions/cache` (for `sqlite-vec` backend).
+- Cache entries are embedding-model scoped; changing `SEMANTIC_CACHE_EMBEDDING_MODEL` isolates old entries automatically.
+- Inputs exceeding `SEMANTIC_CACHE_MAX_CANONICAL_CHARS` are treated as cache misses and are not stored.
+- Any cache-layer error is fail-open: the workflows log a warning and continue with the normal OpenRouter/Codex path.
+- On cache hit, workflows emit structured audit fields in log output: `phase`, `similarity`, `cached_at`, `original_issue_id`.
+
 ## Prompt Caching (OpenRouter + Codex)
+
+### Current behavior
+
+- Prompt assembly is cache-friendly in all Codex-driven phases: static prefix first (`codex_system_instructions.md` + `agents.md` + `prompts/serena-efficiency-block.txt` + phase template), dynamic context second (memory context, issue/PR body, comments/diffs).
+- Explicit OpenRouter `cache_control: { "type": "ephemeral" }` breakpoints are added only in direct OpenRouter HTTP callers (`scripts/ai_memory_lib.py`, `scripts/analyze_workflow_logs.py`) when cache instrumentation is enabled.
+- Gemini-family model IDs skip explicit breakpoint insertion by design.
+- Fail-open safety is enforced: when a provider rejects explicit cache metadata, direct callers retry once without cache metadata instead of failing the workflow.
+
+### Kill switch
+
+- `OPENROUTER_PROMPT_CACHE_DISABLED=false` (default): cache behavior and telemetry are enabled.
+- `OPENROUTER_PROMPT_CACHE_DISABLED=true`: explicit breakpoint insertion is disabled and workflows continue with normal execution.
+
+### Telemetry fields
+
+- Structured OpenRouter usage logging now includes:
+  - `cache_creation_input_tokens`
+  - `cache_read_input_tokens`
+  - `prompt_tokens`, `completion_tokens`, `total_tokens`
+  - `phase`, `model`, and cache instrumentation flags when available
+- Usage parsing is normalized across provider response shapes, including both:
+  - `usage.cache_creation_input_tokens` / `usage.cache_read_input_tokens`
+  - `usage.prompt_tokens_details.cache_write_tokens` / `usage.prompt_tokens_details.cached_tokens`
 
 ### Determination (current stack)
 
