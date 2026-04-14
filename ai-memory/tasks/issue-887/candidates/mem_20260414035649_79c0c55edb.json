@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which exact `memory_maintenance` workload should be converted to async batch?**\nChoices:\n- **A** \u2014 Add a new LLM step to `memory_maintenance.yml` so it submits/polls a batch job (changes workflow behavior)  \n- **B** \u2014 Only `workflow-log-analysis` should actually use batch now; keep `memory_maintenance.yml` functionally unchanged and add no-op compatibility plumbing there (RECOMMENDED)\n- **C** \u2014 Point to a specific existing LLM call path in the repo that `memory_maintenance.yml` should invoke (provide file/function)\nReply: `Q1: B`\n**Q2: For `BATCH_API_PROVIDER` selection, which credential contract should implementation use?**\nChoices:\n- **A** \u2014 `auto|openai|anthropic` must call provider-native batch APIs directly (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`), with fallback to sync if missing/unsupported\n- **B** \u2014 Keep using existing OpenRouter credentials only (`OPENROUTER_API_KEY`); `openai|anthropic` are logical hints, and unsupported routes fall back to sync (RECOMMENDED)\n- **C** \u2014 Support both A and B (prefer native when provider key exists, else OpenRouter path, else sync fallback)\nReply: `Q2: B`\n**Q3: How should next-run polling find pending batch jobs across workflow runs?**\nChoices:\n- **A** \u2014 Artifact-only contract: store batch metadata in a named artifact and next runs retrieve the latest artifact via GitHub API (RECOMMENDED)\n- **B** \u2014 Commit pending batch metadata to repo (or `ai-memory` branch) and poll from git state\n- **C** \u2014 Use both artifact + git mirror for redundancy\nReply: `Q3: A`",
+  "fingerprint": "344e52c3f557a22f6a6d08a5f46754aa6cb0630a9214c2171a43fe0fd51e22b3",
+  "lineage": {
+    "issue_number": 887,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24380089916",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24380089916",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260414035649_79c0c55edb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 887,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24380089916"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #887 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-14T03:56:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
