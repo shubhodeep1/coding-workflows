@@ -668,6 +668,8 @@ close_merged_issues_sweep() {
   fi
 
   local idx issue_num has_tracking_label timeline_json pr_urls pr_url pr_json merged_pr_num
+  local github_api_base="${GITHUB_API_URL:-https://api.github.com}"
+  local pr_api_prefix="${github_api_base}/repos/${GITHUB_REPOSITORY}/pulls/"
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -705,6 +707,9 @@ close_merged_issues_sweep() {
     if [ -n "${pr_urls}" ]; then
       while IFS= read -r pr_url; do
         [ -n "${pr_url}" ] || continue
+        if [[ "${pr_url}" != "${pr_api_prefix}"* ]]; then
+          continue
+        fi
         if ! pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)"; then
           continue
         fi
