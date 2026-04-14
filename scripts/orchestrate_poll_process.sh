@@ -4445,7 +4445,8 @@ PRs to revert: ${REVERT_COUNT}"
     --arg justification "${JUDGE_JUSTIFICATION}" \
     --arg timestamp "${JUDGE_HISTORY_TIMESTAMP}" \
     '.judge_history = ((.judge_history // []) | if type == "array" then . else [] end) |
-     .judge_history += [{"cycle": $cycle, "action": $action, "justification": $justification, "timestamp": $timestamp}]' \
+     .judge_history += [{"cycle": $cycle, "action": $action, "justification": $justification, "timestamp": $timestamp}] |
+     .judge_history |= .[-5:]' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
   # ---------------------------------------------------------------
