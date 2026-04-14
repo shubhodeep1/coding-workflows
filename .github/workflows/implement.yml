@@ -2042,10 +2042,10 @@ jobs:
             echo "${FAILED_STEP_NAME}"
             echo
             echo "=== WORKING TREE CHANGES (git diff HEAD) ==="
-            cat "${DIFF_FILE}"
+            [ -s "${DIFF_FILE}" ] && cat "${DIFF_FILE}" || echo "(no content)"
             echo
             echo "=== UNTRACKED FILE CONTEXT ==="
-            cat "${UNTRACKED_CONTEXT_FILE}"
+            [ -s "${UNTRACKED_CONTEXT_FILE}" ] && cat "${UNTRACKED_CONTEXT_FILE}" || echo "(no content)"
             echo
             echo "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ==="
             cat "${CAPTURE_FILE}"
