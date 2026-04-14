@@ -4848,6 +4848,12 @@ sys.exit(1)
             ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
             FOLLOWUP_PR_BLOCKED="false"
 
+            ORCH_FOLLOWUP_OWNED="false"
+            ORCH_FOLLOWUP_TRACKING_NUM=""
+            ORCH_FOLLOWUP_INTEGRATION_BRANCH=""
+            ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
+            FOLLOWUP_PR_BLOCKED="false"
+
             if [ "${RB_TARGET_MERGED}" = "true" ]; then
               resolve_active_orchestrator_context_for_issue "${rb_issue}" "${TRACKING_NUM:-}"
               ORCH_FOLLOWUP_OWNED="${RESOLVED_ORCHESTRATOR_OWNED}"
