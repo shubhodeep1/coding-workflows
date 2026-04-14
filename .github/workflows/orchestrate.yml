@@ -446,12 +446,139 @@ jobs:
             --issue-title "${ISSUE_TITLE}" \
             --issue-body-file "${PROJECT_CONTEXT_FILE}"
 
+      - name: Gather existing AI inventory
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          INVENTORY_FILE="${RUNTIME_DIR}/existing_inventory.txt"
+          OPEN_ISSUES_JSON="${RUNTIME_DIR}/inventory_open_issues.json"
+          CLOSED_ISSUES_JSON="${RUNTIME_DIR}/inventory_closed_issues.json"
+          BRANCHES_JSON="${RUNTIME_DIR}/inventory_branches.json"
+
+          : > "${INVENTORY_FILE}"
+
+          echo "Open AI-managed issues (limit 50):" >> "${INVENTORY_FILE}"
+          if gh issue list --repo "${{ github.repository }}" --state open --limit 50 --json number,title,labels > "${OPEN_ISSUES_JSON}" 2>/dev/null; then
+            open_inventory="$(jq -r '
+              map(select(any(.labels[]?; (.name // "") | startswith("ai:"))))
+              | if length == 0 then
+                  ["[none found]"]
+                else
+                  map("#\(.number) - \(.title)")
+                end
+              | .[]
+            ' "${OPEN_ISSUES_JSON}" 2>/dev/null || true)"
+            if [ -n "${open_inventory}" ]; then
+              printf '%s\n' "${open_inventory}" >> "${INVENTORY_FILE}"
+            else
+              echo "[inventory unavailable: unable to parse open issue payload]" >> "${INVENTORY_FILE}"
+            fi
+          else
+            echo "[inventory unavailable: unable to fetch open issues]" >> "${INVENTORY_FILE}"
+          fi
+          echo >> "${INVENTORY_FILE}"
+
+          echo "Closed AI-managed issues (limit 30):" >> "${INVENTORY_FILE}"
+          if gh issue list --repo "${{ github.repository }}" --state closed --limit 30 --json number,title,closedAt,labels > "${CLOSED_ISSUES_JSON}" 2>/dev/null; then
+            closed_inventory="$(jq -r '
+              map(select(any(.labels[]?; (.name // "") | startswith("ai:"))))
+              | if length == 0 then
+                  ["[none found]"]
+                else
+                  map("#\(.number) - \(.title) (closed: \(.closedAt // \"unknown\"))")
+                end
+              | .[]
+            ' "${CLOSED_ISSUES_JSON}" 2>/dev/null || true)"
+            if [ -n "${closed_inventory}" ]; then
+              printf '%s\n' "${closed_inventory}" >> "${INVENTORY_FILE}"
+            else
+              echo "[inventory unavailable: unable to parse closed issue payload]" >> "${INVENTORY_FILE}"
+            fi
+          else
+            echo "[inventory unavailable: unable to fetch closed issues]" >> "${INVENTORY_FILE}"
+          fi
+          echo >> "${INVENTORY_FILE}"
+
+          echo "Active AI/Claude branches (limit 50):" >> "${INVENTORY_FILE}"
+          if gh api "repos/${{ github.repository }}/branches?per_page=100" > "${BRANCHES_JSON}" 2>/dev/null; then
+            branch_inventory="$(jq -r '
+              [ .[]? | (.name // "") | select(test("^(ai|claude)/")) ][0:50]
+              | if length == 0 then
+                  ["[none found]"]
+                else
+                  .
+                end
+              | .[]
+            ' "${BRANCHES_JSON}" 2>/dev/null || true)"
+            if [ -n "${branch_inventory}" ]; then
+              printf '%s\n' "${branch_inventory}" >> "${INVENTORY_FILE}"
+            else
+              echo "[inventory unavailable: unable to parse branches payload]" >> "${INVENTORY_FILE}"
+            fi
+          else
+            echo "[inventory unavailable: unable to fetch branches]" >> "${INVENTORY_FILE}"
+          fi
+
+          if [ ! -s "${INVENTORY_FILE}" ]; then
+            echo "[inventory unavailable: no inventory content generated]" > "${INVENTORY_FILE}"
+          fi
+
       - name: Build Codex prompt
         env:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_ORCHESTRATE || '40' }}
           PROJECT_DESCRIPTION: ${{ inputs.project_description }}
         run: |
           set -euo pipefail
+
+          resolve_model_context_window() {
+            local catalog_path="./scripts/codex_model_catalog.json"
+            local context_window=""
+            local effective_percent=""
+
+            if [ -f "${catalog_path}" ] && command -v jq >/dev/null 2>&1; then
+              context_window="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .context_window // empty' "${catalog_path}" | head -n1)"
+              effective_percent="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .effective_context_window_percent // empty' "${catalog_path}" | head -n1)"
+              if [[ "${context_window}" =~ ^[0-9]+$ ]] && [[ "${effective_percent}" =~ ^[0-9]+$ ]] && [ "${effective_percent}" -gt 0 ] && [ "${effective_percent}" -le 100 ]; then
+                context_window=$(( context_window * effective_percent / 100 ))
+              fi
+            fi
+
+            if [[ "${context_window}" =~ ^[0-9]+$ ]] && [ "${context_window}" -gt 0 ]; then
+              printf '%s\n' "${context_window}"
+            fi
+          }
+
+          build_token_budget_hint() {
+            local prompt_file="$1"
+            local prompt_bytes=""
+            local prompt_tokens=""
+            local model_context=""
+            local remaining_tokens=""
+
+            prompt_bytes="$(wc -c < "${prompt_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+            if ! [[ "${prompt_bytes}" =~ ^[0-9]+$ ]]; then
+              echo "unavailable (advisory estimate failed: prompt size unknown)"
+              return
+            fi
+
+            prompt_tokens=$(( (prompt_bytes + 3) / 4 ))
+            model_context="$(resolve_model_context_window || true)"
+            if ! [[ "${model_context}" =~ ^[0-9]+$ ]] || [ "${model_context}" -le 0 ]; then
+              echo "unavailable (advisory estimate failed: model context unknown)"
+              return
+            fi
+
+            remaining_tokens=$(( model_context - prompt_tokens ))
+            if [ "${remaining_tokens}" -lt 0 ]; then
+              remaining_tokens=0
+            fi
+
+            echo "${remaining_tokens} (approx remaining context tokens; advisory only)"
+          }
+
+          CODEX_PROMPT_ESTIMATE_FILE="${RUNTIME_DIR}/codex_prompt_estimate.txt"
 
           {
             cat ./pre_assembled_static.txt
@@ -465,6 +592,7 @@ jobs:
             fi
             echo
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo "TOKEN_BUDGET_HINT: estimating..."
             echo
             echo "=== ORCHESTRATION TASK ==="
             echo
@@ -477,7 +605,46 @@ jobs:
             echo "=== PROJECT DESCRIPTION ==="
             echo
             printf '%s\n' "${PROJECT_DESCRIPTION}"
+          } > "${CODEX_PROMPT_ESTIMATE_FILE}"
+
+          TOKEN_BUDGET_HINT="$(build_token_budget_hint "${CODEX_PROMPT_ESTIMATE_FILE}")"
+
+          {
+            cat ./pre_assembled_static.txt
+            echo
+            echo "=== AI MEMORY CONTEXT ==="
+            if [ -f "${RUNTIME_DIR}/memory_context.txt" ]; then
+              cat "${RUNTIME_DIR}/memory_context.txt"
+            else
+              echo "AI MEMORY CONTEXT"
+              echo "status: unavailable"
+            fi
+            echo
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo "TOKEN_BUDGET_HINT: ${TOKEN_BUDGET_HINT}"
+            echo
+            echo "=== ORCHESTRATION TASK ==="
+            echo
+            bash scripts/render_prompt.sh prompts/mode-orchestrate.txt
+            echo
+            echo "=== DECOMPOSITION SCHEMA ==="
+            echo
+            cat .github/ai/orchestrate_schema.v1.json
+            echo
+            echo "=== PROJECT DESCRIPTION ==="
+            echo
+            printf '%s\n' "${PROJECT_DESCRIPTION}"
+            echo
+            echo "=== EXISTING ISSUES & BRANCHES ==="
+            echo
+            if [ -f "${RUNTIME_DIR}/existing_inventory.txt" ]; then
+              cat "${RUNTIME_DIR}/existing_inventory.txt"
+            else
+              echo "[inventory unavailable: ${RUNTIME_DIR}/existing_inventory.txt missing]"
+            fi
           } > "${CODEX_PROMPT_FILE}"
+
+          rm -f "${CODEX_PROMPT_ESTIMATE_FILE}"
 
           echo "Prompt built: $(wc -l < "${CODEX_PROMPT_FILE}") lines, $(wc -c < "${CODEX_PROMPT_FILE}") bytes"
 
