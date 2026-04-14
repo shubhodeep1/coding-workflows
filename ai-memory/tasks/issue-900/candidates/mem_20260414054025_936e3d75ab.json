@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\n1. Clarification interpretation\n- Clarification had no Q-IDs; `/answer [auto-answered-by-clarify]` means proceed with issue scope exactly as written (no extra assumptions).\n\n2. Files likely to change\n- `tests/test_orchestrate_poll_process.py` (primary and likely only required file).\n- `scripts/orchestrate_poll_process.sh` only if the required supersede/base-guard behavior is still missing and tests reveal a real product gap.\n\n3. Functions/modules to implement in test harness\n- Extend `_run_poller(...)` fixture controls so multi-cycle runs can persist realistic state/comment progression between polls.\n- Extend the embedded `gh` mock in `_run_poller` to record:\n- `pr_create` call arguments (`base`, `head`, `title`, `body`) for wrong-base assertions.\n- Existing `merge_calls` already exist; keep using them for sync retry-path assertions.\n- Add deterministic Telegram observability for tests (mock/stub path, no network), capturing send attempts so we can assert \u201cexactly one sync warning across N>=2 polls.\u201d\n- Add minimal git merge-tree simulation hook (mocked behavior only), so superseded classification can be exercised hermetically.\n\n4. New regression tests to add\n- `test_sync_warning_emits_once_when_branch_superseded_across_poll_cycles`\n- Build a fixture where sync merge reports conflict and branch is classifiable as `superseded-by-main`.\n- Run poller for at least 2 cycles, feeding cycle-1 resulting state/comments into cycle-2 input.\n- Assert:\n- Exactly one sync warning Telegram emission total.\n- Persisted state includes superseded marker/classification.\n- Later cycle skips sync retry path (no additional sync merge attempt / no repeated warning).\n- `test_conflict_autofix_guard_blocks_or_retargets_main_when_integration_active`\n- Fixture with active orchestrator tracking linkage + integration branch present.\n- Drive conflict-autofix/follow-up PR path and inspect recorded `pr_create` calls.\n- Assert no wrong-base create call is issued against `main` for orchestrator conflict-fix path (either refused or retargeted to integration branch).\n\n5. Data structures affected\n- Test store payload in `_run_poller`:\n- Add `pr_create_calls` list.\n- Add `telegram_calls` (or equivalent) list.\n- Add merge-tree simulation control field(s) used by git mock.\n- Orchestrator state assertions:\n- Validate persisted supersede classification exists in `latest_state` after cycle progression (using value-based check for `superseded-by-main` to avoid brittle key-coupling).\n\n6. API/interface changes\n- Internal test helper interface only (`_run_poller` optional args and mock store fields).\n- No external workflow/API/env-var contract changes expected for this issue.\n\n7. Risks and edge cases\n- Cycle replay can become flaky if comment/state ordering is not preserved exactly; keep deterministic ordering from prior result.\n- Telegram assertion can be brittle if matching full formatted text; assert stable substring/signal instead.\n- Ensure test does not touch real network or mutate real git remotes.\n- Avoid false positives from unrelated PR creations (filter by orchestrator conflict-fix title/head/base pattern).\n\n8. Testing considerations\n- Run `python3 tests/test_orchestrate_poll_process.py`.\n- Confirm new tests are red against pre-fix behavior and green with intended fixes.\n- Verify existing conflict-sweep/validation tests still pass (no regression from mock/store extensions).\n\nConflict detection (important)\n- The current `scripts/orchestrate_poll_process.sh` snapshot does not visibly expose a `superseded-by-main` sync classification path, and current tests do not assert repeated-poll deduping for sync warnings.\n- Current harness also does not capture Telegram sends or `gh pr create` call arguments, so required acceptance assertions are not currently possible without the fixture enhancements above.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0f3afabbaa3c2336217c38729e55048a4dae594919a9f39f76350b51602d74e8",
+  "lineage": {
+    "issue_number": 900,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24382665021",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24382665021",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/900"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414054025_936e3d75ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 900,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24382665021"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #900",
+  "timestamps": {
+    "created_at": "2026-04-14T05:40:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
