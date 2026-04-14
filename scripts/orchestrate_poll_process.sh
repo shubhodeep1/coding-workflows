@@ -1647,7 +1647,7 @@ _robust_parse_json_file() {
   python3 -c "
 import json, re, sys
 
-raw = open('${file_path}', 'r').read()
+raw = open(sys.argv[1], 'r').read()
 
 try:
     data = json.loads(raw.strip())
@@ -1679,7 +1679,7 @@ for i, ch in enumerate(cleaned):
 
 print('Could not parse JSON output', file=sys.stderr)
 sys.exit(1)
-" 2>/dev/null || echo ""
+" -- "${file_path}" 2>/dev/null || echo ""
 }
 
 execute_stall_recovery_action() {
@@ -2114,7 +2114,7 @@ invoke_stall_judge() {
     if [ -n "${MOCK_STALL_JUDGE_JSON:-}" ]; then
       printf '%s\n' "${MOCK_STALL_JUDGE_JSON}" > "${stall_judge_output_file}"
     else
-      codex exec --model "${MODEL_EDITOR}" --full-auto < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>/dev/null || true
+      codex exec --model "${MODEL_EDITOR}" --full-auto < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
     fi
     if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
       judge_success="true"
@@ -2185,8 +2185,12 @@ ${diagnostics}
         execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
         return $?
       fi
-      execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}"
-      return $?
+      if ! execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}"; then
+        echo "::warning::resolve_merge_conflict dispatch failed for issue #${issue_num}; falling back to ${fallback_action}."
+        execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
+        return $?
+      fi
+      return 0
       ;;
     *)
       echo "::warning::Unknown stall judge action '${judge_action}' for issue #${issue_num}; falling back to ${fallback_action}."
@@ -2207,7 +2211,8 @@ ${diagnostics}
 _fetch_standalone_marker_issues_graphql() {
   local q_state="repo:${GITHUB_REPOSITORY} is:issue is:open \"AI_STANDALONE_STALL_STATE_V1\" in:comments"
   local q_clarify="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments"
-  local query='query($q_state: String!, $q_clarify: String!) { # shellcheck disable=SC2016
+  # shellcheck disable=SC2016
+  local query='query($q_state: String!, $q_clarify: String!) {
   state: search(query: $q_state, type: ISSUE, first: 100) {
     pageInfo { hasNextPage }
     nodes { ... on Issue { number } }
@@ -2368,8 +2373,7 @@ run_standalone_stall_recovery() {
     for ((t_idx=0; t_idx<t_count; t_idx++)); do
       t_num="$(jq -r ".[${t_idx}].number" "${RUNTIME_DIR}/tracking_issues.json" 2>/dev/null || echo "")"
       [ -n "${t_num}" ] || continue
-      orchestrator_managed_set="${orchestrator_managed_set}"$'
-'"${t_num}"
+      orchestrator_managed_set="${orchestrator_managed_set}"$'\n'"${t_num}"
       if ! t_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${t_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
         t_comments='[]'
       fi
@@ -2379,8 +2383,7 @@ run_standalone_stall_recovery() {
       fi
       managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
       if [ -n "${managed_nums}" ]; then
-        orchestrator_managed_set="${orchestrator_managed_set}"$'
-'"${managed_nums}"
+        orchestrator_managed_set="${orchestrator_managed_set}"$'\n'"${managed_nums}"
       fi
     done
   fi
