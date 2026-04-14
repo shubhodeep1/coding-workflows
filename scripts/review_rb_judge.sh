@@ -123,7 +123,7 @@ compute_rb_token_budget_hint() {
     echo "advisory unavailable: unable to estimate prompt bytes"
     return 0
   fi
-  prompt_tokens=$(( (prompt_bytes + 3) / 4 ))
+  prompt_tokens=$(( (prompt_bytes * 10 + 29) / 30 ))
 
   catalog_path="${SUPPORT_ROOT_DIR}/scripts/codex_model_catalog.json"
   if [ ! -f "${catalog_path}" ]; then
