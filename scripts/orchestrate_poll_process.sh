@@ -3836,20 +3836,16 @@ ${RB_FIX_DESC}" || true
                         echo "::warning::Detected follow-up PR base '${BASE_REF}' for orchestrator-owned issue #${rb_issue}; retargeting to '${ORCH_FOLLOWUP_INTEGRATION_BRANCH}'."
                         BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
                       fi
-
-                      if [ "${BASE_REF}" != "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
-                        FOLLOWUP_GUARD_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}); refusing to create follow-up PR against '${BASE_REF}'. Required base is '${ORCH_FOLLOWUP_INTEGRATION_BRANCH}'."
-                        echo "::warning::${FOLLOWUP_GUARD_REASON}"
-                        post_tracking_comment "## ⚠️ Follow-up PR blocked\n\n${FOLLOWUP_GUARD_REASON}"
-                        tg_notify "${FOLLOWUP_GUARD_REASON}" "WARNING"
-                        FOLLOWUP_PR_URL=""
-                      fi
                     fi
 
-                    if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ] && [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ] && [ "${BASE_REF}" != "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
-                      echo "::warning::Skipped follow-up PR creation due to unresolved base-branch guard for issue #${rb_issue}."
+                    if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ] && [ "${BASE_REF}" = "${DEFAULT_BRANCH:-main}" ]; then
+                      FOLLOWUP_GUARD_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}); refusing to create follow-up PR against '${BASE_REF}'. Required base is '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}'."
+                      echo "::warning::${FOLLOWUP_GUARD_REASON}"
+                      post_tracking_comment "## ⚠️ Follow-up PR blocked\n\n${FOLLOWUP_GUARD_REASON}"
+                      tg_notify "${FOLLOWUP_GUARD_REASON}" "WARNING"
+                      FOLLOWUP_PR_URL=""
                     else
-                    FOLLOWUP_PR_URL="$(gh pr create \
+                      FOLLOWUP_PR_URL="$(gh pr create \
                       --repo "${GITHUB_REPOSITORY}" \
                       --base "${BASE_REF}" \
                       --head "${FOLLOWUP_BRANCH}" \
