@@ -64,17 +64,19 @@ compute_inputs_hash()
 
 	local files
 	files="$(collect_input_files | trim_and_sort_unique)"
-	if [ -z "${files}" ]; then
-		printf '' | ${hasher} | awk '{print $1}'
-		return 0
-	fi
 
-	while IFS= read -r rel; do
-		[ -n "${rel}" ] || continue
-		if [ -f "${REPO_ROOT}/${rel}" ]; then
-			printf '%s  %s\n' "$(cat "${REPO_ROOT}/${rel}" | ${hasher} | awk '{print $1}')" "${rel}"
+	{
+		if [ -f "${BASH_SOURCE[0]}" ]; then
+			printf '%s  %s\n' "$(${hasher} < "${BASH_SOURCE[0]}" | awk '{print $1}')" "__build_repo_overview_script__"
 		fi
-	done <<< "${files}" | ${hasher} | awk '{print $1}'
+
+		while IFS= read -r rel; do
+			[ -n "${rel}" ] || continue
+			if [ -f "${REPO_ROOT}/${rel}" ]; then
+				printf '%s  %s\n' "$(${hasher} < "${REPO_ROOT}/${rel}" | awk '{print $1}')" "${rel}"
+			fi
+		done <<< "${files}"
+	} | ${hasher} | awk '{print $1}'
 }
 
 print_tree_section()
