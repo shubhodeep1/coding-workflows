@@ -5,13 +5,25 @@
   "entry_id": "processed_command_963_4245846419_approved",
   "issue_number": 963,
   "metadata": {
+    "branch": "ai/issue-963",
+    "changed_files": [
+      "prompts/mode-validate-fix-harness.txt",
+      "scripts/openrouter_prompt_cache.py",
+      "tests/test_orchestrate_poll_process.py",
+      "tests/test_validate_harness_rpc.py"
+    ],
+    "issue_number": 963,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/963",
+    "pr_number": 965,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/965",
+    "run_attempt": "1",
+    "run_id": "24413120173",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24413120173"
   },
   "run_attempt": 1,
   "run_id": "24413120173",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-14T17:22:47Z",
+  "status": "completed",
+  "timestamp": "2026-04-14T17:27:01Z",
   "workflow": "implement"
 }
