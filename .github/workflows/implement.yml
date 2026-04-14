@@ -431,6 +431,19 @@ jobs:
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           source scripts/label_helpers.sh
           ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          # Refuse redispatch of any issue that previously tripped the
+          # destructive-commit guard (P2/P3), regardless of phase label.
+          # A destructive rejection latches this label onto the issue; a
+          # human must remove it after reviewing what the earlier run
+          # tried to delete. This is the orchestrator-level circuit
+          # breaker (P3) called out in PRs #917/#931. See the
+          # "Destructive-commit guard on failure" step below for where
+          # the label is applied.
+          if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:destructive-blocked") != null' >/dev/null; then
+            echo "::warning::Issue #${ISSUE_NUMBER} carries ai:destructive-blocked from a previous run — refusing to redispatch implementation. A human must inspect the earlier rejection, remove the label, and reapprove before this issue can run again."
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
           if ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is not in ai:awaiting-approval phase. Exiting safely."
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
@@ -1246,6 +1259,74 @@ jobs:
             echo "Error: .github/prompts or .github/scripts is staged"
             exit 1
           fi
+
+          # -----------------------------------------------------------------
+          # Destructive-commit guard (P2 — defense-in-depth for PRs #917/#931)
+          #
+          # Before committing, inspect the staged deletion set and refuse
+          # the commit if either:
+          #
+          #   (a) any deletion touches the canonical workflow-source list
+          #       (agents.md, ai_pipeline.md, codex_system_instructions.md,
+          #        unattended_llm_system_instructions.md, prompts/**,
+          #        scripts/**, .github/ai/**) and ALLOW_WORKFLOW_EDITS is
+          #       not set to 'true'. Even on self-repo runs, deleting any
+          #       of these files is almost never what an issue asked for;
+          #       legitimate workflow-editing issues must opt in.
+          #
+          #   (b) the total number of staged deletions exceeds
+          #       BULK_DELETE_THRESHOLD (default 3) and ALLOW_BULK_DELETE
+          #       is not set to 'true'. This catches destructive paths
+          #       that don't touch the canonical list but still wipe an
+          #       unexpected number of files.
+          #
+          # On rejection, `destructive_commit_blocked` is written to the
+          # step output with the reason ('canonical-source' or
+          # 'bulk-delete'); the `destructive_commit_deletions` output
+          # carries the deletion list (newline-separated) so downstream
+          # steps (P3: label + TG alert) can act on it before exiting.
+          # -----------------------------------------------------------------
+          deleted_staged="$(git diff --cached --diff-filter=D --name-only || true)"
+          if [ -n "${deleted_staged}" ]; then
+            canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
+              | grep -E '^(agents\.md|ai_pipeline\.md|codex_system_instructions\.md|unattended_llm_system_instructions\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
+              || true)"
+            total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
+            threshold="${BULK_DELETE_THRESHOLD:-3}"
+            if ! [[ "${threshold}" =~ ^[0-9]+$ ]]; then
+              echo "::warning::Invalid BULK_DELETE_THRESHOLD='${threshold}'; defaulting to 3."
+              threshold=3
+            fi
+
+            if [ -n "${canonical_deletions}" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ]; then
+              echo "::error::Refusing to commit: ${total_deletions} staged deletion(s) include canonical workflow-source files and ALLOW_WORKFLOW_EDITS is not 'true'."
+              echo "Canonical-source deletions blocked:"
+              printf '%s\n' "${canonical_deletions}" | sed 's/^/  - /'
+              # Emit outputs BEFORE exiting so downstream P3 step can read them.
+              {
+                echo "destructive_commit_blocked=canonical-source"
+                echo "destructive_commit_count=${total_deletions}"
+                echo 'destructive_commit_deletions<<__DCD_EOF__'
+                printf '%s\n' "${deleted_staged}"
+                echo '__DCD_EOF__'
+              } >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            if [ "${total_deletions}" -gt "${threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ]; then
+              echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds BULK_DELETE_THRESHOLD=${threshold} and ALLOW_BULK_DELETE is not 'true'."
+              echo "Deletions blocked by bulk-delete threshold:"
+              printf '%s\n' "${deleted_staged}" | sed 's/^/  - /'
+              {
+                echo "destructive_commit_blocked=bulk-delete"
+                echo "destructive_commit_count=${total_deletions}"
+                echo 'destructive_commit_deletions<<__DCD_EOF__'
+                printf '%s\n' "${deleted_staged}"
+                echo '__DCD_EOF__'
+              } >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          fi
           # If every Codex-produced change was filtered out by the path exclusions
           # above (or stripped by the fetched-manifest cleanup earlier in this step),
           # there is nothing to commit.  Treat this as a no-op rather than letting
@@ -1262,6 +1343,115 @@ jobs:
           fi
           git commit -m "AI implementation for issue #${ISSUE_NUMBER}"
           echo "did_commit=true" >> "$GITHUB_OUTPUT"
+
+      - name: Destructive-commit guard — label + alert on rejection
+        # Runs ONLY when the commit step exited non-zero AND emitted the
+        # destructive_commit_blocked output. This is the P3 circuit
+        # breaker from PRs #917/#931: latch ai:destructive-blocked on
+        # the issue so any future redispatch attempt is refused by the
+        # Validate approval phase step, post a visible comment, and
+        # fire a CRITICAL TG alert so a human can intervene before the
+        # orchestrator's judge-cycle regenerates the same task under a
+        # fresh issue number.
+        #
+        # All logic here is inline (direct gh/curl calls) rather than
+        # sourcing label_helpers.sh / tg_helpers.sh, because the
+        # fetched-manifest cleanup earlier in the commit step may have
+        # already removed those helper scripts in consumer-repo runs.
+        if: env.SKIP_IMPLEMENT != 'true' && failure() && steps.commit_changes.outputs.destructive_commit_blocked != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          DCB_REASON: ${{ steps.commit_changes.outputs.destructive_commit_blocked }}
+          DCB_COUNT: ${{ steps.commit_changes.outputs.destructive_commit_count }}
+          DCB_DELETIONS: ${{ steps.commit_changes.outputs.destructive_commit_deletions }}
+        run: |
+          set -euo pipefail
+
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          REASON_HUMAN="${DCB_REASON}"
+          case "${DCB_REASON}" in
+            canonical-source)
+              REASON_HUMAN="canonical workflow-source file deletion"
+              ;;
+            bulk-delete)
+              REASON_HUMAN="bulk deletion exceeded BULK_DELETE_THRESHOLD"
+              ;;
+          esac
+
+          # 1. Ensure label exists (idempotent). Hardcoded color/desc to
+          #    avoid depending on scripts/label_helpers.sh which may be
+          #    gone after consumer-repo cleanup.
+          gh label create 'ai:destructive-blocked' \
+            --repo "${{ github.repository }}" \
+            --color 'b60205' \
+            --description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review' \
+            2>/dev/null || true
+
+          # 2. Apply ai:destructive-blocked, clear ai:implementing so the
+          #    issue is visibly in a halt state rather than a transient
+          #    one. Best-effort — if gh is unavailable we still fire the
+          #    TG alert below.
+          gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:destructive-blocked' \
+            --remove-label 'ai:implementing' 2>/dev/null || \
+          gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:destructive-blocked' 2>/dev/null || true
+
+          # 3. Post a visible issue comment describing what was rejected
+          #    and what the operator needs to do. Embeds the deletion
+          #    list in a fenced block so humans can audit which files
+          #    the codex run tried to unlink.
+          {
+            echo "🚨 **Destructive-commit guard rejected this implementation run.**"
+            echo
+            echo "- Reason: \`${DCB_REASON}\` (${REASON_HUMAN})"
+            echo "- Staged deletions: **${DCB_COUNT}**"
+            echo "- Workflow run: ${RUN_URL}"
+            echo
+            echo "The commit was **not** created and **not** pushed. This issue is now labeled \`ai:destructive-blocked\` and will be refused by the \`Validate approval phase\` step on any future redispatch of issue #${ISSUE_NUMBER} until a human removes the label."
+            echo
+            echo "Staged deletion list:"
+            echo
+            echo '```'
+            printf '%s\n' "${DCB_DELETIONS}" | sed '/^$/d'
+            echo '```'
+            echo
+            echo "If these deletions are legitimate, rerun with \`ALLOW_WORKFLOW_EDITS=true\` (for canonical-source deletions) or \`ALLOW_BULK_DELETE=true\` (for threshold-triggered rejections) and remove \`ai:destructive-blocked\` from the issue. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration (see PRs #917/#931 for context)."
+          } > /tmp/destructive_comment.md
+          gh issue comment "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --body-file /tmp/destructive_comment.md 2>/dev/null || true
+
+          # 4. Fire a CRITICAL Telegram alert (inline — tg_helpers.sh may
+          #    have been removed by consumer-repo cleanup). Build the
+          #    message body via printf so every line stays within the
+          #    YAML block-scalar indentation level; curl's
+          #    --data-urlencode then transmits the embedded newlines.
+          if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
+            TG_MSG="$(printf '%s\n' \
+              "🚨 CRITICAL: destructive-commit guard blocked implementation" \
+              "repo: ${{ github.repository }}" \
+              "issue: #${ISSUE_NUMBER}" \
+              "reason: ${DCB_REASON} (${REASON_HUMAN})" \
+              "deletions: ${DCB_COUNT}" \
+              "run: ${RUN_URL}" \
+              "" \
+              "Issue is now ai:destructive-blocked. A human must review and remove the label before this exact issue ID can be redispatched. The orchestrator judge may still regenerate this task under a different issue number.")"
+            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+              -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+              -d "disable_web_page_preview=true" \
+              --data-urlencode "text=${TG_MSG}" >/dev/null 2>&1 || \
+              echo "::warning::Telegram alert send failed for destructive-commit rejection on issue #${ISSUE_NUMBER}"
+          else
+            echo "::warning::TG_BOT_SECRET or TG_ADMIN_CHAT_ID unset; destructive-commit rejection was not sent to Telegram."
+          fi
+
+          # Preserve the non-zero exit from commit_changes — do NOT
+          # swallow the failure here. The job should still fail so
+          # operators see a red X in Actions UI, and so downstream
+          # steps (Push branch, Create PR) are skipped.
+          exit 1
 
       - name: Handle no-op implementation
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false'
