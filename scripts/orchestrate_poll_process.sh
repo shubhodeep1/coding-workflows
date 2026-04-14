@@ -4147,6 +4147,13 @@ json.dump(result, sys.stdout)
       fi
       echo "  Linked PR: #${RB_PR}"
 
+      RB_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+      [ "${RB_INTEGRATION_BRANCH}" = "null" ] && RB_INTEGRATION_BRANCH=""
+      RB_INTEGRATION_BRANCH_VALID="false"
+      if [ -n "${RB_INTEGRATION_BRANCH}" ] && integration_branch_exists "${RB_INTEGRATION_BRANCH}"; then
+        RB_INTEGRATION_BRANCH_VALID="true"
+      fi
+
       # Guard: check PR state before invoking the judge
       # Fetch PR JSON once — reused for state/merged checks and PR_META below.
       _rb_pr_json="$(_fetch_pr_json "${RB_PR}")"
@@ -4164,7 +4171,13 @@ json.dump(result, sys.stdout)
         continue
       elif [ "${RB_PR_MERGED}" = "true" ]; then
         # PR was merged — judge should still run; fixes will go into a follow-up PR
-        echo "  PR #${RB_PR} is already merged. Judge fixes will target a follow-up PR against ${DEFAULT_BRANCH:-main}."
+        if [ "${RB_INTEGRATION_BRANCH_VALID}" = "true" ]; then
+          echo "  PR #${RB_PR} is already merged. Judge fixes will target a follow-up PR against ${RB_INTEGRATION_BRANCH}."
+        elif [ -n "${RB_INTEGRATION_BRANCH}" ]; then
+          echo "::warning::PR #${RB_PR} is already merged and integration branch context '${RB_INTEGRATION_BRANCH}' is invalid. Follow-up PR creation will be refused unless safely retargeted."
+        else
+          echo "  PR #${RB_PR} is already merged. Judge fixes will target a follow-up PR against ${DEFAULT_BRANCH:-main}."
+        fi
       fi
 
       # Collect full PR context for the judge
@@ -4444,8 +4457,24 @@ sys.exit(1)
             HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
             BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
             : "${BASE_REF:=${DEFAULT_BRANCH:-main}}"
+            RB_FOLLOWUP_REFUSED="false"
 
             if [ "${RB_TARGET_MERGED}" = "true" ]; then
+              RB_DEFAULT_BASE_REF="${DEFAULT_BRANCH:-main}"
+              if [ "${RB_INTEGRATION_BRANCH_VALID}" = "true" ] \
+                && { [ "${BASE_REF}" = "${RB_DEFAULT_BASE_REF}" ] || [ "${BASE_REF}" = "main" ]; }; then
+                echo "  Integration branch context active (${RB_INTEGRATION_BRANCH}); retargeting merged follow-up base from ${BASE_REF} to ${RB_INTEGRATION_BRANCH}."
+                BASE_REF="${RB_INTEGRATION_BRANCH}"
+              elif [ -n "${RB_INTEGRATION_BRANCH}" ] && [ "${RB_INTEGRATION_BRANCH_VALID}" != "true" ]; then
+                echo "::warning::Refusing merged follow-up PR for #${RB_PR}: integration branch context '${RB_INTEGRATION_BRANCH}' is invalid and safe retargeting is not possible."
+                tg_notify "Refused merged follow-up PR creation for review-blocked issue #${rb_issue} (PR #${RB_PR}): integration branch context '${RB_INTEGRATION_BRANCH}' is invalid, so targeting default branch is blocked."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+                RB_FOLLOWUP_REFUSED="true"
+              fi
+            fi
+
+            if [ "${RB_FOLLOWUP_REFUSED}" = "true" ]; then
+              REVIEW_BLOCKED_STATE_CHANGED=true
+            elif [ "${RB_TARGET_MERGED}" = "true" ]; then
               # PR already merged — work on a follow-up branch from the base branch
               FOLLOWUP_BRANCH="fix/${rb_issue}-followup-$(date +%s)"
               echo "  PR already merged. Creating follow-up branch ${FOLLOWUP_BRANCH} from ${BASE_REF}."
@@ -4462,7 +4491,7 @@ sys.exit(1)
               # Skip to retry counter via nested-fi + fi
             fi
 
-            if [ "${RB_TARGET_MERGED}" = "true" ] || { [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; }; then
+            if [ "${RB_FOLLOWUP_REFUSED}" != "true" ] && { [ "${RB_TARGET_MERGED}" = "true" ] || { [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; }; }; then
               # Re-run the judge in editing mode on the target branch
               RB_FIX_PROMPT_FILE="${RUNTIME_DIR}/rb_fix_prompt_${rb_issue}.txt"
               RB_FIX_OUTPUT_FILE="${RUNTIME_DIR}/rb_fix_output_${rb_issue}.txt"
@@ -4530,7 +4559,12 @@ ${RB_FIX_DESC}" || true
 
                 if [ "${RB_TARGET_MERGED}" = "true" ]; then
                   # Push follow-up branch and create a new PR
-                  if git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
+                  if [ "${RB_INTEGRATION_BRANCH_VALID}" = "true" ] \
+                    && { [ "${BASE_REF}" = "${DEFAULT_BRANCH:-main}" ] || [ "${BASE_REF}" = "main" ]; }; then
+                    echo "::warning::Refusing follow-up PR creation for merged PR #${RB_PR}: integration branch '${RB_INTEGRATION_BRANCH}' is active but computed base is '${BASE_REF}'."
+                    tg_notify "Refused merged follow-up PR creation for review-blocked issue #${rb_issue} (PR #${RB_PR}): integration branch '${RB_INTEGRATION_BRANCH}' is active but computed base was '${BASE_REF}'."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+                    REVIEW_BLOCKED_STATE_CHANGED=true
+                  elif git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
                     FOLLOWUP_PR_URL="$(gh pr create \
                       --repo "${GITHUB_REPOSITORY}" \
