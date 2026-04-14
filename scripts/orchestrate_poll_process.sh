@@ -5000,6 +5000,8 @@ ${RB_FIX_DESC}" || true
                       tg_notify "${FOLLOWUP_GUARD_REASON}" "WARNING"
                       TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
                       FOLLOWUP_PR_URL=""
+                      RB_FOLLOWUP_REFUSED="true"
+                      REVIEW_BLOCKED_STATE_CHANGED=true
                     else
                       FOLLOWUP_PR_URL="$(gh pr create \
                       --repo "${GITHUB_REPOSITORY}" \
