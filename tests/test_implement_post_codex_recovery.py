@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+import tempfile
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -103,6 +104,7 @@ def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subproc
 		env=env,
 		text=True,
 		capture_output=True,
+		timeout=60,
 	)
 
 
@@ -469,103 +471,107 @@ def _read_file(path: str) -> str:
 	return p.read_text(encoding="utf-8")
 
 
-def test_diagnose_prompt_contract_round_trip_and_fixup_metadata(tmp_path: Path):
-	capture = "===== broken.yml (python3 yaml.safe_load) =====\nscanner error on line 3\n"
-	issue_body = "Issue context\n\nTracking issue: #829\n"
-	failed_step = "Validate syntax of changed files"
-	codex_payload = {
-		"status": "needs_fixes",
-		"diagnosis": "Validator failed after Codex edits.",
-		"fix_issues": [
-			{
-				"id": "implement-fix-1",
-				"title": "Repair syntax capture and parsing",
-				"body": "Fix parser output and re-run implementation.",
-				"priority": 1,
-				"depends_on": [],
-			}
-		],
-		"harness_fixes": "",
-	}
-
-	proc, state, _runtime_dir, paths = _run_diagnose_step(
-		tmp_path,
-		issue_labels=["ai:implementing", "ai:awaiting-approval"],
-		capture_contents=capture,
-		codex_mode="success",
-		codex_output=codex_payload,
-		failed_step_name=failed_step,
-		issue_body=issue_body,
-	)
-
-	assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
-
-	result = json.loads(_read_file(paths["result_file"]))
-	assert isinstance(result, dict)
-	assert result.get("status") in {"needs_fixes", "harness_error", "infeasible"}
-	assert isinstance(result.get("diagnosis"), str)
-	assert isinstance(result.get("fix_issues"), list)
-	assert isinstance(result.get("harness_fixes"), str)
-
-	stdin_prompt = _read_file(paths["stdin_file"])
-	assert "=== SOURCE ISSUE BODY ===" in stdin_prompt
-	assert issue_body.strip() in stdin_prompt
-	assert "=== FAILED STEP NAME ===" in stdin_prompt
-	assert failed_step in stdin_prompt
-	assert "=== WORKING TREE CHANGES (git diff HEAD) ===" in stdin_prompt
-	assert "tracked.txt" in stdin_prompt
-	assert "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ===" in stdin_prompt
-	assert "scanner error on line 3" in stdin_prompt
-
-	created_issues = state.get("created_issues", [])
-	assert len(created_issues) == 1
-	created = created_issues[0]
-	assert created["repo"] == "owner/repo"
-	assert created["title"] == "Repair syntax capture and parsing"
-	body = created["body"]
-	assert "Type: implement-fix-up (post-codex-validation)" in body
-	assert "Source issue: #948" in body
-	assert f"Failed step: {failed_step}" in body
-
-	labels = state.get("issue_labels", [])
-	assert "ai:implementation-failed" in labels
-	assert "ai:awaiting-approval" not in labels
-
-
-def test_validator_capture_aggregates_multiple_files_before_nonzero_exit(tmp_path: Path):
-	repo_dir = tmp_path / "validate-repo"
-	_bootstrap_git_repo(repo_dir)
-
-	(runtime_py := repo_dir / "broken.py").write_text("x = 1\n", encoding="utf-8")
-	(runtime_yaml := repo_dir / "broken.yml").write_text("a: 1\n", encoding="utf-8")
-	_git(["git", "add", "broken.py", "broken.yml"], cwd=repo_dir)
-	_git(["git", "commit", "-m", "add files"], cwd=repo_dir)
-
-	runtime_py.write_text("def nope(:\n\tpass\n", encoding="utf-8")
-	runtime_yaml.write_text("key: [1, 2\n", encoding="utf-8")
-
-	runtime_dir = tmp_path / "runtime"
-	runtime_dir.mkdir(parents=True, exist_ok=True)
-
-	script = _extract_run_script("Validate syntax of changed files")
-	env = os.environ.copy()
-	env.update(
-		{
-			"RUNTIME_DIR": str(runtime_dir),
-			"PATH": env.get("PATH", ""),
+def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		capture = "===== broken.yml (python3 yaml.safe_load) =====\nscanner error on line 3\n"
+		issue_body = "Issue context\n\nTracking issue: #829\n"
+		failed_step = "Validate syntax of changed files"
+		codex_payload = {
+			"status": "needs_fixes",
+			"diagnosis": "Validator failed after Codex edits.",
+			"fix_issues": [
+				{
+					"id": "implement-fix-1",
+					"title": "Repair syntax capture and parsing",
+					"body": "Fix parser output and re-run implementation.",
+					"priority": 1,
+					"depends_on": [],
+				}
+			],
+			"harness_fixes": "",
 		}
-	)
 
-	proc = _run_shell_script(script, cwd=repo_dir, env=env)
-	assert proc.returncode != 0, "expected non-zero exit when syntax errors exist"
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing", "ai:awaiting-approval"],
+			capture_contents=capture,
+			codex_mode="success",
+			codex_output=codex_payload,
+			failed_step_name=failed_step,
+			issue_body=issue_body,
+		)
 
-	capture_file = runtime_dir / "post_codex_validation_errors.txt"
-	assert capture_file.exists(), "expected capture file to be written"
-	capture = capture_file.read_text(encoding="utf-8")
-	assert "broken.py" in capture
-	assert "python3 -m py_compile" in capture
-	assert "broken.yml" in capture
-	assert "python3 yaml.safe_load" in capture
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		result = json.loads(_read_file(paths["result_file"]))
+		assert isinstance(result, dict)
+		assert result.get("status") in {"needs_fixes", "harness_error", "infeasible"}
+		assert isinstance(result.get("diagnosis"), str)
+		assert isinstance(result.get("fix_issues"), list)
+		assert isinstance(result.get("harness_fixes"), str)
+
+		stdin_prompt = _read_file(paths["stdin_file"])
+		assert "=== SOURCE ISSUE BODY ===" in stdin_prompt
+		assert issue_body.strip() in stdin_prompt
+		assert "=== FAILED STEP NAME ===" in stdin_prompt
+		assert failed_step in stdin_prompt
+		assert "=== WORKING TREE CHANGES (git diff HEAD) ===" in stdin_prompt
+		assert "tracked.txt" in stdin_prompt
+		assert "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ===" in stdin_prompt
+		assert "scanner error on line 3" in stdin_prompt
+
+		created_issues = state.get("created_issues", [])
+		assert len(created_issues) == 1
+		created = created_issues[0]
+		assert created["repo"] == "owner/repo"
+		assert created["title"] == "Repair syntax capture and parsing"
+		body = created["body"]
+		assert "Type: implement-fix-up (post-codex-validation)" in body
+		assert "Source issue: #948" in body
+		assert f"Failed step: {failed_step}" in body
+
+		labels = state.get("issue_labels", [])
+		assert "ai:implementation-failed" in labels
+		assert "ai:awaiting-approval" not in labels
+
+
+def test_validator_capture_aggregates_multiple_files_before_nonzero_exit():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "validate-repo"
+		_bootstrap_git_repo(repo_dir)
+
+		(runtime_py := repo_dir / "broken.py").write_text("x = 1\n", encoding="utf-8")
+		(runtime_yaml := repo_dir / "broken.yml").write_text("a: 1\n", encoding="utf-8")
+		_git(["git", "add", "broken.py", "broken.yml"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add files"], cwd=repo_dir)
+
+		runtime_py.write_text("def nope(:\n\tpass\n", encoding="utf-8")
+		runtime_yaml.write_text("key: [1, 2\n", encoding="utf-8")
+
+		runtime_dir = tmp_path / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+
+		script = _extract_run_script("Validate syntax of changed files")
+		env = os.environ.copy()
+		env.update(
+			{
+				"RUNTIME_DIR": str(runtime_dir),
+				"PATH": env.get("PATH", ""),
+			}
+		)
+
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0, "expected non-zero exit when syntax errors exist"
+
+		capture_file = runtime_dir / "post_codex_validation_errors.txt"
+		assert capture_file.exists(), "expected capture file to be written"
+		capture = capture_file.read_text(encoding="utf-8")
+		assert "broken.py" in capture
+		assert "python3 -m py_compile" in capture
+		assert "broken.yml" in capture
+		assert "python3 yaml.safe_load" in capture
 
 
 def test_needs_fixes_labels_source_issue_and_generic_failure_step_is_bypassed():
@@ -575,72 +581,97 @@ def test_needs_fixes_labels_source_issue_and_generic_failure_step_is_bypassed():
 	assert "if: (failure() || cancelled()) && steps.diagnose_post_codex_failure.outputs.handled != 'true'" in wf
 
 
-def test_idempotency_skips_diagnose_and_issue_creation_when_already_failed_label(tmp_path: Path):
-	proc, state, _runtime_dir, paths = _run_diagnose_step(
-		tmp_path,
-		issue_labels=["ai:implementation-failed", "ai:implementing"],
-		capture_contents="===== x =====\nerror\n",
-		codex_mode="success",
-		codex_output={
-			"status": "needs_fixes",
-			"diagnosis": "should not run",
-			"fix_issues": [],
-			"harness_fixes": "",
-		},
-		failed_step_name="Validate syntax of changed files",
-		issue_body="Tracking issue: #829\n",
-	)
+def test_idempotency_skips_diagnose_and_issue_creation_when_already_failed_label():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementation-failed", "ai:implementing"],
+			capture_contents="===== x =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "should not run",
+				"fix_issues": [],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
 
-	assert proc.returncode == 0
-	assert "handled=true" in _read_file(paths["github_output"])
-	assert _read_file(paths["calls_file"]).strip() == ""
-	assert state.get("created_issues", []) == []
-
-
-def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid(tmp_path: Path):
-	raw_diag = "yaml parse failed on alpha.yml\npython compile failed on beta.py\n"
-	proc, state, _runtime_dir, paths = _run_diagnose_step(
-		tmp_path,
-		issue_labels=["ai:implementing"],
-		capture_contents=raw_diag,
-		codex_mode="invalid",
-		codex_output=None,
-		failed_step_name="Validate syntax of changed files",
-		issue_body="Tracking issue: #829\n",
-	)
-
-	assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
-
-	result = json.loads(_read_file(paths["result_file"]))
-	assert result.get("status") == "needs_fixes"
-	assert "Fallback fix-up issue created" in result.get("diagnosis", "")
-
-	created_issues = state.get("created_issues", [])
-	assert len(created_issues) == 1
-	created = created_issues[0]
-	assert created["title"] == "Implement phase post-Codex validation failure fallback"
-	assert "The diagnose step could not produce a valid JSON contract" in created["body"]
-	assert "yaml parse failed on alpha.yml" in created["body"]
-	assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
+		assert proc.returncode == 0
+		assert "handled=true" in _read_file(paths["github_output"])
+		assert _read_file(paths["calls_file"]).strip() == ""
+		assert state.get("created_issues", []) == []
 
 
-def test_out_of_scope_noop_when_capture_file_missing(tmp_path: Path):
-	proc, state, _runtime_dir, paths = _run_diagnose_step(
-		tmp_path,
-		issue_labels=["ai:implementing", "ai:awaiting-approval"],
-		capture_contents=None,
-		codex_mode="success",
-		codex_output={
-			"status": "needs_fixes",
-			"diagnosis": "should not run",
-			"fix_issues": [],
-			"harness_fixes": "",
-		},
-		failed_step_name="Validate syntax of changed files",
-		issue_body="Tracking issue: #829\n",
-	)
+def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		raw_diag = "yaml parse failed on alpha.yml\npython compile failed on beta.py\n"
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents=raw_diag,
+			codex_mode="invalid",
+			codex_output=None,
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
 
-	assert proc.returncode == 0
-	assert "handled=false" in _read_file(paths["github_output"])
-	assert _read_file(paths["calls_file"]).strip() == ""
-	assert state.get("created_issues", []) == []
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		result = json.loads(_read_file(paths["result_file"]))
+		assert result.get("status") == "needs_fixes"
+		assert "Fallback fix-up issue created" in result.get("diagnosis", "")
+
+		created_issues = state.get("created_issues", [])
+		assert len(created_issues) == 1
+		created = created_issues[0]
+		assert created["title"] == "Implement phase post-Codex validation failure fallback"
+		assert "The diagnose step could not produce a valid JSON contract" in created["body"]
+		assert "yaml parse failed on alpha.yml" in created["body"]
+		assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
+
+
+def test_out_of_scope_noop_when_capture_file_missing():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing", "ai:awaiting-approval"],
+			capture_contents=None,
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "should not run",
+				"fix_issues": [],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0
+		assert "handled=false" in _read_file(paths["github_output"])
+		assert _read_file(paths["calls_file"]).strip() == ""
+		assert state.get("created_issues", []) == []
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+if __name__ == "__main__":
+	raise SystemExit(main())
