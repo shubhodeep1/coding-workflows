@@ -185,20 +185,19 @@ ensure_validation_harness_not_tracked()
 
 enforce_no_renamed_driver_artifacts()
 {
-  if [ ! -f scripts/.gitignore ]; then
+  if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
     return 0
   fi
 
-  local unexpected_driver_entries
-  unexpected_driver_entries="$(awk '
-    /^[[:space:]]*#/ {next}
-    /^[[:space:]]*$/ {next}
-    {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0); print $0}
-  ' scripts/.gitignore | grep -E 'validate.*\.sh$' | grep -v '^validate_process\.sh$' || true)"
+  local unexpected_driver_files
+  unexpected_driver_files="$({
+    git ls-files -- 'scripts/validate*.sh'
+    git ls-files --others --exclude-standard -- 'scripts/validate*.sh'
+  } 2>/dev/null | awk '$0 != "scripts/validate_process.sh"' | sort -u)"
 
-  if [ -n "${unexpected_driver_entries}" ]; then
-    echo "Found non-canonical validate driver artifact entries in scripts/.gitignore:" >&2
-    echo "${unexpected_driver_entries}" >&2
+  if [ -n "${unexpected_driver_files}" ]; then
+    echo "Found non-canonical validate driver artifacts in scripts/:" >&2
+    echo "${unexpected_driver_files}" >&2
     return 1
   fi
 
