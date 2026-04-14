@@ -818,6 +818,10 @@ jobs:
           set -euo pipefail
 
           autofix_iteration="${{ steps.retrigger_guard.outputs.autofix_iteration }}"
+          if ! [[ "${autofix_iteration}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Invalid autofix iteration '${autofix_iteration}'. Falling back to 0."
+            autofix_iteration=0
+          fi
           cycle_index=$((autofix_iteration + 1))
 
           base_reviewer_reasoning="${REVIEWER_REASONING_EFFORT:-xhigh}"
@@ -872,7 +876,7 @@ jobs:
               schedule_source="fallback_default"
               echo "::warning::Invalid REVIEW_REASONING_SCHEDULE='${schedule_csv}'. Falling back to REVIEWER_REASONING_EFFORT='${selected_reasoning}'."
             else
-              schedule_index=$((cycle_index - 1))
+              schedule_index=${autofix_iteration}
               if [ "${schedule_index}" -ge "${#normalized_schedule[@]}" ]; then
                 schedule_index=$((${#normalized_schedule[@]} - 1))
               fi
