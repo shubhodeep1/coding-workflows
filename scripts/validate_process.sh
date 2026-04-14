@@ -316,6 +316,70 @@ with open(output_file, "w", encoding="utf-8") as handle:
 PY
 }
 
+resolve_model_context_window()
+{
+  local catalog_path="${CATALOG_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_model_catalog.json}"
+  local context_window=""
+  local effective_percent=""
+
+  if [ -f "${catalog_path}" ] && command -v jq >/dev/null 2>&1; then
+    context_window="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .context_window // empty' "${catalog_path}" | head -n1)"
+    effective_percent="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .effective_context_window_percent // empty' "${catalog_path}" | head -n1)"
+    if [[ "${context_window}" =~ ^[0-9]+$ ]] && [[ "${effective_percent}" =~ ^[0-9]+$ ]] && [ "${effective_percent}" -gt 0 ] && [ "${effective_percent}" -le 100 ]; then
+      context_window=$(( context_window * effective_percent / 100 ))
+    fi
+  fi
+
+  if [[ "${context_window}" =~ ^[0-9]+$ ]] && [ "${context_window}" -gt 0 ]; then
+    printf '%s\n' "${context_window}"
+  fi
+}
+
+build_token_budget_hint()
+{
+  local prompt_file="$1"
+  local prompt_bytes=""
+  local prompt_tokens=""
+  local model_context=""
+  local remaining_tokens=""
+
+  prompt_bytes="$(wc -c < "${prompt_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+  if ! [[ "${prompt_bytes}" =~ ^[0-9]+$ ]]; then
+    echo "unavailable (advisory estimate failed: prompt size unknown)"
+    return
+  fi
+
+  prompt_tokens=$(( (prompt_bytes + 3) / 4 ))
+  model_context="$(resolve_model_context_window || true)"
+  if ! [[ "${model_context}" =~ ^[0-9]+$ ]] || [ "${model_context}" -le 0 ]; then
+    echo "unavailable (advisory estimate failed: model context unknown)"
+    return
+  fi
+
+  remaining_tokens=$(( model_context - prompt_tokens ))
+  if [ "${remaining_tokens}" -lt 0 ]; then
+    remaining_tokens=0
+  fi
+
+  echo "${remaining_tokens} (approx remaining context tokens; advisory only)"
+}
+
+annotate_token_budget_hint()
+{
+  local prompt_file="$1"
+  local token_hint=""
+  local tmp_file=""
+
+  token_hint="$(build_token_budget_hint "${prompt_file}")"
+  tmp_file="$(mktemp)"
+
+  if awk -v hint="${token_hint}" '{ if ($0 ~ /^TOKEN_BUDGET_HINT:/) { print "TOKEN_BUDGET_HINT: " hint; next } print }' "${prompt_file}" > "${tmp_file}"; then
+    mv "${tmp_file}" "${prompt_file}"
+  else
+    rm -f "${tmp_file}"
+  fi
+}
+
 write_status_file()
 {
   local status="$1"
@@ -630,6 +694,7 @@ else
     cat "${STATIC_CONTEXT_FILE}"
     echo
     echo "TOOL_CALL_BUDGET: 15"
+    echo "TOKEN_BUDGET_HINT: estimating..."
     echo
     echo "=== DISCOVERY TASK ==="
     echo
@@ -640,6 +705,8 @@ else
     echo
     echo "Output only YAML for .ai/validate.yml with no markdown fences or prose."
   } > "${DISCOVER_PROMPT_FILE}"
+
+  annotate_token_budget_hint "${DISCOVER_PROMPT_FILE}"
 
   DISCOVER_SUCCESS=false
   for attempt in 1 2; do
@@ -811,6 +878,7 @@ fi
   cat "${STATIC_CONTEXT_FILE}"
   echo
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
+  echo "TOKEN_BUDGET_HINT: estimating..."
   echo
   echo "=== IMPLEMENTATION TASK ==="
   echo
@@ -872,6 +940,8 @@ fi
     echo "Generate the harness directly in the repository workspace for immediate execution."
   fi
 } > "${GENERATE_PROMPT_FILE}"
+
+annotate_token_budget_hint "${GENERATE_PROMPT_FILE}"
 
 GENERATE_SUCCESS=false
 for attempt in 1 2; do
@@ -1213,6 +1283,7 @@ fi
   cat "${STATIC_CONTEXT_FILE}"
   echo
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
+  echo "TOKEN_BUDGET_HINT: estimating..."
   echo
   echo "=== DIAGNOSIS TASK ==="
   echo
@@ -1233,6 +1304,8 @@ fi
   echo "=== VALIDATION HINTS ==="
   cat "${VALIDATE_HINTS_FILE}"
 } > "${DIAGNOSE_PROMPT_FILE}"
+
+annotate_token_budget_hint "${DIAGNOSE_PROMPT_FILE}"
 
 DIAGNOSE_SUCCESS=false
 for attempt in 1 2; do
