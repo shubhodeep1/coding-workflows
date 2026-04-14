@@ -149,7 +149,7 @@ jobs:
           }
 
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh ai_labels.py validate_process.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh ai_labels.py validate_process.sh validate_driver.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"
             chmod +x "scripts/${f}"
             _fetched_scripts+=("${f}")
