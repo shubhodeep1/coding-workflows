@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n`scripts/orchestrate_poll_process.sh`\nscripts/orchestrate_poll_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n`tests/test_orchestrate_poll_process.py`\nscripts/orchestrate_poll_process.sh**\nscripts/orchestrate_poll_process.sh,\nscripts/orchestrate_poll_process.sh,\nscripts/orchestrate_poll_process.sh,\nscripts/orchestrate_poll_process.sh,\nscripts/orchestrate_poll_process.sh,\ntests/test_orchestrate_poll_process.py,",
+  "fingerprint": "066b534963a46b6d3089905ad8c4925d40a7cf8c9d9e8de2372ed2f215f42ad8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 926,
+    "run_id": "24394591241",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24394591241",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414111125_7bebb4f30b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 926,
+    "run_id": "24394591241"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T11:11:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
