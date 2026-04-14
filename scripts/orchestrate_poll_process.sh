@@ -1197,6 +1197,7 @@ evaluate_sync_superseded_by_main() {
     SYNC_SUPERSEDED_REASON="All tracked child PRs are terminal and integration changes for child PR paths are already represented on ${default_branch}."
   fi
 }
+
 # ---------------------------------------------------------------
 # Self-healing helpers for integration-branch <-> default-branch drift
 # ---------------------------------------------------------------
@@ -1581,6 +1582,7 @@ sync_default_into_integration_branch() {
     post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}\n\nSkipping sync of \`${default_branch}\` into \`${integration_branch}\` because all tracked child PRs are terminal and the branch is now treated as superseded by \`${default_branch}\`.\n\nReason: ${SYNC_SUPERSEDED_REASON}\n\nRunbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
     return 0
   fi
+
   ensure_integration_conflict_state_fields
 
   local merge_error
@@ -4579,11 +4581,11 @@ json.dump(result, sys.stdout)
       {
         cat "${RUNTIME_DIR}/judge_static.txt"
         echo
-        echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
-        echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
         bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+        echo
+        echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
         echo "=== ISSUE #${rb_issue} (original requirement) ==="
         echo
@@ -5536,11 +5538,11 @@ ${PR_DIFF}
   {
     cat "${RUNTIME_DIR}/judge_static.txt"
     echo
-    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
-    echo
     echo "=== JUDGE TASK ==="
     echo
     bash scripts/render_prompt.sh prompts/mode-judge.txt
+    echo
+    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
     echo "=== PROJECT SPEC ==="
     echo
