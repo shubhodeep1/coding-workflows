@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue `post-codex-diagnose-fixup-step`\n\nClarification mapping:\n- No Q-ID clarifications were asked in Clarify.\n- `/answer [auto-answered-by-clarify]` means planning can proceed with the issue text as authoritative.\n\nConflicts found in current codebase:\n- `prompts/mode-implement-diagnose.txt` does not exist yet.\n- `.github/workflows/implement.yml` currently has no references to `${RUNTIME_DIR}/post_codex_validation_errors.txt`, so the new diagnose step must treat this file as optional and no-op when absent.\n- The implement workflow currently does not resolve failed step names from Actions job-step metadata; this must be added.\n\n1. Files likely to change\n- `.github/workflows/implement.yml`\n- `prompts/mode-implement-diagnose.txt` (new)\n- `README.md` (document new implement-failure handling path and label behavior)\n\n2. Modules/logic to implement\n- Add a new step before `Comment on issue failure` in `implement.yml`, with `id` (for output gating), running on `failure() || cancelled()`.\n- In that new step, implement this flow:\n- Idempotency guard: fetch source issue labels; if `ai:implementation-failed` already exists, set step output to mark failure as already handled and exit `0`.\n- Capture gate: if `${RUNTIME_DIR}/post_codex_validation_errors.txt` missing or empty, set output `handled=false` and exit `0` so generic failure behavior remains unchanged.\n- Build diagnose payload from:\n- `${ISSUE_BODY_FILE}`\n- `git diff HEAD`\n- untracked file list/context from `git ls-files --others --exclude-standard` (with safe truncation/readback)\n- full captured diagnostics file\n- resolved failed step name (via Actions jobs API, with fallback like `unknown-step`)\n- Run Codex diagnose using `prompts/mode-implement-diagnose.txt`, reusing existing model/sandbox/MCP setup patterns from this workflow, with short budget controls (timeout around 300s, small tool/token budget in prompt context).\n- Parse diagnosis JSON contract (`status`, `diagnosis`, `fix_issues`, `harness_fixes`) using robust extraction logic (same pattern as validation diagnose flow).\n- If diagnose/parse fails, create one deterministic fallback fix-up issue containing raw diagnostics so failure is never swallowed.\n- Status handling:\n- `needs_fixes`: create one issue per `fix_issues[]`, append exact orchestrator metadata block (Tracking issue, Integration branch, Local ID, Type `implement-fix-up (post-codex-validation)`, Source issue, Failed step, Priority), then post dependency comments (`## Dependency Notes`) from `depends_on`, then comment on source issue with created issue numbers, then apply `ai:implementation-failed`.\n- `harness_error`: comment `harness_fixes` on source issue, apply `ai:implementation-failed`.\n- `infeasible`: comment diagnosis on source issue, apply `ai:implementation-failed`.\n- `gh issue create` failure tolerance: warn and continue creating remaining issues.\n- Update existing `Comment on issue failure` step condition to skip relabel/comment path when new diagnose step reports it already transitioned/handled the issue, preventing re-add of `ai:awaiting-approval`.\n\n3. Data structures affected\n- New runtime artifacts in `${RUNTIME_DIR}` for diagnose prompt/output/result (text + JSON).\n- Diagnosis JSON object structure reused from validation-style contract:\n- `status: needs_fixes | harness_error | infeasible`\n- `diagnosis: string`\n- `fix_issues[]` with `id`, `title`, `body`, `priority`, optional `depends_on[]`\n- `harness_fixes: string`\n- Local ID \u2192 created issue number map for dependency comment resolution.\n- New step outputs in workflow to signal handled transition and control downstream generic failure step.\n\n4. API/interface changes\n- GitHub API usage in workflow shell:\n- `GET /repos/{owner}/{repo}/issues/{issue_number}` for labels/body\n- `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs` for failed step name\n- issue creation via `gh issue create`\n- source/fix-up comments via `gh issue comment`/`gh api .../comments`\n- labels via existing `ensure_label_exists` + `gh issue edit`\n- New prompt contract file for implement-diagnose mode (`prompts/mode-implement-diagnose.txt`), fetched/available consistently in reusable-workflow contexts.\n\n5. Risks and edge cases\n- Missing tracking issue metadata in source issue body; must fallback safely while preserving required metadata format as much as possible.\n- Large diagnostics may exceed issue body limits; require deterministic truncation strategy while preserving raw signal.\n- Partial creation failures of fix-up issues; must not fail cleanup step.\n- Re-runs/cancellations causing duplicate handling; addressed by label idempotency + handled output gate.\n- `label_helpers.sh` availability can vary after cleanup of fetched artifacts; use existing fallback pattern if helper missing.\n- Ensure out-of-scope failures (no capture file) still follow current generic failure path unchanged.\n\n6. Testing considerations\n- Validate YAML syntax and workflow logic pathing after changes.\n- Scenario test matrix:\n- No capture file present: generic `Comment on issue failure` behavior unchanged.\n- Empty capture file: unchanged behavior.\n- Non-empty capture + `needs_fixes`: creates issues, dependency comments, source summary comment, applies `ai:implementation-failed`.\n- Non-empty capture + one `gh issue create` failure: emits warning, continues remaining creations.\n- Diagnose call/parsing failure: deterministic fallback fix-up issue is created.\n- `harness_error` and `infeasible`: correct source comment + `ai:implementation-failed`.\n- Source already labeled `ai:implementation-failed`: diagnose step exits 0 and generic relabel path is skipped.\n- Confirm `ai:awaiting-approval` is not re-added in handled post-Codex failure path.\n\nRepresentative pattern to follow:\n- Reuse the diagnosis\u2192JSON parsing\u2192status branching\u2192fix-up/dependency flow already implemented in `scripts/validate_process.sh` as the structural template, adapted to implement-phase context and required metadata fields.\n\nReply `/approved` to implement this plan, or `/reclarify` if you want changes to scope/behavior before implementation.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "46cd2fb2239c11f867ecc2c31a6bb316b3d3343900b790d7873a3b4c07d3e3fc",
+  "lineage": {
+    "issue_number": 873,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24379389016",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24379389016",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/873"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414033552_786c98d4a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 873,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24379389016"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #873",
+  "timestamps": {
+    "created_at": "2026-04-14T03:35:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
