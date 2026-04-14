@@ -57,6 +57,10 @@
       "color": "e11d48",
       "description": "Implementation produced no changes despite an approved plan — will be re-issued"
     },
+    "ai:destructive-blocked": {
+      "color": "b60205",
+      "description": "Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review"
+    },
     "ai:closed": {
       "color": "6a737d",
       "description": "Linked PR closed without merge"

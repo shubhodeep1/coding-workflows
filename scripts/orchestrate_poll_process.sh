@@ -1206,6 +1206,7 @@ evaluate_sync_superseded_by_main() {
     SYNC_SUPERSEDED_REASON="All tracked child PRs are terminal and integration changes for child PR paths are already represented on ${default_branch}."
   fi
 }
+
 # ---------------------------------------------------------------
 # Self-healing helpers for integration-branch <-> default-branch drift
 # ---------------------------------------------------------------
@@ -1624,6 +1625,7 @@ Reason: ${SYNC_SUPERSEDED_REASON}
 Runbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
     return 0
   fi
+
   ensure_integration_conflict_state_fields
 
   local merge_error
@@ -4978,15 +4980,34 @@ ${FOLLOWUP_BLOCK_REASON}"
 
               # Remove workflow-generated/fetched artifacts so they are never
               # committed to caller repos.
-              if [[ "${GITHUB_REPOSITORY}" != *"/coding-workflows" ]]; then
-                rm -f ./pre_assembled_static.txt
-                rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-                rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
-                  scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
-                  scripts/codex_model_catalog.json scripts/orchestrate_poll_process.sh scripts/orchestrate_lib.py
-                rm -rf .serena prompts
-                rm -f .github/ai/orchestrate_schema.v1.json
-              fi
+              #
+              # Gate on the git origin URL rather than ${GITHUB_REPOSITORY}:
+              # the env var is user-controllable and any test harness that
+              # sets e.g. GITHUB_REPOSITORY=owner/repo while running this
+              # poller as a subprocess from the real coding-workflows
+              # checkout would trip this block and rm the tracked source
+              # files under that checkout (see PRs #917/#931 for the
+              # incident). The remote URL reflects the actual checkout on
+              # disk, not a user-overridable env var. Unknown/empty URL is
+              # fail-closed: skip cleanup (strictly safer — at worst a
+              # commit carries a few extra untracked fetched files that
+              # downstream path excludes already block from staging).
+              _orig_origin_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+              case "${_orig_origin_url}" in
+                ""|*/coding-workflows|*/coding-workflows.git|*/coding-workflows/|*/coding-workflows.git/)
+                  : # self-repo or unknown — keep files; consumer-repo-only cleanup
+                  ;;
+                *)
+                  rm -f ./pre_assembled_static.txt
+                  rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
+                  rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
+                    scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
+                    scripts/codex_model_catalog.json
+                  rm -rf .serena
+                  rm -f .github/ai/orchestrate_schema.v1.json
+                  ;;
+              esac
+              unset _orig_origin_url
 
               # Check if there are changes to commit
               if [ -n "$(git status --porcelain)" ]; then
