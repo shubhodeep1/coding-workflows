@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Clarification Mapping**\n- No `Q<ID>` clarification questions were issued in this run.\n- Interpreted answer `/answer [auto-answered-by-clarify]` as: scope is fully approved as written in the issue, with no additional constraints.\n\n**Implementation Checklist (from issue requirements)**\n- [ ] Load integration context from `STATE_FILE` (`.integration_branch`) before merged-PR follow-up creation.\n- [ ] Enforce safe base targeting when integration branch is active (retarget from default branch to integration branch, or refuse creation).\n- [ ] Add explicit guardrail logging and operator-facing refusal message.\n- [ ] Guarantee no orchestrator-owned follow-up fix PR is created against default branch while integration context exists.\n\n**1) Files Likely to Change**\n- `scripts/orchestrate_poll_process.sh`\n  - Review-blocked judge flow (`fix` path), especially merged-PR follow-up branch/PR creation block around current ~`4019-4133`.\n  - Nearby review-blocked messaging around ~`3740-3743`.\n- `tests/test_orchestrate_poll_process.py`\n  - Add regression coverage for review-blocked merged-PR follow-up base selection/guard behavior.\n- `README.md` (likely)\n  - Align review-blocked follow-up wording with integration-branch safety behavior.\n\n**2) Functions/Modules to Implement**\n- In `scripts/orchestrate_poll_process.sh`, update the merged-PR branch of `case \"${RB_ACTION}\" in fix)`:\n  - Read `RB_INTEGRATION_BRANCH=\"$(jq -r '.integration_branch // \"\"' \"${STATE_FILE}\")\"` in this path.\n  - Derive effective follow-up base:\n    - Start from `PR_META.base_ref` (existing behavior),\n    - If integration branch is active, force follow-up base away from default branch (`${DEFAULT_BRANCH}`/`main`) to integration branch.\n  - Add defense-in-depth guard immediately before `gh pr create`:\n    - If integration branch exists and computed base is still default branch, refuse PR creation.\n- Reuse existing helper `integration_branch_exists()` for branch validity checks.\n- Keep open-PR fix push path (`HEAD_REF` push) unchanged.\n\n**3) Data Structures Affected**\n- Read-only orchestrator state field: `.integration_branch` from `STATE_FILE`.\n- Existing PR metadata object: `PR_META.base_ref`.\n- Runtime vars: `BASE_REF`, `FOLLOWUP_BRANCH`, plus new local guard vars for effective/default/integration base decision.\n- No schema changes expected.\n\n**4) API / Interface Changes**\n- No new env vars, CLI args, or state schema fields.\n- Behavioral API change (internal):\n  - `gh pr create --base` for merged review-blocked follow-up PRs will no longer permit default branch base when integration context is active.\n- Operator-facing output:\n  - Add explicit `::warning::` refusal logs and tracking/notification message when safe retarget cannot be guaranteed.\n\n**5) Risks / Edge Cases**\n- `PR_META.base_ref` may be null/missing (current fallback to `main`): must be overridden by integration branch when active.\n- Repositories with non-`main` default branch: guard must compare against resolved default branch and `main` alias.\n- Avoid partial unsafe side effects:\n  - Validate/decide base before follow-up PR creation.\n  - If refusing, do not create follow-up PR; keep clear diagnostic trail.\n- Preserve backward compatibility:\n  - Only apply this guard when orchestrator integration branch context is present.\n  - Non-orchestrator/standalone behavior remains unchanged.\n\n**6) Testing Considerations**\n- Add regression tests in `tests/test_orchestrate_poll_process.py` for:\n  - Merged review-blocked issue + active integration branch + base resolves to default branch => effective follow-up targeting is integration branch (not default).\n  - Guard path asserts refusal/logging when safe retarget conditions are not met.\n  - Integration branch absent => legacy/default behavior remains unchanged.\n- Keep tests deterministic via existing mock harness (`gh` + `codex` mocks), asserting stdout/store effects.\n\n**Conflict Detection (Issue vs Current Code)**\n- Current code conflicts with requested behavior:\n  - Merged review-blocked follow-up path sets `BASE_REF` from `PR_META.base_ref` with fallback to `${DEFAULT_BRANCH:-main}` and uses it directly in `gh pr create --base` (unsafe with active integration context).\n  - Current log text explicitly says merged follow-up targets default branch.  \nThis directly matches the bug described in the issue and should be corrected in this change.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3b8e0a2e23437aebe39518e0b36249f129d4783360c9b693d727a324b8bebb43",
+  "lineage": {
+    "issue_number": 923,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24389269610",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24389269610",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/923"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414084425_2b9740ab9d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 923,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24389269610"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #923",
+  "timestamps": {
+    "created_at": "2026-04-14T08:44:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
