@@ -5,13 +5,23 @@
   "entry_id": "processed_command_953_4244918749_approved",
   "issue_number": 953,
   "metadata": {
+    "branch": "ai/issue-953",
+    "changed_files": [
+      "README.md",
+      "scripts/openrouter_prompt_cache.py"
+    ],
+    "issue_number": 953,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/953",
+    "pr_number": 955,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/955",
+    "run_attempt": "1",
+    "run_id": "24406322140",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24406322140"
   },
   "run_attempt": 1,
   "run_id": "24406322140",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-14T15:00:10Z",
+  "status": "completed",
+  "timestamp": "2026-04-14T15:04:46Z",
   "workflow": "implement"
 }
