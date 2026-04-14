@@ -434,6 +434,85 @@ jobs:
             --issue-title "${ISSUE_TITLE}" \
             --issue-body-file "${PROJECT_CONTEXT_FILE}"
 
+      - name: Gather existing AI inventory
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          INVENTORY_FILE="${RUNTIME_DIR}/existing_inventory.txt"
+          OPEN_ISSUES_JSON="${RUNTIME_DIR}/inventory_open_issues.json"
+          CLOSED_ISSUES_JSON="${RUNTIME_DIR}/inventory_closed_issues.json"
+          BRANCHES_JSON="${RUNTIME_DIR}/inventory_branches.json"
+
+          : > "${INVENTORY_FILE}"
+
+          echo "Open AI-managed issues (limit 50):" >> "${INVENTORY_FILE}"
+          if gh issue list --repo "${{ github.repository }}" --state open --limit 50 --json number,title,labels > "${OPEN_ISSUES_JSON}" 2>/dev/null; then
+            open_inventory="$(jq -r '
+              map(select(any(.labels[]?; (.name // "") | startswith("ai:"))))
+              | if length == 0 then
+                  ["[none found]"]
+                else
+                  map("#\(.number) - \(.title)")
+                end
+              | .[]
+            ' "${OPEN_ISSUES_JSON}" 2>/dev/null || true)"
+            if [ -n "${open_inventory}" ]; then
+              printf '%s\n' "${open_inventory}" >> "${INVENTORY_FILE}"
+            else
+              echo "[inventory unavailable: unable to parse open issue payload]" >> "${INVENTORY_FILE}"
+            fi
+          else
+            echo "[inventory unavailable: unable to fetch open issues]" >> "${INVENTORY_FILE}"
+          fi
+          echo >> "${INVENTORY_FILE}"
+
+          echo "Closed AI-managed issues (limit 30):" >> "${INVENTORY_FILE}"
+          if gh issue list --repo "${{ github.repository }}" --state closed --limit 30 --json number,title,closedAt,labels > "${CLOSED_ISSUES_JSON}" 2>/dev/null; then
+            closed_inventory="$(jq -r '
+              map(select(any(.labels[]?; (.name // "") | startswith("ai:"))))
+              | if length == 0 then
+                  ["[none found]"]
+                else
+                  map("#\(.number) - \(.title) (closed: \(.closedAt // \"unknown\"))")
+                end
+              | .[]
+            ' "${CLOSED_ISSUES_JSON}" 2>/dev/null || true)"
+            if [ -n "${closed_inventory}" ]; then
+              printf '%s\n' "${closed_inventory}" >> "${INVENTORY_FILE}"
+            else
+              echo "[inventory unavailable: unable to parse closed issue payload]" >> "${INVENTORY_FILE}"
+            fi
+          else
+            echo "[inventory unavailable: unable to fetch closed issues]" >> "${INVENTORY_FILE}"
+          fi
+          echo >> "${INVENTORY_FILE}"
+
+          echo "Active AI/Claude branches (limit 50):" >> "${INVENTORY_FILE}"
+          if gh api "repos/${{ github.repository }}/branches?per_page=100" > "${BRANCHES_JSON}" 2>/dev/null; then
+            branch_inventory="$(jq -r '
+              [ .[]? | (.name // "") | select(test("^(ai|claude)/")) ][0:50]
+              | if length == 0 then
+                  ["[none found]"]
+                else
+                  .
+                end
+              | .[]
+            ' "${BRANCHES_JSON}" 2>/dev/null || true)"
+            if [ -n "${branch_inventory}" ]; then
+              printf '%s\n' "${branch_inventory}" >> "${INVENTORY_FILE}"
+            else
+              echo "[inventory unavailable: unable to parse branches payload]" >> "${INVENTORY_FILE}"
+            fi
+          else
+            echo "[inventory unavailable: unable to fetch branches]" >> "${INVENTORY_FILE}"
+          fi
+
+          if [ ! -s "${INVENTORY_FILE}" ]; then
+            echo "[inventory unavailable: no inventory content generated]" > "${INVENTORY_FILE}"
+          fi
+
       - name: Build Codex prompt
         env:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_ORCHESTRATE || '40' }}
@@ -465,6 +544,14 @@ jobs:
             echo "=== PROJECT DESCRIPTION ==="
             echo
             printf '%s\n' "${PROJECT_DESCRIPTION}"
+            echo
+            echo "=== EXISTING ISSUES & BRANCHES ==="
+            echo
+            if [ -f "${RUNTIME_DIR}/existing_inventory.txt" ]; then
+              cat "${RUNTIME_DIR}/existing_inventory.txt"
+            else
+              echo "[inventory unavailable: ${RUNTIME_DIR}/existing_inventory.txt missing]"
+            fi
           } > "${CODEX_PROMPT_FILE}"
 
           echo "Prompt built: $(wc -l < "${CODEX_PROMPT_FILE}") lines, $(wc -c < "${CODEX_PROMPT_FILE}") bytes"
