@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which exact rule should mark integration sync as `superseded-by-main`?**\nChoices:\n- **A** \u2014 Mark superseded when branch trees are identical (`integration^{tree} == default^{tree}`), even if histories diverge/conflict (RECOMMENDED)\n- **B** \u2014 Mark superseded when compare API reports no net file differences between branches (even if trees/commits differ)\n- **C** \u2014 Mark superseded only when integration is an ancestor of default (fast-forward equivalent)\nReply: `Q1: A`\n**Q2: When superseded state is already set, how should it be cleared?**\nChoices:\n- **A** \u2014 Re-evaluate each poll; clear automatically once equivalence no longer holds, then resume normal sync attempts (RECOMMENDED)\n- **B** \u2014 Keep sticky for the project lifetime (never auto-clear)\n- **C** \u2014 Keep sticky until a manual reset command/comment is posted\nReply: `Q2: A`",
+  "fingerprint": "e2629bbacd76a87b4d5a4d4f3156339074f44089379c525a5d0a243b9cbc9c0a",
+  "lineage": {
+    "issue_number": 922,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24389155602",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24389155602",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260414083449_56ba936623",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 922,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24389155602"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #922 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-14T08:34:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
