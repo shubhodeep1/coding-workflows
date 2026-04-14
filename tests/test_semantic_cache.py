@@ -191,6 +191,129 @@ def test_sqlite_lookup_miss_on_high_threshold() -> None:
 			_restore_env(previous)
 
 
+def test_lookup_miss_when_embedding_model_changes() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		tmp = Path(tmpdir)
+		sqlite_path = tmp / "semantic.sqlite3"
+		issue = tmp / "issue.txt"
+		thread = tmp / "thread.txt"
+		resp = tmp / "response.txt"
+		out = tmp / "cached.txt"
+
+		_write(issue, "Issue body D")
+		_write(thread, "comment history D")
+		_write(resp, "cached response D")
+
+		previous = _set_env(
+			{
+				"SEMANTIC_CACHE_BACKEND": "sqlite-vec",
+				"SEMANTIC_CACHE_SQLITE_PATH": str(sqlite_path),
+				"SEMANTIC_CACHE_SIMILARITY_THRESHOLD": "0.9",
+				"SEMANTIC_CACHE_TTL_DAYS": "14",
+				"OPENROUTER_API_KEY": "test-key",
+				"SEMANTIC_CACHE_EMBEDDING_MODEL": "model-A",
+			}
+		)
+		orig_embed = semantic_cache._create_embedding
+		semantic_cache._create_embedding = lambda text, cfg: [1.0, 0.0, 0.0]
+		try:
+			store_args = type(
+				"Args",
+				(),
+				{
+					"phase": "clarify",
+					"issue_number": "77",
+					"issue_body_file": str(issue),
+					"thread_history_file": str(thread),
+					"response_file": str(resp),
+				},
+			)()
+			store_result = semantic_cache.run_store(store_args)
+			assert store_result["ok"] is True
+			assert store_result["stored"] is True
+
+			os.environ["SEMANTIC_CACHE_EMBEDDING_MODEL"] = "model-B"
+			lookup_args = type(
+				"Args",
+				(),
+				{
+					"phase": "clarify",
+					"issue_number": "78",
+					"issue_body_file": str(issue),
+					"thread_history_file": str(thread),
+					"output_file": str(out),
+				},
+			)()
+			lookup_result = semantic_cache.run_lookup(lookup_args)
+			assert lookup_result["ok"] is True
+			assert lookup_result["hit"] is False
+		finally:
+			semantic_cache._create_embedding = orig_embed
+			_restore_env(previous)
+
+
+def test_truncated_input_skips_store_and_lookup() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		tmp = Path(tmpdir)
+		sqlite_path = tmp / "semantic.sqlite3"
+		issue = tmp / "issue.txt"
+		thread = tmp / "thread.txt"
+		resp = tmp / "response.txt"
+		out = tmp / "cached.txt"
+
+		_write(issue, "I" * 200)
+		_write(thread, "T" * 200)
+		_write(resp, "cached response E")
+
+		previous = _set_env(
+			{
+				"SEMANTIC_CACHE_BACKEND": "sqlite-vec",
+				"SEMANTIC_CACHE_SQLITE_PATH": str(sqlite_path),
+				"SEMANTIC_CACHE_SIMILARITY_THRESHOLD": "0.9",
+				"SEMANTIC_CACHE_TTL_DAYS": "14",
+				"OPENROUTER_API_KEY": "test-key",
+				"SEMANTIC_CACHE_MAX_CANONICAL_CHARS": "50",
+			}
+		)
+		orig_embed = semantic_cache._create_embedding
+		semantic_cache._create_embedding = lambda text, cfg: [1.0, 0.0, 0.0]
+		try:
+			store_args = type(
+				"Args",
+				(),
+				{
+					"phase": "clarify",
+					"issue_number": "88",
+					"issue_body_file": str(issue),
+					"thread_history_file": str(thread),
+					"response_file": str(resp),
+				},
+			)()
+			store_result = semantic_cache.run_store(store_args)
+			assert store_result["ok"] is True
+			assert store_result["stored"] is False
+			assert store_result["reason"] == "input_truncated"
+
+			lookup_args = type(
+				"Args",
+				(),
+				{
+					"phase": "clarify",
+					"issue_number": "89",
+					"issue_body_file": str(issue),
+					"thread_history_file": str(thread),
+					"output_file": str(out),
+				},
+			)()
+			lookup_result = semantic_cache.run_lookup(lookup_args)
+			assert lookup_result["ok"] is True
+			assert lookup_result["hit"] is False
+			assert lookup_result["reason"] == "input_truncated"
+		finally:
+			semantic_cache._create_embedding = orig_embed
+			_restore_env(previous)
+
+
 def test_store_fail_open_on_embedding_error() -> None:
 	with tempfile.TemporaryDirectory() as tmpdir:
 		tmp = Path(tmpdir)

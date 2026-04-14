@@ -293,6 +293,12 @@ jobs:
           ISSUE_COMMENTS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100")"
           printf '%s' "${ISSUE_COMMENTS_JSON}" | jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"
 
+      - name: Install Redis Python client
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis'
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
+
       - name: Semantic cache lookup
         id: semantic_cache_lookup
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'

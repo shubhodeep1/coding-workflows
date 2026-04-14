@@ -420,6 +420,12 @@ jobs:
             --issue-title "${ISSUE_TITLE}" \
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
 
+      - name: Install Redis Python client
+        if: vars.SEMANTIC_CACHE_BACKEND == 'redis'
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
+
       - name: Semantic cache lookup
         id: semantic_cache_lookup
         env:

@@ -99,6 +99,7 @@ class CacheEntry:
 	original_issue_id: str
 	cached_at: str
 	expires_at_epoch: int
+	embedding_model: str
 	embedding: list[float]
 	response_text: str
 	similarity_threshold: float
@@ -215,6 +216,7 @@ class SQLiteVecBackend:
 				original_issue_id TEXT NOT NULL,
 				cached_at TEXT NOT NULL,
 				expires_at INTEGER NOT NULL,
+				embedding_model TEXT NOT NULL,
 				embedding_json TEXT NOT NULL,
 				response_text TEXT NOT NULL,
 				similarity_threshold REAL NOT NULL,
@@ -222,23 +224,34 @@ class SQLiteVecBackend:
 			)
 			"""
 		)
+		columns = {row[1] for row in conn.execute("PRAGMA table_info(semantic_cache_entries)").fetchall()}
+		if "embedding_model" not in columns:
+			conn.execute(
+				"ALTER TABLE semantic_cache_entries ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''"
+			)
 		conn.execute(
 			"CREATE INDEX IF NOT EXISTS idx_semantic_cache_phase_expires ON semantic_cache_entries (phase, expires_at)"
 		)
 
-	def lookup(self, phase: str, query_embedding: list[float], threshold: float) -> tuple[CacheEntry | None, float]:
+	def lookup(
+		self,
+		phase: str,
+		query_embedding: list[float],
+		threshold: float,
+		query_embedding_model: str,
+	) -> tuple[CacheEntry | None, float]:
 		now_epoch = int(time.time())
 		with self._connect() as conn:
 			self._ensure_schema(conn)
 			conn.execute("DELETE FROM semantic_cache_entries WHERE expires_at <= ?", (now_epoch,))
 			rows = conn.execute(
 				"""
-				SELECT phase, original_issue_id, cached_at, expires_at, embedding_json,
+				SELECT phase, original_issue_id, cached_at, expires_at, embedding_model, embedding_json,
 				       response_text, similarity_threshold, source_fingerprint
 				FROM semantic_cache_entries
-				WHERE phase = ? AND expires_at > ?
+				WHERE phase = ? AND expires_at > ? AND embedding_model = ?
 				""",
-				(phase, now_epoch),
+				(phase, now_epoch, query_embedding_model),
 			).fetchall()
 
 		best_entry: CacheEntry | None = None
@@ -256,6 +269,7 @@ class SQLiteVecBackend:
 					original_issue_id=row["original_issue_id"],
 					cached_at=row["cached_at"],
 					expires_at_epoch=int(row["expires_at"]),
+					embedding_model=row["embedding_model"],
 					embedding=embedding,
 					response_text=row["response_text"],
 					similarity_threshold=float(row["similarity_threshold"]),
@@ -272,15 +286,16 @@ class SQLiteVecBackend:
 			conn.execute(
 				"""
 				INSERT INTO semantic_cache_entries (
-					phase, original_issue_id, cached_at, expires_at,
+					phase, original_issue_id, cached_at, expires_at, embedding_model,
 					embedding_json, response_text, similarity_threshold, source_fingerprint
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 				""",
 				(
 					entry.phase,
 					entry.original_issue_id,
 					entry.cached_at,
 					entry.expires_at_epoch,
+					entry.embedding_model,
 					json.dumps(entry.embedding, ensure_ascii=True, separators=(",", ":")),
 					entry.response_text,
 					entry.similarity_threshold,
@@ -300,9 +315,22 @@ class RedisBackend:
 			import redis  # type: ignore
 		except ImportError as exc:
 			raise RuntimeError("redis backend selected but 'redis' package is not installed") from exc
-		return redis.Redis.from_url(self.redis_url, decode_responses=True, socket_timeout=3, socket_connect_timeout=3)
+		client_kwargs: dict[str, Any] = {
+			"decode_responses": True,
+			"socket_timeout": 3,
+			"socket_connect_timeout": 3,
+		}
+		if self.redis_url.lower().startswith("rediss://"):
+			client_kwargs["ssl_cert_reqs"] = "required"
+		return redis.Redis.from_url(self.redis_url, **client_kwargs)
 
-	def lookup(self, phase: str, query_embedding: list[float], threshold: float) -> tuple[CacheEntry | None, float]:
+	def lookup(
+		self,
+		phase: str,
+		query_embedding: list[float],
+		threshold: float,
+		query_embedding_model: str,
+	) -> tuple[CacheEntry | None, float]:
 		client = self._client()
 		now_epoch = int(time.time())
 		best_entry: CacheEntry | None = None
@@ -317,6 +345,9 @@ class RedisBackend:
 				if expires_at <= now_epoch:
 					client.delete(key)
 					continue
+				embedding_model = str(payload.get("embedding_model", ""))
+				if embedding_model != query_embedding_model:
+					continue
 				embedding = [float(v) for v in payload.get("embedding", [])]
 			except Exception:
 				continue
@@ -329,6 +360,7 @@ class RedisBackend:
 					original_issue_id=str(payload.get("original_issue_id", "")),
 					cached_at=str(payload.get("cached_at", "")),
 					expires_at_epoch=expires_at,
+					embedding_model=embedding_model,
 					embedding=embedding,
 					response_text=str(payload.get("response_text", "")),
 					similarity_threshold=float(payload.get("similarity_threshold", threshold)),
@@ -348,6 +380,7 @@ class RedisBackend:
 			"original_issue_id": entry.original_issue_id,
 			"cached_at": entry.cached_at,
 			"expires_at_epoch": entry.expires_at_epoch,
+			"embedding_model": entry.embedding_model,
 			"embedding": entry.embedding,
 			"response_text": entry.response_text,
 			"similarity_threshold": entry.similarity_threshold,
@@ -367,6 +400,7 @@ def _resolve_backend(cfg: RuntimeConfig) -> Any:
 def _build_entry(
 	phase: str,
 	original_issue_id: str,
+	embedding_model: str,
 	embedding: list[float],
 	response_text: str,
 	similarity_threshold: float,
@@ -380,6 +414,7 @@ def _build_entry(
 		original_issue_id=original_issue_id,
 		cached_at=_utc_now_iso(),
 		expires_at_epoch=expires_at_epoch,
+		embedding_model=embedding_model,
 		embedding=embedding,
 		response_text=response_text,
 		similarity_threshold=similarity_threshold,
@@ -403,9 +438,19 @@ def run_lookup(args: argparse.Namespace) -> dict[str, Any]:
 		thread_history = _read_text_file(args.thread_history_file)
 		canonical_input, truncated = _build_canonical_input(issue_body, thread_history)
 		source_fingerprint = hashlib.sha256(canonical_input.encode("utf-8")).hexdigest()
+		if truncated:
+			return {
+				"ok": True,
+				"backend": cfg.backend,
+				"phase": args.phase,
+				"hit": False,
+				"reason": "input_truncated",
+				"truncated": True,
+				"source_fingerprint": source_fingerprint,
+			}
 		query_embedding = _create_embedding(canonical_input, cfg)
 		backend = _resolve_backend(cfg)
-		entry, similarity = backend.lookup(args.phase, query_embedding, cfg.similarity_threshold)
+		entry, similarity = backend.lookup(args.phase, query_embedding, cfg.similarity_threshold, cfg.embedding_model)
 		if entry is None:
 			return {
 				"ok": True,
@@ -464,11 +509,22 @@ def run_store(args: argparse.Namespace) -> dict[str, Any]:
 		thread_history = _read_text_file(args.thread_history_file)
 		canonical_input, truncated = _build_canonical_input(issue_body, thread_history)
 		source_fingerprint = hashlib.sha256(canonical_input.encode("utf-8")).hexdigest()
+		if truncated:
+			return {
+				"ok": True,
+				"backend": cfg.backend,
+				"phase": args.phase,
+				"stored": False,
+				"reason": "input_truncated",
+				"truncated": True,
+				"source_fingerprint": source_fingerprint,
+			}
 		embedding = _create_embedding(canonical_input, cfg)
 		backend = _resolve_backend(cfg)
 		entry = _build_entry(
 			phase=args.phase,
 			original_issue_id=str(args.issue_number),
+			embedding_model=cfg.embedding_model,
 			embedding=embedding,
 			response_text=response_text,
 			similarity_threshold=cfg.similarity_threshold,
