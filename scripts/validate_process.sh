@@ -316,6 +316,70 @@ with open(output_file, "w", encoding="utf-8") as handle:
 PY
 }
 
+resolve_model_context_window()
+{
+  local catalog_path="${CATALOG_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_model_catalog.json}"
+  local context_window=""
+  local effective_percent=""
+
+  if [ -f "${catalog_path}" ] && command -v jq >/dev/null 2>&1; then
+    context_window="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .context_window // empty' "${catalog_path}" | head -n1)"
+    effective_percent="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .effective_context_window_percent // empty' "${catalog_path}" | head -n1)"
+    if [[ "${context_window}" =~ ^[0-9]+$ ]] && [[ "${effective_percent}" =~ ^[0-9]+$ ]] && [ "${effective_percent}" -gt 0 ] && [ "${effective_percent}" -le 100 ]; then
+      context_window=$(( context_window * effective_percent / 100 ))
+    fi
+  fi
+
+  if [[ "${context_window}" =~ ^[0-9]+$ ]] && [ "${context_window}" -gt 0 ]; then
+    printf '%s\n' "${context_window}"
+  fi
+}
+
+build_token_budget_hint()
+{
+  local prompt_file="$1"
+  local prompt_bytes=""
+  local prompt_tokens=""
+  local model_context=""
+  local remaining_tokens=""
+
+  prompt_bytes="$(wc -c < "${prompt_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+  if ! [[ "${prompt_bytes}" =~ ^[0-9]+$ ]]; then
+    echo "unavailable (advisory estimate failed: prompt size unknown)"
+    return
+  fi
+
+  prompt_tokens=$(( (prompt_bytes + 3) / 4 ))
+  model_context="$(resolve_model_context_window || true)"
+  if ! [[ "${model_context}" =~ ^[0-9]+$ ]] || [ "${model_context}" -le 0 ]; then
+    echo "unavailable (advisory estimate failed: model context unknown)"
+    return
+  fi
+
+  remaining_tokens=$(( model_context - prompt_tokens ))
+  if [ "${remaining_tokens}" -lt 0 ]; then
+    remaining_tokens=0
+  fi
+
+  echo "${remaining_tokens} (approx remaining context tokens; advisory only)"
+}
+
+annotate_token_budget_hint()
+{
+  local prompt_file="$1"
+  local token_hint=""
+  local tmp_file=""
+
+  token_hint="$(build_token_budget_hint "${prompt_file}")"
+  tmp_file="$(mktemp)"
+
+  if awk -v hint="${token_hint}" '{ if ($0 ~ /^TOKEN_BUDGET_HINT:/) { print "TOKEN_BUDGET_HINT: " hint; next } print }' "${prompt_file}" > "${tmp_file}"; then
+    mv "${tmp_file}" "${prompt_file}"
+  else
+    rm -f "${tmp_file}"
+  fi
+}
+
 write_status_file()
 {
   local status="$1"
@@ -425,15 +489,32 @@ run_preflight_checks()
 	PRE_FLIGHT_STATUS="running"
 	: > "${PRE_FLIGHT_LOG_FILE}"
 
+	# Emit the tail of the pre-flight log to stderr so that the failing command's
+	# output is visible directly in the GitHub Actions job log, without requiring
+	# the validation_preflight.log artifact to be downloaded. Structured with
+	# clear delimiter markers so the excerpt is easy to scan and grep in CI logs.
+	_emit_preflight_tail()
+	{
+		local reason="$1"
+		{
+			echo "::error::Pre-flight failed: ${reason}"
+			echo "----- validation_preflight.log (tail -n 40) -----"
+			tail -n 40 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true
+			echo "-------------------------------------------------"
+		} >&2
+	}
+
 	if [ ! -f validation/docker-compose.test.yml ]; then
 		echo "Missing validation/docker-compose.test.yml" >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "validation/docker-compose.test.yml missing"
 		return 1
 	fi
 
 	if ! docker compose -f validation/docker-compose.test.yml config --quiet >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 		echo "Compose syntax/validation check failed." >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "docker compose config failed (YAML/schema invalid). Common cause: YAML must use space indentation, not tabs."
 		return 1
 	fi
 
@@ -442,6 +523,7 @@ run_preflight_checks()
 	if [ "${shell_count}" -eq 0 ]; then
 		echo "No shell scripts found under validation/." >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "no shell scripts found under validation/"
 		return 1
 	fi
 
@@ -449,6 +531,7 @@ run_preflight_checks()
 		if ! bash -n "${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 			echo "Shell syntax check failed: ${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
+			_emit_preflight_tail "bash -n failed for ${shell_file}"
 			return 1
 		fi
 	done < <(find validation -type f -name '*.sh' -not -path 'validation/logs/*' | sort)
@@ -514,11 +597,87 @@ print("Build context and dockerfile path checks passed.")
 PY
 	then
 		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "build context / dockerfile path resolution failed"
 		return 1
 	fi
 
 	PRE_FLIGHT_STATUS="pass"
 	return 0
+}
+
+emit_harness_prompt_context()
+{
+	local prompt_budget_bytes="${1:-204800}"
+	local per_file_budget_bytes="${2:-200000}"
+	local included_bytes=0
+	local remaining_bytes=0
+	local harness_file=""
+	local harness_size_bytes=0
+	local line_count=0
+	local estimated_output_bytes=0
+
+	echo "=== EXISTING HARNESS FILES ==="
+
+	if [ ! -d validation ]; then
+		echo "(validation/ directory not found)"
+		echo
+		return 0
+	fi
+
+	while IFS= read -r -d '' harness_file; do
+		if [ -s "${harness_file}" ] && ! grep -Iq . "${harness_file}"; then
+			echo "----- ${harness_file} (skipped: non-text file) -----"
+			echo
+			continue
+		fi
+
+		harness_size_bytes="$(wc -c < "${harness_file}" 2>/dev/null | tr -d ' ' || true)"
+		if ! [[ "${harness_size_bytes}" =~ ^[0-9]+$ ]]; then
+			echo "----- ${harness_file} (skipped: could not determine file size) -----"
+			echo
+			continue
+		fi
+		if [ "${per_file_budget_bytes}" -gt 0 ] && [ "${harness_size_bytes}" -gt "${per_file_budget_bytes}" ]; then
+			echo "----- ${harness_file} (skipped: file too large for per-file prompt budget) -----"
+			echo
+			continue
+		fi
+
+		line_count="$(wc -l < "${harness_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+		if ! [[ "${line_count}" =~ ^[0-9]+$ ]]; then
+			line_count=0
+		fi
+		estimated_output_bytes=$((harness_size_bytes + (line_count * 12)))
+
+		remaining_bytes=$((prompt_budget_bytes - included_bytes))
+		if [ "${remaining_bytes}" -le 0 ]; then
+			echo "----- (Remaining harness files skipped: global prompt budget exhausted) -----"
+			echo
+			break
+		fi
+		if [ "${estimated_output_bytes}" -gt "${prompt_budget_bytes}" ]; then
+			echo "----- ${harness_file} (skipped: file too large for global prompt budget) -----"
+			echo
+			continue
+		fi
+		if [ "${estimated_output_bytes}" -gt "${remaining_bytes}" ]; then
+			echo "----- ${harness_file} (skipped: global prompt budget would be exceeded) -----"
+			echo
+			continue
+		fi
+
+		echo "----- ${harness_file} (line-numbered) -----"
+		if nl -ba "${harness_file}" 2>/dev/null; then
+			echo
+			included_bytes=$((included_bytes + estimated_output_bytes))
+		elif cat "${harness_file}" 2>/dev/null; then
+			echo
+			included_bytes=$((included_bytes + harness_size_bytes))
+		else
+			echo "(skipped: failed to read file contents)"
+			echo
+		fi
+	done < <(find validation -type f -not -path 'validation/logs/*' -print0 | sort -z)
 }
 
 trap cleanup_runtime_containers EXIT
@@ -610,6 +769,7 @@ else
     cat "${STATIC_CONTEXT_FILE}"
     echo
     echo "TOOL_CALL_BUDGET: 15"
+    echo "TOKEN_BUDGET_HINT: estimating..."
     echo
     echo "=== DISCOVERY TASK ==="
     echo
@@ -620,6 +780,8 @@ else
     echo
     echo "Output only YAML for .ai/validate.yml with no markdown fences or prose."
   } > "${DISCOVER_PROMPT_FILE}"
+
+  annotate_token_budget_hint "${DISCOVER_PROMPT_FILE}"
 
   DISCOVER_SUCCESS=false
   for attempt in 1 2; do
@@ -791,6 +953,7 @@ fi
   cat "${STATIC_CONTEXT_FILE}"
   echo
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
+  echo "TOKEN_BUDGET_HINT: estimating..."
   echo
   echo "=== IMPLEMENTATION TASK ==="
   echo
@@ -812,23 +975,7 @@ fi
     echo
   fi
   if [ "${HARNESS_MODE}" = "fix" ]; then
-    echo "=== EXISTING HARNESS FILES ==="
-    while IFS= read -r harness_file; do
-      harness_size_bytes="$(wc -c < "${harness_file}" | tr -d ' ')"
-      if [ "${harness_size_bytes}" -gt 200000 ]; then
-        echo "----- ${harness_file} (skipped: file too large for prompt context) -----"
-        echo
-        continue
-      fi
-      if [ -s "${harness_file}" ] && ! grep -Iq . "${harness_file}"; then
-        echo "----- ${harness_file} (skipped: non-text file) -----"
-        echo
-        continue
-      fi
-      echo "----- ${harness_file} -----"
-      cat "${harness_file}"
-      echo
-    done < <(find validation -type f -not -path 'validation/logs/*' | sort)
+    emit_harness_prompt_context
   fi
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
@@ -852,6 +999,8 @@ fi
     echo "Generate the harness directly in the repository workspace for immediate execution."
   fi
 } > "${GENERATE_PROMPT_FILE}"
+
+annotate_token_budget_hint "${GENERATE_PROMPT_FILE}"
 
 GENERATE_SUCCESS=false
 for attempt in 1 2; do
@@ -1193,6 +1342,7 @@ fi
   cat "${STATIC_CONTEXT_FILE}"
   echo
   echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
+  echo "TOKEN_BUDGET_HINT: estimating..."
   echo
   echo "=== DIAGNOSIS TASK ==="
   echo
@@ -1201,6 +1351,7 @@ fi
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
   echo
+  emit_harness_prompt_context
   echo "=== STRUCTURED VALIDATION FAILURE JSON ==="
   cat "${VALIDATION_RESULT_FILE}"
   echo
@@ -1213,6 +1364,8 @@ fi
   echo "=== VALIDATION HINTS ==="
   cat "${VALIDATE_HINTS_FILE}"
 } > "${DIAGNOSE_PROMPT_FILE}"
+
+annotate_token_budget_hint "${DIAGNOSE_PROMPT_FILE}"
 
 DIAGNOSE_SUCCESS=false
 for attempt in 1 2; do

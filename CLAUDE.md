@@ -132,7 +132,10 @@ Logging must be structured, searchable, with context keys.
 
 ## 9. Code Style
 
-- **Tabs** for indentation
+- **Tabs** for indentation — EXCEPT in formats where the language forbids tabs or mandates a different indentation token:
+	- **YAML** (`.yml`, `.yaml`) MUST use **2-space** indentation. YAML spec disallows tab characters as indentation; `docker compose config` and every YAML parser will reject tab-indented YAML.
+	- Makefile recipe bodies must use a literal TAB (this is a Make requirement, not a style choice).
+	- If a sub-directory pins a different convention via `.editorconfig`, honour that file for files it covers.
 - Opening braces on a **new line**
 
 ---

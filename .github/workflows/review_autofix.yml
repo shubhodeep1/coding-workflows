@@ -199,7 +199,7 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh build_repo_overview.sh; do
             if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -281,6 +281,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq curl python3
 
+      - name: Restore cached repo overview
+        uses: actions/cache@v5
+        continue-on-error: true
+        with:
+          path: repo_overview.txt
+          key: repo-overview-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pyproject.toml', '**/go.mod', '**/Cargo.toml', '.pre-commit-config.yaml', '**/Dockerfile', '.github/workflows/*.yml') }}
+
+      - name: Build repo overview artifact
+        run: |
+          set -euo pipefail
+          REPO_OVERVIEW_ROOT="${GITHUB_WORKSPACE}" bash "${SUPPORT_SCRIPTS_DIR}/build_repo_overview.sh" || true
+
       - name: Install uv for Serena
         uses: astral-sh/setup-uv@v7
 
@@ -320,6 +332,8 @@ jobs:
             echo "PR_EDITOR_COMMENT_FILE=${RUNTIME_DIR}/pr_editor_comment.txt"
             echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
             echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
+            echo "ORIGINAL_ISSUE_FILE=${RUNTIME_DIR}/original_issue.txt"
+            echo "APPROVED_PLAN_FILE=${RUNTIME_DIR}/approved_plan.txt"
             echo "CONFLICT_RESOLVER_PROMPT_FILE=${RUNTIME_DIR}/conflict_resolver_prompt.txt"
             echo "CONFLICT_RESOLVER_SUMMARY_FILE=${RUNTIME_DIR}/conflict_resolver_summary.txt"
             echo "COMMITTED_FILES_FILE=${RUNTIME_DIR}/committed_files.txt"
@@ -514,6 +528,153 @@ jobs:
             headRefName: (.head.ref // ""),
             headRepoFullName: (.head.repo.full_name // "")
           }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+
+          ORIGINAL_ISSUE_UNAVAILABLE_MARKER="UNAVAILABLE: linked closing issue body could not be resolved."
+          APPROVED_PLAN_UNAVAILABLE_MARKER="UNAVAILABLE: approved plan could not be resolved."
+
+          printf '%s\n' "${ORIGINAL_ISSUE_UNAVAILABLE_MARKER}" > "${ORIGINAL_ISSUE_FILE}"
+          printf '%s\n' "${APPROVED_PLAN_UNAVAILABLE_MARKER}" > "${APPROVED_PLAN_FILE}"
+
+          LINKED_ISSUE_NUMBER=""
+          if gh_retry /tmp/gh_pr_closing_issue_ref.json api graphql \
+            -f query='query($owner:String!, $repo:String!, $pr:Int!) { repository(owner:$owner, name:$repo) { pullRequest(number:$pr) { closingIssuesReferences(first:1) { nodes { number } } } } }' \
+            -F owner='${{ github.repository_owner }}' \
+            -F repo='${{ github.event.repository.name }}' \
+            -F pr="${PR_NUMBER}"; then
+            LINKED_ISSUE_NUMBER="$(jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' /tmp/gh_pr_closing_issue_ref.json)"
+          else
+            echo "::warning::Unable to resolve linked closing issue for PR #${PR_NUMBER}."
+          fi
+
+          if [ -n "${LINKED_ISSUE_NUMBER}" ]; then
+            if gh_retry /tmp/gh_linked_issue.json api repos/${{ github.repository }}/issues/"${LINKED_ISSUE_NUMBER}"; then
+              if jq -e '.body != null and .body != ""' /tmp/gh_linked_issue.json > /dev/null; then
+                jq -r '.body' /tmp/gh_linked_issue.json > "${ORIGINAL_ISSUE_FILE}"
+              else
+                echo "::warning::Linked issue #${LINKED_ISSUE_NUMBER} has empty body; using unavailable marker."
+              fi
+            else
+              echo "::warning::Unable to fetch linked issue #${LINKED_ISSUE_NUMBER}; using unavailable marker."
+            fi
+
+            if gh_retry /tmp/gh_linked_issue_comments_raw.json api --paginate repos/${{ github.repository }}/issues/"${LINKED_ISSUE_NUMBER}"/comments; then
+              jq -s 'add // []' /tmp/gh_linked_issue_comments_raw.json > /tmp/gh_linked_issue_comments.json
+              jq -r '
+                [
+                  .[]
+                  | select((.body // "") | test("(^|\\n)Implementation Plan(\\n|$)"; "mi"))
+                ]
+                | sort_by(.updated_at // .created_at // "")
+                | last
+                | .body // empty
+              ' /tmp/gh_linked_issue_comments.json > /tmp/gh_linked_issue_plan_comment.txt
+
+              if [ -s /tmp/gh_linked_issue_plan_comment.txt ]; then
+                cp /tmp/gh_linked_issue_plan_comment.txt "${APPROVED_PLAN_FILE}"
+              fi
+            else
+              echo "::warning::Unable to fetch comments for linked issue #${LINKED_ISSUE_NUMBER}; will attempt artifact fallback for approved plan."
+            fi
+          else
+            echo "::warning::No linked closing issue found for PR #${PR_NUMBER}; using unavailable markers."
+          fi
+
+          if [ ! -s "${APPROVED_PLAN_FILE}" ] || grep -q "^UNAVAILABLE:" "${APPROVED_PLAN_FILE}"; then
+            resolve_plan_from_artifact() {
+              local head_ref head_sha implementation_run_id artifact_id workflow_name
+
+              head_ref="$(jq -r '.head.ref // empty' "${PR_PAYLOAD_FILE}")"
+              head_sha="$(jq -r '.head.sha // empty' "${PR_PAYLOAD_FILE}")"
+              if [ -z "${head_ref}" ]; then
+                echo "::warning::Unable to determine PR head ref for approved-plan artifact fallback."
+                return 1
+              fi
+
+              implementation_run_id=""
+              for workflow_name in ai-implement.yml implement.yml internal-implement.yml; do
+                if ! gh_retry /tmp/gh_ai_implement_runs.json api -X GET repos/${{ github.repository }}/actions/workflows/"${workflow_name}"/runs -f head_branch="${head_ref}" -f per_page=20; then
+                  continue
+                fi
+
+                implementation_run_id="$(jq -r '
+                  [
+                    .workflow_runs[]?
+                    | select((.status // "") == "completed")
+                    | select((.head_branch // "") == $head_ref)
+                    | select(($head_sha | length) == 0 or (.head_sha // "") == $head_sha)
+                  ]
+                  | sort_by(.created_at // "")
+                  | reverse
+                  | .[0].id // empty
+                ' --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" /tmp/gh_ai_implement_runs.json)"
+                if [ -n "${implementation_run_id}" ]; then
+                  break
+                fi
+              done
+
+              if [ -z "${implementation_run_id}" ]; then
+                echo "::warning::No completed implement workflow run found for branch ${head_ref}."
+                return 1
+              fi
+
+              if ! gh_retry /tmp/gh_ai_implement_run_artifacts.json api repos/${{ github.repository }}/actions/runs/"${implementation_run_id}"/artifacts; then
+                echo "::warning::Unable to list artifacts for ai-implement run ${implementation_run_id}."
+                return 1
+              fi
+
+              artifact_id="$(jq -r '
+                [
+                  .artifacts[]?
+                  | select((.name // "") == "implementation-plan")
+                  | select((.expired // true) == false)
+                ]
+                | sort_by(.created_at // "")
+                | reverse
+                | .[0].id // empty
+              ' /tmp/gh_ai_implement_run_artifacts.json)"
+
+              if [ -z "${artifact_id}" ]; then
+                echo "::warning::No usable implementation-plan artifact found for ai-implement run ${implementation_run_id}."
+                return 1
+              fi
+
+              if ! gh_retry /tmp/implementation-plan-artifact.zip api repos/${{ github.repository }}/actions/artifacts/"${artifact_id}"/zip; then
+                echo "::warning::Unable to download implementation-plan artifact ${artifact_id}."
+                return 1
+              fi
+
+              if ! PYTHONDONTWRITEBYTECODE=1 python3 -c 'import sys, zipfile; zip_path=sys.argv[1]; output_path=sys.argv[2]; archive=zipfile.ZipFile(zip_path, "r"); target=next((name for name in archive.namelist() if name.endswith("implementation_plan.txt")), ""); data=archive.read(target) if target else (_ for _ in ()).throw(FileNotFoundError("implementation_plan.txt not found in artifact")); archive.close(); open(output_path, "wb").write(data)' /tmp/implementation-plan-artifact.zip /tmp/implementation_plan_from_artifact.txt
+              then
+                echo "::warning::Unable to extract implementation_plan.txt from implementation-plan artifact ${artifact_id}."
+                return 1
+              fi
+
+              if [ ! -s /tmp/implementation_plan_from_artifact.txt ]; then
+                echo "::warning::implementation_plan.txt extracted from artifact ${artifact_id} is empty."
+                return 1
+              fi
+
+              cp /tmp/implementation_plan_from_artifact.txt "${APPROVED_PLAN_FILE}"
+              echo "Approved plan context resolved from implementation-plan artifact ${artifact_id}."
+              return 0
+            }
+
+            resolve_plan_from_artifact || true
+          fi
+
+          if [ ! -s "${ORIGINAL_ISSUE_FILE}" ]; then
+            printf '%s\n' "${ORIGINAL_ISSUE_UNAVAILABLE_MARKER}" > "${ORIGINAL_ISSUE_FILE}"
+          fi
+          if [ ! -s "${APPROVED_PLAN_FILE}" ]; then
+            printf '%s\n' "${APPROVED_PLAN_UNAVAILABLE_MARKER}" > "${APPROVED_PLAN_FILE}"
+          fi
+
+          original_issue_bytes="$(wc -c < "${ORIGINAL_ISSUE_FILE}" | tr -d '[:space:]')"
+          approved_plan_bytes="$(wc -c < "${APPROVED_PLAN_FILE}" | tr -d '[:space:]')"
+          echo "original_issue.txt bytes: ${original_issue_bytes}"
+          echo "approved_plan.txt bytes: ${approved_plan_bytes}"
+          echo "original_issue.txt sha256: $(sha256sum "${ORIGINAL_ISSUE_FILE}" | awk '{print $1}')"
+          echo "approved_plan.txt sha256: $(sha256sum "${APPROVED_PLAN_FILE}" | awk '{print $1}')"
 
           PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
           import json
@@ -1324,6 +1485,7 @@ jobs:
           # They are cleaned up in the final "Cleanup temporary artifacts" step.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
+            rm -f ./repo_overview.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
           fi
 
@@ -1805,6 +1967,8 @@ jobs:
         # the iteration cap.  Also runs when did_commit is true since the push
         # is deferred — both autofix and conflict resolution are pushed together.
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -1871,7 +2035,35 @@ jobs:
           done
           rm -rf "${RESOLVE_STASH}"
 
-          cat > "${CONFLICT_RESOLVER_PROMPT_FILE}" <<__CONFLICT_RESOLVER_PROMPT__
+          PR_INTENT_TITLE="$(jq -r '.title // ""' "${PR_META_FILE}" 2>/dev/null || echo "")"
+          PR_INTENT_BODY="$(jq -r '.body // ""' "${PR_META_FILE}" 2>/dev/null || echo "")"
+          PR_INTENT_BODY_CAPPED="$(printf '%s\n' "${PR_INTENT_BODY}" | awk 'NR<=200')"
+
+          LINKED_ISSUE_BODY="$(jq -r '.linkedIssueBody // empty' "${PR_META_FILE}" 2>/dev/null || true)"
+          if [ -z "${LINKED_ISSUE_BODY}" ]; then
+            # Prefer an explicit PR->issue link; pick the first linked issue deterministically.
+            LINKED_ISSUE_NUMBER="$(gh api graphql \
+              -f owner="${{ github.repository_owner }}" \
+              -f name="${{ github.event.repository.name }}" \
+              -F number="${PR_NUMBER}" \
+              -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
+              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+            if [ -z "${LINKED_ISSUE_NUMBER}" ]; then
+              LINKED_ISSUE_NUMBER="$(printf '%s\n%s\n' "${PR_INTENT_TITLE}" "${PR_INTENT_BODY}" | grep -oiE '(github\.com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/[0-9]+|[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)' | grep -oE '[0-9]+$' | head -n 1 || true)"
+            fi
+            if [ -n "${LINKED_ISSUE_NUMBER}" ]; then
+              LINKED_ISSUE_BODY="$(gh api "repos/${{ github.repository }}/issues/${LINKED_ISSUE_NUMBER}" --jq '.body // empty' 2>/dev/null || true)"
+            fi
+          fi
+
+          if [ -n "${LINKED_ISSUE_BODY}" ]; then
+            LINKED_ISSUE_BODY_CAPPED="$(printf '%s\n' "${LINKED_ISSUE_BODY}" | awk 'NR<=200')"
+          else
+            LINKED_ISSUE_BODY_CAPPED="none"
+          fi
+
+          {
+            cat <<'__PROMPT_HEAD__'
           Repository task: Resolve merge conflicts.
 
           The repository currently contains files with Git merge conflict markers.
@@ -1885,6 +2077,12 @@ jobs:
 
           Your task:
           Resolve merge conflicts safely.
+
+          === PR INTENT ===
+          __PROMPT_HEAD__
+            printf '          Title: %s\n          Body: %s\n          Linked issue: %s\n\n' \
+              "${PR_INTENT_TITLE}" "${PR_INTENT_BODY_CAPPED}" "${LINKED_ISSUE_BODY_CAPPED}"
+            cat <<'__PROMPT_TAIL__'
 
           Rules:
           - Only resolve conflicts.
@@ -1910,7 +2108,8 @@ jobs:
 
           Notes:
           - brief explanation if any resolution required choosing one side
-          __CONFLICT_RESOLVER_PROMPT__
+          __PROMPT_TAIL__
+          } > "${CONFLICT_RESOLVER_PROMPT_FILE}"
 
           attempt=1
           while [ "${attempt}" -le 3 ]; do
@@ -1941,6 +2140,7 @@ jobs:
           # from git add via ':!scripts', ':!.serena', ':!prompts' patterns.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
+            rm -f ./repo_overview.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
           fi
 
@@ -2568,7 +2768,8 @@ jobs:
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
-            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh
+            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/build_repo_overview.sh
             rm -rf .serena prompts
             rm -f .github/ai/orchestrate_schema.v1.json
+            rm -f repo_overview.txt
           fi

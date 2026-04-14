@@ -145,7 +145,7 @@ jobs:
           # Only fetch scripts actually used by the plan workflow.
           # git_ref_health_check.sh is only needed by implement/edit workflows.
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh extract_db_contracts.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py build_repo_overview.sh; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -202,6 +202,18 @@ jobs:
             fi
           fi
 
+      - name: Restore cached repo overview
+        uses: actions/cache@v5
+        continue-on-error: true
+        with:
+          path: repo_overview.txt
+          key: repo-overview-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pyproject.toml', '**/go.mod', '**/Cargo.toml', '.pre-commit-config.yaml', '**/Dockerfile', '.github/workflows/*.yml') }}
+
+      - name: Build repo overview artifact
+        run: |
+          set -euo pipefail
+          bash scripts/build_repo_overview.sh || true
+
       - name: Create runtime workspace
         run: |
           set -euo pipefail
@@ -212,6 +224,7 @@ jobs:
             echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
             echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
             echo "RECENT_CHANGES_FILE=${RUNTIME_DIR}/recent_changes.txt"
+            echo "DB_CONTRACTS_RELEVANT_FILE=${RUNTIME_DIR}/db_contracts_relevant.txt"
             echo "PLANNING_CONTEXT_FILE=${RUNTIME_DIR}/planning_context.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
@@ -567,6 +580,31 @@ jobs:
             } >> "${RECENT_CHANGES_FILE}"
           done < "${tmp_unique}"
 
+      - name: Extract relevant DB contracts
+        if: env.SKIP_PLAN != 'true'
+        run: |
+          set -euo pipefail
+
+          ISSUE_CONTEXT_FILE="${RUNTIME_DIR}/issue_body_db_context.txt"
+          ANSWERS_CONTEXT_FILE="${RUNTIME_DIR}/user_answers_db_context.txt"
+
+          printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_CONTEXT_FILE}"
+          printf '%s\n' "${USER_ANSWERS}" > "${ANSWERS_CONTEXT_FILE}"
+
+          if ! bash scripts/extract_db_contracts.sh "${DB_CONTRACTS_RELEVANT_FILE}" "${ISSUE_CONTEXT_FILE}" "${ANSWERS_CONTEXT_FILE}"; then
+            {
+              echo "=== DB CONTRACTS (relevant) ==="
+              echo "[marker] failed to extract DB contracts; continuing without snippets."
+            } > "${DB_CONTRACTS_RELEVANT_FILE}" || true
+          fi
+
+          if [ ! -s "${DB_CONTRACTS_RELEVANT_FILE}" ]; then
+            {
+              echo "=== DB CONTRACTS (relevant) ==="
+              echo "[marker] DB contract extraction produced no output."
+            } > "${DB_CONTRACTS_RELEVANT_FILE}" || true
+          fi
+
       - name: Build planning context
         if: env.SKIP_PLAN != 'true'
         run: |
@@ -578,6 +616,8 @@ jobs:
             printf '%s\n\n' "${CLARIFICATION_QUESTIONS}"
             echo "USER ANSWERS"
             printf '%s\n\n' "${USER_ANSWERS}"
+            cat "${DB_CONTRACTS_RELEVANT_FILE}"
+            echo
             echo "ALL COMMENTS"
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
             echo
@@ -819,6 +859,53 @@ jobs:
           # all inlined so the model doesn't waste tool calls reading files.
           # The static prefix (pre_assembled_static.txt) is identical across all
           # runs, enabling LLM provider prompt-prefix caching.
+          resolve_model_context_window() {
+            local catalog_path="./scripts/codex_model_catalog.json"
+            local context_window=""
+            local effective_percent=""
+
+            if [ -f "${catalog_path}" ] && command -v jq >/dev/null 2>&1; then
+              context_window="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .context_window // empty' "${catalog_path}" | head -n1)"
+              effective_percent="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .effective_context_window_percent // empty' "${catalog_path}" | head -n1)"
+              if [[ "${context_window}" =~ ^[0-9]+$ ]] && [[ "${effective_percent}" =~ ^[0-9]+$ ]] && [ "${effective_percent}" -gt 0 ] && [ "${effective_percent}" -le 100 ]; then
+                context_window=$(( context_window * effective_percent / 100 ))
+              fi
+            fi
+
+            if [[ "${context_window}" =~ ^[0-9]+$ ]] && [ "${context_window}" -gt 0 ]; then
+              printf '%s\n' "${context_window}"
+            fi
+          }
+
+          build_token_budget_hint() {
+            local prompt_file="$1"
+            local prompt_bytes=""
+            local prompt_tokens=""
+            local model_context=""
+            local remaining_tokens=""
+
+            prompt_bytes="$(wc -c < "${prompt_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+            if ! [[ "${prompt_bytes}" =~ ^[0-9]+$ ]]; then
+              echo "unavailable (advisory estimate failed: prompt size unknown)"
+              return
+            fi
+
+            prompt_tokens=$(( (prompt_bytes + 3) / 4 ))
+            model_context="$(resolve_model_context_window || true)"
+            if ! [[ "${model_context}" =~ ^[0-9]+$ ]] || [ "${model_context}" -le 0 ]; then
+              echo "unavailable (advisory estimate failed: model context unknown)"
+              return
+            fi
+
+            remaining_tokens=$(( model_context - prompt_tokens ))
+            if [ "${remaining_tokens}" -lt 0 ]; then
+              remaining_tokens=0
+            fi
+
+            echo "${remaining_tokens} (approx remaining context tokens; advisory only)"
+          }
+
+          CODEX_PROMPT_ESTIMATE_FILE="${RUNTIME_DIR}/codex_prompt_estimate.txt"
           {
             cat ./pre_assembled_static.txt
             echo
@@ -826,12 +913,32 @@ jobs:
             echo
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo "TOKEN_BUDGET_HINT: estimating..."
+            echo
+            bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+            echo
+            echo "=== PLANNING CONTEXT ==="
+            cat "${PLANNING_CONTEXT_FILE}"
+          } > "${CODEX_PROMPT_ESTIMATE_FILE}"
+
+          TOKEN_BUDGET_HINT="$(build_token_budget_hint "${CODEX_PROMPT_ESTIMATE_FILE}")"
+
+          {
+            cat ./pre_assembled_static.txt
+            echo
+            cat "${RUNTIME_DIR}/memory_context.txt"
+            echo
+            # Inject the configurable tool call budget before the static heredoc
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo "TOKEN_BUDGET_HINT: ${TOKEN_BUDGET_HINT}"
             echo
             bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
             echo
             echo "=== PLANNING CONTEXT ==="
             cat "${PLANNING_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
+
+          rm -f "${CODEX_PROMPT_ESTIMATE_FILE}"
 
           # Update progress comment to signal model invocation is starting
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
@@ -933,7 +1040,7 @@ jobs:
           fi
 
       - name: Guard plans targeting template-owned paths
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && !endsWith(github.repository, '/coding-workflows')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -946,14 +1053,26 @@ jobs:
           # issue is routed back to humans with a clear reason rather than
           # producing a silent no-op PR downstream.
           #
-          # We match backtick-wrapped path tokens only — the convention Codex
-          # uses in its "Files likely to change" section and inline file
-          # references. This avoids false positives on prose mentions.
+          # This guard is skipped entirely when the workflow is running inside
+          # the canonical `*/coding-workflows` repository, because in that repo
+          # those paths *are* the source of truth and must be editable.
+          #
+          # We only scan the plan's "Files likely to change" section (and any
+          # equivalent "Files to change" heading), not prose, so that a plan
+          # which merely *mentions* `scripts/render_prompt.sh` in a verification
+          # step does not get rejected as if it were editing it.
+          FILES_SECTION_FILE="${RUNTIME_DIR}/files_section.txt"
+          perl -ne '
+            BEGIN { $in = 0 }
+            if (/^\s{0,3}#{1,6}\s*Files\b[^\n]*\bchange\b/i) { $in = 1; next; }
+            if ($in && /^\s{0,3}#{1,6}\s+\S/) { $in = 0; }
+            print if $in;
+          ' "${CODEX_OUTPUT_FILE}" > "${FILES_SECTION_FILE}"
           EXCLUDED_RE='`(scripts/|\.github/prompts/|\.github/scripts/)'
-          if grep -nE "${EXCLUDED_RE}" "${CODEX_OUTPUT_FILE}" >/dev/null; then
-            echo "::error::Plan references template-owned paths (scripts/, .github/prompts/, .github/scripts/) which are excluded from Codex commits in implement.yml. Changes to those paths belong in the coding-workflows repository."
-            echo "Offending lines:"
-            grep -nE "${EXCLUDED_RE}" "${CODEX_OUTPUT_FILE}" || true
+          if [ -s "${FILES_SECTION_FILE}" ] && grep -nE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}" >/dev/null; then
+            echo "::error::Plan's 'Files likely to change' section lists template-owned paths (scripts/, .github/prompts/, .github/scripts/) which are excluded from Codex commits in implement.yml. Changes to those paths belong in the coding-workflows repository."
+            echo "Offending lines (from Files section):"
+            grep -nE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}" || true
             source scripts/gh_helpers.sh 2>/dev/null || true
             type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
             # Clean up the progress comment so the failure comment (posted by

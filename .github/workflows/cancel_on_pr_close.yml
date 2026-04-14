@@ -59,12 +59,20 @@ jobs:
           RUNS_JQ='{workflow_runs:
             [.[].workflow_runs // []]
             | flatten}'
+          # Filter at the API level by branch+event so the response is
+          # bounded to this PR's branch only. This avoids fetching every
+          # queued/in-progress run in the repo, which previously produced
+          # JSON blobs large enough to exceed ARG_MAX when passed via
+          # `jq --argjson` (E2BIG -> exit 126). The client-side selects
+          # below are kept as a defensive double-check.
           queued_runs_json="$(
             _gh_retry gh api \
               --method GET \
               "repos/${REPOSITORY}/actions/runs" \
               --paginate \
               -f status=queued \
+              -f event=pull_request \
+              -f "branch=${PR_HEAD_REF}" \
               -f per_page=100 \
             | jq -s "${RUNS_JQ}"
           )"
@@ -74,6 +82,8 @@ jobs:
               "repos/${REPOSITORY}/actions/runs" \
               --paginate \
               -f status=in_progress \
+              -f event=pull_request \
+              -f "branch=${PR_HEAD_REF}" \
               -f per_page=100 \
             | jq -s "${RUNS_JQ}"
           )"

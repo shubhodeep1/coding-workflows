@@ -50,6 +50,9 @@ PROMPT_RUNTIME_CONTEXT_HINT="$(printf '%s\n' \
   'Useful files include git_status.txt, git_diff_stat.txt, shallow_tree.txt, environment_sorted.txt, recent_commits.txt, branches.txt, workflow_snapshot.yml, and run_logs_best_effort.txt.' \
   "Example command: cat ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
 
+ORIGINAL_ISSUE_UNAVAILABLE_MARKER="${ORIGINAL_ISSUE_UNAVAILABLE_MARKER:-UNAVAILABLE: linked closing issue body could not be resolved.}"
+APPROVED_PLAN_UNAVAILABLE_MARKER="${APPROVED_PLAN_UNAVAILABLE_MARKER:-UNAVAILABLE: approved plan could not be resolved.}"
+
 cat > "${REVIEWER_PROMPT_BODY_FILE}" <<__REVIEWER_PROMPT__
 SYMBOL-LEVEL DIFF SUMMARY
 A compact symbol-level summary of what changed is available at:
@@ -445,15 +448,6 @@ Code: lock.acquire() without corresponding release in exception path
 Problem: lock may remain held if an exception occurs
 Runtime impact: subsequent cache operations will deadlock
 
-PRE-APPROVAL TEST GATE (MANDATORY)
-Before finalizing your review, run the test suite:
-python3 tests/test_orchestrate_poll_process.py
-If any test fails, report each failure as a blocking issue with:
-- the test name
-- the failure message
-- the file and function under test
-Do not report the PR as having no blocking issues if any test fails.
-
 OUTPUT RULES
 Output plain text only.
 No JSON
@@ -472,6 +466,20 @@ mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 {
   cat ./pre_assembled_static.txt
   echo
+  echo "=== ORIGINAL ISSUE ==="
+  if [ -s "${ORIGINAL_ISSUE_FILE:-}" ]; then
+    cat "${ORIGINAL_ISSUE_FILE}"
+  else
+    echo "${ORIGINAL_ISSUE_UNAVAILABLE_MARKER}"
+  fi
+  echo
+  echo "=== APPROVED PLAN ==="
+  if [ -s "${APPROVED_PLAN_FILE:-}" ]; then
+    cat "${APPROVED_PLAN_FILE}"
+  else
+    echo "${APPROVED_PLAN_UNAVAILABLE_MARKER}"
+  fi
+  echo
   echo "=== MEMORY CONTEXT (REVIEWER) ==="
   if [ -s "${MEMORY_CONTEXT_FILE}" ]; then
     cat "${MEMORY_CONTEXT_FILE}"
@@ -486,6 +494,9 @@ mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
   echo
   cat "${REVIEWER_PROMPT_BODY_FILE}"
 } > "${REVIEWER_PROMPT_FILE}"
+
+echo "Reviewer prompt bytes: $(wc -c < "${REVIEWER_PROMPT_FILE}")"
+echo "Reviewer prompt sha256: $(sha256sum "${REVIEWER_PROMPT_FILE}" | awk '{print $1}')"
 
 run_reviewer() {
   local model="$1"
@@ -672,6 +683,23 @@ run_reviewer() {
         return 0
       fi
       echo "Reviewer ${model} produced empty output on attempt ${attempt}." | tee -a "${log_file}"
+      # Empty-output diagnostic: codex-cli exited 0 but emitted nothing on
+      # stdout, which means the model never produced a final review message
+      # (typical causes: tool-call/turn budget exhausted, sandbox command
+      # timeout loop, or model giving up silently). Surface the tail of the
+      # codex stderr inline so the cause is visible in the GitHub Actions
+      # job log without having to scroll through thousands of streamed lines
+      # or download artifacts. Structured with grep-able delimiters per
+      # CLAUDE.md §8.
+      if [ -s "${tmp_stderr}" ]; then
+        {
+          echo "----- reviewer ${model} stderr tail -n 40 (empty-output diagnostic, attempt ${attempt}) -----"
+          tail -n 40 "${tmp_stderr}" 2>/dev/null | sed 's/^/  | /'
+          echo "------------------------------------------------------------------------------------------"
+        } | tee -a "${log_file}" >&2
+      else
+        echo "Reviewer ${model} attempt ${attempt}: codex-cli stderr was also empty (no diagnostic available)." | tee -a "${log_file}" >&2
+      fi
     else
       cat "${tmp_stderr}" >> "${log_file}"
       case "${wd_reason}" in

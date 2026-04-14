@@ -13,6 +13,9 @@ PROMPT_ARTIFACT_PATH_HINT="$(printf '%s\n' \
   'Do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow.' \
   "Example command: cat ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt")"
 
+ORIGINAL_ISSUE_UNAVAILABLE_MARKER="${ORIGINAL_ISSUE_UNAVAILABLE_MARKER:-UNAVAILABLE: linked closing issue body could not be resolved.}"
+APPROVED_PLAN_UNAVAILABLE_MARKER="${APPROVED_PLAN_UNAVAILABLE_MARKER:-UNAVAILABLE: approved plan could not be resolved.}"
+
 REVIEWER_MANIFEST_FILE="${RUNTIME_DIR}/reviewer_manifest.txt"
 REVIEWER_BUNDLE_FILE="${RUNTIME_DIR}/reviewer_bundle.txt"
 
@@ -340,9 +343,35 @@ for required_file in ./pre_assembled_static.txt "${PR_META_FILE}" "${LAST_RUN_DI
   echo "${required_file} bytes: $(wc -c < "${required_file}")"
 done
 
+if [ -s "${ORIGINAL_ISSUE_FILE:-}" ]; then
+  echo "${ORIGINAL_ISSUE_FILE} bytes: $(wc -c < "${ORIGINAL_ISSUE_FILE}")"
+else
+  echo "${ORIGINAL_ISSUE_FILE:-unset} bytes: unavailable (using marker)"
+fi
+
+if [ -s "${APPROVED_PLAN_FILE:-}" ]; then
+  echo "${APPROVED_PLAN_FILE} bytes: $(wc -c < "${APPROVED_PLAN_FILE}")"
+else
+  echo "${APPROVED_PLAN_FILE:-unset} bytes: unavailable (using marker)"
+fi
+
 prompt_tmp="$(mktemp)"
 {
   cat ./pre_assembled_static.txt
+  echo
+  echo "=== ORIGINAL ISSUE ==="
+  if [ -s "${ORIGINAL_ISSUE_FILE:-}" ]; then
+    cat "${ORIGINAL_ISSUE_FILE}"
+  else
+    echo "${ORIGINAL_ISSUE_UNAVAILABLE_MARKER}"
+  fi
+  echo
+  echo "=== APPROVED PLAN ==="
+  if [ -s "${APPROVED_PLAN_FILE:-}" ]; then
+    cat "${APPROVED_PLAN_FILE}"
+  else
+    echo "${APPROVED_PLAN_UNAVAILABLE_MARKER}"
+  fi
   echo
   echo "${PROMPT_ARTIFACT_PATH_HINT}"
   echo
@@ -610,4 +639,3 @@ if [ -n "${final_editor_err}" ] && [ -s "${final_editor_err}" ]; then
   echo "Editor stderr from final attempt:"
   cat "${final_editor_err}"
 fi
-

@@ -90,6 +90,7 @@ jobs:
             echo "ISSUE_SUMMARY_FILE=${RUNTIME_DIR}/issue_summary.md"
             echo "IMPLEMENTATION_CONTEXT_FILE=${RUNTIME_DIR}/implementation_context.txt"
             echo "RECENT_CHANGES_FILE=${RUNTIME_DIR}/recent_changes.txt"
+            echo "DB_CONTRACTS_RELEVANT_FILE=${RUNTIME_DIR}/db_contracts_relevant.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
             echo "PLAN_FILE=${RUNTIME_DIR}/implementation_plan.txt"
@@ -245,7 +246,7 @@ jobs:
             done; return 1
           }
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh extract_db_contracts.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py build_repo_overview.sh; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -385,6 +386,20 @@ jobs:
             echo "🔬 Smoke test detected — switching to low reasoning effort"
             echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
           fi
+
+      - name: Restore cached repo overview
+        if: env.SKIP_IMPLEMENT != 'true'
+        uses: actions/cache@v5
+        continue-on-error: true
+        with:
+          path: repo_overview.txt
+          key: repo-overview-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pyproject.toml', '**/go.mod', '**/Cargo.toml', '.pre-commit-config.yaml', '**/Dockerfile', '.github/workflows/*.yml') }}
+
+      - name: Build repo overview artifact
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/build_repo_overview.sh || true
 
       - name: Fetch issue comments
         if: env.SKIP_IMPLEMENT != 'true'
@@ -581,6 +596,29 @@ jobs:
             } >> "${RECENT_CHANGES_FILE}"
           done < "${tmp_unique}"
 
+      - name: Extract relevant DB contracts
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+
+          ISSUE_CONTEXT_FILE="${RUNTIME_DIR}/issue_body_db_context.txt"
+
+          printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_CONTEXT_FILE}"
+
+          if ! bash scripts/extract_db_contracts.sh "${DB_CONTRACTS_RELEVANT_FILE}" "${ISSUE_CONTEXT_FILE}" "${CLARIFICATION_ANSWERS_FILE}" "${PLAN_FILE}"; then
+            {
+              echo "=== DB CONTRACTS (relevant) ==="
+              echo "[marker] failed to extract DB contracts; continuing without snippets."
+            } > "${DB_CONTRACTS_RELEVANT_FILE}" || true
+          fi
+
+          if [ ! -s "${DB_CONTRACTS_RELEVANT_FILE}" ]; then
+            {
+              echo "=== DB CONTRACTS (relevant) ==="
+              echo "[marker] DB contract extraction produced no output."
+            } > "${DB_CONTRACTS_RELEVANT_FILE}" || true
+          fi
+
       - name: Build implementation context
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -593,6 +631,8 @@ jobs:
             echo
             echo "APPROVED IMPLEMENTATION PLAN"
             cat "${PLAN_FILE}"
+            echo
+            cat "${DB_CONTRACTS_RELEVANT_FILE}"
             echo
             echo "ISSUE COMMENTS"
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
@@ -787,6 +827,53 @@ jobs:
           # all inlined so the model doesn't waste tool calls reading files.
           # The static prefix (pre_assembled_static.txt) is identical across all
           # runs, enabling LLM provider prompt-prefix caching.
+          resolve_model_context_window() {
+            local catalog_path="./scripts/codex_model_catalog.json"
+            local context_window=""
+            local effective_percent=""
+
+            if [ -f "${catalog_path}" ] && command -v jq >/dev/null 2>&1; then
+              context_window="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .context_window // empty' "${catalog_path}" | head -n1)"
+              effective_percent="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .effective_context_window_percent // empty' "${catalog_path}" | head -n1)"
+              if [[ "${context_window}" =~ ^[0-9]+$ ]] && [[ "${effective_percent}" =~ ^[0-9]+$ ]] && [ "${effective_percent}" -gt 0 ] && [ "${effective_percent}" -le 100 ]; then
+                context_window=$(( context_window * effective_percent / 100 ))
+              fi
+            fi
+
+            if [[ "${context_window}" =~ ^[0-9]+$ ]] && [ "${context_window}" -gt 0 ]; then
+              printf '%s\n' "${context_window}"
+            fi
+          }
+
+          build_token_budget_hint() {
+            local prompt_file="$1"
+            local prompt_bytes=""
+            local prompt_tokens=""
+            local model_context=""
+            local remaining_tokens=""
+
+            prompt_bytes="$(wc -c < "${prompt_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+            if ! [[ "${prompt_bytes}" =~ ^[0-9]+$ ]]; then
+              echo "unavailable (advisory estimate failed: prompt size unknown)"
+              return
+            fi
+
+            prompt_tokens=$(( (prompt_bytes + 3) / 4 ))
+            model_context="$(resolve_model_context_window || true)"
+            if ! [[ "${model_context}" =~ ^[0-9]+$ ]] || [ "${model_context}" -le 0 ]; then
+              echo "unavailable (advisory estimate failed: model context unknown)"
+              return
+            fi
+
+            remaining_tokens=$(( model_context - prompt_tokens ))
+            if [ "${remaining_tokens}" -lt 0 ]; then
+              remaining_tokens=0
+            fi
+
+            echo "${remaining_tokens} (approx remaining context tokens; advisory only)"
+          }
+
+          CODEX_PROMPT_ESTIMATE_FILE="${RUNTIME_DIR}/codex_prompt_estimate.txt"
           {
             cat ./pre_assembled_static.txt
             echo
@@ -795,12 +882,33 @@ jobs:
             echo
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo "TOKEN_BUDGET_HINT: estimating..."
+            echo
+            bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+            echo
+            echo "=== IMPLEMENTATION CONTEXT ==="
+            cat "${IMPLEMENTATION_CONTEXT_FILE}"
+          } > "${CODEX_PROMPT_ESTIMATE_FILE}"
+
+          TOKEN_BUDGET_HINT="$(build_token_budget_hint "${CODEX_PROMPT_ESTIMATE_FILE}")"
+
+          {
+            cat ./pre_assembled_static.txt
+            echo
+            echo "=== AI MEMORY CONTEXT ==="
+            cat "${MEMORY_CONTEXT_FILE}"
+            echo
+            # Inject the configurable tool call budget before the static heredoc
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo "TOKEN_BUDGET_HINT: ${TOKEN_BUDGET_HINT}"
             echo
             bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
             echo
             echo "=== IMPLEMENTATION CONTEXT ==="
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
+
+          rm -f "${CODEX_PROMPT_ESTIMATE_FILE}"
 
           # ── Adaptive progress-aware watchdog for the implement editor ──
           # The Codex process is run in the background with stderr-based
@@ -846,7 +954,36 @@ jobs:
             PROMPT_FILE_TO_USE="${CODEX_PROMPT_FILE}"
             if [ "${attempt}" -gt 1 ] && [ -z "$(git status --porcelain)" ]; then
               PROMPT_FILE_TO_USE="${RUNTIME_DIR}/codex_prompt_retry.txt"
+              retry_git_status="$(git status --short 2>/dev/null || true)"
+              retry_git_diff_stat="$(git diff --stat 2>/dev/null || true)"
+              retry_opened_files="$({
+                if [ -d ".serena" ]; then
+                  find .serena -type f \
+                    \( -name '*.json' -o -name '*.jsonl' -o -name '*.log' -o -name '*.txt' -o -name '*.md' \) \
+                    -print0 2>/dev/null \
+                    | xargs -0 -r grep -hEo '"(relative_path|file_path)"[[:space:]]*:[[:space:]]*"[^"]+"' 2>/dev/null \
+                    | sed -E 's/.*:[[:space:]]*"([^"]+)"/\1/' || true
+                fi
+                if [ -d ".serena/memory" ]; then
+                  grep -RhoE '([[:alnum:]_.-]+/)+[[:alnum:]_.-]+\.[[:alnum:]_.-]+' .serena/memory 2>/dev/null || true
+                fi
+              } | sed '/^[[:space:]]*$/d' | sed 's#^\./##' | sed '/^\.serena\//d' | sort -u | head -n 100)"
+              if [ -z "${retry_git_status}" ]; then retry_git_status="(clean working tree)"; fi
+              if [ -z "${retry_git_diff_stat}" ]; then retry_git_diff_stat="(no changed files)"; fi
+              if [ -z "${retry_opened_files}" ]; then retry_opened_files="(unavailable: no Serena opened-file metadata found)"; fi
               {
+                cat <<RETRY_PARTIAL_WORK_EOF
+          === PARTIAL WORK FROM PREVIOUS ATTEMPT ===
+          git status --short
+          ${retry_git_status}
+
+          git diff --stat
+          ${retry_git_diff_stat}
+
+          opened/read files this run (best-effort from Serena cache/.serena/memory)
+          ${retry_opened_files}
+
+          RETRY_PARTIAL_WORK_EOF
                 cat <<'RETRY_EOF'
           IMPORTANT: Your previous attempt produced NO file changes. The implementation
           plan requires repository modifications. You MUST create or edit the files
@@ -1104,6 +1241,7 @@ jobs:
           # The manifest tracks exactly which files were fetched — caller-repo
           # files that were never touched are safe.
           rm -f ./pre_assembled_static.txt
+          rm -f ./repo_overview.txt
           if [ -f "${FETCHED_MANIFEST}" ]; then
             while IFS= read -r fetched_file; do
               [ -n "${fetched_file}" ] && rm -f "${fetched_file}"
@@ -1120,16 +1258,28 @@ jobs:
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
-          if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-            git add -u -- ':!node_modules' ':!scripts' ':!.github/prompts' ':!.github/scripts'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
-          else
-            git add -u -- ':!node_modules' ':!scripts' ':!.github/prompts' ':!.github/scripts'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+          # Template-owned paths (scripts/, prompts/, .github/prompts/,
+          # .github/scripts/) are fetched from coding-workflows at runtime in
+          # consumer repos, and must NOT be committed there — any edit to them
+          # in a consumer wrapper would either be a no-op (overwritten next run)
+          # or leak a stale copy back into the caller's tree.  In the canonical
+          # `*/coding-workflows` repository these paths ARE the source of truth
+          # and must be editable, so the excludes are dropped.
+          is_self_repo="false"
+          if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then
+            is_self_repo="true"
           fi
+          add_u_excludes=(':!node_modules')
+          add_o_excludes=(':!node_modules' ':!.serena' ':!.github/ai')
+          if [ "${is_self_repo}" = "false" ]; then
+            add_u_excludes+=(':!scripts' ':!.github/prompts' ':!.github/scripts')
+            add_o_excludes+=(':!scripts' ':!prompts' ':!.github/prompts' ':!.github/scripts')
+          fi
+          git add -u -- "${add_u_excludes[@]}"
+          git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
           echo "Staged files before commit:"
           git diff --cached --name-only | sed 's/^/ - /' || true
-          if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
+          if [ "${is_self_repo}" = "false" ] && git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
             echo "Error: .github/prompts or .github/scripts is staged"
             exit 1
           fi
@@ -1139,7 +1289,11 @@ jobs:
           # `git commit` fail — the "Handle no-op implementation" step below will
           # re-label the issue and post an explanatory comment.
           if [ -z "$(git diff --cached --name-only)" ]; then
-            echo "All Codex changes were filtered out (scripts/, .github/prompts/, .github/scripts/, or fetched-manifest cleanup); nothing to commit."
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "All Codex changes were filtered out (scripts/, .github/prompts/, .github/scripts/, or fetched-manifest cleanup); nothing to commit."
+            else
+              echo "No staged changes after fetched-manifest cleanup; nothing to commit."
+            fi
             echo "did_commit=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -1502,6 +1656,51 @@ jobs:
             echo "LATEST APPROVED IMPLEMENTATION PLAN"
             cat "${PLAN_FILE}"
           } > "${RUNTIME_DIR}/issue_context_for_summary.txt"
+
+          BASE_REF="origin/${PR_BASE_BRANCH}"
+          DIFF_RANGE="${BASE_REF}...HEAD"
+          HAS_BASE_REF="false"
+          if git rev-parse --verify "${BASE_REF}" >/dev/null 2>&1; then
+            HAS_BASE_REF="true"
+          fi
+
+          {
+            echo
+            echo "=== CHANGED FILES (this PR) ==="
+            if [ "${HAS_BASE_REF}" = "true" ]; then
+              if ! git diff --stat "${DIFF_RANGE}"; then
+                echo "Unavailable: unable to compute diff stat for ${DIFF_RANGE}."
+              fi
+            else
+              echo "Unavailable: base ref ${BASE_REF} not found; skipping diff stat."
+            fi
+
+            echo
+            echo "=== FILE LIST ==="
+            if [ "${HAS_BASE_REF}" = "true" ]; then
+              mapfile -t PR_CHANGED_FILES < <(git diff --name-only "${DIFF_RANGE}" || true)
+              TOTAL_FILES="${#PR_CHANGED_FILES[@]}"
+              if [ "${TOTAL_FILES}" -eq 0 ]; then
+                echo "(no changed files detected)"
+              else
+                LIMIT=100
+                PRINT_COUNT="${TOTAL_FILES}"
+                if [ "${PRINT_COUNT}" -gt "${LIMIT}" ]; then
+                  PRINT_COUNT="${LIMIT}"
+                fi
+
+                for ((i = 0; i < PRINT_COUNT; i++)); do
+                  echo "${PR_CHANGED_FILES[i]}"
+                done
+
+                if [ "${TOTAL_FILES}" -gt "${LIMIT}" ]; then
+                  echo "... and $((TOTAL_FILES - LIMIT)) more"
+                fi
+              fi
+            else
+              echo "Unavailable: base ref ${BASE_REF} not found; skipping file list."
+            fi
+          } >> "${RUNTIME_DIR}/issue_context_for_summary.txt"
 
           CONFIG_FILE="${HOME}/.codex/config.toml"
           CONFIG_BACKUP_FILE="${RUNTIME_DIR}/codex_config_issue_summary_backup.toml"
