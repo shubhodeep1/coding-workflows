@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nInterpreted clarification mapping:\n- `Q1: A` -> Scope is tests-only, and the source-of-truth implementation is branch `orchestrator/project-829` (not current `main`).\n\nConflict note:\n- The issue requirements reference post-Codex flow artifacts that are absent on `main` but present on `orchestrator/project-829`; planning is based on the integration branch per clarification.\n\nImplementation plan\n\n1. Files likely to change\n- `tests/test_implement_post_codex_recovery.py` (new): focused regression suite for implement-phase post-Codex recovery.\n- Optional small touch to `tests/test_review_autofix_merge_precheck.py` only if we decide to keep static workflow-guard assertions there (otherwise keep all new coverage in the new file).\n- No production workflow/script changes planned for this issue.\n\n2. Functions/modules to implement (tests + harness)\n- Add a lightweight test harness that:\n  - Reads `.github/workflows/implement.yml` and extracts specific `run:` blocks by step name.\n  - Normalizes GitHub expression placeholders (`${{ ... }}`) to test-time env values so step scripts can be executed in subprocess.\n  - Provides mock `gh` and `codex` executables (pattern aligned with `tests/test_orchestrate_poll_process.py`) and captures invocations.\n- Target steps:\n  - `Validate syntax changed files`\n  - `Capture post-Codex validation errors`\n  - `Diagnose post-Codex failure and create fix-up issues`\n  - Guard condition on `Comment on issue failure`\n\n3. Required coverage mapping (direct test cases)\n- `#1 Diagnose prompt contract round-trip`\n  - Synthetic tuple injected: issue body, git diff, validator stderr capture, failed step name.\n  - Execute diagnose step with mocked `codex` JSON output.\n  - Assert parsed `implement_diagnose_result.json` shape matches contract:\n    - `status` in `needs_fixes|harness_error|infeasible`\n    - `diagnosis` string\n    - `fix_issues` array\n    - `harness_fixes` string\n- `#2 Validator capture aggregation across files`\n  - In temp git repo, create two broken changed files (one `.py`, one `.yml`).\n  - Execute `Validate syntax changed files` step script.\n  - Assert non-zero exit and both file errors appear in `post_codex_validation_errors.txt` before exit.\n- `#3 gh issue create invocation shape`\n  - Mock `gh issue create` and assert args include:\n    - `--repo <repo>`\n    - `--title <fix title>`\n    - `--body` containing:\n      - `Type: implement-fix-up (post-codex-validation)`\n      - `Source issue: #<n>`\n      - `Failed step: <name>`\n- `#4 Source issue labeling + bypass`\n  - For `needs_fixes`, assert `gh issue edit` applies `ai:implementation-failed` and removes `ai:awaiting-approval`.\n  - Assert workflow generic failure comment step is gated by `steps.diagnose_post_codex_failure.outputs.handled != 'true'` (prevents re-add path when handled).\n- `#5 Idempotency`\n  - When source issue already has `ai:implementation-failed`, execute diagnose step and assert:\n    - exit code `0`\n    - no `codex` call\n    - no `gh issue create`\n- `#6 Fallback behavior`\n  - Simulate diagnose failure/invalid JSON.\n  - Assert deterministic fallback issue is still created and includes raw captured diagnostics.\n- `#7 Out-of-scope no-op`\n  - Missing/empty capture file path.\n  - Assert diagnose step exits `0`, sets/keeps `handled=false`, does not call `codex` or `gh issue create`.\n  - Combined with guard assertion above, this confirms existing generic cleanup path remains unchanged.\n\n4. Data structures affected\n- `post_codex_validation_errors.txt` capture format (multi-block aggregation).\n- `implement_diagnose_result.json` parsed JSON contract.\n- GitHub issue body metadata block for fix-up issues.\n- Step outputs in `$GITHUB_OUTPUT` (`handled`, `captured`, `failed_step_name`).\n\n5. API/interface changes\n- No production API/interface changes.\n- Test-only mocked interfaces:\n  - `gh` CLI endpoints used by diagnose/capture logic.\n  - `codex exec` stdout contract for diagnose parsing behavior.\n\n6. Potential risks and edge cases\n- Workflow-step extraction can be brittle if step names or YAML layout change; mitigate by matching exact step names and failing with explicit assertion messages.\n- Placeholder substitution must be deterministic; keep substitutions scoped to known `${{ ... }}` tokens used in targeted steps.\n- Quoting/newline handling in `--body` can be fragile; capture raw argv from mock `gh` to assert exact metadata presence.\n- Ensure tests are hermetic (no network; temp dirs only).\n\n7. Testing considerations\n- Run targeted suite: `pytest -q tests/test_implement_post_codex_recovery.py`\n- Then run full tests: `pytest -q`\n- If shell-level aggregation test (#2) is flaky in CI due environment variance, document manual repro steps in PR description as fallback (only if automation proves impractical).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fd8b93c23cb596f2de05a3ba54b9508cfb593259d20f5cc2c2dcf600722f5cc4",
+  "lineage": {
+    "issue_number": 948,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24403093537",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24403093537",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/948"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414140407_4d784e075f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 948,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24403093537"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #948",
+  "timestamps": {
+    "created_at": "2026-04-14T14:04:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
