@@ -123,7 +123,7 @@ compute_rb_token_budget_hint() {
     echo "advisory unavailable: unable to estimate prompt bytes"
     return 0
   fi
-  prompt_tokens=$(( (prompt_bytes * 10 + 29) / 30 ))
+  prompt_tokens=$(( (prompt_bytes + 3) / 4 ))
 
   catalog_path="${SUPPORT_ROOT_DIR}/scripts/codex_model_catalog.json"
   if [ ! -f "${catalog_path}" ]; then
@@ -232,7 +232,7 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
 
 RB_TOKEN_BUDGET_HINT="$(compute_rb_token_budget_hint "${RB_JUDGE_PROMPT}" "${MODEL_EDITOR}")"
 RB_JUDGE_PROMPT_TMP="${RB_JUDGE_PROMPT}.tmp"
-awk -v hint="${RB_TOKEN_BUDGET_HINT}" '
+if awk -v hint="${RB_TOKEN_BUDGET_HINT}" '
   {
     print
     if (!inserted && $0 ~ /^TOOL_CALL_BUDGET:/) {
@@ -240,8 +240,11 @@ awk -v hint="${RB_TOKEN_BUDGET_HINT}" '
       inserted=1
     }
   }
-' "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_PROMPT_TMP}"
-mv "${RB_JUDGE_PROMPT_TMP}" "${RB_JUDGE_PROMPT}"
+' "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_PROMPT_TMP}" && mv "${RB_JUDGE_PROMPT_TMP}" "${RB_JUDGE_PROMPT}"; then
+  :
+else
+  rm -f "${RB_JUDGE_PROMPT_TMP}"
+fi
 
 # -----------------------------------------------------------
 # Temporarily set judge reasoning effort in codex config
