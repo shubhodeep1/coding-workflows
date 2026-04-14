@@ -173,7 +173,7 @@ jobs:
           BATCH_ARTIFACT_NAME="workflow-log-analysis-batch-state"
           BATCH_STATE_FILE="workflow_log_analysis_batch_state.json"
 
-          if ARTIFACTS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" 2>/dev/null)"; then
+          if ARTIFACTS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100")"; then
             :
           else
             ARTIFACTS_JSON='{}'
