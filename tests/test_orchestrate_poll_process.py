@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -24,48 +25,157 @@ POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 POLLER_SUBPROCESS_TIMEOUT_SEC = 180.0
 
 
+# Directories and top-level files that the poller script under test needs
+# to resolve at runtime via relative paths (helper scripts, prompt files,
+# schema JSON, canonical instruction markdown). Each sandbox run gets an
+# isolated copy of these so any file mutations the script performs are
+# confined to the sandbox and cannot reach the real coding-workflows
+# checkout the test runner started from.
+_SANDBOX_DIRS = ("scripts", "prompts", ".github/ai")
+_SANDBOX_FILES = (
+	"agents.md",
+	"codex_system_instructions.md",
+	"ai_pipeline.md",
+	"unattended_llm_system_instructions.md",
+)
+
+
+def _make_poller_sandbox(target: Path) -> None:
+	"""Populate ``target`` with a minimal copy of the coding-workflows tree
+	the poller expects at runtime and initialize a throwaway git repo
+	inside it.
+
+	The sandbox contains **real copies**, not symlinks, so ``rm``/``git
+	rm``/``rm -rf`` operations the script performs touch only the
+	sandbox. The sandbox's git origin is deliberately set to a URL that
+	does **not** match ``*/coding-workflows`` so the poller's
+	consumer-repo cleanup path is exercised against throwaway copies —
+	the real checkout is never at risk regardless of how that cleanup
+	path is gated in a future revision.
+	"""
+	for rel in _SANDBOX_DIRS:
+		src = REPO_ROOT / rel
+		if src.exists():
+			shutil.copytree(src, target / rel)
+	for rel in _SANDBOX_FILES:
+		src = REPO_ROOT / rel
+		if src.exists():
+			dst = target / rel
+			dst.parent.mkdir(parents=True, exist_ok=True)
+			shutil.copy2(src, dst)
+	subprocess.run(
+		["git", "init", "--quiet", str(target)],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		[
+			"git", "-C", str(target), "remote", "add",
+			"origin", "https://github.com/test-harness/poller-sandbox.git",
+		],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+
+
+def _rewrite_cmd_for_sandbox(cmd: list, sandbox: Path) -> list:
+	"""Rewrite any command-line argument that is an absolute path under
+	``REPO_ROOT`` so it resolves to the equivalent path inside
+	``sandbox``. Leaves all other arguments untouched.
+
+	Existing callers pass ``str(POLLER_SCRIPT)`` as the script to exec,
+	which is an absolute path into ``REPO_ROOT/scripts``; after rewrite
+	they exec the sandbox's copy instead.
+	"""
+	rewritten: list = []
+	repo_root_str = str(REPO_ROOT)
+	for arg in cmd:
+		if isinstance(arg, str) and arg.startswith(repo_root_str + os.sep):
+			rel = Path(arg).resolve().relative_to(REPO_ROOT)
+			rewritten.append(str(sandbox / rel))
+		else:
+			rewritten.append(arg)
+	return rewritten
+
+
 def _run_poller_subprocess(
 	cmd: list,
 	*,
-	cwd: str,
+	cwd: str | None = None,
 	env: dict,
+	sandbox: Path | None = None,
 ) -> subprocess.CompletedProcess:
-	"""Run the poller with a bounded timeout, reaping the whole process group.
+	"""Run the poller under test in an isolated sandbox directory with a
+	bounded timeout, reaping the whole process group on timeout.
 
-	The poller spawns a tree of bash/sleep helpers. Using ``start_new_session``
-	puts every descendant in its own process group so a timeout can kill the
-	entire tree via ``killpg`` rather than leaking orphan children that keep
-	the CI runner alive.
+	Previously this helper ran the poller with ``cwd=REPO_ROOT`` so the
+	script could find its sibling helper scripts under the real
+	coding-workflows checkout. That made the real working tree the
+	blast radius of any destructive code path the script happened to
+	execute — and in fact did so destructively at least twice (PRs
+	#917/#931), where a consumer-repo cleanup block gated on
+	``GITHUB_REPOSITORY`` fired while pytest was running from the real
+	checkout and deleted ~28 tracked source files. The fix in the
+	poller itself (switch to a git-remote-URL gate) closes that
+	specific hole, but sandboxing the subprocess here is the
+	defense-in-depth layer: any future destructive path, regardless of
+	how it is gated, can only ever touch files inside a throwaway
+	tempdir.
+
+	The poller spawns a tree of bash/sleep helpers. Using
+	``start_new_session`` puts every descendant in its own process
+	group so a timeout can kill the entire tree via ``killpg`` rather
+	than leaking orphan children that keep the CI runner alive.
+
+	The ``cwd`` argument is accepted for source-level compatibility
+	with earlier call sites but its value is ignored — the sandbox
+	directory always wins as the cwd. Tests that need to inspect
+	sandbox state after the run may pre-stage and pass a ``sandbox``
+	path; otherwise one is auto-created per call and removed when the
+	call returns.
 	"""
-	proc = subprocess.Popen(
-		cmd,
-		cwd=cwd,
-		env=env,
-		stdout=subprocess.PIPE,
-		stderr=subprocess.PIPE,
-		text=True,
-		start_new_session=True,
-	)
+	del cwd  # explicit: sandbox always overrides caller cwd
+	owns_sandbox = False
+	if sandbox is None:
+		sandbox = Path(tempfile.mkdtemp(prefix="poller-sandbox-"))
+		owns_sandbox = True
+		_make_poller_sandbox(sandbox)
 	try:
-		stdout, stderr = proc.communicate(timeout=POLLER_SUBPROCESS_TIMEOUT_SEC)
-	except subprocess.TimeoutExpired:
-		# Kill the entire process group, not just the direct child, so the
-		# bash -> bash -> sleep descendants observed in hung jobs get reaped.
-		try:
-			os.killpg(proc.pid, signal.SIGKILL)
-		except ProcessLookupError:
-			pass
-		try:
-			stdout, stderr = proc.communicate(timeout=5)
-		except subprocess.TimeoutExpired:
-			stdout, stderr = "", ""
-		raise AssertionError(
-			"poller did not exit within "
-			f"{POLLER_SUBPROCESS_TIMEOUT_SEC:.0f}s; process group killed\n"
-			f"stdout:\n{stdout}\n"
-			f"stderr:\n{stderr}"
+		cmd = _rewrite_cmd_for_sandbox(cmd, sandbox)
+		proc = subprocess.Popen(
+			cmd,
+			cwd=str(sandbox),
+			env=env,
+			stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE,
+			text=True,
+			start_new_session=True,
 		)
-	return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+		try:
+			stdout, stderr = proc.communicate(timeout=POLLER_SUBPROCESS_TIMEOUT_SEC)
+		except subprocess.TimeoutExpired:
+			# Kill the entire process group, not just the direct child, so the
+			# bash -> bash -> sleep descendants observed in hung jobs get reaped.
+			try:
+				os.killpg(proc.pid, signal.SIGKILL)
+			except ProcessLookupError:
+				pass
+			try:
+				stdout, stderr = proc.communicate(timeout=5)
+			except subprocess.TimeoutExpired:
+				stdout, stderr = "", ""
+			raise AssertionError(
+				"poller did not exit within "
+				f"{POLLER_SUBPROCESS_TIMEOUT_SEC:.0f}s; process group killed\n"
+				f"stdout:\n{stdout}\n"
+				f"stderr:\n{stderr}"
+			)
+		return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+	finally:
+		if owns_sandbox:
+			shutil.rmtree(sandbox, ignore_errors=True)
 
 
 def test_judge_reasoning_effort_logic_is_adaptive_after_cycle_three():
