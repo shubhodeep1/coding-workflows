@@ -34,6 +34,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:merged"]="5319e7"
 	["ai:review-blocked"]="e11d48"
 	["ai:implementation-failed"]="e11d48"
+	["ai:destructive-blocked"]="b60205"
 	["ai:closed"]="6a737d"
 	["ai:orchestrator-tracking"]="a2eeef"
 )
@@ -53,6 +54,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:merged"]="Linked PR merged"
 	["ai:review-blocked"]="PR review/autofix could not resolve all issues — needs human intervention"
 	["ai:implementation-failed"]="Implementation produced no changes despite an approved plan — will be re-issued"
+	["ai:destructive-blocked"]="Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review"
 	["ai:closed"]="Linked PR closed without merge"
 	["ai:orchestrator-tracking"]="Orchestrator project tracking issue"
 )
