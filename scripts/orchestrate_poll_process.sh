@@ -1558,24 +1558,37 @@ sync_default_into_integration_branch() {
   superseded_notified="$(jq -r '.sync.superseded_notified // false' "${STATE_FILE}")"
 
   if [ "${sync_status}" = "superseded-by-main" ]; then
-    if [ "${superseded_notified}" != "true" ]; then
-      runbook_url="$(sync_rebuild_runbook_url "${default_branch}")"
-      jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        '.sync = ((.sync // {}) + {
-          "status": "superseded-by-main",
-          "superseded_notified": true,
-          "last_sync_outcome": "superseded-skip",
-          "superseded_at": ((.sync.superseded_at // empty) // $now)
-        })' \
-        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_state_comment
-      post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}
+    evaluate_sync_superseded_by_main "${integration_branch}" "${default_branch}"
+    if [ "${SYNC_SUPERSEDED_BY_MAIN}" = "true" ]; then
+      if [ "${superseded_notified}" != "true" ]; then
+        runbook_url="$(sync_rebuild_runbook_url "${default_branch}")"
+        jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          '.sync = ((.sync // {}) + {
+            "status": "superseded-by-main",
+            "superseded_notified": true,
+            "last_sync_outcome": "superseded-skip",
+            "superseded_at": ((.sync.superseded_at // empty) // $now)
+          })' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment
+        post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}
 
 The integration branch \`${integration_branch}\` is marked as **superseded-by-main**. Sync is intentionally skipped in future poll cycles to avoid repeated conflict churn.
 
 Runbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
+      fi
+      return 0
     fi
-    return 0
+
+    jq '.sync = ((.sync // {}) + {
+      "status": "active",
+      "superseded_notified": false,
+      "superseded_reason": "",
+      "last_sync_outcome": "active",
+      "affected_paths": []
+    })' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    sync_status="active"
   fi
 
   if ! integration_branch_exists "${integration_branch}"; then
