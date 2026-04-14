@@ -4603,7 +4603,7 @@ json.dump(result, sys.stdout)
                   codex|codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
                 esac
                 case "${_rb_head_author_email}" in
-                  codex@users.noreply.github.com|*+github-actions\[bot\]@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
+                  codex@users.noreply.github.com|github-actions\[bot\]@users.noreply.github.com|*+github-actions\[bot\]@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
                 esac
                 ;;
             esac
