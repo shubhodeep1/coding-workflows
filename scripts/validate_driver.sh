@@ -251,14 +251,6 @@ fail_fast()
 
 run_preflight_checks()
 {
-	if ! command -v docker >/dev/null 2>&1; then
-		fail_fast "preflight_docker" "docker is not installed" "${COMPOSE_LOG}" "preflight"
-	fi
-
-	if ! docker compose version >/dev/null 2>&1; then
-		fail_fast "preflight_compose" "docker compose is not available" "${COMPOSE_LOG}" "preflight"
-	fi
-
 	if ! command -v python3 >/dev/null 2>&1; then
 		echo "python3 is required for validation result emission" >&2
 		RESULT="fail"
@@ -270,6 +262,14 @@ run_preflight_checks()
 		FINAL_EXIT_CODE=1
 		printf '%s\n' '{"result":"fail","phase":"preflight","total_tests":1,"passed_tests":0,"failed_tests":1,"failures":[{"test":"preflight_python3","error":"python3 is required for validation result emission","log_tail":""}],"duration_seconds":0}'
 		exit 1
+	fi
+
+	if ! command -v docker >/dev/null 2>&1; then
+		fail_fast "preflight_docker" "docker is not installed" "${COMPOSE_LOG}" "preflight"
+	fi
+
+	if ! docker compose version >/dev/null 2>&1; then
+		fail_fast "preflight_compose" "docker compose is not available" "${COMPOSE_LOG}" "preflight"
 	fi
 
 	if [ ! -f "${COMPOSE_FILE}" ]; then
