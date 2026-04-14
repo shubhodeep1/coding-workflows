@@ -290,8 +290,8 @@ jobs:
           printf '%s' "${TRACKING_BODY}" > "${RUNTIME_DIR}/tracking_body.txt"
           printf '%s' "${CLARIFICATION_COMMENT}" > "${RUNTIME_DIR}/clarification_comment.txt"
 
-          ISSUE_COMMENTS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100")"
-          printf '%s' "${ISSUE_COMMENTS_JSON}" | jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"
+          ISSUE_COMMENTS_JSON="$(gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100")"
+          printf '%s' "${ISSUE_COMMENTS_JSON}" | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"
 
       - name: Install Redis Python client
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis'
@@ -299,6 +299,14 @@ jobs:
           set -euo pipefail
           python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
 
+      - name: Restore semantic cache SQLite
+        if: vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        uses: actions/cache@v4
+        with:
+          path: /tmp/semantic_cache.sqlite3
+          key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL }}
+          restore-keys: |
+            semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-
       - name: Semantic cache lookup
         id: semantic_cache_lookup
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
@@ -527,6 +535,12 @@ jobs:
             echo "::warning::Semantic cache store command failed; continuing"
           fi
 
+      - name: Save semantic cache SQLite
+        if: success() && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        uses: actions/cache@v4
+        with:
+          path: /tmp/semantic_cache.sqlite3
+          key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL }}
       - name: Parse and post answer
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         env:

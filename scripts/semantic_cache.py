@@ -27,6 +27,7 @@ from typing import Any
 
 
 ALLOWED_BACKENDS = {"none", "redis", "sqlite-vec"}
+ALLOWED_PHASES = {"clarify", "orchestrate_clarify_respond"}
 DEFAULT_BACKEND = "none"
 DEFAULT_TTL_DAYS = 14
 DEFAULT_SIMILARITY_THRESHOLD = 0.92
@@ -116,6 +117,7 @@ class RuntimeConfig:
 	redis_url: str
 	sqlite_path: str
 	openrouter_api_key: str
+	redis_key_namespace: str
 
 
 def _load_runtime_config() -> RuntimeConfig:
@@ -145,6 +147,12 @@ def _load_runtime_config() -> RuntimeConfig:
 	redis_url = (os.getenv("SEMANTIC_CACHE_REDIS_URL") or "").strip()
 	sqlite_path = (os.getenv("SEMANTIC_CACHE_SQLITE_PATH") or DEFAULT_SQLITE_PATH).strip() or DEFAULT_SQLITE_PATH
 	openrouter_api_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+	# Redis key namespace: prefer explicit SEMANTIC_CACHE_REDIS_KEY_NAMESPACE; fall back to GITHUB_REPOSITORY lowercase with sanitization
+	redis_key_namespace = (os.getenv("SEMANTIC_CACHE_REDIS_KEY_NAMESPACE") or os.getenv("GITHUB_REPOSITORY") or "").strip().lower()
+	# Sanitize: replace invalid chars with underscore
+	if redis_key_namespace:
+		import re as _re
+		redis_key_namespace = _re.sub(r"[^a-z0-9_\-]", "_", redis_key_namespace)
 
 	return RuntimeConfig(
 		backend=backend,
@@ -155,6 +163,7 @@ def _load_runtime_config() -> RuntimeConfig:
 		redis_url=redis_url,
 		sqlite_path=sqlite_path,
 		openrouter_api_key=openrouter_api_key,
+		redis_key_namespace=redis_key_namespace,
 	)
 
 
@@ -305,10 +314,11 @@ class SQLiteVecBackend:
 
 
 class RedisBackend:
-	def __init__(self, redis_url: str) -> None:
+	def __init__(self, redis_url: str, namespace: str = "") -> None:
 		if not redis_url:
 			raise RuntimeError("SEMANTIC_CACHE_REDIS_URL is required when backend is redis")
 		self.redis_url = redis_url
+		self.namespace = namespace
 
 	def _client(self) -> Any:
 		try:
@@ -335,7 +345,8 @@ class RedisBackend:
 		now_epoch = int(time.time())
 		best_entry: CacheEntry | None = None
 		best_similarity = -1.0
-		for key in client.scan_iter(match=f"semantic_cache:{phase}:*"):
+		ns_prefix = f"{self.namespace}:" if self.namespace else ""
+		for key in client.scan_iter(match=f"{ns_prefix}semantic_cache:{phase}:*"):
 			raw = client.get(key)
 			if not raw:
 				continue
@@ -374,7 +385,8 @@ class RedisBackend:
 	def store(self, entry: CacheEntry) -> None:
 		client = self._client()
 		ttl_seconds = max(1, entry.expires_at_epoch - int(time.time()))
-		key = f"semantic_cache:{entry.phase}:{uuid.uuid4().hex}"
+		ns_prefix = f"{self.namespace}:" if self.namespace else ""
+		key = f"{ns_prefix}semantic_cache:{entry.phase}:{uuid.uuid4().hex}"
 		payload = {
 			"phase": entry.phase,
 			"original_issue_id": entry.original_issue_id,
@@ -393,7 +405,7 @@ def _resolve_backend(cfg: RuntimeConfig) -> Any:
 	if cfg.backend == "sqlite-vec":
 		return SQLiteVecBackend(cfg.sqlite_path)
 	if cfg.backend == "redis":
-		return RedisBackend(cfg.redis_url)
+		return RedisBackend(cfg.redis_url, cfg.redis_key_namespace)
 	raise RuntimeError(f"Unsupported backend: {cfg.backend}")
 
 
@@ -432,6 +444,16 @@ def run_lookup(args: argparse.Namespace) -> dict[str, Any]:
 				"phase": args.phase,
 				"hit": False,
 				"reason": "passthrough",
+			}
+
+		# Enforce strict phase scope (only clarify/orchestrate_clarify_respond allowed)
+		if args.phase not in ALLOWED_PHASES:
+			return {
+				"ok": True,
+				"backend": cfg.backend,
+				"phase": args.phase,
+				"hit": False,
+				"reason": "phase_not_allowed",
 			}
 
 		issue_body = _read_text_file(args.issue_body_file)
@@ -495,6 +517,16 @@ def run_store(args: argparse.Namespace) -> dict[str, Any]:
 				"reason": "passthrough",
 			}
 
+		# Enforce strict phase scope (only clarify/orchestrate_clarify_respond allowed)
+		if args.phase not in ALLOWED_PHASES:
+			return {
+				"ok": True,
+				"backend": cfg.backend,
+				"phase": args.phase,
+				"stored": False,
+				"reason": "phase_not_allowed",
+			}
+
 		response_text = _read_text_file(args.response_file)
 		if not response_text.strip():
 			return {
@@ -504,6 +536,7 @@ def run_store(args: argparse.Namespace) -> dict[str, Any]:
 				"stored": False,
 				"reason": "empty_response",
 			}
+
 
 		issue_body = _read_text_file(args.issue_body_file)
 		thread_history = _read_text_file(args.thread_history_file)

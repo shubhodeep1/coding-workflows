@@ -227,9 +227,10 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
-          # Fetch the 50 most recent comments in chronological order (asc) so
-          # the "Build context file" step can use them directly without re-sorting.
-          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+          # Fetch all comments in chronological order (asc) so semantic cache
+          # keys include full thread history on long issues.
+          gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+            | jq -c 'add // []' > "${ISSUE_COMMENTS_FILE}"
 
       - name: Set clarification phase label
         env:
@@ -426,6 +427,14 @@ jobs:
           set -euo pipefail
           python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
 
+      - name: Restore semantic cache SQLite
+        if: vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        uses: actions/cache@v4
+        with:
+          path: /tmp/semantic_cache.sqlite3
+          key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL }}
+          restore-keys: |
+            semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-
       - name: Semantic cache lookup
         id: semantic_cache_lookup
         env:
@@ -693,6 +702,12 @@ jobs:
             echo "::warning::Semantic cache store command failed; continuing"
           fi
 
+      - name: Save semantic cache SQLite
+        if: success() && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        uses: actions/cache@v4
+        with:
+          path: /tmp/semantic_cache.sqlite3
+          key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL }}
       - name: Write run summary
         if: always()
         env:
