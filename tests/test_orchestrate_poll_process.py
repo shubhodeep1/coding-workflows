@@ -70,6 +70,30 @@ def _make_poller_sandbox(target: Path) -> None:
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
+		["git", "-C", str(target), "config", "user.email", "sandbox@example.com"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "config", "user.name", "Poller Sandbox"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "checkout", "-B", "main"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "commit", "--allow-empty", "-m", "sandbox init", "--quiet"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
 		[
 			"git", "-C", str(target), "remote", "add",
 			"origin", "https://github.com/test-harness/poller-sandbox.git",
@@ -90,11 +114,18 @@ def _rewrite_cmd_for_sandbox(cmd: list, sandbox: Path) -> list:
 	they exec the sandbox's copy instead.
 	"""
 	rewritten: list = []
-	repo_root_str = str(REPO_ROOT)
+	repo_root_resolved = REPO_ROOT.resolve()
 	for arg in cmd:
-		if isinstance(arg, str) and arg.startswith(repo_root_str + os.sep):
-			rel = Path(arg).resolve().relative_to(REPO_ROOT)
-			rewritten.append(str(sandbox / rel))
+		if isinstance(arg, (str, os.PathLike)):
+			arg_str = os.fspath(arg)
+			if os.path.isabs(arg_str):
+				try:
+					rel = Path(arg_str).resolve().relative_to(repo_root_resolved)
+					rewritten.append(str(sandbox / rel))
+					continue
+				except (OSError, ValueError):
+					pass
+			rewritten.append(arg_str)
 		else:
 			rewritten.append(arg)
 	return rewritten
@@ -1224,6 +1255,48 @@ def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
 	assert second["merge_calls"] == []
 
 
+def test_superseded_state_reactivates_when_timeline_lookup_fails_for_other_issue():
+	state = _base_state(status="in_progress")
+	state["status"] = "done"
+	state["total_issues"] = 2
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_status"] = "superseded-by-main"
+	state["final_merge_pr"] = 300
+	state["sync"] = {
+		"status": "superseded-by-main",
+		"superseded_notified": True,
+		"last_sync_outcome": "superseded-skip",
+		"superseded_at": "2026-04-14T00:00:00Z",
+	}
+	state["waves"][0]["issues"].append({"id": "issue-2", "github_issue": 11, "status": "pending"})
+	state["issue_number_map"]["issue-2"] = 11
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 11: ["ai:implementing"]},
+		issue_linked_prs={11: 902},
+		prs=[
+			{
+				"number": 902,
+				"state": "open",
+				"merged": False,
+				"baseRefName": "main",
+				"headRefName": "ai/issue-11",
+				"mergeable": None,
+				"mergeable_state": "unknown",
+				"files": ["scripts/orchestrate_poll_process.sh"],
+			},
+		],
+		timeline_fail_for_issues=[10],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+	)
+	assert result["latest_state"]["sync"]["status"] == "conflict"
+	assert "Integration sync conflict" in "\n".join(c.get("body", "") for c in result["issues"]["192"]["comments"])
+	assert "keeping sync paused for now" not in (result["stdout"] + result["stderr"])
+
+
 def test_sync_conflict_comment_includes_paths_and_runbook_link():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "main"
@@ -1318,6 +1391,25 @@ def test_sync_conflict_posts_again_when_conflict_set_changes():
 	assert len(conflict_comments) == 2
 	assert "- `src/b.py`" in conflict_comments[-1]
 
+
+def test_sync_conflict_escalates_to_judge_immediately_after_retry_budget_exhausted():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 3
+	# Keep the dispatch timestamp inside cooldown so this test verifies that
+	# retry-budget exhaustion takes priority over cooldown deferral.
+	state["integration_conflict_dispatch_ts"] = 9999999999
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Integration judge invoked" in body for body in tracking_bodies)
+	assert result["review_dispatches"] == []
 
 def test_final_merge_conflict_sets_merge_conflict_status():
 	# Regression coverage for the self-healing flow introduced in PR #918
