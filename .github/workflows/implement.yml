@@ -2042,10 +2042,18 @@ jobs:
             echo "${FAILED_STEP_NAME}"
             echo
             echo "=== WORKING TREE CHANGES (git diff HEAD) ==="
-            [ -s "${DIFF_FILE}" ] && cat "${DIFF_FILE}" || echo "(no content)"
+            if [ -s "${DIFF_FILE}" ]; then
+              cat "${DIFF_FILE}"
+            else
+              echo "(no content)"
+            fi
             echo
             echo "=== UNTRACKED FILE CONTEXT ==="
-            [ -s "${UNTRACKED_CONTEXT_FILE}" ] && cat "${UNTRACKED_CONTEXT_FILE}" || echo "(no content)"
+            if [ -s "${UNTRACKED_CONTEXT_FILE}" ]; then
+              cat "${UNTRACKED_CONTEXT_FILE}"
+            else
+              echo "(no content)"
+            fi
             echo
             echo "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ==="
             cat "${CAPTURE_FILE}"
@@ -2060,6 +2068,10 @@ jobs:
           import json
           import re
           import sys
+
+          if len(sys.argv) < 4:
+              print("Usage: extract_last_json_with_key <source_file> <required_key> <output_file>", file=sys.stderr)
+              sys.exit(1)
 
           source_file = sys.argv[1]
           required_key = sys.argv[2]
@@ -2199,6 +2211,8 @@ jobs:
                   if [ -n "${FIX_NUM}" ]; then
                     CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${FIX_NUM}" '. + [$num]')"
                     local_to_issue_map="$(echo "${local_to_issue_map}" | jq --arg id "${FIX_ID}" --argjson num "${FIX_NUM}" '. + {($id): $num}')"
+                  else
+                    echo "::warning::Could not parse issue number from gh issue create output for local id ${FIX_ID}: ${FIX_URL}" >&2
                   fi
                 else
                   CREATE_ERR_MSG="$(cat "${CREATE_ERR_FILE}" 2>/dev/null || true)"
