@@ -3482,13 +3482,23 @@ PY
 )"
           write_standalone_state_json "${new_num}" "${new_state}" ""
           tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
-        else
-          echo "::warning::Standalone close_and_reissue failed to create replacement issue for #${issue_num}."
-          tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted close-and-reissue but could not create replacement issue." "ERROR"
-          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
-        fi
-        took_action="true"
-        ;;
+		else
+		  echo "::warning::Standalone close_and_reissue failed to create replacement issue for #${issue_num}."
+		  tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted close-and-reissue but could not create replacement issue." "ERROR"
+		  failed_reissue_state="$(python3 - "$updated_state" <<'PY'
+import json, sys, time
+state = json.loads(sys.argv[1])
+now = int(time.time())
+state["stall_recovery_count"] = int(state.get("stall_recovery_count", 0) or 0) + 1
+state["status_since_ts"] = now
+state["updated_ts"] = now
+print(json.dumps(state, separators=(",", ":")))
+PY
+)"
+		  write_standalone_state_json "${issue_num}" "${failed_reissue_state}" "${state_comment_id}"
+		fi
+		took_action="true"
+		;;
       skip)
         close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${recovery_count})."
         ensure_label_exists "ai:closed"

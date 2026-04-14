@@ -601,7 +601,7 @@ def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_planning_phase_
 	assert result[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:planning"][1]
 
 
-def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_legacy_defaults():
+def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_explicitly_enabled():
 	captured: dict[str, object] = {}
 	original_detect_stalls = orchestrate_lib.detect_stalls
 
