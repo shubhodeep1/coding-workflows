@@ -5,13 +5,24 @@
   "entry_id": "processed_command_834_4241000938_approved",
   "issue_number": 834,
   "metadata": {
+    "branch": "ai/issue-834",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "scripts/review_apply_fixes.sh",
+      "scripts/review_run_reviewers.sh"
+    ],
+    "issue_number": 834,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/834",
+    "pr_number": 863,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/863",
+    "run_attempt": "1",
+    "run_id": "24378413135",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24378413135"
   },
   "run_attempt": 1,
   "run_id": "24378413135",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-14T02:53:58Z",
+  "status": "completed",
+  "timestamp": "2026-04-14T03:04:51Z",
   "workflow": "implement"
 }
