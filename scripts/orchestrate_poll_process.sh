@@ -871,7 +871,7 @@ integration_branch_exists() {
   [ -n "${branch_name}" ] || return 1
   local branch_ref
   local gh_error
-  branch_ref="$(printf '%s' "${branch_name}" | jq -sRr @uri)"
+  branch_ref="$(printf '%s' "${branch_name}" | jq -sRr '@uri | gsub("%2F"; "/")')"
 
   if gh_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" 2>&1 >/dev/null)"; then
     return 0
@@ -906,9 +906,10 @@ resolve_branch_head_sha() {
   local head_sha
 
   [ -n "${branch_name}" ] || return 1
-  branch_ref="$(printf '%s' "${branch_name}" | jq -sRr @uri)"
+  branch_ref="$(printf '%s' "${branch_name}" | jq -sRr '@uri | gsub("%2F"; "/")')"
   head_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" --jq '.object.sha // empty' || echo "")"
   if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
+    echo "::debug::Failed to resolve head SHA for branch '${branch_name}'." >&2
     return 1
   fi
 
@@ -922,6 +923,7 @@ resolve_commit_tree_sha() {
   [ -n "${commit_sha}" ] || return 1
   tree_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/commits/${commit_sha}" --jq '.tree.sha // empty' || echo "")"
   if [ -z "${tree_sha}" ] || [ "${tree_sha}" = "null" ]; then
+    echo "::debug::Failed to resolve tree SHA for commit '${commit_sha}'." >&2
     return 1
   fi
 
@@ -991,7 +993,7 @@ set_integration_sync_superseded_active() {
       "integration_tree": $integration_tree,
       "default_tree": $default_tree
     }' \
-    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && [ -s "${STATE_FILE}.tmp" ] && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
 clear_integration_sync_superseded_active() {
@@ -1074,7 +1076,9 @@ sync_default_into_integration_branch() {
       "${INTEGRATION_SYNC_DEFAULT_TREE_SHA}"
     if [ "${superseded_was_active}" != "true" ]; then
       post_state_comment
-      post_tracking_comment "## ⚠️ Integration sync superseded by default branch\n\nAutomatic sync from \`${default_branch}\` into \`${integration_branch}\` is currently reporting merge conflicts, but both branches have identical trees. Sync retries and alerts are paused until branch trees diverge."
+      post_tracking_comment "## ⚠️ Integration sync superseded by default branch
+
+Automatic sync from \`${default_branch}\` into \`${integration_branch}\` is currently reporting merge conflicts, but both branches have identical trees. Sync retries and alerts are paused until branch trees diverge."
       tg_notify "⚠️ Sync superseded for #${TRACKING_NUM}: '${integration_branch}' currently matches '${default_branch}' tree; retry alerts paused."
     fi
     return 0
@@ -1090,7 +1094,9 @@ sync_default_into_integration_branch() {
     post_state_comment
   fi
 
-  post_tracking_comment "## ⚠️ Integration sync warning\n\nUnable to sync \`${default_branch}\` into \`${integration_branch}\`. This is usually a merge conflict. The project can continue, but final merge may require manual conflict resolution."
+  post_tracking_comment "## ⚠️ Integration sync warning
+
+Unable to sync \`${default_branch}\` into \`${integration_branch}\`. This is usually a merge conflict. The project can continue, but final merge may require manual conflict resolution."
   tg_notify "⚠️ Sync warning for #${TRACKING_NUM}: could not merge '${default_branch}' into '${integration_branch}'."
   return 0
 }
