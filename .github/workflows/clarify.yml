@@ -288,6 +288,8 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Build context file
+        env:
+          RECLARIFY_COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
           {
@@ -300,7 +302,7 @@ jobs:
 
           IS_RECLARIFY=false
           if [ "${{ github.event_name }}" = "issue_comment" ] \
-            && printf '%s\n' "${{ github.event.comment.body }}" | grep -qiE '^[[:space:]]*/reclarify([[:space:]]|$)'; then
+            && printf '%s\n' "${RECLARIFY_COMMENT_BODY}" | grep -qiE '^[[:space:]]*/reclarify([[:space:]]|$)'; then
             IS_RECLARIFY=true
           fi
 
@@ -342,7 +344,6 @@ jobs:
                   [ range(0; $answer_idx) as $i | .[$i] ]
                   | reverse
                   | map(select(
-                      ((.user.type // "") != "User") and
                       ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required|\\*\\*Q[0-9]+:|QUESTIONS:"; "i"))
                     ))
                   | if length > 0 then .[0].body // "" else "" end
