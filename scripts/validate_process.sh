@@ -605,6 +605,81 @@ PY
 	return 0
 }
 
+emit_harness_prompt_context()
+{
+	local prompt_budget_bytes="${1:-204800}"
+	local per_file_budget_bytes="${2:-200000}"
+	local included_bytes=0
+	local remaining_bytes=0
+	local harness_file=""
+	local harness_size_bytes=0
+	local line_count=0
+	local estimated_output_bytes=0
+
+	echo "=== EXISTING HARNESS FILES ==="
+
+	if [ ! -d validation ]; then
+		echo "(validation/ directory not found)"
+		echo
+		return 0
+	fi
+
+	while IFS= read -r -d '' harness_file; do
+		if [ -s "${harness_file}" ] && ! grep -Iq . "${harness_file}"; then
+			echo "----- ${harness_file} (skipped: non-text file) -----"
+			echo
+			continue
+		fi
+
+		harness_size_bytes="$(wc -c < "${harness_file}" 2>/dev/null | tr -d ' ' || true)"
+		if ! [[ "${harness_size_bytes}" =~ ^[0-9]+$ ]]; then
+			echo "----- ${harness_file} (skipped: could not determine file size) -----"
+			echo
+			continue
+		fi
+		if [ "${per_file_budget_bytes}" -gt 0 ] && [ "${harness_size_bytes}" -gt "${per_file_budget_bytes}" ]; then
+			echo "----- ${harness_file} (skipped: file too large for per-file prompt budget) -----"
+			echo
+			continue
+		fi
+
+		line_count="$(wc -l < "${harness_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+		if ! [[ "${line_count}" =~ ^[0-9]+$ ]]; then
+			line_count=0
+		fi
+		estimated_output_bytes=$((harness_size_bytes + (line_count * 12)))
+
+		remaining_bytes=$((prompt_budget_bytes - included_bytes))
+		if [ "${remaining_bytes}" -le 0 ]; then
+			echo "----- (Remaining harness files skipped: global prompt budget exhausted) -----"
+			echo
+			break
+		fi
+		if [ "${estimated_output_bytes}" -gt "${prompt_budget_bytes}" ]; then
+			echo "----- ${harness_file} (skipped: file too large for global prompt budget) -----"
+			echo
+			continue
+		fi
+		if [ "${estimated_output_bytes}" -gt "${remaining_bytes}" ]; then
+			echo "----- ${harness_file} (skipped: global prompt budget would be exceeded) -----"
+			echo
+			continue
+		fi
+
+		echo "----- ${harness_file} (line-numbered) -----"
+		if nl -ba "${harness_file}" 2>/dev/null; then
+			echo
+			included_bytes=$((included_bytes + estimated_output_bytes))
+		elif cat "${harness_file}" 2>/dev/null; then
+			echo
+			included_bytes=$((included_bytes + harness_size_bytes))
+		else
+			echo "(skipped: failed to read file contents)"
+			echo
+		fi
+	done < <(find validation -type f -not -path 'validation/logs/*' -print0 | sort -z)
+}
+
 trap cleanup_runtime_containers EXIT
 
 
@@ -900,23 +975,7 @@ fi
     echo
   fi
   if [ "${HARNESS_MODE}" = "fix" ]; then
-    echo "=== EXISTING HARNESS FILES ==="
-    while IFS= read -r harness_file; do
-      harness_size_bytes="$(wc -c < "${harness_file}" | tr -d ' ')"
-      if [ "${harness_size_bytes}" -gt 200000 ]; then
-        echo "----- ${harness_file} (skipped: file too large for prompt context) -----"
-        echo
-        continue
-      fi
-      if [ -s "${harness_file}" ] && ! grep -Iq . "${harness_file}"; then
-        echo "----- ${harness_file} (skipped: non-text file) -----"
-        echo
-        continue
-      fi
-      echo "----- ${harness_file} -----"
-      cat "${harness_file}"
-      echo
-    done < <(find validation -type f -not -path 'validation/logs/*' | sort)
+    emit_harness_prompt_context
   fi
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
@@ -1292,6 +1351,7 @@ fi
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
   echo
+  emit_harness_prompt_context
   echo "=== STRUCTURED VALIDATION FAILURE JSON ==="
   cat "${VALIDATION_RESULT_FILE}"
   echo
