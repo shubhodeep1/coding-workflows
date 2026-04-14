@@ -325,6 +325,10 @@ class RedisBackend:
 	def __init__(self, redis_url: str, namespace: str = "") -> None:
 		if not redis_url:
 			raise RuntimeError("SEMANTIC_CACHE_REDIS_URL is required when backend is redis")
+		try:
+			import redis as _redis  # type: ignore  # noqa: F401
+		except ImportError as exc:
+			raise RuntimeError("redis backend selected but 'redis' package is not installed") from exc
 		self.redis_url = redis_url
 		self.namespace = namespace
 

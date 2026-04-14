@@ -174,13 +174,13 @@ jobs:
           BATCH_ARTIFACT_NAME="workflow-log-analysis-batch-state"
           BATCH_STATE_FILE="workflow_log_analysis_batch_state.json"
 
-          if ARTIFACTS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100")"; then
+          if ARTIFACTS_JSON="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" 2>/dev/null)"; then
             :
           else
-            ARTIFACTS_JSON='{}'
+            ARTIFACTS_JSON=''
           fi
           if [ -n "${ARTIFACTS_JSON}" ]; then
-            ARTIFACT_ID="$(printf '%s' "${ARTIFACTS_JSON}" | jq -r --arg name "${BATCH_ARTIFACT_NAME}" --arg branch "${GITHUB_REF_NAME}" '.artifacts // [] | map(select(.name == $name and .expired == false and (((.workflow_run // {}) | .head_branch // "") == $branch))) | sort_by(.created_at) | last | .id // empty' 2>/dev/null || true)"
+            ARTIFACT_ID="$(printf '%s\n' "${ARTIFACTS_JSON}" | jq -rs --arg name "${BATCH_ARTIFACT_NAME}" --arg branch "${GITHUB_REF_NAME}" '[.[].artifacts[]?] | map(select(.name == $name and .expired == false and (((.workflow_run // {}) | .head_branch // "") == $branch))) | sort_by(.created_at) | last | .id // empty' 2>/dev/null || true)"
             if [ -n "${ARTIFACT_ID}" ]; then
               TMP_DIR="$(mktemp -d)"
               if gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "${TMP_DIR}/batch-state.zip" 2>/dev/null; then
