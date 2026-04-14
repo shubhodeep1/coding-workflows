@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No Q<ID> items were asked in clarify; `/answer [auto-answered-by-clarify]` means proceed with planning as-is.\n- Scope interpreted as: add deterministic regression tests in `tests/test_orchestrate_poll_process.py`, and include any minimal hardening fixes needed so those tests pass.\n\nCodebase conflicts detected:\n- The issue refers to \u201csuperseded sync\u201d state, but current poller code has no `superseded` state/field in `scripts/orchestrate_poll_process.sh`; it currently only emits repeated \u201cIntegration sync warning\u201d comments.\n- Current review-blocked follow-up PR path uses `BASE_REF` from original PR metadata (and defaults to `main`), which conflicts with the requested integration-base guard.\n\nImplementation plan\n\n1. Files likely to change\n- `tests/test_orchestrate_poll_process.py`\n- `scripts/orchestrate_poll_process.sh` (guard + dedupe behavior if not already present)\n- `scripts/orchestrate_lib.py` (only if state defaulting/back-compat helpers are needed)\n\n2. Functions/modules to implement or update\n- Test harness in `tests/test_orchestrate_poll_process.py`:\n- `_run_poller` (extend mocks for deterministic follow-up PR creation assertions without real git side effects)\n- Add 3 regression tests:\n- superseded sync dedupe + persistence across cycles\n- review-blocked merged-PR follow-up base guard (must not target `main` in integration context)\n- missing/invalid integration branch refusal path (deterministic + observable)\n- Poller hardening points in `scripts/orchestrate_poll_process.sh`:\n- `sync_default_into_integration_branch` (persisted dedupe state + one-time warning/comment behavior)\n- review-blocked `fix` path around follow-up PR creation (base retarget/guard + refusal handling)\n\n3. Data structures affected\n- `ORCHESTRATOR_STATE_V1` payload in tracking comments:\n- add/read persistent sync-dedupe marker/state (name to match hardening implementation)\n- preserve backward compatibility when field is absent\n- Test mock store (`gh_store.json`) in `_run_poller`:\n- ensure created follow-up PR metadata is inspectable (`baseRefName`, `headRefName`)\n- optionally track mock git call intent if needed for deterministic assertions\n\n4. API/interface changes\n- External APIs: none new.\n- Behavioral contract changes:\n- merged review-blocked follow-up PRs in orchestrator integration context must not use `main` as base\n- when integration branch is missing/invalid for this guard path, refuse PR creation explicitly (comment/log/state), with no silent fallback to `main`\n\n5. Risks and edge cases\n- Avoid running real git mutations in tests; keep flow deterministic via mocks.\n- Keep dedupe state durable across poll cycles/restarts (state-driven, not process-memory-driven).\n- Distinguish true missing branch from transient GitHub API errors in guard behavior.\n- Ensure guard does not alter normal open-PR fix flow (only merged follow-up path).\n- Keep older state comments compatible (missing new fields must not break parsing).\n\n6. Testing considerations\n- Use a two-cycle test for sync dedupe:\n- cycle 1: conflict triggers one warning/comment and persisted dedupe state\n- cycle 2: same condition with persisted state yields no duplicate warning/comment\n- assert both call intent and persisted state values\n- Use merged review-blocked PR scenario with integration branch context:\n- assert follow-up PR base is integration branch, or assert explicit refusal path\n- for missing/invalid integration branch:\n- assert no PR to `main`, deterministic refusal signal in comments/logs/state\n- Reuse existing representative pattern style from:\n- `test_complete_verdict_enters_validation_mode_when_enabled`\n- `test_standalone_conflict_sweep_*` tests (call-intent assertions via mocked store)\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "247217c09891ee93b3cd5b2a84e19000596026d34a4bb5280bd8cfb7f498b587",
+  "lineage": {
+    "issue_number": 924,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24389284678",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24389284678",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/924"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414084850_6d70164d6d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 924,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24389284678"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #924",
+  "timestamps": {
+    "created_at": "2026-04-14T08:48:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
