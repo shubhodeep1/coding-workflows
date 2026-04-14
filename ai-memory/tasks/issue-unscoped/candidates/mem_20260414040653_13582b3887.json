@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/test-and-mark-stable.yml\n.github/workflows/test-and-mark-stable.yml**\n/tmp/codex-pr-24380115152-1-11348/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\n`.github/workflows/test-and-mark-stable.yml`\n\nLow confidence files (mentioned by 1 reviewer):\n`.github/workflows/test-and-mark-",
+  "fingerprint": "bed4af9e43daca11d109dd0629f8b855cb07512851a4902d6a3c594accc6bd1d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 888,
+    "run_id": "24380115152",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24380115152",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414040653_13582b3887",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 888,
+    "run_id": "24380115152"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T04:06:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
