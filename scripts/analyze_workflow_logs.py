@@ -1095,6 +1095,33 @@ def main(argv: list[str] | None = None) -> int:
 	now = datetime.now(timezone.utc)
 
 	def run_sync(reason: str) -> int:
+		state_for_fallback = _load_batch_state(state_path) if state_path is not None else None
+		state_for_fallback_status = str((state_for_fallback or {}).get("status") or "").strip().lower()
+		if state_path is not None and state_for_fallback is not None and state_for_fallback_status in PENDING_BATCH_STATUSES:
+			fallback_batch_id = str(state_for_fallback.get("batch_id") or "").strip()
+			if fallback_batch_id:
+				fallback_state = _build_batch_state(
+					batch_id=fallback_batch_id,
+					status="fallback_sync",
+					provider_hint=provider_hint,
+					model=model,
+					poll_timeout_hours=int(args.batch_poll_timeout_hours),
+					submitted_at=str(state_for_fallback.get("submitted_at") or now.isoformat()),
+					last_polled_at=now.isoformat(),
+					fallback_reason=reason,
+				)
+				try:
+					_write_json_atomic(state_path, fallback_state)
+				except OSError as exc:
+					_batch_log(
+						"batch_fallback",
+						severity="WARNING",
+						reason=f"fallback_state_write_failed:{exc}",
+						provider=provider_hint,
+						model=model,
+						batch_id=fallback_batch_id,
+					)
+
 		_batch_log(
 			"batch_fallback",
 			severity="WARNING",

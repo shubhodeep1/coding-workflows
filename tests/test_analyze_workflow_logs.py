@@ -623,6 +623,9 @@ def test_main_batch_poll_timeout_falls_back_to_sync():
 		report_path = output_dir / "workflow-optimization-2026-04-11.md"
 		assert report_path.exists()
 		assert "sync-fallback" in report_path.read_text(encoding="utf-8")
+		updated_state = json.loads(state_file.read_text(encoding="utf-8"))
+		assert updated_state["status"] == "fallback_sync"
+		assert updated_state["fallback_reason"] == "batch_poll_timeout"
 
 
 def test_load_input_data_rejects_malformed_json_input():

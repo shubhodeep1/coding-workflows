@@ -173,7 +173,11 @@ jobs:
           BATCH_ARTIFACT_NAME="workflow-log-analysis-batch-state"
           BATCH_STATE_FILE="workflow_log_analysis_batch_state.json"
 
-          ARTIFACTS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" 2>/dev/null || echo '{}')"
+          if ARTIFACTS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" 2>/dev/null)"; then
+            :
+          else
+            ARTIFACTS_JSON='{}'
+          fi
           if [ -n "${ARTIFACTS_JSON}" ]; then
             ARTIFACT_ID="$(printf '%s' "${ARTIFACTS_JSON}" | jq -r --arg name "${BATCH_ARTIFACT_NAME}" --arg branch "${GITHUB_REF_NAME}" '.artifacts // [] | map(select(.name == $name and .expired == false and (((.workflow_run // {}) | .head_branch // "") == $branch))) | sort_by(.created_at) | last | .id // empty')"
             if [ -n "${ARTIFACT_ID}" ]; then
@@ -208,10 +212,7 @@ jobs:
             echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
             echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
             if [ -f "${BATCH_STATE_FILE}" ]; then
-              BATCH_STATUS="$(jq -r '.status // ""' "${BATCH_STATE_FILE}" 2>/dev/null || echo "")"
-              if [ "${BATCH_STATUS}" = "completed" ]; then
-                rm -f "${BATCH_STATE_FILE}"
-              fi
+              echo "batch_state_file=${BATCH_STATE_FILE}" >> "$GITHUB_OUTPUT"
             fi
             exit 0
           fi
@@ -230,8 +231,8 @@ jobs:
           echo "::error::Analyzer failed with exit code ${ANALYZE_EXIT}."
           exit "${ANALYZE_EXIT}"
 
-      - name: Upload pending batch state artifact
-        if: steps.analyze.outputs.analysis_status == 'pending'
+      - name: Upload batch state artifact
+        if: steps.analyze.outputs.batch_state_file != ''
         uses: actions/upload-artifact@v4
         with:
           name: workflow-log-analysis-batch-state
