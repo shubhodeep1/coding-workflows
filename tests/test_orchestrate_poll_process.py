@@ -1201,6 +1201,26 @@ def test_sync_conflict_posts_again_when_conflict_set_changes():
 	assert "- `src/b.py`" in conflict_comments[-1]
 
 
+def test_sync_conflict_escalates_to_judge_immediately_after_retry_budget_exhausted():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 3
+	# Keep the dispatch timestamp inside cooldown so this test verifies that
+	# retry-budget exhaustion takes priority over cooldown deferral.
+	state["integration_conflict_dispatch_ts"] = 9999999999
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Integration judge invoked" in body for body in tracking_bodies)
+	assert result["review_dispatches"] == []
+
+
 def test_final_merge_conflict_sets_merge_conflict_status():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
@@ -1222,9 +1242,11 @@ def test_final_merge_conflict_sets_merge_conflict_status():
 		prs=prs,
 		existing_branches=["main", "orchestrator/project-192"],
 	)
-	assert result["latest_state"]["status"] == "merge_conflict"
-	assert result["latest_state"]["final_merge_status"] == "conflict"
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["final_merge_status"] == "pending"
 	assert result["latest_state"]["final_merge_pr"] == 351
+	assert len(result["review_dispatches"]) == 1
+	assert result["review_dispatches"][0]["pr_number"] == 351
 
 
 def test_final_merge_waits_for_required_checks_before_merging():

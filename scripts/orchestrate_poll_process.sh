@@ -1439,13 +1439,6 @@ heal_integration_branch_conflict() {
      .integration_sync_last_error = $err' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-  # Cooldown gate: don't re-dispatch resolver too frequently.
-  local elapsed=$((now_ts - last_ts))
-  if [ "${last_ts}" -gt 0 ] && [ "${elapsed}" -lt "${CONFLICT_DISPATCH_COOLDOWN_SECS}" ]; then
-    echo "  [integration-heal] Dispatch cooldown active (${elapsed}s < ${CONFLICT_DISPATCH_COOLDOWN_SECS}s); deferring resolver dispatch for PR #${final_pr}."
-    return 0
-  fi
-
   # Circuit breaker: after MAX retries, escalate to judge instead of
   # dispatching one more resolver run.
   if [ "${unresolved_ticks}" -ge "${INTEGRATION_CONFLICT_MAX_RETRIES}" ]; then
@@ -1471,6 +1464,13 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did n
 Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could not be made mergeable after ${INTEGRATION_CONFLICT_MAX_RETRIES} automated attempts AND a judge escalation that itself failed. Manual intervention required."
     tg_notify "❌ Integration self-healing exhausted for #${TRACKING_NUM} (PR #${final_pr}). Manual intervention required."
     return 1
+  fi
+
+  # Cooldown gate: don't re-dispatch resolver too frequently.
+  local elapsed=$((now_ts - last_ts))
+  if [ "${last_ts}" -gt 0 ] && [ "${elapsed}" -lt "${CONFLICT_DISPATCH_COOLDOWN_SECS}" ]; then
+    echo "  [integration-heal] Dispatch cooldown active (${elapsed}s < ${CONFLICT_DISPATCH_COOLDOWN_SECS}s); deferring resolver dispatch for PR #${final_pr}."
+    return 0
   fi
 
   # Dispatch the existing review/autofix workflow against the final PR.
