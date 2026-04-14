@@ -316,6 +316,17 @@ jobs:
               echo "prompts/serena-efficiency-block.txt" >> "${FETCHED_MANIFEST}"
             fi
           fi
+          if [ ! -f prompts/mode-implement-diagnose.txt ]; then
+            if ! _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=${script_ref}"; then
+              echo "::warning::mode-implement-diagnose.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=main"
+            fi
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "prompts/mode-implement-diagnose.txt" >> "${FETCHED_MANIFEST}"
+            fi
+          fi
 
           # Fetch canonical agents.md from coding-workflows into the runtime
           # directory. This is combined with the caller repo's own agents.md
