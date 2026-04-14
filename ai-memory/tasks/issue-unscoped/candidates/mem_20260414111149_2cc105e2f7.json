@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\nscripts/validate_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/validate.yml\n/tmp/codex-pr-24395085434-1-26328/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\n`.github/workflows/validate.yml`",
+  "fingerprint": "10d9874626f0499061bed1d5cb2e325b7868886d7afab826e3daeca08c1b9f95",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 908,
+    "run_id": "24395085434",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24395085434",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414111149_2cc105e2f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 908,
+    "run_id": "24395085434"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T11:11:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
