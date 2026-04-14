@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` items were asked in Clarify.\n- Interpreted answer `/answer [auto-answered-by-clarify]` as: proceed with the issue requirements unchanged.\n\nRepresentative pattern to follow:\n- `scripts/orchestrate_poll_process.sh` `finalize_integration_merge_if_needed()` for state update + tracking comment + Telegram sequencing.\n- `scripts/orchestrate_poll_process.sh` `sync_validation_fix_issues_from_comments()` for durable dedupe behavior stored in state.\n\nFiles likely to change:\n1. `scripts/orchestrate_poll_process.sh`\n2. `tests/test_orchestrate_poll_process.py`\n3. `docs/orchestrator-integration-branch-rebuild-runbook.md` (new)\n4. `README.md`\n\nImplementation plan:\n1. Add pre-merge superseded detection in `sync_default_into_integration_branch()`.\n- Add helper logic to evaluate `superseded-by-main` before calling `POST /repos/{repo}/merges`.\n- Determine \u201call tracked child PRs terminal\u201d from orchestrator wave/issue state (`merged` or `closed`).\n- Build affected-path evidence from linked child PRs (existing timeline lookup pattern: `GET /repos/{repo}/issues/{issue}/timeline`; PR file list if needed: `GET /repos/{repo}/pulls/{pr}/files`).\n- Evaluate content equivalence with git analysis (including `git merge-tree --write-tree` conflict output and integration-only delta checks on affected paths).\n- If confidence is insufficient, do not mark superseded; keep current retry/conflict behavior.\n\n2. Persist durable sync/superseded state in tracking JSON comment.\n- Add additive state fields (backward-compatible), for example under `.sync`:\n- `status` (`active|conflict|superseded-by-main`)\n- `superseded_at`, `superseded_reason`\n- `last_conflict_paths`, `last_conflict_fingerprint`\n- `last_sync_outcome`\n- Write fields via existing jq update pattern and publish through `post_state_comment()`.\n\n3. Enforce one-time superseded operator messaging.\n- When transition to `superseded-by-main` occurs, post exactly one tracking comment explaining intentional sync skip.\n- Never send recurring Telegram warnings for this superseded condition.\n- Future poll cycles short-circuit sync attempts based on persisted state.\n\n4. Improve real-conflict messaging and dedupe spam.\n- For true unresolved 409 conflicts, parse conflict path list from `git merge-tree` output.\n- Include conflict paths and a rebuild runbook link in tracking comment.\n- Compute/store a stable fingerprint of conflict paths; if unchanged from prior cycle, do not re-post comment or Telegram.\n- Keep non-conflict API failures as transient warnings with retry (existing behavior unchanged).\n\n5. Make final merge path superseded-aware (to avoid later re-conflict loops).\n- In `finalize_integration_merge_if_needed()`, if state indicates `superseded-by-main`, skip final merge attempt and treat as intentionally resolved for orchestrator progression.\n- Persist final merge metadata accordingly (additive status value) without breaking existing statuses.\n\n6. Add runbook documentation and README linkage.\n- Create a runbook under `docs/` for rebuilding integration branches after divergence/conflict.\n- Link that runbook from README orchestrator section where integration-branch/final-merge conflict behavior is documented.\n\nData structures affected:\n- Orchestrator tracking state JSON (`ORCHESTRATOR_STATE_V1` comment payload) gains additive sync metadata fields.\n- No schema-breaking rename/removal of existing fields.\n\nAPI/interface changes:\n- GitHub API usage remains existing + targeted additions:\n- `POST /repos/{repo}/merges` (existing)\n- `GET /repos/{repo}/issues/{issue}/timeline` (existing pattern, reused)\n- `GET /repos/{repo}/pulls/{pr}/files` (new, if used for affected-path proof)\n- Tracking comment content changes (now includes conflict paths + runbook link).\n- No new required env vars (prefer fixed repo-relative runbook path to keep compatibility).\n\nPotential risks and edge cases:\n- False-positive superseded detection if equivalence checks are too loose; mitigate by conservative gating and fallback to conflict path.\n- `git merge-tree` output format variation across git versions; parser should accept multiple conflict line shapes.\n- Large conflict path sets can exceed comment readability; cap displayed paths and summarize overflow count.\n- Closed (unmerged) child PRs may be terminal but not integrated; equivalence check must remain mandatory.\n\nTesting considerations:\n1. Extend `tests/test_orchestrate_poll_process.py` to cover:\n- Superseded transition sets state and posts one comment only.\n- Repeated polls with superseded state skip sync and produce no repeated Telegram/comment.\n- True conflict includes parsed path list + runbook link.\n- Identical conflict set does not re-post warning.\n- Changed conflict set re-posts warning once.\n- Non-409 merge API failure remains transient retry path.\n2. Update test harness mocks to support deterministic merge-tree/conflict-path scenarios (and repeat-cycle assertions on persisted state/comments).\n3. Keep existing final-merge and validation tests passing to ensure no regression.\n\nFactual conflicts found between issue and current codebase:\n- Current `sync_default_into_integration_branch()` has no superseded detection and no persistent dedupe state.\n- Current 409 handling posts warning comment + Telegram every cycle (spam) and does not include conflict path list.\n- No existing integration-branch rebuild runbook document/link currently present under `docs/`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "62e6b10d30b0fcfc56499de3b3bc670dba56080601e4292e9b804ccacaaadc89",
+  "lineage": {
+    "issue_number": 870,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24379220146",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24379220146",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/870"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414033111_47edc5a149",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 870,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24379220146"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #870",
+  "timestamps": {
+    "created_at": "2026-04-14T03:31:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
