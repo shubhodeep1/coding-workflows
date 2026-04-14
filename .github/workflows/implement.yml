@@ -1791,17 +1791,6 @@ jobs:
           fi
           echo "failed_step_name=${FAILED_STEP_NAME}" >> "$GITHUB_OUTPUT"
 
-          is_post_codex_failure=false
-          case "${FAILED_STEP_NAME}" in
-            "Write run summary"|"Log token usage and Serena stats"|"Generate Serena efficiency report"|"Create implementation branch"|"Validate syntax of changed files"|"Protect workflow files from implementation edits"|"Commit changes"|"Handle no-op implementation"|"Push branch"|"Create Pull Request"|"Refetch memory helpers after commit cleanup"|"Collect PR metadata and changed files"|"Record implementation candidate"|"Complete /approved processed command"|"Finalize implementation task lineage as in_progress"|"Generate AI issue summary for PR comment"|"Post AI issue summary as first PR comment"|"Mark issue done after implementation PR"|"Record implementation run success event")
-              is_post_codex_failure=true
-              ;;
-          esac
-
-          if [ "${is_post_codex_failure}" != "true" ]; then
-            exit 0
-          fi
-
           CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
           if [ ! -s "${CAPTURE_FILE}" ]; then
             exit 0
@@ -2019,9 +2008,26 @@ jobs:
             echo "::warning::Diagnose prompt render assets unavailable; using raw prompt."
           fi
 
+          DIAGNOSE_STATIC_PREFIX_FILE="${RUNTIME_DIR}/implement_diagnose_static_prefix.txt"
+          if [ -f ./pre_assembled_static.txt ]; then
+            cp ./pre_assembled_static.txt "${DIAGNOSE_STATIC_PREFIX_FILE}" || true
+          fi
+          if [ ! -s "${DIAGNOSE_STATIC_PREFIX_FILE}" ]; then
+            cat > "${DIAGNOSE_STATIC_PREFIX_FILE}" <<'EOF'
+          You are diagnosing an AI implementation workflow failure.
+          Return exactly one JSON object and no surrounding prose.
+          The JSON object must use these keys:
+          - status (needs_fixes|harness_error|infeasible)
+          - diagnosis
+          - fix_issues
+          - harness_fixes
+          Keep the response focused on actionable diagnosis grounded in the supplied evidence.
+          EOF
+          fi
+
           {
-            if [ -f ./pre_assembled_static.txt ]; then
-              cat ./pre_assembled_static.txt
+            if [ -s "${DIAGNOSE_STATIC_PREFIX_FILE}" ]; then
+              cat "${DIAGNOSE_STATIC_PREFIX_FILE}"
               echo
             fi
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_IMPLEMENT_DIAGNOSE}"
