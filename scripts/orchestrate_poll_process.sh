@@ -539,6 +539,8 @@ validation_fix_issue_has_merged_pr_evidence() {
   local pr_url
   local pr_json
   local lookup_failed="false"
+  local github_api_base="${GITHUB_API_URL:-https://api.github.com}"
+  local pr_api_prefix="${github_api_base}/repos/${GITHUB_REPOSITORY}/pulls/"
 
   if ! timeline_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null)"; then
     return 2
@@ -555,6 +557,9 @@ validation_fix_issue_has_merged_pr_evidence() {
 
   while IFS= read -r pr_url; do
     [ -n "${pr_url}" ] || continue
+    if [[ "${pr_url}" != "${pr_api_prefix}"* ]]; then
+      continue
+    fi
 
     if ! pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)"; then
       lookup_failed="true"
