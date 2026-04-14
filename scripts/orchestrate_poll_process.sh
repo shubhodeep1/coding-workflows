@@ -4307,6 +4307,24 @@ ${PR_DIFF}
       echo "another corrective action. The wave CANNOT complete on its own."
     fi
     echo
+    echo "=== PRIOR JUDGE DECISIONS (last 5) ==="
+    JUDGE_HISTORY_LINES="$(jq -r '
+      (.judge_history // []
+       | if type == "array" then . else [] end
+       | .[-5:]
+       | .[]
+       | "- cycle " + ((.cycle // "unknown") | tostring)
+         + " | action: " + ((.action // "unknown") | tostring)
+         + " | timestamp: " + ((.timestamp // "unknown") | tostring)
+         + " | justification: " + ((.justification // "" | tostring | gsub("[\\r\\n]+"; " ")))
+      )
+    ' "${STATE_FILE}")"
+    if [ -n "${JUDGE_HISTORY_LINES}" ]; then
+      printf '%s\n' "${JUDGE_HISTORY_LINES}"
+    else
+      echo "- none"
+    fi
+    echo
     echo "IMPORTANT: If current wave < total waves, the project is NOT complete."
     echo "Return in_progress to advance to the next wave."
   } > "${JUDGE_PROMPT_FILE}"
@@ -4417,6 +4435,15 @@ PRs to revert: ${REVERT_COUNT}"
     gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
       -f body="⚠️ Judge verdict overridden: \`complete\` → \`in_progress\` because wave ${CURRENT_WAVE}/${TOTAL_WAVES} is not the final wave. Advancing to next wave." >/dev/null
   fi
+
+  JUDGE_HISTORY_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq --argjson cycle "$((JUDGE_CYCLE + 1))" \
+    --arg action "${JUDGE_STATUS}" \
+    --arg justification "${JUDGE_JUSTIFICATION}" \
+    --arg timestamp "${JUDGE_HISTORY_TIMESTAMP}" \
+    '.judge_history = ((.judge_history // []) | if type == "array" then . else [] end) |
+     .judge_history += [{"cycle": $cycle, "action": $action, "justification": $justification, "timestamp": $timestamp}]' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
   # ---------------------------------------------------------------
   # Handle judge verdict
