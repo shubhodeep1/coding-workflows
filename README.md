@@ -934,6 +934,7 @@ This phase starts only after the orchestrator judge returns `complete`.
 - Non-terminal failure: `needs_fixes` diagnosis with fix-up issues (enters the fix/revalidate loop).
 - Terminal failure: validation dispatch failure, harness error, infeasible diagnosis, unknown diagnosis payload, closed fix-up issues, or cycle limit exceeded.
 - Terminal failure label: `ai:validation-failed`.
+- Managed artifact contract: startup checks now enforce only managed artifacts (`scripts/validate_process.sh`, optional `scripts/validate_driver.sh`) and the transient `validation/validate.sh` rule. Repos may keep unrelated consumer scripts such as `scripts/validate_local.sh` without failing validation.
 
 ### Manual Reset: `/revalidate`
 

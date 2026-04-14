@@ -849,6 +849,67 @@ PY
 	return 0
 }
 
+enforce_managed_validation_artifact_contract()
+{
+	if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+		return 0
+	fi
+
+	local canonical_path
+	local canonical_hash
+	local tracked_script
+	local tracked_hash
+	local has_violation=false
+	local -a canonical_paths
+	local -a tracked_scripts
+	local -a violations
+
+	canonical_paths=(
+		"scripts/validate_process.sh"
+		"scripts/validate_driver.sh"
+	)
+
+	if git ls-files --error-unmatch -- validation/validate.sh >/dev/null 2>&1; then
+		violations+=("validation/validate.sh is tracked. validation/ artifacts must remain transient and untracked.")
+		has_violation=true
+	fi
+
+	mapfile -t tracked_scripts < <(git ls-files -- 'scripts/*.sh' 2>/dev/null || true)
+
+	for canonical_path in "${canonical_paths[@]}"; do
+		if [ ! -f "${canonical_path}" ] || [ -L "${canonical_path}" ]; then
+			continue
+		fi
+
+		if ! canonical_hash="$(git hash-object -- "${canonical_path}" 2>/dev/null)"; then
+			continue
+		fi
+
+		for tracked_script in "${tracked_scripts[@]}"; do
+			if [ -z "${tracked_script}" ] || [ "${tracked_script}" = "${canonical_path}" ] || [ ! -f "${tracked_script}" ] || [ -L "${tracked_script}" ]; then
+				continue
+			fi
+
+			if ! tracked_hash="$(git hash-object -- "${tracked_script}" 2>/dev/null)"; then
+				continue
+			fi
+
+			if [ "${tracked_hash}" = "${canonical_hash}" ]; then
+				violations+=("${tracked_script} is a tracked copy of managed artifact ${canonical_path}.")
+				has_violation=true
+			fi
+		done
+	done
+
+	if [ "${has_violation}" = true ]; then
+		echo "Managed validation artifact contract violation detected:" >&2
+		printf ' - %s\n' "${violations[@]}" >&2
+		return 1
+	fi
+
+	return 0
+}
+
 trap cleanup_runtime_containers EXIT
 
 
@@ -1033,6 +1094,10 @@ if ! ensure_validation_harness_not_tracked; then
   write_result_files "error" "Validation harness tracking violation" "${local_failure_summary}"
   tg_notify "Validation harness tracking violation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
   exit 1
+fi
+
+if ! enforce_managed_validation_artifact_contract; then
+	exit 1
 fi
 
 if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then
