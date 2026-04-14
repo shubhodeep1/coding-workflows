@@ -1031,6 +1031,7 @@ sync_rebuild_runbook_url() {
 
 resolve_branch_analysis_ref() {
   local branch_name="$1"
+  local branch_ref
   [ -n "${branch_name}" ] || return 1
 
   if git rev-parse --verify -q "refs/remotes/origin/${branch_name}" >/dev/null 2>&1; then
@@ -1043,9 +1044,20 @@ resolve_branch_analysis_ref() {
     return 0
   fi
 
+  if git rev-parse --verify -q "${branch_name}" >/dev/null 2>&1; then
+    printf '%s' "${branch_name}"
+    return 0
+  fi
+
   if git fetch --no-tags origin "refs/heads/${branch_name}:refs/remotes/origin/${branch_name}" >/dev/null 2>&1 \
     && git rev-parse --verify -q "refs/remotes/origin/${branch_name}" >/dev/null 2>&1; then
     printf 'refs/remotes/origin/%s' "${branch_name}"
+    return 0
+  fi
+
+  branch_ref="${branch_name//\//%2F}"
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" >/dev/null 2>&1; then
+    printf '%s' "${branch_name}"
     return 0
   fi
 
@@ -1183,6 +1195,12 @@ evaluate_sync_superseded_by_main() {
 
   SYNC_SUPERSEDED_AFFECTED_PATHS_JSON="$(printf '%s\n' "${affected_paths[@]}" | jq -Rsc 'split("\n") | map(select(length > 0)) | unique')"
 
+  if [ "${integration_branch}" = "${default_branch}" ]; then
+    SYNC_SUPERSEDED_BY_MAIN="true"
+    SYNC_SUPERSEDED_REASON="Integration branch matches ${default_branch}; sync is intentionally skipped as a no-op."
+    return 0
+  fi
+
   if ! default_ref="$(resolve_branch_analysis_ref "${default_branch}")"; then
     return 0
   fi
@@ -1232,6 +1250,20 @@ ensure_integration_conflict_state_fields() {
         integration_conflict_dispatch_ts: (.integration_conflict_dispatch_ts // 0),
         integration_conflict_unresolved_ticks: (.integration_conflict_unresolved_ticks // 0)
       }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+}
+
+ensure_sync_state_fields() {
+  [ -f "${STATE_FILE}" ] || return 0
+  jq '.sync = ((.sync // {}) + {
+        status: (.sync.status // "active"),
+        last_sync_outcome: (.sync.last_sync_outcome // ""),
+        last_conflict_paths: (.sync.last_conflict_paths // []),
+        last_conflict_fingerprint: (.sync.last_conflict_fingerprint // ""),
+        superseded_notified: (.sync.superseded_notified // false),
+        superseded_at: (.sync.superseded_at // null),
+        superseded_reason: (.sync.superseded_reason // ""),
+        affected_paths: (.sync.affected_paths // [])
+      })' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
 # Create (or discover) the integration->default PR eagerly so that the
@@ -1533,6 +1565,8 @@ sync_default_into_integration_branch() {
   if [ -z "${integration_branch}" ]; then
     return 0
   fi
+
+  ensure_sync_state_fields
 
   sync_status="$(jq -r '.sync.status // "active"' "${STATE_FILE}")"
   prev_conflict_fingerprint="$(jq -r '.sync.last_conflict_fingerprint // ""' "${STATE_FILE}")"
