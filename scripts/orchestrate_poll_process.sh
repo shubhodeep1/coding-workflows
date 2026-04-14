@@ -1197,6 +1197,7 @@ evaluate_sync_superseded_by_main() {
     SYNC_SUPERSEDED_REASON="All tracked child PRs are terminal and integration changes for child PR paths are already represented on ${default_branch}."
   fi
 }
+
 # ---------------------------------------------------------------
 # Self-healing helpers for integration-branch <-> default-branch drift
 # ---------------------------------------------------------------
@@ -1581,6 +1582,7 @@ sync_default_into_integration_branch() {
     post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}\n\nSkipping sync of \`${default_branch}\` into \`${integration_branch}\` because all tracked child PRs are terminal and the branch is now treated as superseded by \`${default_branch}\`.\n\nReason: ${SYNC_SUPERSEDED_REASON}\n\nRunbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
     return 0
   fi
+
   ensure_integration_conflict_state_fields
 
   local merge_error
