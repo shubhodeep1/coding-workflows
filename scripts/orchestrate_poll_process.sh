@@ -1009,7 +1009,7 @@ mark_integration_branch_missing_failed() {
 sync_rebuild_runbook_url() {
   local default_branch="$1"
   local fallback_branch="${default_branch:-main}"
-  local runbook_path="docs/orchestrator-integration-branch-rebuild-runbook.md"
+  local runbook_path="docs/rollback-runbook.md"
   local url
 
   if gh_retry gh api "repos/${GITHUB_REPOSITORY}/contents/${runbook_path}?ref=${fallback_branch}" >/dev/null 2>&1; then
@@ -4829,30 +4829,6 @@ sys.exit(1)
             BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
             : "${BASE_REF:=${DEFAULT_BRANCH:-main}}"
             RB_FOLLOWUP_REFUSED="false"
-
-            ORCH_FOLLOWUP_OWNED="false"
-            ORCH_FOLLOWUP_TRACKING_NUM=""
-            ORCH_FOLLOWUP_INTEGRATION_BRANCH=""
-            ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
-            FOLLOWUP_PR_BLOCKED="false"
-
-            ORCH_FOLLOWUP_OWNED="false"
-            ORCH_FOLLOWUP_TRACKING_NUM=""
-            ORCH_FOLLOWUP_INTEGRATION_BRANCH=""
-            ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
-            FOLLOWUP_PR_BLOCKED="false"
-
-            ORCH_FOLLOWUP_OWNED="false"
-            ORCH_FOLLOWUP_TRACKING_NUM=""
-            ORCH_FOLLOWUP_INTEGRATION_BRANCH=""
-            ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
-            FOLLOWUP_PR_BLOCKED="false"
-
-            ORCH_FOLLOWUP_OWNED="false"
-            ORCH_FOLLOWUP_TRACKING_NUM=""
-            ORCH_FOLLOWUP_INTEGRATION_BRANCH=""
-            ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
-            FOLLOWUP_PR_BLOCKED="false"
 
             ORCH_FOLLOWUP_OWNED="false"
             ORCH_FOLLOWUP_TRACKING_NUM=""
