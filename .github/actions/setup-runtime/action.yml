@@ -50,6 +50,13 @@ runs:
       with:
         python-version: ${{ inputs.python_version }}
 
+    - name: Restore cached repo overview
+      uses: actions/cache@v5
+      continue-on-error: true
+      with:
+        path: repo_overview.txt
+        key: repo-overview-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pyproject.toml', '**/go.mod', '**/Cargo.toml', '.pre-commit-config.yaml', '**/Dockerfile', '.github/workflows/*.yml') }}
+
     - name: Install Codex CLI and core tools
       shell: bash
       env:
@@ -86,6 +93,17 @@ runs:
         fi
 
         echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
+
+    - name: Build repo overview artifact
+      shell: bash
+      run: |
+        set -euo pipefail
+        script_path="${GITHUB_ACTION_PATH}/../../../scripts/build_repo_overview.sh"
+        if [ -f "${script_path}" ] && [ -r "${script_path}" ]; then
+          REPO_OVERVIEW_ROOT="${GITHUB_WORKSPACE}" bash "${script_path}" || true
+        else
+          echo "::warning::Repo overview generator is missing or unreadable at ${script_path}; continuing without repo_overview.txt"
+        fi
 
     - name: Validate required environment variables
       if: ${{ inputs.required_env_csv != '' }}

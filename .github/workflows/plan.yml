@@ -146,7 +146,7 @@ jobs:
           # Only fetch scripts actually used by the plan workflow.
           # git_ref_health_check.sh is only needed by implement/edit workflows.
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh extract_db_contracts.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh extract_db_contracts.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py build_repo_overview.sh; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -202,6 +202,18 @@ jobs:
                 "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
             fi
           fi
+
+      - name: Restore cached repo overview
+        uses: actions/cache@v5
+        continue-on-error: true
+        with:
+          path: repo_overview.txt
+          key: repo-overview-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pyproject.toml', '**/go.mod', '**/Cargo.toml', '.pre-commit-config.yaml', '**/Dockerfile', '.github/workflows/*.yml') }}
+
+      - name: Build repo overview artifact
+        run: |
+          set -euo pipefail
+          bash scripts/build_repo_overview.sh || true
 
       - name: Create runtime workspace
         run: |
