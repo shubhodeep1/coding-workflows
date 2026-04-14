@@ -944,7 +944,7 @@ This phase starts only after the orchestrator judge returns `complete`.
 - Non-terminal failure: `needs_fixes` diagnosis with fix-up issues (enters the fix/revalidate loop).
 - Terminal failure: validation dispatch failure, harness error, infeasible diagnosis, unknown diagnosis payload, closed fix-up issues, or cycle limit exceeded.
 - Terminal failure label: `ai:validation-failed`.
-- Managed artifact contract: startup checks now enforce only managed artifacts (`scripts/validate_process.sh`, optional `scripts/validate_driver.sh`) and the transient `validation/validate.sh` rule. Repos may keep unrelated consumer scripts such as `scripts/validate_local.sh` without failing validation.
+- Managed artifact contract: startup checks now enforce only managed artifacts (`scripts/validate_process.sh`, optional `scripts/validate_driver.sh`) and the transient `validation/validate.sh` rule. Repos may keep unrelated consumer scripts without failing validation.
 
 ### Manual Reset: `/revalidate`
 
@@ -1006,9 +1006,13 @@ Use this after manual intervention (e.g. fixing a problematic issue, merging a s
 
 - Cycle 1 generates a new harness under `validation/`.
 - Cycle 2+ reuses and targeted-fixes the existing owned harness when `validation/` is present (for example, restored from artifacts); otherwise it safely falls back to full regeneration.
-- Canonical validation drivers live in `coding-workflows/scripts/` and are fetched at runtime by the reusable wrapper workflow into the consumer workspace as `scripts/validate_process.sh` and `scripts/validate_driver.sh`.
-- `validation/validate.sh` may be generated transiently at runtime as a thin wrapper that delegates to `scripts/validate_driver.sh`; it must remain untracked/uncommitted in consumer repositories.
+- Canonical validation drivers are fetched at runtime by the reusable wrapper workflow into the consumer workspace as `scripts/validate_process.sh` and `scripts/validate_driver.sh`.
+- The generated runtime harness delegates to `scripts/validate_driver.sh` and remains transient/untracked in consumer repositories.
 - Canonical runtime harness behavior lives in `scripts/validate_driver.sh` (pre-flight, compose startup/logging, health polling, canary gating, TAP-safe counting, result emission/finalization).
+- Startup guard scope is managed-artifact only: consumer-owned helper scripts are allowed.
+- Managed artifact contract at startup:
+  - Generated validation harness artifacts must remain transient/untracked.
+  - Tracked copies of managed validation artifacts under `scripts/` (including renamed `scripts/validate*.sh` driver artifacts) are blocked.
 - Before execution, validation runs pre-flight checks (`docker compose config`, shell syntax, and compose build path resolution).
 - Pre-flight failures are classified as terminal `harness_error` for that run.
 - The first generated test must be a canary infrastructure check (`00_canary.sh` style); infra-only canary failures shortcut to `harness_error`, while app startup/crash signals continue to diagnosis.
