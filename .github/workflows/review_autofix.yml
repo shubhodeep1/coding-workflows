@@ -1805,6 +1805,8 @@ jobs:
         # the iteration cap.  Also runs when did_commit is true since the push
         # is deferred — both autofix and conflict resolution are pushed together.
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -1871,6 +1873,33 @@ jobs:
           done
           rm -rf "${RESOLVE_STASH}"
 
+          PR_INTENT_TITLE="$(jq -r '.title // ""' "${PR_META_FILE}" 2>/dev/null || echo "")"
+          PR_INTENT_BODY="$(jq -r '.body // ""' "${PR_META_FILE}" 2>/dev/null || echo "")"
+          PR_INTENT_BODY_CAPPED="$(printf '%s\n' "${PR_INTENT_BODY}" | awk 'NR<=200')"
+
+          LINKED_ISSUE_BODY="$(jq -r '.linkedIssueBody // empty' "${PR_META_FILE}" 2>/dev/null || true)"
+          if [ -z "${LINKED_ISSUE_BODY}" ]; then
+            # Prefer an explicit PR->issue link; pick the first linked issue deterministically.
+            LINKED_ISSUE_NUMBER="$(gh api graphql \
+              -f owner="${{ github.repository_owner }}" \
+              -f name="${{ github.event.repository.name }}" \
+              -F number="${PR_NUMBER}" \
+              -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
+              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+            if [ -z "${LINKED_ISSUE_NUMBER}" ]; then
+              LINKED_ISSUE_NUMBER="$(printf '%s\n%s\n' "${PR_INTENT_TITLE}" "${PR_INTENT_BODY}" | grep -oE '(issues/|issue[[:space:]]*#)[0-9]+' | head -n 1 | grep -oE '[0-9]+' || true)"
+            fi
+            if [ -n "${LINKED_ISSUE_NUMBER}" ]; then
+              LINKED_ISSUE_BODY="$(gh api "repos/${{ github.repository }}/issues/${LINKED_ISSUE_NUMBER}" --jq '.body // empty' 2>/dev/null || true)"
+            fi
+          fi
+
+          if [ -n "${LINKED_ISSUE_BODY}" ]; then
+            LINKED_ISSUE_BODY_CAPPED="$(printf '%s\n' "${LINKED_ISSUE_BODY}" | awk 'NR<=200')"
+          else
+            LINKED_ISSUE_BODY_CAPPED="none"
+          fi
+
           cat > "${CONFLICT_RESOLVER_PROMPT_FILE}" <<__CONFLICT_RESOLVER_PROMPT__
           Repository task: Resolve merge conflicts.
 
@@ -1885,6 +1914,11 @@ jobs:
 
           Your task:
           Resolve merge conflicts safely.
+
+          === PR INTENT ===
+          Title: ${PR_INTENT_TITLE}
+          Body: ${PR_INTENT_BODY_CAPPED}
+          Linked issue: ${LINKED_ISSUE_BODY_CAPPED}
 
           Rules:
           - Only resolve conflicts.
