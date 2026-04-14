@@ -1803,6 +1803,10 @@ jobs:
           fi
 
           CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+          if [ ! -s "${CAPTURE_FILE}" ]; then
+            exit 0
+          fi
+
           {
             echo "===== workflow context ====="
             echo "issue_number=${ISSUE_NUMBER}"
@@ -1834,7 +1838,7 @@ jobs:
               cat "${RUNTIME_DIR}/existing_prs.txt" || true
               echo
             fi
-          } > "${CAPTURE_FILE}"
+          } >> "${CAPTURE_FILE}"
 
           if [ -s "${CAPTURE_FILE}" ]; then
             echo "captured=true" >> "$GITHUB_OUTPUT"
