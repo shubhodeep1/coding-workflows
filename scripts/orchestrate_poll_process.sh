@@ -723,6 +723,88 @@ integration_branch_exists() {
   return 0
 }
 
+resolve_active_orchestrator_context_for_issue() {
+  local issue_num="$1"
+  local preferred_tracking_num="${2:-}"
+  local ordered_tracking_nums=""
+  local tracking_count
+  local idx
+  local tracking_num
+  local tracking_comments
+  local tracking_comments_pages_file
+  local tracking_comments_merged
+  local tracking_state_json
+
+  RESOLVED_ORCHESTRATOR_OWNED="false"
+  RESOLVED_TRACKING_ISSUE=""
+  RESOLVED_INTEGRATION_BRANCH=""
+  RESOLVED_INTEGRATION_BRANCH_EXISTS="false"
+
+  if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+
+  if ! [ -f "${RUNTIME_DIR}/tracking_issues.json" ]; then
+    return 0
+  fi
+
+  if [[ "${preferred_tracking_num}" =~ ^[0-9]+$ ]]; then
+    ordered_tracking_nums+="${preferred_tracking_num}"$'\n'
+  fi
+
+  tracking_count="$(jq 'length' "${RUNTIME_DIR}/tracking_issues.json" 2>/dev/null || echo "0")"
+  for ((idx=0; idx<tracking_count; idx++)); do
+    tracking_num="$(jq -r ".[$idx].number" "${RUNTIME_DIR}/tracking_issues.json" 2>/dev/null || echo "")"
+    [ -n "${tracking_num}" ] || continue
+    ordered_tracking_nums+="${tracking_num}"$'\n'
+  done
+
+  while IFS= read -r tracking_num; do
+    [ -n "${tracking_num}" ] || continue
+    if ! [[ "${tracking_num}" =~ ^[0-9]+$ ]]; then
+      continue
+    fi
+
+    tracking_comments='[]'
+    tracking_comments_pages_file="${RUNTIME_DIR}/tracking_issue_${tracking_num}_comments_pages.json"
+    rm -f "${tracking_comments_pages_file}"
+    if gh_retry_to_file "${tracking_comments_pages_file}" gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${tracking_num}/comments?per_page=100"; then
+      if tracking_comments_merged="$(jq -s 'add // []' "${tracking_comments_pages_file}" 2>/dev/null)" && \
+        printf '%s' "${tracking_comments_merged}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+        tracking_comments="${tracking_comments_merged}"
+      fi
+    fi
+    rm -f "${tracking_comments_pages_file}"
+
+    tracking_state_json=""
+    if ! extract_latest_valid_orchestrator_state "${tracking_comments}"; then
+      continue
+    fi
+    tracking_state_json="${EXTRACTED_STATE_JSON}"
+    [ -n "${tracking_state_json}" ] || continue
+
+    if ! printf '%s' "${tracking_state_json}" | jq -e --arg issue "${issue_num}" '
+      ([
+        (.issue_number_map // {} | to_entries[]?.value | tostring),
+        (.waves[]?.issues[]?.github_issue // empty | tostring)
+      ] | index($issue)) != null
+    ' >/dev/null 2>&1; then
+      continue
+    fi
+
+    RESOLVED_ORCHESTRATOR_OWNED="true"
+    RESOLVED_TRACKING_ISSUE="${tracking_num}"
+    RESOLVED_INTEGRATION_BRANCH="$(printf '%s' "${tracking_state_json}" | jq -r '.integration_branch // empty' 2>/dev/null || echo "")"
+
+    if [ -n "${RESOLVED_INTEGRATION_BRANCH}" ] && integration_branch_exists "${RESOLVED_INTEGRATION_BRANCH}"; then
+      RESOLVED_INTEGRATION_BRANCH_EXISTS="true"
+    fi
+    return 0
+  done < <(printf '%s\n' "${ordered_tracking_nums}" | grep -E '^[0-9]+$' | awk '!seen[$0]++')
+
+  return 0
+}
+
 mark_integration_branch_missing_failed() {
   local integration_branch="$1"
   local reason="Integration branch '${integration_branch}' is missing. It may have been deleted externally. Manual intervention required."
@@ -3641,12 +3723,41 @@ sys.exit(1)
             BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
             : "${BASE_REF:=${DEFAULT_BRANCH:-main}}"
 
+            ORCH_FOLLOWUP_OWNED="false"
+            ORCH_FOLLOWUP_TRACKING_NUM=""
+            ORCH_FOLLOWUP_INTEGRATION_BRANCH=""
+            ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
+            FOLLOWUP_PR_BLOCKED="false"
+
             if [ "${RB_TARGET_MERGED}" = "true" ]; then
+              resolve_active_orchestrator_context_for_issue "${rb_issue}" "${TRACKING_NUM:-}"
+              ORCH_FOLLOWUP_OWNED="${RESOLVED_ORCHESTRATOR_OWNED}"
+              ORCH_FOLLOWUP_TRACKING_NUM="${RESOLVED_TRACKING_ISSUE}"
+              ORCH_FOLLOWUP_INTEGRATION_BRANCH="${RESOLVED_INTEGRATION_BRANCH}"
+              ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="${RESOLVED_INTEGRATION_BRANCH_EXISTS}"
+
+              if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
+                if [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+                  BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
+                  echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
+                else
+                  FOLLOWUP_PR_BLOCKED="true"
+                  FOLLOWUP_BLOCK_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}), but integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}."
+                  echo "::warning::${FOLLOWUP_BLOCK_REASON}"
+                  post_tracking_comment "## ⚠️ Follow-up PR blocked\n\n${FOLLOWUP_BLOCK_REASON}"
+                  tg_notify "${FOLLOWUP_BLOCK_REASON}" "WARNING"
+                fi
+              fi
+            fi
+
+            if [ "${RB_TARGET_MERGED}" = "true" ] && [ "${FOLLOWUP_PR_BLOCKED}" != "true" ]; then
               # PR already merged — work on a follow-up branch from the base branch
               FOLLOWUP_BRANCH="fix/${rb_issue}-followup-$(date +%s)"
               echo "  PR already merged. Creating follow-up branch ${FOLLOWUP_BRANCH} from ${BASE_REF}."
               git fetch --no-tags origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" 2>/dev/null || true
               git checkout -B "${FOLLOWUP_BRANCH}" "refs/remotes/origin/${BASE_REF}" 2>/dev/null || true
+            elif [ "${RB_TARGET_MERGED}" = "true" ]; then
+              echo "::warning::Skipping follow-up branch creation for issue #${rb_issue}; follow-up PR creation is blocked."
             elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
               # PR is open — push to existing PR branch
               git fetch --no-tags origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null || true
@@ -3658,7 +3769,7 @@ sys.exit(1)
               # Skip to retry counter via nested-fi + fi
             fi
 
-            if [ "${RB_TARGET_MERGED}" = "true" ] || { [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; }; then
+            if { [ "${RB_TARGET_MERGED}" = "true" ] && [ "${FOLLOWUP_PR_BLOCKED}" != "true" ]; } || { [ "${RB_TARGET_MERGED}" != "true" ] && [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; }; then
               # Re-run the judge in editing mode on the target branch
               RB_FIX_PROMPT_FILE="${RUNTIME_DIR}/rb_fix_prompt_${rb_issue}.txt"
               RB_FIX_OUTPUT_FILE="${RUNTIME_DIR}/rb_fix_output_${rb_issue}.txt"
@@ -3728,7 +3839,22 @@ ${RB_FIX_DESC}" || true
                   # Push follow-up branch and create a new PR
                   if git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
-                    FOLLOWUP_PR_URL="$(gh pr create \
+
+                    if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ] && [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+                      if [ "${BASE_REF}" != "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+                        echo "::warning::Detected follow-up PR base '${BASE_REF}' for orchestrator-owned issue #${rb_issue}; retargeting to '${ORCH_FOLLOWUP_INTEGRATION_BRANCH}'."
+                        BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
+                      fi
+                    fi
+
+                    if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ] && [ "${BASE_REF}" = "${DEFAULT_BRANCH:-main}" ]; then
+                      FOLLOWUP_GUARD_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}); refusing to create follow-up PR against '${BASE_REF}'. Required base is '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}'."
+                      echo "::warning::${FOLLOWUP_GUARD_REASON}"
+                      post_tracking_comment "## ⚠️ Follow-up PR blocked\n\n${FOLLOWUP_GUARD_REASON}"
+                      tg_notify "${FOLLOWUP_GUARD_REASON}" "WARNING"
+                      FOLLOWUP_PR_URL=""
+                    else
+                      FOLLOWUP_PR_URL="$(gh pr create \
                       --repo "${GITHUB_REPOSITORY}" \
                       --base "${BASE_REF}" \
                       --head "${FOLLOWUP_BRANCH}" \
@@ -3744,6 +3870,7 @@ ${RB_FIX_DESC}
 
 ---
 *Created automatically by the orchestrator judge.*" 2>/dev/null || echo "")"
+                    fi
                     if [ -n "${FOLLOWUP_PR_URL}" ]; then
                       echo "  Created follow-up PR: ${FOLLOWUP_PR_URL}"
                       gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
