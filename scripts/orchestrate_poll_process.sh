@@ -4572,6 +4572,7 @@ json.dump(result, sys.stdout)
       REVIEW_BLOCKED_AUTO_UNSTICK="${REVIEW_BLOCKED_AUTO_UNSTICK:-true}"
       if is_truthy "${REVIEW_BLOCKED_AUTO_UNSTICK}" && [ "${RB_PR_STATE}" = "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
         RB_PR_MERGEABLE="$(_jq_field "${_rb_pr_json}" '.mergeable' 'true|false')"
+        RB_PR_MERGEABLE_STATE="$(echo "${_rb_pr_json}" | jq -r '.mergeable_state // ""')"
         RB_HEAD_REF_PRECHECK="$(echo "${_rb_pr_json}" | jq -r '.head.ref // ""')"
         RB_HEAD_SHA_PRECHECK="$(echo "${_rb_pr_json}" | jq -r '.head.sha // ""')"
 
@@ -4599,7 +4600,7 @@ json.dump(result, sys.stdout)
                 # Keep authenticated GitHub login authoritative. Only
                 # when login is missing do we use name/email bot hints.
                 case "${_rb_head_author_name}" in
-                  codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
+                  codex|codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
                 esac
                 case "${_rb_head_author_email}" in
                   codex@users.noreply.github.com|github-actions\[bot\]@users.noreply.github.com|*+github-actions\[bot\]@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
@@ -4613,9 +4614,9 @@ json.dump(result, sys.stdout)
 
         RB_SHOULD_PREDISPATCH="false"
         RB_PREDISPATCH_REASON=""
-        if [ "${RB_PR_MERGEABLE}" = "false" ]; then
+        if [ "${RB_PR_MERGEABLE}" = "false" ] || [ "${RB_PR_MERGEABLE_STATE}" = "dirty" ]; then
           RB_SHOULD_PREDISPATCH="true"
-          RB_PREDISPATCH_REASON="merge conflicts (mergeable=false)"
+          RB_PREDISPATCH_REASON="merge conflicts (mergeable=${RB_PR_MERGEABLE:-unknown}, mergeable_state=${RB_PR_MERGEABLE_STATE:-unknown})"
         elif [ "${RB_HEAD_IS_EXTERNAL}" = "true" ]; then
           RB_SHOULD_PREDISPATCH="true"
           RB_PREDISPATCH_REASON="external head commit ${RB_HEAD_SHA_PRECHECK:0:7} by ${_rb_head_author_login:-${_rb_head_author_name:-unknown}}"
@@ -4642,7 +4643,7 @@ json.dump(result, sys.stdout)
             REVIEW_BLOCKED_STATE_CHANGED=true
             continue
           elif [ "${_predispatch_rc}" -eq 2 ]; then
-            echo "  [review-blocked] Pre-judge dispatch skipped (active run or cycle-local dupe); skipping judge this tick."
+            echo "  [review-blocked] Pre-judge dispatch skipped (active run or cycle-local dupe); skipping judge for this tick."
             continue
           else
             echo "::warning::[review-blocked] Pre-judge dispatch failed for PR #${RB_PR}; falling through to judge."
