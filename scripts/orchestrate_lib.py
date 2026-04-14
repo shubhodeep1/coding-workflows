@@ -438,6 +438,8 @@ def detect_stalls(
 	now_ts: int,
 	max_recoveries: int = 5,
 	phase_thresholds: dict[str, int] | None = None,
+	stall_judge_trigger_count: int = 2,
+	enable_stall_judge: bool = True,
 ) -> list[dict[str, Any]]:
 	"""Detect stalled issues in the current wave.
 
@@ -500,6 +502,8 @@ def detect_stalls(
 		# Determine recovery action
 		if recovery_count >= max_recoveries:
 			action = "skip"
+		elif enable_stall_judge and recovery_count >= stall_judge_trigger_count:
+			action = "run_stall_judge"
 		else:
 			actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
 			action_idx = min(recovery_count, len(actions) - 1)
@@ -990,6 +994,8 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 	now_ts = int(args.now_ts) if args.now_ts else int(time.time())
 	threshold = int(args.threshold_minutes)
 	max_recoveries = int(args.max_recoveries)
+	stall_judge_trigger_count = int(args.stall_judge_trigger_count)
+	enable_stall_judge = str(args.enable_stall_judge).lower() == "true"
 
 	phase_thresholds: dict[str, int] | None = None
 	if args.phase_thresholds_json:
@@ -1000,6 +1006,8 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 	stalls = detect_stalls(
 		state, issue_labels, threshold, now_ts, max_recoveries,
 		phase_thresholds=phase_thresholds,
+		stall_judge_trigger_count=stall_judge_trigger_count,
+		enable_stall_judge=enable_stall_judge,
 	)
 	_print_json({"ok": True, "stalls": stalls, "count": len(stalls)})
 	return 0
@@ -1067,6 +1075,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls.add_argument("--threshold-minutes", required=True, help="Fallback stall threshold in minutes (used when a phase has no specific override)")
 	p_stalls.add_argument("--phase-thresholds-json", default=None, help='Optional JSON: {"ai:clarification": 60, "ai:implementing": 120, ...}. Per-phase overrides.')
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
+	p_stalls.add_argument("--stall-judge-trigger-count", default="2", help="Recovery-count threshold to switch stall recovery to run_stall_judge")
+	p_stalls.add_argument("--enable-stall-judge", default="true", choices=["true", "false"], help="Enable/disable stall judge escalation action")
 	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
 	p_stalls.set_defaults(func=cmd_check_stalls)
 

@@ -334,6 +334,71 @@ def test_check_wave_status_mixed_null_and_real_issues():
 	assert issues_by_id["task-b"]["status"] == "not_created"
 
 
+
+
+def test_detect_stalls_selects_run_stall_judge_at_trigger_threshold():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["github_issue"] == 10
+	assert stalls[0]["recovery_action"] == "run_stall_judge"
+
+
+def test_detect_stalls_uses_ladder_when_stall_judge_disabled():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=False,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "close_and_reissue"
+
+
+def test_detect_stalls_max_recoveries_still_skips_with_judge_enabled():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 5
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "skip"
+
 # ---------------------------------------------------------------------------
 # Tests: state schema
 # ---------------------------------------------------------------------------
