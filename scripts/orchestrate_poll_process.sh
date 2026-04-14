@@ -4211,26 +4211,34 @@ json.dump(result, sys.stdout)
         # "external" and a signal that someone (human or external
         # automation) has intervened and wants review retriggered.
         RB_HEAD_IS_EXTERNAL="false"
+        _rb_head_author_login=""
+        _rb_head_author_name=""
+        _rb_head_author_email=""
         if [ -n "${RB_HEAD_SHA_PRECHECK}" ] && [ "${RB_HEAD_SHA_PRECHECK}" != "null" ]; then
           _rb_head_commit_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${RB_HEAD_SHA_PRECHECK}" 2>/dev/null || echo "{}")"
-          _rb_head_author_login="$(echo "${_rb_head_commit_json}" | jq -r '.author.login // ""')"
-          _rb_head_author_name="$(echo "${_rb_head_commit_json}" | jq -r '.commit.author.name // ""')"
-          _rb_head_author_email="$(echo "${_rb_head_commit_json}" | jq -r '.commit.author.email // ""')"
-          # Default to external unless login matches known internal identity
-          RB_HEAD_IS_EXTERNAL="true"
-          case "${_rb_head_author_login}" in
-            codex-bot|github-actions|github-actions\[bot\]) RB_HEAD_IS_EXTERNAL="false" ;;
-          esac
-          # Keep authenticated GitHub login authoritative. Commit author
-          # name/email are fallback hints only when login did not classify
-          # the commit as external.
-          if [ "${RB_HEAD_IS_EXTERNAL}" != "true" ]; then
-            case "${_rb_head_author_name}" in
-              codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
+          _rb_head_commit_lookup_ok="$(echo "${_rb_head_commit_json}" | jq -r 'if (.sha != null and .commit != null and .commit.author != null) then "true" else "false" end')"
+          if [ "${_rb_head_commit_lookup_ok}" = "true" ]; then
+            _rb_head_author_login="$(echo "${_rb_head_commit_json}" | jq -r '.author.login // ""')"
+            _rb_head_author_name="$(echo "${_rb_head_commit_json}" | jq -r '.commit.author.name // ""')"
+            _rb_head_author_email="$(echo "${_rb_head_commit_json}" | jq -r '.commit.author.email // ""')"
+            # Default to external unless the head commit can be
+            # confidently classified as internal automation.
+            RB_HEAD_IS_EXTERNAL="true"
+            case "${_rb_head_author_login}" in
+              codex-bot|github-actions|github-actions\[bot\]) RB_HEAD_IS_EXTERNAL="false" ;;
+              "")
+                # Keep authenticated GitHub login authoritative. Only
+                # when login is missing do we use name/email bot hints.
+                case "${_rb_head_author_name}" in
+                  codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
+                esac
+                case "${_rb_head_author_email}" in
+                  codex@users.noreply.github.com|noreply@github.com|*@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
+                esac
+                ;;
             esac
-            case "${_rb_head_author_email}" in
-              codex@users.noreply.github.com|noreply@github.com|*@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
-            esac
+          else
+            echo "::warning::[review-blocked] Unable to fetch head-commit author metadata for PR #${RB_PR}; skipping external-commit pre-dispatch this tick."
           fi
         fi
 
