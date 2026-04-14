@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation needs fixes; failure_summary=Runtime validation failed with 1 failing test(s). Fix-up issues were created.",
+  "fingerprint": "f8c4ae9bc5b343b9154ed019c0fc2041aaa7e6ec535bd52128191259a6d0481e",
+  "lineage": {
+    "issue_number": 941,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24395438690",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24395438690",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260414121605_356555eb9d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 941,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24395438690"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation needs fixes",
+  "timestamps": {
+    "created_at": "2026-04-14T12:16:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
