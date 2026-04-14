@@ -406,7 +406,15 @@ COMPOSE_FILE="validation/docker-compose.test.yml"
 TEST_DIR="validation/tests"
 LOG_DIR="validation/logs"
 COMPOSE_LOG="${LOG_DIR}/compose.log"
+ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
 START_TS="$(date +%s)"
+
+if [ -f "${ENV_FILE}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+  set +a
+fi
 
 mkdir -p "${LOG_DIR}"
 : > "${COMPOSE_LOG}"
