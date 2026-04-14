@@ -493,6 +493,24 @@ def test_reconcile_wave_status_terminal_non_regression():
 	assert source_closed == "stored_terminal"
 
 
+def test_detect_stalls_skips_needs_human_phase():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["last_seen_phase"] = "ai:needs-human"
+	issue["stall_recovery_count"] = 2
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels={"10": ["ai:planning", "ai:needs-human"], "11": []},
+		threshold_minutes=1,
+		now_ts=10_000,
+	)
+
+	assert stalls == []
+
+
 def test_label_contract_matches_helper_catalog_and_phase_priority():
 	contract_path = Path(__file__).resolve().parent.parent / ".github" / "ai" / "label_contract.v1.json"
 	helper_path = Path(__file__).resolve().parent.parent / "scripts" / "label_helpers.sh"

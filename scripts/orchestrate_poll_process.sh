@@ -500,14 +500,15 @@ ensure_label_exists() {
   fi
 }
 
-set_tracking_phase_label() {
-  local phase_label="$1"
+set_issue_phase_label() {
+  local issue_num="$1"
+  local phase_label="$2"
   local contract_file=".github/ai/label_contract.v1.json"
 
   ensure_label_exists "${phase_label}"
 
   if [ ! -f "${contract_file}" ]; then
-    echo "::warning::set_tracking_phase_label: missing label contract ${contract_file}; cannot apply '${phase_label}' safely." >&2
+    echo "::warning::set_issue_phase_label: missing label contract ${contract_file}; cannot apply '${phase_label}' safely on #${issue_num}." >&2
     return 1
   fi
 
@@ -518,7 +519,7 @@ set_tracking_phase_label() {
     local _resolve_err
     _resolve_err="$(tr '\n' ' ' < "${_resolve_err_file}" 2>/dev/null || true)"
     rm -f "${_resolve_err_file}"
-    echo "::warning::set_tracking_phase_label: resolve-phase failed for '${phase_label}' using ${contract_file}: ${_resolve_err:-<no stderr captured>}" >&2
+    echo "::warning::set_issue_phase_label: resolve-phase failed for '${phase_label}' using ${contract_file} on #${issue_num}: ${_resolve_err:-<no stderr captured>}" >&2
     return 1
   fi
   rm -f "${_resolve_err_file}"
@@ -530,7 +531,7 @@ set_tracking_phase_label() {
   # labels (e.g. ai:validating + ai:validation-fixing) in place even
   # after the phase has advanced to ai:validated.
   local current_issue_labels
-  current_issue_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
+  current_issue_labels="$(get_issue_labels_json "${issue_num}")"
 
   # Build a single gh issue edit command with all --remove-label and
   # --add-label flags instead of one API call per label.
@@ -553,23 +554,28 @@ set_tracking_phase_label() {
   if [ "${#edit_args[@]}" -gt 0 ]; then
     local _label_err_file
     _label_err_file="$(mktemp)"
-    if ! gh_retry gh issue edit "${TRACKING_NUM}" \
+    if ! gh_retry gh issue edit "${issue_num}" \
       --repo "${GITHUB_REPOSITORY}" \
       "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
       local _label_err
       _label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
       if echo "${_label_err}" | grep -Eqi "could not remove label:|['\"][[:alnum:]:._/-]+['\"] not found"; then
-        echo "::warning::set_tracking_phase_label: non-fatal missing label while applying '${phase_label}' to #${TRACKING_NUM}: ${_label_err}" >&2
+        echo "::warning::set_issue_phase_label: non-fatal missing label while applying '${phase_label}' to #${issue_num}: ${_label_err}" >&2
         rm -f "${_label_err_file}"
         return 0
       fi
-      echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_NUM}: ${_label_err}" >&2
+      echo "::warning::set_issue_phase_label: failed to apply '${phase_label}' to #${issue_num}: ${_label_err}" >&2
       rm -f "${_label_err_file}"
       return 1
     fi
     rm -f "${_label_err_file}"
   fi
   return 0
+}
+
+set_tracking_phase_label() {
+  local phase_label="$1"
+  set_issue_phase_label "${TRACKING_NUM}" "${phase_label}"
 }
 
 get_issue_labels_json() {
@@ -2620,7 +2626,7 @@ print(determine_phase(labels))
 PY
 )"
 
-    if [ "${phase}" = "ai:review-blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [ "${phase}" = "ai:validation-failed" ]; then
+    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:review-blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [ "${phase}" = "ai:validation-failed" ]; then
       continue
     fi
 
@@ -2821,6 +2827,18 @@ STALL_EOF
         tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
         took_action="true"
         ;;
+      escalate_human)
+        set_issue_phase_label "${issue_num}" "ai:needs-human" || true
+        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
+⚠️ Standalone stall recovery escalated this issue to human intervention.
+
+The issue has been moved to `ai:needs-human`, and autonomous stall recovery is now paused for this issue.
+To resume automation, remove `ai:needs-human` and apply the intended pipeline phase label.
+STALL_EOF
+)" >/dev/null 2>&1 || true
+        tg_notify_issue "${issue_num}" "Standalone stall recovery escalated issue #${issue_num} to ai:needs-human after ${elapsed_minutes}m in '${phase}'." "WARNING"
+        took_action="true"
+        ;;
       close_and_reissue)
         local orig_title
         local orig_body
@@ -2909,7 +2927,7 @@ import json, sys, time
 state = json.loads(sys.argv[1])
 action = sys.argv[2]
 now = int(time.time())
-if action not in ("skip", "close_and_reissue"):
+if action not in ("skip", "close_and_reissue", "escalate_human"):
     state["stall_recovery_count"] = int(state.get("stall_recovery_count", 0)) + 1
 state["status_since_ts"] = now
 state["updated_ts"] = now
@@ -3271,6 +3289,20 @@ STALL_EOF
       # already handles this each poll cycle, so just log for diagnostics.
       echo "  Issue #${issue_num} stuck at ready-to-merge. Main merge loop will retry."
       tg_notify "Stall recovery: issue #${issue_num} stuck at ready-to-merge for ${stall_minutes}m (attempt $((recovery_count + 1))). Merge loop will retry."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+      ;;
+
+    escalate_human)
+      echo "  Escalating issue #${issue_num} to human intervention..."
+      set_issue_phase_label "${issue_num}" "ai:needs-human" || true
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+        -f body="$(cat <<'STALL_EOF'
+⚠️ Orchestrator stall recovery escalated this issue to human intervention.
+
+The issue has been moved to `ai:needs-human`, and autonomous stall recovery is now paused for this issue.
+To resume automation, remove `ai:needs-human` and apply the intended pipeline phase label.
+STALL_EOF
+)" >/dev/null 2>&1 || true
+      tg_notify "Stall recovery: escalated issue #${issue_num} to ai:needs-human (stuck ${stall_minutes}m in '${phase}', attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       ;;
 
     close_and_reissue)
@@ -5358,7 +5390,7 @@ fi
 
           # Increment recovery counter in state (and reset status_since_ts)
           # for recovery actions that keep the same issue in place.
-          if [ "${STALL_ACTION}" != "close_and_reissue" ] && [ "${STALL_ACTION}" != "skip" ]; then
+          if [ "${STALL_ACTION}" != "close_and_reissue" ] && [ "${STALL_ACTION}" != "skip" ] && [ "${STALL_ACTION}" != "escalate_human" ]; then
             python3 -c "
 import json, time, sys
 sys.path.insert(0, 'scripts')
