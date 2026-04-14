@@ -768,13 +768,19 @@ sys.exit(1)
 import json
 import os
 import sys
+from pathlib import Path
 
 # Drain stdin to avoid SIGPIPE on the upstream cat process
 # when the prompt file is larger than the OS pipe buffer.
+prompt = ''
 try:
-	sys.stdin.read()
+	prompt = sys.stdin.read()
 except Exception:
 	pass
+
+prompt_file = os.environ.get('MOCK_CODEX_PROMPT_FILE')
+if prompt_file:
+	Path(prompt_file).write_text(prompt, encoding='utf-8')
 
 output = os.environ.get('MOCK_CODEX_JSON', '{}')
 parsed = json.loads(output)
@@ -783,6 +789,7 @@ print(json.dumps(parsed))
 		)
 
 		env = os.environ.copy()
+		prompt_capture_file = runtime_dir / "captured_judge_prompt.txt"
 		env.update(
 			{
 				"HOME": str(home_dir),
@@ -808,6 +815,7 @@ print(json.dumps(parsed))
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"GH_MOCK_STORE": str(store_file),
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
+				"MOCK_CODEX_PROMPT_FILE": str(prompt_capture_file),
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			}
 		)
@@ -832,6 +840,11 @@ print(json.dumps(parsed))
 		result["merge_calls"] = result.get("merge_calls", [])
 		result["review_dispatches"] = result.get("review_dispatches", [])
 		result["update_branch_calls"] = result.get("update_branch_calls", [])
+		result["judge_prompt"] = (
+			prompt_capture_file.read_text(encoding="utf-8")
+			if prompt_capture_file.exists()
+			else ""
+		)
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
 		return result
@@ -1642,6 +1655,82 @@ def test_in_progress_judge_advances_when_no_new_issues():
 	ls = result["latest_state"]
 	# Should have advanced to wave 2
 	assert ls["current_wave"] == 2, f"Expected current_wave=2, got {ls['current_wave']}"
+
+
+def test_judge_history_bootstraps_when_missing_in_state():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+	)
+	ls = result["latest_state"]
+	history = ls.get("judge_history")
+	assert isinstance(history, list), f"Expected judge_history list, got {type(history)}"
+	assert len(history) == 1, f"Expected 1 history entry, got {len(history)}"
+	entry = history[0]
+	assert entry.get("cycle") == 1
+	assert entry.get("action") == "complete"
+	assert entry.get("justification") == "done"
+	assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", str(entry.get("timestamp", "")))
+
+
+def test_judge_prompt_includes_only_latest_five_history_entries():
+	state = _base_state(status="in_progress")
+	state["judge_history"] = [
+		{
+			"cycle": idx,
+			"action": "in_progress",
+			"justification": f"hist-{idx}",
+			"timestamp": f"2026-01-0{idx}T00:00:00Z",
+		}
+		for idx in range(1, 7)
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+	)
+	prompt = result["judge_prompt"]
+	assert "=== PRIOR JUDGE DECISIONS (last 5) ===" in prompt
+	assert "hist-1" not in prompt
+	for idx in range(2, 7):
+		assert f"hist-{idx}" in prompt
+	positions = [prompt.index(f"hist-{idx}") for idx in range(2, 7)]
+	assert positions == sorted(positions), "Expected history entries in chronological order"
+
+
+def test_judge_history_appends_one_entry_per_successful_cycle():
+	state = _base_state(status="in_progress")
+	state["judge_history"] = [
+		{
+			"cycle": 1,
+			"action": "in_progress",
+			"justification": "older-1",
+			"timestamp": "2026-01-01T00:00:00Z",
+		},
+		{
+			"cycle": 2,
+			"action": "in_progress",
+			"justification": "older-2",
+			"timestamp": "2026-01-02T00:00:00Z",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+	)
+	history = result["latest_state"].get("judge_history", [])
+	assert len(history) == 3, f"Expected 3 history entries, got {len(history)}"
+	entry = history[-1]
+	assert set(entry.keys()) == {"cycle", "action", "justification", "timestamp"}
+	assert entry["cycle"] == 1
+	assert entry["action"] == "complete"
+	assert entry["justification"] == "done"
 
 
 def test_backward_scan_updates_prior_wave_merged_issue():

@@ -183,6 +183,13 @@ In every final response:
 If a problem's cause is unclear: add **diagnostic logging first**, not speculative fixes.
 Logging must be structured, searchable, with context keys.
 
+## Prompt Budget Metadata
+
+When prompt metadata includes `TOOL_CALL_BUDGET: N`, it may also include
+`TOKEN_BUDGET_HINT: ...` computed from approximate prompt size (`wc -c / 4`) and
+model context window data. `TOKEN_BUDGET_HINT` is advisory guidance only and
+must never be treated as a hard enforcement mechanism or stop condition.
+
 ---
 
 ## 9. Code Style
