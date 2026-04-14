@@ -63,6 +63,21 @@ CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
 - For `eth_blockNumber` probes, parse `.result` the same way (it is a hex string like `"0x0"`).
 - When fixing a canary script that fails with `Cannot index object with number`, locate every `jq '.[N]'` call on an RPC response and replace with `.result`-based parsing above.
 
+CRITICAL — Dockerfile PID 1 signal handling (prevents exit 137 in graceful_shutdown):
+- Any generated `validation/Dockerfile*` MUST use **exec-form** (JSON array) `CMD` and `ENTRYPOINT` so PID 1 is the actual application process and receives SIGTERM directly from `docker compose stop`.
+- CORRECT (exec-form, PID 1 is the app):
+    CMD ["python3", "-m", "http.server", "18080"]
+    CMD ["node", "server.js"]
+    ENTRYPOINT ["/usr/local/bin/app"]
+- WRONG (shell-form, PID 1 is `/bin/sh -c` which does NOT forward signals):
+    CMD python3 -m http.server 18080
+    CMD node server.js
+  Shell-form makes `/bin/sh -c "..."` PID 1. POSIX `sh` does not forward SIGTERM to its child by default, so `docker compose stop` times out and docker escalates to SIGKILL. The container exits with code **137** (= 128 + SIGKILL), which fails the `graceful_shutdown` assertion even though the app itself was healthy until teardown.
+- If the app genuinely cannot install a SIGTERM handler and exec-form alone is not sufficient (rare), pick ONE of:
+  1. Add `init: true` to the compose service so Docker injects `tini` as PID 1; tini reaps children and forwards SIGTERM correctly.
+  2. Install `tini` in the image and use `ENTRYPOINT ["/sbin/tini", "--"]` with the real command as `CMD`.
+- Do NOT "fix" this by relaxing the shutdown assertion to accept exit code 137. Exit 137 can also be produced by OOM kills, livelocks, and real SIGKILLs from the host — accepting it would hide genuine failures. Fix the PID 1 process model instead.
+
 CRITICAL — graceful shutdown container resolution:
 - After `docker compose stop <service>`, the container moves to `exited` state.
 - `docker compose ps -q <service>` only returns RUNNING containers and will return empty after stop.

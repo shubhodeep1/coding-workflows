@@ -149,7 +149,7 @@ class TestHardhatRpcProbe(unittest.TestCase):
         self.assertTrue(line.startswith("RESULT:missing_result_field:"), line)
 
     def test_prompt_files_contain_rpc_guidance(self) -> None:
-        """Verify that both prompt files contain the Hardhat JSON-RPC guidance section."""
+        """Verify that both prompt files contain RPC and graceful-shutdown guidance sections."""
         from pathlib import Path
 
         prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
@@ -169,6 +169,26 @@ class TestHardhatRpcProbe(unittest.TestCase):
                 'type == "object"',
                 content,
                 f"{fname} must include 'type == \"object\"' guard in JSON-RPC pattern",
+            )
+            self.assertIn(
+                "CRITICAL — Dockerfile PID 1 signal handling",
+                content,
+                f"{fname} must require PID 1 signal-forwarding guidance",
+            )
+            self.assertIn(
+                "exec-form",
+                content,
+                f"{fname} must require exec-form CMD/ENTRYPOINT for PID 1",
+            )
+            self.assertIn(
+                "init: true",
+                content,
+                f"{fname} must mention init: true as a fallback",
+            )
+            self.assertIn(
+                "accept exit code 137",
+                content,
+                f"{fname} must forbid accepting 137 as graceful shutdown",
             )
 
 
