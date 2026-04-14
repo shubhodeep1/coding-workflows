@@ -2175,7 +2175,7 @@ def test_stall_judge_escalate_human_does_not_increment_counter():
 		},
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
-	assert issue_entry["stall_recovery_count"] == 2
+	assert issue_entry["stall_recovery_count"] == 3
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
 
 
@@ -2227,7 +2227,7 @@ def test_standalone_stall_judge_escalate_human_adds_needs_human_label():
 	)
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
-	assert issue_entry["stall_recovery_count"] == 2
+	assert issue_entry["stall_recovery_count"] == 3
 
 def test_no_labels_open_issue_uses_bounded_recovery_policy():
 	state = _base_state(status="in_progress")

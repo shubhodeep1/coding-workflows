@@ -2294,6 +2294,7 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       ensure_label_exists "ai:needs-human"
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || true
       tg_notify "Stall judge escalated issue #${issue_num} for human intervention (phase ${phase}, stuck ${stall_minutes}m)."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "CRITICAL"
+      STALL_RECOVERY_SHOULD_INCREMENT="true"
       ;;
 
     resolve_merge_conflict)
