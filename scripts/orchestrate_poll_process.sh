@@ -315,6 +315,13 @@ else
   ENABLE_STANDALONE_STALL_RECOVERY="false"
 fi
 
+ENABLE_CLOSE_MERGED_ISSUES="${ENABLE_CLOSE_MERGED_ISSUES:-true}"
+if is_truthy "${ENABLE_CLOSE_MERGED_ISSUES}"; then
+  ENABLE_CLOSE_MERGED_ISSUES="true"
+else
+  ENABLE_CLOSE_MERGED_ISSUES="false"
+fi
+
 MAX_RECOVERY_ATTEMPTS="${MAX_RECOVERY_ATTEMPTS:-3}"
 if ! [[ "${MAX_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_RECOVERY_ATTEMPTS}" -lt 1 ]; then
   echo "::warning::MAX_RECOVERY_ATTEMPTS must be a positive integer; defaulting to 3"
@@ -532,8 +539,10 @@ validation_fix_issue_has_merged_pr_evidence() {
   local pr_url
   local pr_json
   local lookup_failed="false"
+  local github_api_base="${GITHUB_API_URL:-https://api.github.com}"
+  local pr_api_prefix="${github_api_base}/repos/${GITHUB_REPOSITORY}/pulls/"
 
-  if ! timeline_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null)"; then
+  if ! timeline_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
     return 2
   fi
 
@@ -548,6 +557,9 @@ validation_fix_issue_has_merged_pr_evidence() {
 
   while IFS= read -r pr_url; do
     [ -n "${pr_url}" ] || continue
+    if [[ "${pr_url}" != "${pr_api_prefix}"* ]]; then
+      continue
+    fi
 
     if ! pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)"; then
       lookup_failed="true"
@@ -616,6 +628,129 @@ post_healing_summary_comment() {
   post_tracking_comment "## 🔧 Poller auto-healing updates
 
 $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
+}
+
+# close_merged_issues_sweep — scans all OPEN GitHub issues that carry the
+# ai:merged label and closes any whose linked PR is verified merged via the
+# GitHub REST API. Runs for both orchestrator-managed child issues and
+# non-orchestrator-managed standalone issues. Tracking issues
+# (label ai:orchestrator-tracking) are intentionally skipped — their
+# close lifecycle is handled by the orchestrator completion path.
+#
+# Verification policy (Q2: A — strict): walks the issue timeline for
+# cross-referenced PRs and only closes if at least one fetched PR reports
+# merged == true (or merged_at != null). If no merged PR can be verified
+# (e.g. stale label, missing PR link, transient API failure), the issue is
+# left open and a Telegram alert is sent for operator investigation — this
+# sweep does NOT attempt any other recovery in that case.
+#
+# Gated by ENABLE_CLOSE_MERGED_ISSUES (default true).
+close_merged_issues_sweep() {
+  if [ "${ENABLE_CLOSE_MERGED_ISSUES}" != "true" ]; then
+    echo "Close merged issues sweep disabled by ENABLE_CLOSE_MERGED_ISSUES=${ENABLE_CLOSE_MERGED_ISSUES}."
+    return 0
+  fi
+
+  echo ""
+  echo "========================================"
+  echo "Close merged issues sweep"
+  echo "========================================"
+
+  local issues_json
+  issues_json="$(gh_retry gh issue list \
+    --repo "${GITHUB_REPOSITORY}" \
+    --state open \
+    --label "ai:merged" \
+    --json number,labels \
+    --limit 200 2>/dev/null || echo "[]")"
+
+  local count
+  count="$(echo "${issues_json}" | jq 'length' 2>/dev/null || echo "0")"
+  echo "Found ${count} open issue(s) with ai:merged label."
+
+  if [ "${count}" -eq 0 ]; then
+    return 0
+  fi
+
+  local idx issue_num has_tracking_label timeline_json pr_urls pr_url pr_json merged_pr_num
+  local github_api_base="${GITHUB_API_URL:-https://api.github.com}"
+  local pr_api_prefix="${github_api_base}/repos/${GITHUB_REPOSITORY}/pulls/"
+  local closed_count=0
+  local skipped_count=0
+  local alert_count=0
+
+  for ((idx=0; idx<count; idx++)); do
+    issue_num="$(echo "${issues_json}" | jq -r ".[${idx}].number" 2>/dev/null || echo "")"
+    [ -n "${issue_num}" ] && [ "${issue_num}" != "null" ] || continue
+
+    # Skip orchestrator tracking issues — handled by the project completion
+    # close path (see set_tracking_phase_label "ai:merged" call sites).
+    has_tracking_label="$(echo "${issues_json}" | jq -r --argjson i "${idx}" '[.[$i].labels[]?.name] | index("ai:orchestrator-tracking") // empty' 2>/dev/null || echo "")"
+    if [ -n "${has_tracking_label}" ]; then
+      echo "  Issue #${issue_num}: ai:orchestrator-tracking — skipping (handled by completion path)."
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+
+    # Walk the issue timeline for cross-referenced PR URLs. Reuses the
+    # same pattern as validation_fix_issue_has_merged_pr_evidence().
+    if ! timeline_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} timeline_fetch_failed — skipping this cycle."
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+
+    if ! echo "${timeline_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} timeline_not_array — skipping this cycle."
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+
+    pr_urls="$(echo "${timeline_json}" | jq -r '[.[] | select(.event == "cross-referenced" and (.source.issue.pull_request.url? | type == "string")) | .source.issue.pull_request.url] | unique | .[]?' 2>/dev/null || true)"
+
+    merged_pr_num=""
+    if [ -n "${pr_urls}" ]; then
+      while IFS= read -r pr_url; do
+        [ -n "${pr_url}" ] || continue
+        if [[ "${pr_url}" != "${pr_api_prefix}"* ]]; then
+          continue
+        fi
+        if ! pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)"; then
+          continue
+        fi
+        if ! echo "${pr_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+          continue
+        fi
+        if echo "${pr_json}" | jq -e '(.merged_at != null) or (.merged == true)' >/dev/null 2>&1; then
+          merged_pr_num="$(echo "${pr_json}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+          break
+        fi
+      done <<< "${pr_urls}"
+    fi
+
+    if [ -z "${merged_pr_num}" ]; then
+      # Policy: do not close, send Telegram alert for investigation.
+      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} no_merged_pr_found — leaving open and alerting."
+      tg_notify_issue "${issue_num}" "⚠️ Orchestrator poller: issue #${issue_num} carries the \`ai:merged\` label but no linked merged PR could be verified on its timeline. The label may be stale or the PR link may be missing. Not auto-closing — please investigate." "WARNING" || true
+      alert_count=$((alert_count + 1))
+      continue
+    fi
+
+    echo "  Issue #${issue_num}: verified merged PR #${merged_pr_num}. Closing."
+    local _close_err_file
+    _close_err_file="$(mktemp)"
+    if gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        -c "Closing: linked PR #${merged_pr_num} was merged. Auto-closed by orchestrator poller (close_merged_issues_sweep)." \
+        >/dev/null 2>"${_close_err_file}"; then
+      closed_count=$((closed_count + 1))
+      echo "CLOSE_MERGED_SWEEP issue=${issue_num} pr=${merged_pr_num} status=closed"
+    else
+      echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} close_failed: $(cat "${_close_err_file}" 2>/dev/null)" >&2
+    fi
+    rm -f "${_close_err_file}"
+  done
+
+  echo "Close merged issues sweep complete. Closed=${closed_count} Skipped=${skipped_count} Alerts=${alert_count}."
 }
 
 reconcile_managed_issue_labels() {
@@ -5196,6 +5331,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 done
 
 run_standalone_stall_recovery
+
+close_merged_issues_sweep
 
 # ---------------------------------------------------------------
 # Standalone PR conflict sweep
