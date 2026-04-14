@@ -161,6 +161,11 @@ def _run_poller(
 	update_branch_fail_for_prs: list[int] | None = None,
 	review_dispatch_fail_for_prs: list[int] | None = None,
 	active_autofix_runs: list[dict] | None = None,
+	compare_results: dict[str, dict] | None = None,
+	pr_api_sequences: dict[int, list[dict]] | None = None,
+	enable_telegram_mock: bool = False,
+	simulate_git_changes: bool = False,
+	git_diff_cached_names: list[str] | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -177,6 +182,9 @@ def _run_poller(
 	update_branch_fail_for_prs = update_branch_fail_for_prs or []
 	review_dispatch_fail_for_prs = review_dispatch_fail_for_prs or []
 	active_autofix_runs = active_autofix_runs or []
+	compare_results = compare_results or {}
+	pr_api_sequences = pr_api_sequences or {}
+	git_diff_cached_names = git_diff_cached_names or ["src/mock_fix.py"]
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -220,8 +228,13 @@ def _run_poller(
 		store = {
 			"issues": issues,
 			"next_comment_id": 2 + len(tracking_comments),
+			"next_tg_message_id": 1,
 			"validation_dispatches": [],
 			"review_dispatches": [],
+			"pr_create_calls": [],
+			"telegram_calls": [],
+			"telegram_delete_calls": [],
+			"compare_calls": [],
 			"closed_issues": [],
 			"graphql_mode": gql_mode,
 			"graphql_labels": {str(k): list(v) for k, v in gql_labels.items()},
@@ -241,6 +254,9 @@ def _run_poller(
 			"validation_workflow_runs": validation_workflow_runs,
 			"issue_linked_prs": {str(k): int(v) for k, v in issue_linked_prs.items()},
 			"timeline_fail_for_issues": [int(x) for x in timeline_fail_for_issues],
+			"compare_results": {str(k): dict(v) for k, v in compare_results.items()},
+			"pr_api_sequences": {str(k): [dict(x) for x in v] for k, v in pr_api_sequences.items()},
+			"pr_api_sequence_pos": {},
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -431,6 +447,7 @@ if args[0] == 'pr' and len(args) >= 2 and args[1] == 'create':
 			i += 2
 			continue
 		i += 1
+	store.setdefault('pr_create_calls', []).append({'base': base, 'head': head, 'title': title, 'body': body})
 	next_num = store.get('next_pr_number', 300)
 	store['next_pr_number'] = next_num + 1
 	pr = {
@@ -620,9 +637,21 @@ if args[0] == 'api':
 	if m:
 		pr_num = int(m.group(1))
 		pr = None
+		seq_key = str(pr_num)
+		seq_map = store.get('pr_api_sequences', {})
+		if seq_key in seq_map:
+			seq = seq_map.get(seq_key, [])
+			if seq:
+				pos_map = store.setdefault('pr_api_sequence_pos', {})
+				pos = int(pos_map.get(seq_key, 0))
+				idx = pos if pos < len(seq) else len(seq) - 1
+				pr = seq[idx]
+				pos_map[seq_key] = pos + 1
+				save()
 		for item in store.get('prs', []):
 			if item.get('number') == pr_num:
-				pr = item
+				if pr is None:
+					pr = item
 				break
 		if pr is None:
 			print('{}')
@@ -668,6 +697,20 @@ if args[0] == 'api':
 			}))
 		sys.exit(0)
 
+	if re.search(r'/compare/', path):
+		m_compare = re.search(r'/compare/([^\.]+)\.\.\.(.+)$', path)
+		if m_compare:
+			base_ref = m_compare.group(1)
+			head_ref = m_compare.group(2)
+			key = f'{base_ref}...{head_ref}'
+			compare_payload = store.get('compare_results', {}).get(key)
+			if compare_payload is None:
+				compare_payload = {'status': 'ahead', 'total_commits': 1, 'ahead_by': 1}
+			store.setdefault('compare_calls', []).append({'base': base_ref, 'head': head_ref})
+			save()
+			print(json.dumps(compare_payload))
+			sys.exit(0)
+
 	if re.search(r'/merges$', path) and (method == 'POST' or fields):
 		base = ''
 		head = ''
@@ -678,6 +721,7 @@ if args[0] == 'api':
 				head = f.split('=', 1)[1]
 		store.setdefault('merge_calls', []).append({'base': base, 'head': head})
 		if store.get('merge_conflict_on_sync'):
+			save()
 			print('conflict', file=sys.stderr)
 			sys.exit(1)
 		save()
@@ -782,6 +826,135 @@ print(json.dumps(parsed))
 """,
 		)
 
+		if enable_telegram_mock:
+			_write_exec(
+				bin_dir / "curl",
+				r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+store_path = Path(os.environ['GH_MOCK_STORE'])
+store = json.loads(store_path.read_text(encoding='utf-8'))
+args = sys.argv[1:]
+
+method = 'GET'
+url = ''
+data = {}
+i = 0
+while i < len(args):
+	arg = args[i]
+	if arg == '-X' and i + 1 < len(args):
+		method = args[i + 1]
+		i += 2
+		continue
+	if arg == '-d' and i + 1 < len(args):
+		kv = args[i + 1]
+		if '=' in kv:
+			k, v = kv.split('=', 1)
+			data[k] = v
+		i += 2
+		continue
+	if arg.startswith('http'):
+		url = arg
+		i += 1
+		continue
+	i += 1
+
+if 'api.telegram.org' in url and '/sendMessage' in url and method.upper() == 'POST':
+	text_arg = ''
+	for idx, item in enumerate(args):
+		if item == '--data-urlencode' and idx + 1 < len(args):
+			encoded = args[idx + 1]
+			if encoded.startswith('text='):
+				text_arg = encoded.split('=', 1)[1]
+				break
+	if text_arg:
+		from urllib.parse import unquote_plus
+		data['text'] = unquote_plus(text_arg)
+	msg_id = int(store.get('next_tg_message_id', 1))
+	store['next_tg_message_id'] = msg_id + 1
+	store.setdefault('telegram_calls', []).append({
+		'chat_id': data.get('chat_id', ''),
+		'text': data.get('text', ''),
+		'url': url,
+	})
+	store_path.write_text(json.dumps(store), encoding='utf-8')
+	print(json.dumps({'ok': True, 'result': {'message_id': msg_id}}))
+	sys.exit(0)
+
+if 'api.telegram.org' in url and '/deleteMessage' in url and method.upper() == 'POST':
+	store.setdefault('telegram_delete_calls', []).append({
+		'chat_id': data.get('chat_id', ''),
+		'message_id': data.get('message_id', ''),
+		'url': url,
+	})
+	store_path.write_text(json.dumps(store), encoding='utf-8')
+	print(json.dumps({'ok': True, 'result': True}))
+	sys.exit(0)
+
+if 'api.github.com' in url:
+	print('{}')
+	sys.exit(0)
+
+print('{}')
+''',
+			)
+
+		if simulate_git_changes:
+			_write_exec(
+				bin_dir / "git",
+				r'''#!/usr/bin/env python3
+import os
+import re
+import sys
+
+args = sys.argv[1:]
+if not args:
+	sys.exit(0)
+
+cmd = args[0]
+if cmd == 'status':
+	if '--porcelain' in args:
+		print(' M src/mock_fix.py')
+	else:
+		print('On branch main')
+		sys.exit(0)
+	sys.exit(0)
+
+if cmd == 'config':
+	sys.exit(0)
+
+if cmd == 'add':
+	sys.exit(0)
+
+if cmd == 'diff' and '--cached' in args and '--name-only' in args:
+	names = os.environ.get('MOCK_GIT_DIFF_CACHED_NAMES', 'src/mock_fix.py')
+	for name in [x for x in names.split('\n') if x]:
+		print(name)
+	sys.exit(0)
+
+if cmd == 'commit':
+	sys.exit(0)
+
+if cmd == 'remote' and len(args) >= 3 and args[1] == 'set-url':
+	sys.exit(0)
+
+if cmd == 'push':
+	sys.exit(0)
+
+if cmd == 'fetch':
+	sys.exit(0)
+
+if cmd == 'checkout':
+	sys.exit(0)
+
+print('')
+sys.exit(0)
+''',
+			)
+
 		env = os.environ.copy()
 		env.update(
 			{
@@ -795,8 +968,8 @@ print(json.dumps(parsed))
 				"GITHUB_REPOSITORY": "owner/repo",
 				"MODEL_EDITOR": "openai/gpt-5.3-codex",
 				"MODEL_REASONING_EFFORT_JUDGE": "xhigh",
-				"TG_BOT_SECRET": "",
-				"TG_ADMIN_CHAT_ID": "",
+				"TG_BOT_SECRET": "test-telegram-token" if enable_telegram_mock else "",
+				"TG_ADMIN_CHAT_ID": "-100123" if enable_telegram_mock else "",
 				"TOOL_CALL_BUDGET_JUDGE": "60",
 				"SERENA_VERSION": "main",
 				"SERENA_LANGUAGES": "",
@@ -808,6 +981,7 @@ print(json.dumps(parsed))
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"GH_MOCK_STORE": str(store_file),
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
+				"MOCK_GIT_DIFF_CACHED_NAMES": "\n".join(git_diff_cached_names),
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			}
 		)
@@ -832,6 +1006,9 @@ print(json.dumps(parsed))
 		result["merge_calls"] = result.get("merge_calls", [])
 		result["review_dispatches"] = result.get("review_dispatches", [])
 		result["update_branch_calls"] = result.get("update_branch_calls", [])
+		result["pr_create_calls"] = result.get("pr_create_calls", [])
+		result["telegram_calls"] = result.get("telegram_calls", [])
+		result["compare_calls"] = result.get("compare_calls", [])
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
 		return result
@@ -1237,6 +1414,128 @@ def test_standalone_conflict_sweep_missing_head_ref_logs_warning_and_continues()
 	assert result["update_branch_calls"] == []
 	assert result["review_dispatches"] == []
 	assert "unavailable head ref" in (result["stdout"] + result["stderr"])
+
+
+def test_sync_warning_emits_once_when_branch_superseded_across_poll_cycles():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	compare_key = "orchestrator/project-192...main"
+
+	cycle_one = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:in-progress"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		compare_results={
+			compare_key: {"status": "behind", "ahead_by": 0, "total_commits": 0},
+		},
+		enable_telegram_mock=True,
+	)
+
+	tracking_comments = [c.get("body", "") for c in cycle_one["issues"]["192"]["comments"][1:]]
+	cycle_two = _run_poller(
+		state=cycle_one["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=tracking_comments,
+		issue_labels={10: ["ai:in-progress"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		compare_results={
+			compare_key: {"status": "behind", "ahead_by": 0, "total_commits": 0},
+		},
+		enable_telegram_mock=True,
+	)
+
+	assert cycle_one["latest_state"]["integration_sync_status"] == "superseded-by-main"
+	assert cycle_one["latest_state"]["integration_sync_warning_emitted"] is True
+	assert cycle_one["latest_state"]["integration_sync_superseded_by"] == "main"
+	assert cycle_one["merge_calls"]
+	assert cycle_one["merge_calls"][0] == {"base": "orchestrator/project-192", "head": "main"}
+	assert len(cycle_one["compare_calls"]) == 1
+	assert len(cycle_one["telegram_calls"]) == 1
+	assert "Sync warning for #192" in cycle_one["telegram_calls"][0].get("text", "")
+
+	assert cycle_two["latest_state"]["integration_sync_status"] == "superseded-by-main"
+	assert cycle_two["merge_calls"] == []
+	assert cycle_two["compare_calls"] == []
+	assert cycle_two["telegram_calls"] == []
+	assert len(cycle_one["telegram_calls"]) + len(cycle_two["telegram_calls"]) == 1
+
+
+def test_conflict_autofix_guard_retargets_followup_base_when_integration_branch_active():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	prs = [
+		{
+			"number": 430,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headSha": "sha430",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+			"title": "Merged PR",
+			"body": "Merged body",
+		},
+	]
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked", "ai:in-progress"]},
+		issue_linked_prs={10: 430},
+		prs=prs,
+		pr_api_sequences={
+			430: [
+				{
+					"number": 430,
+					"state": "open",
+					"merged": False,
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headSha": "sha430",
+					"mergeable": False,
+					"mergeable_state": "dirty",
+					"title": "Open PR before review-blocked handling",
+					"body": "Open body",
+				},
+				{
+					"number": 430,
+					"state": "closed",
+					"merged": True,
+					"merged_at": "2026-04-12T08:00:00Z",
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headSha": "sha430",
+					"mergeable": None,
+					"mergeable_state": "unknown",
+					"title": "Merged PR after race",
+					"body": "Merged body",
+				},
+			],
+		},
+		existing_branches=["main", "orchestrator/project-192"],
+		codex_json={
+			"action": "fix",
+			"justification": "follow-up fixes required",
+			"fix_description": "apply follow-up patch",
+			"remaining_issues_summary": "none",
+		},
+		simulate_git_changes=True,
+	)
+
+	followup_creates = [
+		call for call in result["pr_create_calls"] if "[orchestrator-fix] follow-up fixes" in call.get("title", "")
+	]
+	assert followup_creates
+	assert all(call.get("base") == "orchestrator/project-192" for call in followup_creates)
+	assert all(call.get("base") != "main" for call in followup_creates)
 
 
 
