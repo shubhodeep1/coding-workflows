@@ -731,6 +731,8 @@ resolve_active_orchestrator_context_for_issue() {
   local idx
   local tracking_num
   local tracking_comments
+  local tracking_comments_pages_file
+  local tracking_comments_merged
   local tracking_state_json
 
   RESOLVED_ORCHESTRATOR_OWNED="false"
@@ -763,9 +765,16 @@ resolve_active_orchestrator_context_for_issue() {
       continue
     fi
 
-    if ! tracking_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${tracking_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
-      tracking_comments='[]'
+    tracking_comments='[]'
+    tracking_comments_pages_file="${RUNTIME_DIR}/tracking_issue_${tracking_num}_comments_pages.json"
+    rm -f "${tracking_comments_pages_file}"
+    if gh_retry_to_file "${tracking_comments_pages_file}" gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${tracking_num}/comments?per_page=100"; then
+      tracking_comments_merged="$(jq -s 'add // []' "${tracking_comments_pages_file}" 2>/dev/null || echo '[]')"
+      if printf '%s' "${tracking_comments_merged}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+        tracking_comments="${tracking_comments_merged}"
+      fi
     fi
+    rm -f "${tracking_comments_pages_file}"
 
     tracking_state_json=""
     if ! extract_latest_valid_orchestrator_state "${tracking_comments}"; then
