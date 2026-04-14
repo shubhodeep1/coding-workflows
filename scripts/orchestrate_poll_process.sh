@@ -427,7 +427,7 @@ ensure_label_exists() {
   # Fast path: already verified (or created) earlier in this process.
   # Labels are persistent on the repo so a prior confirmation is still
   # valid for the lifetime of this orchestrator invocation.
-  if [ -n "${_ENSURED_LABELS_CACHE[${label_name}]+set}" ]; then
+  if [ -n "${_ENSURED_LABELS_CACHE["${label_name}"]+set}" ]; then
     return 0
   fi
 
@@ -457,7 +457,7 @@ ensure_label_exists() {
   local encoded_name
   encoded_name="$(printf '%s' "${label_name}" | jq -sRr @uri)"
   if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
-    _ENSURED_LABELS_CACHE[${label_name}]=1
+    _ENSURED_LABELS_CACHE["${label_name}"]=1
     return 0
   fi
 
@@ -465,14 +465,14 @@ ensure_label_exists() {
     --repo "${GITHUB_REPOSITORY}" \
     --color "${color}" \
     --description "${description}" >/dev/null 2>&1; then
-    _ENSURED_LABELS_CACHE[${label_name}]=1
+    _ENSURED_LABELS_CACHE["${label_name}"]=1
     return 0
   fi
 
   # Creation can fail if another concurrent actor created the label first.
   # Cache only when a follow-up read confirms the label now exists.
   if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
-    _ENSURED_LABELS_CACHE[${label_name}]=1
+    _ENSURED_LABELS_CACHE["${label_name}"]=1
   fi
 }
 
