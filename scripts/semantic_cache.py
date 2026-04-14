@@ -478,8 +478,8 @@ def run_lookup(args: argparse.Namespace) -> dict[str, Any]:
 				"truncated": True,
 				"source_fingerprint": source_fingerprint,
 			}
-		query_embedding = _create_embedding(canonical_input, cfg)
 		backend = _resolve_backend(cfg)
+		query_embedding = _create_embedding(canonical_input, cfg)
 		entry, similarity = backend.lookup(args.phase, query_embedding, cfg.similarity_threshold, cfg.embedding_model)
 		if entry is None:
 			return {
@@ -560,8 +560,8 @@ def run_store(args: argparse.Namespace) -> dict[str, Any]:
 				"truncated": True,
 				"source_fingerprint": source_fingerprint,
 			}
-		embedding = _create_embedding(canonical_input, cfg)
 		backend = _resolve_backend(cfg)
+		embedding = _create_embedding(canonical_input, cfg)
 		entry = _build_entry(
 			phase=args.phase,
 			original_issue_id=str(args.issue_number),

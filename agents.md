@@ -268,7 +268,7 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
-## 14. Semantic Cache Scope
+## 15. Semantic Cache Scope
 
 - Semantic cache integration is allowed only in `clarify` and `orchestrate_clarify_respond`.
 - Do NOT add semantic cache hooks to `implement`, `review_autofix`, `validate`, `plan`, or `orchestrate` unless explicitly approved.
