@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Stop orchestrator sync-alert spam and enforce integration-branch targeting for conflict autofix PRs\",\"issues\":[{\"id\":\"poller-sync-superseded-by-main\",\"title\":\"orchestrate_poll: detect `superseded-by-main` integration branches and stop repeated sync warnings\",\"priority\":1},{\"id\":\"conflict-autofix-integration-base-guard\",\"title\":\"Prevent merge-conflict autofix PRs from targeting `main` when orchestrator integration branch is active\",\"priority\":2},{\"id\":\"regression-tests-sync-supersede-and-base-guard\",\"title\":\"Add regression coverage for superseded sync dedupe and autofix base-branch guard\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"poller-sync-superseded-by-main\",\"to\":\"regression-tests-sync-supersede-and-base-guard\"},{\"from\":\"conflict-autofix-integration-base-guard\",\"to\":\"regression-tests-sync-supersede-and-base-guard\"}]}",
+  "fingerprint": "cbe9c1d085894c2945762215b8408928b2bacd6c7e034602c1b485746702571d",
+  "lineage": {
+    "issue_number": 866,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24378933011",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24378933011",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260414031845_429c157396",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 866,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24378933011"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Stop orchestrator sync-alert spam and enforce integration-branch targeting for conflict autofix PRs' into 3 issues (tracking #866)",
+  "timestamps": {
+    "created_at": "2026-04-14T03:18:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
