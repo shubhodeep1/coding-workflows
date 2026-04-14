@@ -1550,7 +1550,7 @@ sync_default_into_integration_branch() {
         })' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
-      post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}\n\nThe integration branch \`${integration_branch}\` is marked as **superseded-by-main**. Sync is intentionally skipped in future poll cycles to avoid repeated conflict churn.\n\nRunbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
+      post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}\n\nThe integration branch \`${integration_branch}\` is marked as **\`superseded-by-main\` relative to \`${default_branch}\`**. Sync is intentionally skipped in future poll cycles to avoid repeated conflict churn.\n\nRunbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
     fi
     return 0
   fi
@@ -1668,7 +1668,7 @@ finalize_integration_merge_if_needed() {
   local sync_status
   sync_status="$(jq -r '.sync.status // "active"' "${STATE_FILE}")"
   if [ "${sync_status}" = "superseded-by-main" ]; then
-    jq --arg reason "$(jq -r '.sync.superseded_reason // "Integration branch superseded by main; final merge intentionally skipped."' "${STATE_FILE}")" \
+    jq --arg reason "$(jq -r --arg default_branch "${default_branch}" '.sync.superseded_reason // ("Integration branch superseded by " + $default_branch + "; final merge intentionally skipped.")' "${STATE_FILE}")" \
       '.final_merge_status = "superseded-by-main" | .final_merge_error = $reason' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment

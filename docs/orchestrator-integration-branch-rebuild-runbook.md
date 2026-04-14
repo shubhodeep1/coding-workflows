@@ -10,7 +10,7 @@ Use this runbook when the poller reports recurring integration-branch sync confl
 
 ## Preconditions
 
-- `main` contains the desired project output (or the commits you want to preserve are known).
+- `<default_branch>` contains the desired project output (or the commits you want to preserve are known).
 - You have permission to push/delete `orchestrator/project-<tracking_issue>`.
 - No critical in-flight PR depends on the old integration branch tip.
 
@@ -26,8 +26,8 @@ git branch backup/orchestrator-project-<tracking_issue> origin/orchestrator/proj
 2. Recreate integration branch from default branch:
 
 ```bash
-git checkout main
-git pull --ff-only origin main
+git checkout <default_branch>
+git pull --ff-only origin <default_branch>
 git push origin --delete orchestrator/project-<tracking_issue>
 git checkout -b orchestrator/project-<tracking_issue>
 git push -u origin orchestrator/project-<tracking_issue>
