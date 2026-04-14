@@ -332,18 +332,6 @@ jobs:
             fi
           fi
 
-          if [ ! -f prompts/mode-implement-diagnose.txt ]; then
-            if ! _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=${script_ref}"; then
-              echo "::warning::mode-implement-diagnose.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=main"
-            fi
-            if [ "${is_self_repo}" = "false" ]; then
-              echo "prompts/mode-implement-diagnose.txt" >> "${FETCHED_MANIFEST}"
-            fi
-          fi
-
           # Fetch canonical agents.md from coding-workflows into the runtime
           # directory. This is combined with the caller repo's own agents.md
           # (if any) during prompt assembly — the caller's copy is never
@@ -1777,6 +1765,17 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
+          type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
+            local _tmpf
+            _tmpf="$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null)" || return 1
+            if gh api "$@" > "${_tmpf}" 2>/dev/null; then
+              cat "${_tmpf}"
+              rm -f "${_tmpf}"
+              return 0
+            fi
+            rm -f "${_tmpf}"
+            return 1
+          }
 
           echo "captured=false" >> "$GITHUB_OUTPUT"
 
@@ -1784,11 +1783,11 @@ jobs:
             exit 0
           fi
 
-          FAILED_STEP_NAME="$(gh_retry gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
-            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' 2>/dev/null || true)"
+          FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' || true)"
           if [ -z "${FAILED_STEP_NAME}" ] && [ "${{ job.status }}" = "cancelled" ]; then
-            FAILED_STEP_NAME="$(gh_retry gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
-              --jq '[.jobs[].steps[] | select(.conclusion == "cancelled" or .status == "in_progress")] | first | .name // ""' 2>/dev/null || true)"
+            FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+              --jq '[.jobs[].steps[] | select(.conclusion == "cancelled" or .status == "in_progress")] | first | .name // ""' || true)"
           fi
           echo "failed_step_name=${FAILED_STEP_NAME}" >> "$GITHUB_OUTPUT"
 
@@ -1853,13 +1852,24 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
+          type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
+            local _tmpf
+            _tmpf="$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null)" || return 1
+            if gh api "$@" > "${_tmpf}" 2>/dev/null; then
+              cat "${_tmpf}"
+              rm -f "${_tmpf}"
+              return 0
+            fi
+            rm -f "${_tmpf}"
+            return 1
+          }
 
           IMPLEMENT_DIAGNOSE_TIMEOUT_SEC=300
           TOOL_CALL_BUDGET_IMPLEMENT_DIAGNOSE=20
 
           echo "handled=false" >> "$GITHUB_OUTPUT"
 
-          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' 2>/dev/null || echo '[]')"
+          ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementation-failed") != null' >/dev/null 2>&1; then
             echo "Issue #${ISSUE_NUMBER} already has ai:implementation-failed label; skipping post-Codex diagnosis."
             echo "handled=true" >> "$GITHUB_OUTPUT"
@@ -1897,11 +1907,11 @@ jobs:
               --add-label 'ai:implementation-failed' >/dev/null 2>&1 || true
           }
 
-          FAILED_STEP_NAME="$(gh_retry gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
-            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' 2>/dev/null || true)"
+          FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' || true)"
           if [ -z "${FAILED_STEP_NAME}" ] && [ "${{ job.status }}" = "cancelled" ]; then
-            FAILED_STEP_NAME="$(gh_retry gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
-              --jq '[.jobs[].steps[] | select(.conclusion == "cancelled" or .status == "in_progress")] | first | .name // ""' 2>/dev/null || true)"
+            FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+              --jq '[.jobs[].steps[] | select(.conclusion == "cancelled" or .status == "in_progress")] | first | .name // ""' || true)"
           fi
           if [ -z "${FAILED_STEP_NAME}" ]; then
             FAILED_STEP_NAME="unknown-step"
