@@ -995,6 +995,10 @@ Use this after manual intervention (e.g. fixing a problematic issue, merging a s
 
 - Cycle 1 generates a new harness under `validation/`.
 - Cycle 2+ reuses and targeted-fixes the existing owned harness when `validation/` is present (for example, restored from artifacts); otherwise it safely falls back to full regeneration.
+- Startup guard scope is managed-artifact only: consumer-owned helper scripts (for example, `scripts/validate_local.sh`) are allowed.
+- Managed artifact contract at startup:
+- `validation/validate.sh` must remain transient/untracked.
+- Tracked copies of managed validation artifacts are blocked outside canonical `validation/` paths.
 - Before execution, validation runs pre-flight checks (`docker compose config`, shell syntax, and compose build path resolution).
 - Pre-flight failures are classified as terminal `harness_error` for that run.
 - The first generated test must be a canary infrastructure check (`00_canary.sh` style); infra-only canary failures shortcut to `harness_error`, while app startup/crash signals continue to diagnosis.

@@ -541,6 +541,50 @@ PY
 	return 0
 }
 
+ensure_validation_harness_not_tracked()
+{
+	if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+		return 0
+	fi
+
+	if [ -n "$(git ls-files --error-unmatch -- validation/validate.sh 2>/dev/null || true)" ]; then
+		echo "Managed validation artifact must remain untracked: validation/validate.sh" >&2
+		echo "Remove it from git tracking with: git rm --cached -- validation/validate.sh" >&2
+		return 1
+	fi
+
+	return 0
+}
+
+enforce_managed_validation_artifact_contract()
+{
+	if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+		return 0
+	fi
+
+	local tracked_path
+	local duplicate_paths=()
+	while IFS= read -r tracked_path; do
+		case "${tracked_path}" in
+			validation/validate.sh|validation/docker-compose.test.yml|validation/.ai-validation-owned)
+				continue
+				;;
+			*/validation/validate.sh|*/validation/docker-compose.test.yml|*/validation/.ai-validation-owned)
+				duplicate_paths+=("${tracked_path}")
+				;;
+		esac
+	done < <(git ls-files 2>/dev/null || true)
+
+	if [ "${#duplicate_paths[@]}" -gt 0 ]; then
+		echo "Found tracked copies of managed validation artifacts:" >&2
+		printf '  %s\n' "${duplicate_paths[@]}" >&2
+		echo "Managed artifacts are only allowed at validation/{validate.sh,docker-compose.test.yml,.ai-validation-owned}." >&2
+		return 1
+	fi
+
+	return 0
+}
+
 trap cleanup_runtime_containers EXIT
 
 
@@ -711,6 +755,14 @@ fi
 # Phase 1: Generate validation harness
 # ---------------------------------------------------------------
 set_tracking_phase_label "ai:validating"
+
+if ! ensure_validation_harness_not_tracked; then
+	exit 1
+fi
+
+if ! enforce_managed_validation_artifact_contract; then
+	exit 1
+fi
 
 # Ensure validation/ is git-ignored so no workflow accidentally commits it.
 # If validation/ was previously committed to the repo, untrack and remove it

@@ -68,6 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/test_validate_harness_rpc.py
+          python3 tests/test_validate_process_driver_guard_scope.py
 
       - name: Workflow log collector coverage gate
         run: |
