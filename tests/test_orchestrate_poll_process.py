@@ -984,7 +984,6 @@ print(json.dumps(parsed))
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"GH_MOCK_STORE": str(store_file),
-				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
