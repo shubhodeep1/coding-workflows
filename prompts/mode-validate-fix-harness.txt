@@ -16,6 +16,11 @@ Scope constraints (mandatory):
 - Preserve passing tests and working configuration.
 - Focus only on failures indicated by prior failure JSON/logs/comments.
 
+Canonical architecture constraints (mandatory):
+- `validation/validate.sh` must remain a thin wrapper that delegates to `scripts/validate_driver.sh`.
+- Do not move harness logic into `validation/validate.sh`; keep runtime logic centralized in `scripts/validate_driver.sh`.
+- Do not modify `scripts/validate_driver.sh` in this phase.
+
 Fix strategy:
 - Identify the minimal set of failing assertions or config mistakes.
 - Patch those lines only (ports, endpoints, scripts, assertions, compose build paths, health checks, tool availability checks).
