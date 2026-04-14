@@ -3619,7 +3619,7 @@ json.dump(result, sys.stdout)
   done
 
   # ---------------------------------------------------------------
-  # Auto-resolve merge conflicts on in-progress PRs
+  # Auto-resolve merge conflicts on in-progress and done PRs
   # ---------------------------------------------------------------
   # When the base branch advances (e.g. another PR merges), existing
   # PRs may develop merge conflicts.  The review workflow already has
@@ -3627,13 +3627,21 @@ json.dump(result, sys.stdout)
   # (opened/synchronize/reopened).  No event fires when the *base*
   # branch moves, so the review workflow is never re-triggered.
   #
-  # This block detects in-progress issues whose linked PRs have become
-  # unmergeable.  First tries the GitHub API update-branch endpoint
-  # (handles clean merges).  If that fails (real conflicts), dispatches
-  # the review workflow via workflow_dispatch so it can resolve
-  # conflicts on a dedicated runner with a clean environment.
+  # This block detects issues whose linked PRs have become unmergeable
+  # across two wave statuses:
+  #   - in_progress: phases ai:implementing/validating/etc. where the
+  #     PR is actively moving through the pipeline.
+  #   - done: the ai:done phase where review has passed and the PR is
+  #     waiting for promotion to ai:ready-to-merge.  Conflicts here
+  #     would otherwise be silently picked up only by the stall
+  #     detector's retrigger_review action (empty-commit nudge), which
+  #     does not actually resolve conflicts.
+  # First tries the GitHub API update-branch endpoint (handles clean
+  # merges).  If that fails (real conflicts), dispatches the review
+  # workflow via workflow_dispatch so it can resolve conflicts on a
+  # dedicated runner with a clean environment.
   # ---------------------------------------------------------------
-  echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "in_progress") | .github_issue' | while read -r ip_issue; do
+  echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "in_progress" or .status == "done") | .github_issue' | while read -r ip_issue; do
     [[ "${ip_issue}" =~ ^[0-9]+$ ]] || continue
     IP_PR="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ip_issue}/timeline" \
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
@@ -3647,7 +3655,7 @@ json.dump(result, sys.stdout)
     if [ "${IP_PR_STATE}" != "open" ] || [ "${IP_MERGEABLE}" != "false" ]; then
       continue
     fi
-    echo "  In-progress issue #${ip_issue} has PR #${IP_PR} with merge conflicts. Running Codex conflict resolution..."
+    echo "  Issue #${ip_issue} has PR #${IP_PR} with merge conflicts. Running Codex conflict resolution..."
 
     _ip_head_sha="$(_jq_field "${_ip_pr_json}" '.head.sha')"
 
@@ -3674,7 +3682,7 @@ json.dump(result, sys.stdout)
         tg_notify "PR #${IP_PR} (issue #${ip_issue}) has merge conflicts. Could not dispatch review workflow."$'\n'"PR: $(_gh_url "pull/${IP_PR}")"$'\n'"Issue: $(_gh_url "issues/${ip_issue}")" "WARNING"
       fi
     else
-      echo "::warning::Could not determine head ref for in-progress PR #${IP_PR}."
+      echo "::warning::Could not determine head ref for PR #${IP_PR}."
     fi
   done
 
