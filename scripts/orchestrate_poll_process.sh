@@ -361,6 +361,7 @@ STALL_RECOVERY_SHOULD_INCREMENT="false"
 STALL_RECOVERY_EFFECTIVE_ACTION=""
 STALL_JUDGE_TARGET_PR=""
 STALL_JUDGE_HEAD_REF=""
+
 # ---------------------------------------------------------------
 # Integration-branch self-healing knobs
 # ---------------------------------------------------------------
