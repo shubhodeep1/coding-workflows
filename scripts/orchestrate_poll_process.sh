@@ -343,6 +343,30 @@ if ! [[ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDAT
   MAX_VALIDATION_RECOVERY_ATTEMPTS="2"
 fi
 
+# ---------------------------------------------------------------
+# Integration-branch self-healing knobs
+# ---------------------------------------------------------------
+# CONFLICT_DISPATCH_COOLDOWN_SECS throttles how often the poller may
+# dispatch the review/autofix workflow against the integration branch's
+# final PR. Without throttling, every poll tick would re-dispatch while
+# the previous resolver is still running.
+#
+# INTEGRATION_CONFLICT_MAX_RETRIES is the circuit-breaker for the
+# resolver dispatch loop. After this many consecutive unresolved
+# conflict ticks, the orchestrator escalates to the judge instead of
+# continuing to spam resolver dispatches.
+CONFLICT_DISPATCH_COOLDOWN_SECS="${CONFLICT_DISPATCH_COOLDOWN_SECS:-900}"
+if ! [[ "${CONFLICT_DISPATCH_COOLDOWN_SECS}" =~ ^[0-9]+$ ]] || [ "${CONFLICT_DISPATCH_COOLDOWN_SECS}" -lt 0 ]; then
+  echo "::warning::CONFLICT_DISPATCH_COOLDOWN_SECS must be a non-negative integer; defaulting to 900"
+  CONFLICT_DISPATCH_COOLDOWN_SECS="900"
+fi
+
+INTEGRATION_CONFLICT_MAX_RETRIES="${INTEGRATION_CONFLICT_MAX_RETRIES:-3}"
+if ! [[ "${INTEGRATION_CONFLICT_MAX_RETRIES}" =~ ^[0-9]+$ ]] || [ "${INTEGRATION_CONFLICT_MAX_RETRIES}" -lt 1 ]; then
+  echo "::warning::INTEGRATION_CONFLICT_MAX_RETRIES must be a positive integer; defaulting to 3"
+  INTEGRATION_CONFLICT_MAX_RETRIES="3"
+fi
+
 post_tracking_comment() {
   local comment_body="$1"
   local payload_file
@@ -900,6 +924,330 @@ mark_integration_branch_missing_failed() {
   tg_cleanup_msgs "${TRACKING_NUM}"
 }
 
+# ---------------------------------------------------------------
+# Self-healing helpers for integration-branch <-> default-branch drift
+# ---------------------------------------------------------------
+# These helpers implement the circuit-breaker flow for issue #832-style
+# stalls, where a periodic `main -> orchestrator/project-<n>` merge
+# silently fails with HTTP 409 every poll tick and nothing resolves it.
+#
+# Flow:
+#   1. ensure_integration_conflict_state_fields: guarantees new state
+#      fields exist (additive, idempotent) so jq arithmetic is safe.
+#   2. sync_default_into_integration_branch tries the plain merges API.
+#   3. On 409, it calls heal_integration_branch_conflict, which:
+#        a. Ensures the final integration->default PR exists (creating
+#           it on-demand via ensure_eager_final_pr).
+#        b. Honours CONFLICT_DISPATCH_COOLDOWN_SECS throttling.
+#        c. Dispatches the existing review/autofix workflow against the
+#           final PR via _dispatch_review_for_conflicts.
+#        d. Bumps integration_conflict_unresolved_ticks / dispatch_count.
+#   4. When unresolved ticks reach INTEGRATION_CONFLICT_MAX_RETRIES the
+#      flow escalates to invoke_judge_for_integration_conflict, which
+#      runs codex exec with a prompt crafted for final-merge resolution.
+#
+# All helpers are idempotent; repeated invocation converges to a
+# mergeable integration branch or a terminal 'failed' state.
+
+ensure_integration_conflict_state_fields() {
+  [ -f "${STATE_FILE}" ] || return 0
+  jq '. + {
+        integration_sync_status: (.integration_sync_status // "clean"),
+        integration_sync_last_error: (.integration_sync_last_error // ""),
+        integration_conflict_dispatch_count: (.integration_conflict_dispatch_count // 0),
+        integration_conflict_dispatch_ts: (.integration_conflict_dispatch_ts // 0),
+        integration_conflict_unresolved_ticks: (.integration_conflict_unresolved_ticks // 0)
+      }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+}
+
+# Create (or discover) the integration->default PR eagerly so that the
+# existing conflict-resolution pipeline has a concrete PR to target.
+# Prints the PR number on stdout, empty string on failure.
+# Also updates final_merge_pr in state when a new PR is created.
+ensure_eager_final_pr() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local project_title="$3"
+
+  [ -n "${integration_branch}" ] || { echo ""; return 1; }
+
+  local existing_pr
+  existing_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  if [ -n "${existing_pr}" ] && [ "${existing_pr}" != "null" ]; then
+    local pr_state
+    pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${existing_pr}" --jq '.state' 2>/dev/null || echo "")"
+    if [ "${pr_state}" = "open" ]; then
+      echo "${existing_pr}"
+      return 0
+    fi
+    # PR closed/merged — fall through to rediscover or recreate.
+  fi
+
+  local discovered
+  discovered="$(gh pr list \
+    --repo "${GITHUB_REPOSITORY}" \
+    --state open \
+    --base "${default_branch}" \
+    --head "${integration_branch}" \
+    --json number \
+    --jq '.[0].number // empty' 2>/dev/null || true)"
+
+  if [ -z "${discovered}" ]; then
+    local pr_url
+    pr_url="$(gh pr create \
+      --repo "${GITHUB_REPOSITORY}" \
+      --base "${default_branch}" \
+      --head "${integration_branch}" \
+      --title "feat: ${project_title}" \
+      --body "Squash merge of orchestrator project #${TRACKING_NUM}.\n\nThis PR is created eagerly by the self-healing pipeline so that \`main\` <-> \`${integration_branch}\` drift can be resolved continuously rather than only at finalize time.\n\nRefs #${TRACKING_NUM}" 2>/dev/null || true)"
+    discovered="$(printf '%s\n' "${pr_url}" | grep -oE '/pull/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+  fi
+
+  if [ -n "${discovered}" ]; then
+    jq --argjson final_pr "${discovered}" '.final_merge_pr = $final_pr' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    echo "${discovered}"
+    return 0
+  fi
+
+  echo ""
+  return 1
+}
+
+# Build a prompt for the judge and run codex exec to resolve a
+# final-merge conflict that has survived INTEGRATION_CONFLICT_MAX_RETRIES
+# automated dispatches. Mirrors the codex setup used by the
+# review-blocked judge block (~L3700-3720) but is PR-scoped rather
+# than issue-scoped.
+#
+# Usage: invoke_judge_for_integration_conflict <final_pr> <integration_branch> <default_branch>
+# Returns: 0 on successful invocation (not necessarily successful resolution),
+#          1 on setup/dispatch failure.
+invoke_judge_for_integration_conflict() {
+  local final_pr="$1"
+  local integration_branch="$2"
+  local default_branch="$3"
+
+  [ -n "${final_pr}" ] || return 1
+
+  echo "  [integration-heal] Escalating to judge for final PR #${final_pr} (${integration_branch} -> ${default_branch})."
+
+  # Ensure codex config exists — mirrors the review-blocked judge setup.
+  mkdir -p ~/.codex
+  local catalog_path="$(pwd)/scripts/codex_model_catalog.json"
+  {
+    echo 'web_search = "live"'
+    echo 'model_provider = "openrouter"'
+    echo "model = \"${MODEL_EDITOR:-openai/gpt-5.3-codex}\""
+    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-high}\""
+    if [ -f "${catalog_path}" ]; then
+      echo "model_catalog_json = \"${catalog_path}\""
+    fi
+    echo
+    echo '[model_providers.openrouter]'
+    echo 'name = "OpenRouter"'
+    echo 'base_url = "https://openrouter.ai/api/v1"'
+    echo 'env_key = "OPENROUTER_API_KEY"'
+    echo 'wire_api = "responses"'
+    echo 'stream_idle_timeout_ms = 600000'
+    echo 'stream_max_retries = 5'
+    echo 'request_max_retries = 3'
+    echo
+    echo '[sandbox_workspace_write]'
+    echo 'network_access = true'
+  } > ~/.codex/config.toml
+
+  # Setup Serena (best-effort, same pattern as existing judge blocks).
+  bash scripts/setup_serena.sh --mode editing --context codex || true
+
+  local prompt_file
+  local output_file
+  prompt_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_prompt.XXXXXX")"
+  output_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_output.XXXXXX")"
+
+  local pr_diff
+  local pr_files
+  pr_diff="$(gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}" 2>/dev/null | head -c 120000 || true)"
+  pr_files="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}/files" --jq '[.[] | {filename, status, additions, deletions}]' 2>/dev/null || echo "[]")"
+  local retries
+  retries="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
+
+  {
+    echo "You are the orchestrator final-merge judge. The automated resolver"
+    echo "pipeline has attempted to sync \`${default_branch}\` into"
+    echo "\`${integration_branch}\` ${retries} times without producing a"
+    echo "mergeable state. Final PR #${final_pr} (${integration_branch} -> ${default_branch})"
+    echo "is currently unmergeable."
+    echo
+    echo "Your task: fetch both branches, resolve the merge conflicts in a"
+    echo "way that preserves the intent of every sub-issue already merged"
+    echo "into ${integration_branch}, push the resolution to"
+    echo "${integration_branch}, and then verify GitHub reports the final"
+    echo "PR as mergeable=true. Do NOT merge the PR yourself — the poller"
+    echo "will do that once mergeability is restored."
+    echo
+    echo "Context:"
+    echo "- Tracking issue: #${TRACKING_NUM}"
+    echo "- Final PR number: ${final_pr}"
+    echo "- Integration branch: ${integration_branch}"
+    echo "- Default branch: ${default_branch}"
+    echo "- Automated resolver attempts so far: ${retries}"
+    echo
+    echo "Changed files in final PR (JSON):"
+    printf '%s\n' "${pr_files}"
+    echo
+    echo "Truncated PR diff:"
+    echo '```diff'
+    printf '%s\n' "${pr_diff}"
+    echo '```'
+    echo
+    echo "Rules:"
+    echo "1. Preserve all intent from merged sub-issues."
+    echo "2. Do not rewrite history of ${default_branch}."
+    echo "3. Prefer merge commits over rebase for the integration branch."
+    echo "4. If conflicts are semantic rather than textual, surface a"
+    echo "   short diagnosis in the commit message."
+  } > "${prompt_file}"
+
+  if cat "${prompt_file}" | codex exec --model "${MODEL_EDITOR:-openai/gpt-5.3-codex}" --full-auto > "${output_file}" 2>&1; then
+    echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
+    rm -f "${prompt_file}" "${output_file}"
+    return 0
+  fi
+
+  echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
+  rm -f "${prompt_file}" "${output_file}"
+  return 1
+}
+
+# Drive one iteration of the self-healing loop for the integration
+# branch. Must be called when we know a conflict exists (either from
+# a 409 in sync_default_into_integration_branch or from a
+# mergeable=false in finalize_integration_merge_if_needed).
+#
+# Returns 0 if healing progressed (dispatch queued, cooldown active,
+# or judge invoked), 1 if the circuit breaker has tripped and the
+# state was marked failed.
+heal_integration_branch_conflict() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local project_title="$3"
+  local error_msg="${4:-merge conflict}"
+
+  ensure_integration_conflict_state_fields
+
+  local final_pr
+  final_pr="$(ensure_eager_final_pr "${integration_branch}" "${default_branch}" "${project_title}" || true)"
+  if [ -z "${final_pr}" ]; then
+    echo "::warning::heal_integration_branch_conflict could not obtain a final PR for ${integration_branch}." >&2
+    jq --arg err "${error_msg}" \
+      '.integration_sync_status = "conflict" | .integration_sync_last_error = $err' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    return 0
+  fi
+
+  local now_ts
+  now_ts="$(date -u +%s)"
+  local last_ts
+  last_ts="$(jq -r '.integration_conflict_dispatch_ts // 0' "${STATE_FILE}")"
+  local dispatch_count
+  dispatch_count="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
+  local unresolved_ticks
+  unresolved_ticks="$(jq -r '.integration_conflict_unresolved_ticks // 0' "${STATE_FILE}")"
+
+  jq --arg err "${error_msg}" \
+    '.integration_sync_status = "conflict" |
+     .integration_sync_last_error = $err' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  # Cooldown gate: don't re-dispatch resolver too frequently.
+  local elapsed=$((now_ts - last_ts))
+  if [ "${last_ts}" -gt 0 ] && [ "${elapsed}" -lt "${CONFLICT_DISPATCH_COOLDOWN_SECS}" ]; then
+    echo "  [integration-heal] Dispatch cooldown active (${elapsed}s < ${CONFLICT_DISPATCH_COOLDOWN_SECS}s); deferring resolver dispatch for PR #${final_pr}."
+    return 0
+  fi
+
+  # Circuit breaker: after MAX retries, escalate to judge instead of
+  # dispatching one more resolver run.
+  if [ "${unresolved_ticks}" -ge "${INTEGRATION_CONFLICT_MAX_RETRIES}" ]; then
+    if invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}"; then
+      # Reset unresolved ticks so the resolver loop can resume after
+      # the judge's push. Keep dispatch_count as audit trail.
+      jq '.integration_sync_status = "healing" | .integration_conflict_unresolved_ticks = 0 | .integration_sync_last_error = ""' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_tracking_comment "## 🛠️ Integration judge invoked\n\nFinal PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${INTEGRATION_CONFLICT_MAX_RETRIES} automated resolver attempts. The judge has been invoked with full PR context to resolve conflicts. The poller will retry merge on the next tick."
+      return 0
+    fi
+    jq --arg err "judge escalation failed: ${error_msg}" \
+      '.status = "failed" |
+       .final_merge_status = "failed" |
+       .integration_sync_status = "failed" |
+       .integration_sync_last_error = $err' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    post_tracking_comment "## ❌ Integration self-healing exhausted\n\nFinal PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could not be made mergeable after ${INTEGRATION_CONFLICT_MAX_RETRIES} automated attempts AND a judge escalation that itself failed. Manual intervention required."
+    tg_notify "❌ Integration self-healing exhausted for #${TRACKING_NUM} (PR #${final_pr}). Manual intervention required."
+    return 1
+  fi
+
+  # Dispatch the existing review/autofix workflow against the final PR.
+  local dispatch_rc=0
+  _dispatch_review_for_conflicts "${final_pr}" "${integration_branch}" || dispatch_rc=$?
+
+  if [ "${dispatch_rc}" -eq 2 ]; then
+    jq --argjson ts "${now_ts}" \
+      '.integration_sync_status = "healing" |
+       .integration_conflict_dispatch_ts = $ts' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    echo "  [integration-heal] Resolver already in flight for PR #${final_pr}; skipping dispatch this tick."
+    return 0
+  fi
+
+  unresolved_ticks=$((unresolved_ticks + 1))
+  jq --argjson ticks "${unresolved_ticks}" \
+    '.integration_conflict_unresolved_ticks = $ticks' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  case "${dispatch_rc}" in
+    0)
+      dispatch_count=$((dispatch_count + 1))
+      jq --argjson count "${dispatch_count}" --argjson ts "${now_ts}" \
+        '.integration_sync_status = "healing" |
+         .integration_conflict_dispatch_count = $count |
+         .integration_conflict_dispatch_ts = $ts' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      # Only post a user-facing comment on the FIRST dispatch of this
+      # conflict episode to avoid the every-tick spam pattern seen on
+      # #832. Subsequent dispatches log to the state comment instead.
+      if [ "${unresolved_ticks}" -eq 1 ]; then
+        post_tracking_comment "## 🔧 Integration self-healing started\n\nDetected a real merge conflict while syncing \`${default_branch}\` into \`${integration_branch}\`. Dispatched the review/autofix workflow against final PR #${final_pr} for automated resolution. Will retry up to ${INTEGRATION_CONFLICT_MAX_RETRIES} times before escalating to the judge."
+      fi
+      tg_notify "🔧 Integration conflict on #${TRACKING_NUM}: dispatched resolver for PR #${final_pr} (attempt ${dispatch_count}, unresolved_ticks=${unresolved_ticks})." "WARNING"
+      ;;
+    *)
+      echo "::warning::[integration-heal] Could not dispatch review workflow for PR #${final_pr}."
+      ;;
+  esac
+
+  return 0
+}
+
+# Called after a successful sync to clear conflict state. Idempotent.
+# Usage: mark_integration_sync_clean <default_branch>
+mark_integration_sync_clean() {
+  local default_branch="${1:-main}"
+  ensure_integration_conflict_state_fields
+  local prev_status
+  prev_status="$(jq -r '.integration_sync_status // "clean"' "${STATE_FILE}")"
+  if [ "${prev_status}" != "clean" ]; then
+    jq '.integration_sync_status = "clean" |
+        .integration_sync_last_error = "" |
+        .integration_conflict_unresolved_ticks = 0' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_tracking_comment "## ✅ Integration self-healing resolved\n\n\`${default_branch}\` now merges cleanly into the integration branch. Final merge will proceed on the next poll tick."
+  fi
+}
+
 sync_default_into_integration_branch() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -913,21 +1261,32 @@ sync_default_into_integration_branch() {
     return 1
   fi
 
+  ensure_integration_conflict_state_fields
+
   local merge_error
   if merge_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/merges" \
     -f base="${integration_branch}" \
     -f head="${default_branch}" \
     -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >/dev/null)"; then
+    mark_integration_sync_clean "${default_branch}"
     return 0
   fi
 
   if ! printf '%s' "${merge_error}" | grep -Eqi '(HTTP 409|status code 409|merge conflict|conflict)'; then
     echo "::warning::Unable to sync '${default_branch}' into '${integration_branch}' due to transient GitHub API error; will retry next poll." >&2
+    jq --arg err "${merge_error}" '.integration_sync_last_error = $err' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     return 0
   fi
 
-  post_tracking_comment "## ⚠️ Integration sync warning\n\nUnable to sync \`${default_branch}\` into \`${integration_branch}\`. This is usually a merge conflict. The project can continue, but final merge may require manual conflict resolution."
-  tg_notify "⚠️ Sync warning for #${TRACKING_NUM}: could not merge '${default_branch}' into '${integration_branch}'."
+  # Real conflict: trigger the self-healing loop. project_title is
+  # read from state so finalize's signature-compatible call-sites can
+  # keep invoking this function with just (branch, default).
+  local project_title
+  project_title="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
+  if ! heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "${merge_error}"; then
+    return 1
+  fi
   return 0
 }
 
@@ -1010,13 +1369,13 @@ finalize_integration_merge_if_needed() {
     return 0
   fi
 
+  # Mergeability gate: if the final PR is not mergeable, hand off to
+  # the self-healing flow and defer finalize to the next tick. This is
+  # the primary fix for the #832-style stall: previously this code path
+  # set final_merge_status=conflict and halted with no recovery.
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "false" ]; then
-    jq --argjson final_pr "${final_pr}" \
-      '.status = "merge_conflict" | .final_merge_pr = $final_pr | .final_merge_status = "conflict"' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
-    post_tracking_comment "## ⚠️ Final merge conflict\n\nFinal PR #${final_pr} from \`${integration_branch}\` to \`${default_branch}\` has merge conflicts. Resolve conflicts manually, then re-run the poller."
-    tg_notify "⚠️ Final merge conflict for #${TRACKING_NUM} (PR #${final_pr})."
+    echo "  [final-merge] PR #${final_pr} is not mergeable; invoking self-healing flow."
+    heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "final PR #${final_pr} mergeable=false" || true
     return 1
   fi
 
@@ -1031,7 +1390,12 @@ finalize_integration_merge_if_needed() {
   fi
 
   if gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch >/dev/null 2>&1; then
-    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+    jq --argjson final_pr "${final_pr}" \
+      '.final_merge_pr = $final_pr |
+       .final_merge_status = "merged" |
+       .integration_sync_status = "clean" |
+       .integration_sync_last_error = "" |
+       .integration_conflict_unresolved_ticks = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     post_tracking_comment "## ✅ Final merge complete\n\nIntegration branch \`${integration_branch}\` was squash-merged into \`${default_branch}\` via PR #${final_pr}."
@@ -1049,13 +1413,12 @@ finalize_integration_merge_if_needed() {
     return 0
   fi
 
+  # Post-merge-attempt conflict path: squash merge was rejected by
+  # GitHub despite our pre-merge mergeability check (race with a push
+  # to default). Hand off to the healing flow instead of halting.
   if [ "${pr_mergeable}" = "false" ]; then
-    jq --argjson final_pr "${final_pr}" \
-      '.status = "merge_conflict" | .final_merge_pr = $final_pr | .final_merge_status = "conflict"' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
-    post_tracking_comment "## ⚠️ Final merge conflict\n\nFinal PR #${final_pr} from \`${integration_branch}\` to \`${default_branch}\` could not be squash-merged due to conflicts. Resolve manually, then re-run the poller."
-    tg_notify "⚠️ Final merge conflict for #${TRACKING_NUM} (PR #${final_pr})."
+    echo "  [final-merge] Post-attempt mergeability=false on PR #${final_pr}; invoking self-healing flow."
+    heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "final PR #${final_pr} became unmergeable during merge" || true
     return 1
   fi
 
@@ -3665,6 +4028,68 @@ json.dump(result, sys.stdout)
       echo "::warning::Could not determine head ref for PR #${IP_PR}."
     fi
   done
+
+  # ---------------------------------------------------------------
+  # Phase-agnostic orchestrator-PR sweep (Q6-B self-healing)
+  # ---------------------------------------------------------------
+  # The loop above only touches PRs whose tracking-state status is
+  # "in_progress" and whose mergeable=false. A PR can still drift
+  # behind `main` (mergeable_state="behind") without being marked
+  # dirty, and it can belong to an issue that isn't currently
+  # flagged in-progress (e.g. sitting at ai:review, ai:validating,
+  # ai:implementation-failed). Without this sweep, such PRs rot
+  # until they're finally labeled ready-to-merge, at which point the
+  # update-branch call can fail because they've diverged too far.
+  #
+  # Strategy: enumerate all open PRs whose head branch matches the
+  # orchestrator naming pattern `ai/issue-*`, and for any that are
+  # `behind` but not currently `dirty` (conflicts are handled above),
+  # call the GitHub update-branch endpoint to fast-forward them.
+  # Real conflicts still fall through to the in-progress loop on the
+  # next tick via the mergeable=false path.
+  #
+  # This pass is bounded per poll tick via --limit 100 and does not
+  # dispatch review workflows; it only attempts update-branch.
+  echo "  [feature-sweep] Scanning open ai/issue-* PRs for base-branch drift..."
+  _FEATURE_SWEEP_JSON="$(gh pr list \
+    --repo "${GITHUB_REPOSITORY}" \
+    --state open \
+    --json number,headRefName,baseRefName,mergeable,mergeStateStatus \
+    --limit 100 2>/dev/null || echo "[]")"
+  if [ -n "${_FEATURE_SWEEP_JSON}" ] && [ "${_FEATURE_SWEEP_JSON}" != "[]" ]; then
+    echo "${_FEATURE_SWEEP_JSON}" | jq -c '.[]' | while read -r _fs_pr; do
+      _fs_num="$(echo "${_fs_pr}" | jq -r '.number // empty')"
+      _fs_head="$(echo "${_fs_pr}" | jq -r '.headRefName // empty')"
+      _fs_state="$(echo "${_fs_pr}" | jq -r '.mergeStateStatus // empty' | tr '[:upper:]' '[:lower:]')"
+      _fs_mergeable="$(echo "${_fs_pr}" | jq -r '.mergeable // empty' | tr '[:upper:]' '[:lower:]')"
+      [[ "${_fs_num}" =~ ^[0-9]+$ ]] || continue
+      case "${_fs_head}" in
+        ai/issue-*) ;;
+        *) continue ;;
+      esac
+      # Skip dirty PRs — those go through the proper conflict loop
+      # above so the resolver workflow can be dispatched.
+      if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "conflicting" ]; then
+        continue
+      fi
+      # Only act on PRs that are actually behind base.
+      if [ "${_fs_state}" != "behind" ]; then
+        continue
+      fi
+      _fs_head_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}" --jq '.head.sha' 2>/dev/null || echo "")"
+      if [ -z "${_fs_head_sha}" ]; then
+        echo "  [feature-sweep] PR #${_fs_num}: cannot resolve head sha; skipping."
+        continue
+      fi
+      echo "  [feature-sweep] PR #${_fs_num} (${_fs_head}) is behind base; calling update-branch..."
+      if gh api "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}/update-branch" \
+        -X PUT -f expected_head_sha="${_fs_head_sha}" >/dev/null 2>&1; then
+        echo "  [feature-sweep] PR #${_fs_num} fast-forwarded."
+      else
+        echo "  [feature-sweep] PR #${_fs_num}: update-branch failed (likely real conflict). The in-progress conflict loop will handle it on the next tick."
+      fi
+    done
+  fi
 
   # ---------------------------------------------------------------
   # Handle review-blocked issues: invoke judge to decide
