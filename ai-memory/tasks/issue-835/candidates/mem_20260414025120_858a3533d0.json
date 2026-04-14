@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for **Item 14: protected-paths single source**\n\nClarification mapping:\n- `Q2: A` was explicitly locked: create `scripts/protected_paths.txt` and use it as the single source for both gate logic and prompt guidance.\n- `/answer` was auto-posted with \u201cissue description is sufficient,\u201d so there are no unresolved clarification blockers.\n\n1. Files likely to change\n- `scripts/protected_paths.txt` (new canonical source)\n- `.github/workflows/implement.yml`\n- `.github/workflows/review_autofix.yml`\n\n2. Functions/modules to implement\n- In `scripts/protected_paths.txt`:\n  - Add exactly these lines (in canonical order):\n  - `scripts/`\n  - `prompts/`\n  - `.github/prompts/`\n  - `.github/scripts/`\n  - `.serena/`\n  - `ai-memory/`\n  - `node_modules/`\n- In `.github/workflows/implement.yml`:\n  - Update support-file bootstrap fetch list to fetch `scripts/protected_paths.txt` in consumer repos (same stable\u2192main fallback pattern as other fetched artifacts).\n  - In prompt assembly (`Run Codex implementation`), inject a static block:\n  - `=== PROTECTED PATHS (do not modify) ===`\n  - Rendered from `scripts/protected_paths.txt` (not hardcoded in YAML).\n  - In commit-gate staging logic (`Commit and push changes`), replace hardcoded protected path exclusions/checks with file-driven arrays/regex derived from `scripts/protected_paths.txt`.\n  - Preserve existing source-repo vs consumer-repo behavior gates (`is_self_repo`) so semantics do not regress.\n- In `.github/workflows/review_autofix.yml`:\n  - Update support-file bootstrap fetch list to fetch `scripts/protected_paths.txt`.\n  - Replace hardcoded protected path lists in:\n  - preflight warning (`git ls-files` protected paths check),\n  - staging exclusions (`git add -u` / `git ls-files --others` excludes),\n  - protected-path reset guards (`git reset` / grep guard in commit and conflict-resolve flows),\n  with values built from `scripts/protected_paths.txt`.\n  - Keep existing special-case exceptions (for workflow-source-repo editable files) intact; only centralize shared protected path constants.\n\n3. Data structures affected\n- New canonical config file: newline-delimited protected path list (`scripts/protected_paths.txt`).\n- Runtime shell structures derived from that file in both workflows:\n  - pathspec exclude arrays for `git add`,\n  - grep-safe protected-path regex,\n  - reset target lists,\n  - prompt display list.\n\n4. API or interface changes\n- No external API changes.\n- Internal workflow interface change: both workflows now depend on `scripts/protected_paths.txt` as a fetched/local runtime input.\n- No env var changes required.\n\n5. Potential risks / edge cases\n- Naive centralization could accidentally change behavior in the workflow-source repo (where some paths are intentionally editable); must preserve existing conditional gates.\n- Path parsing must handle empty lines and avoid regex/pathspec quoting bugs.\n- `node_modules/` is both an explicit `git rm -r --cached` target and a protected path entry; avoid duplicate/conflicting handling.\n- Fallback fetch behavior must work when `stable` doesn\u2019t yet contain `protected_paths.txt` (fallback to `main`).\n- Any remaining hardcoded list in one workflow would reintroduce drift.\n\n6. Testing considerations\n- Static verification:\n  - Confirm `scripts/protected_paths.txt` content matches required 7 entries exactly.\n  - Confirm no duplicated hardcoded protected-path list remains in the two workflows.\n- Behavioral verification in workflow logic:\n  - Consumer-repo path changes under protected dirs are unstaged/blocked as before.\n  - Non-protected file edits still stage/commit normally.\n  - Workflow-source-repo behavior remains unchanged (existing edit allowances preserved).\n  - Implement prompt contains `=== PROTECTED PATHS (do not modify) ===` and list is rendered from file content.\n- Regression check:\n  - No new no-op failures caused by path filtering mismatch between prompt guidance and gate logic.\n\nConflict detection noted:\n- Current code has multiple hardcoded protected-path lists and partial mismatches between implement/review gate logic; issue objective is valid.\n- Current review workflow has extra source-repo exceptions not represented by the canonical directory list; these must remain as overlays to avoid semantics changes.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f63d22f3c19ad9e43744fcb24534a5dba12fb9f378c4f9cc180ba9685e76f91e",
+  "lineage": {
+    "issue_number": 835,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24378233704",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24378233704",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/835"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414025120_858a3533d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 835,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24378233704"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #835",
+  "timestamps": {
+    "created_at": "2026-04-14T02:51:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
