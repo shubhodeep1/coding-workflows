@@ -81,6 +81,15 @@ CRITICAL — graceful shutdown container resolution:
 - If `validation/logs/compose.log` is missing at assertion time, fix the harness to write `docker compose ... logs` output to that path before running the wrapper-SIGTERM grep.
 - If a graceful shutdown test fails with "app container id unavailable after stop", this is almost certainly caused by using `docker compose ps -q <service>` (without `--status exited` or `--all`) after stop. Fix by switching to the `--status exited` or `--all` variant.
 
+CRITICAL — "command not found" for a tool the canary claims is present:
+- Symptom: `00_canary.sh` passes `ok N - required container CLI tools are present (..., forge)` but a later test fails with `sh: 1: forge: not found` (or the same pattern for `npx`, `hardhat`, `pytest`, etc.) inside `npm run ...` / `npx ...` / similar.
+- Root cause: the canary assertion and the test invocation are using different `docker compose exec` shell modes. On Debian/Ubuntu base images, `/bin/sh -lc 'npm run ...'` is a login shell that sources `/etc/profile` and RESETS PATH to a hard-coded value, dropping any `ENV PATH=/root/.foundry/bin:$PATH` (or equivalent) set in the Dockerfile. npm then spawns the script command via `sh -c`, inheriting the stripped PATH — so the tool appears missing even though the image has it installed.
+- Fix: make the shell mode consistent between the canary check and the failing test invocation. Preferred fix is to change the test invocation from `/bin/sh -lc '...'` to `/bin/sh -c '...'` (non-login). Do this for all of `npm`, `npx`, `yarn`, `pnpm`, `forge`, `cast`, `anvil`, `hardhat`, `pytest`, `python`, `go`, `cargo`, `mvn`, `gradle`.
+- Do NOT attempt to "fix" this by deleting the canary tool-presence assertion — the canary is correctly reporting the image state; the bug is in the test shell mode.
+- Do NOT attempt to "fix" this by `RUN ln -s /root/.foundry/bin/forge /usr/local/bin/forge` alone unless you also confirm every other affected binary is symlinked. Prefer the shell-mode fix because it covers all tools uniformly.
+- If a login shell is genuinely required (for example because the tool is installed via `nvm`/`rbenv`/`pyenv`/`sdkman`), keep `/bin/sh -lc` but also add `/etc/profile.d/<tool>.sh` to the Dockerfile that exports the tool's bin directory onto PATH, so the login shell sees it. In that case the canary tool-presence assertion MUST also run under `/bin/sh -lc` so the two modes stay in lockstep.
+- When applying this fix, update BOTH `validation/tests/00_canary.sh` (the tool-presence assertion) AND the failing test script (for example `validation/tests/01_build_and_tests.sh`) in the same patch so their shell modes match.
+
 Output contract:
 - Return exactly one valid JSON object.
 - Do not wrap JSON in markdown fences.
