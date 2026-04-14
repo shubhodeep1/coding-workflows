@@ -729,7 +729,7 @@ jobs:
             } >> "$GITHUB_ENV"
             # Patch the already-written codex config to use low reasoning (if present)
             if [ -f "${HOME}/.codex/config.toml" ]; then
-              sed -i 's/model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
+              sed -i 's/^[[:space:]]*model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
             fi
           else
             echo "REVIEW_SMOKE_OVERRIDE_ACTIVE=false" >> "$GITHUB_ENV"
@@ -2193,7 +2193,7 @@ jobs:
             # currently contains a literal git conflict marker.  This
             # catches paths git auto-merged but left with residual markers
             # (rare but possible with --no-ff).
-            git grep -lE '^(<<<<<<< |>>>>>>> )' -- ':!*.md' 2>/dev/null \
+            git grep -lE '^(<<<<<<<|>>>>>>>)' -- ':!*.md' 2>/dev/null \
               >> "${CONFLICTED_PATHS_FILE}" || true
             sort -u -o "${CONFLICTED_PATHS_FILE}" "${CONFLICTED_PATHS_FILE}"
             echo "Conflicted paths captured: $(wc -l < "${CONFLICTED_PATHS_FILE}") entries"
