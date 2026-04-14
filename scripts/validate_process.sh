@@ -426,7 +426,7 @@ append_failure()
   local log_tail=""
 
   if [ -n "${log_file}" ] && [ -f "${log_file}" ]; then
-    log_tail="$(tail -c 10000 "${log_file}" | tr -d '\000' | head -n 30 2>/dev/null || true)"
+    log_tail="$(tail -c 10000 "${log_file}" | tr -d '\000' | tail -n 30 2>/dev/null || true)"
   fi
 
   python3 - "${FAILURES_FILE}" "${test_name}" "${error_msg}" "${log_tail}" <<'PY'
