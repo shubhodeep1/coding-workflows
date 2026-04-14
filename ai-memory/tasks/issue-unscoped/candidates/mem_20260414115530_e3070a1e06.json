@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/implement.yml\n.github/workflows/implement.yml\nscripts/review_rb_judge.sh\nscripts/semantic_cache.py\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/implement.yml**\n.github/workflows/implement.yml**\nagents.md\nscripts/orchestrate_poll_process.sh\nscripts/review_rb_judge.sh**\nscripts/semantic_cache.py",
+  "fingerprint": "0213dad4bcb83333480f3c0dde3202739e3741ee81e814c2ec9c11972289c7fd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 944,
+    "run_id": "24397059480",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24397059480",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414115530_e3070a1e06",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 944,
+    "run_id": "24397059480"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T11:55:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
