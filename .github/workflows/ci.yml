@@ -46,6 +46,7 @@ jobs:
           python3 -m py_compile scripts/ai_labels.py
           python3 -m py_compile scripts/collect_workflow_logs.py
           python3 -m py_compile scripts/analyze_workflow_logs.py
+          python3 -m py_compile scripts/check_workflow_script_refs.py
 
       - name: Orchestrate lib unit tests
         run: |
@@ -172,20 +173,11 @@ jobs:
           ruff check --select E,F --ignore E501 scripts/*.py
 
       - name: Script-workflow cross-reference
+        # Canonical check used by both CI and the inline post-resolver
+        # guard in review_autofix.yml.  Catches three reference patterns:
+        # explicit `scripts/<name>.<ext>`, `${SUPPORT_SCRIPTS_DIR}/<name>`,
+        # and bare names enumerated in bootstrap fetch loops.  See
+        # scripts/check_workflow_script_refs.py for details.
         run: |
           set -euo pipefail
-          echo "Verifying all scripts referenced by workflows exist..."
-          MISSING=0
-          for ref in $(grep -rhoE 'scripts/[a-zA-Z0-9_.-]+\.(sh|py|json)' .github/workflows/ | sort -u); do
-            if [ ! -f "$ref" ]; then
-              echo "FAIL: $ref referenced in workflows but does not exist"
-              MISSING=$((MISSING + 1))
-            else
-              echo "OK: $ref"
-            fi
-          done
-          if [ "$MISSING" -gt 0 ]; then
-            echo "::error::${MISSING} script(s) referenced by workflows are missing"
-            exit 1
-          fi
-          echo "All referenced scripts exist."
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
