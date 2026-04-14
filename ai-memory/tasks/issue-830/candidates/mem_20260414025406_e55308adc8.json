@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation Plan\n\n### Clarification mapping\n- No `Q<ID>` clarification questions were issued in this thread.\n- Interpreted `/answer [auto-answered-by-clarify]` and `/answer [auto-answered-by-orchestrator]` as: issue description is sufficient and unblocked for planning.\n\n### Representative pattern used\n- Prompt contract/source pattern: `prompts/mode-validate-diagnose.txt`\n- Runtime fetch/fallback pattern: `.github/workflows/validate.yml` prompt fetch block\n- Prompt inventory/render checks: `.github/workflows/ci.yml` and `.github/workflows/test-and-mark-stable.yml`\n\n### 1) Files likely to change\n- `prompts/mode-implement-diagnose.txt` (new)\n- `.github/workflows/implement.yml`\n- `.github/workflows/ci.yml`\n- `.github/workflows/test-and-mark-stable.yml`\n\n### 2) Functions/modules to implement\n- Add new prompt `mode-implement-diagnose` with the exact runtime-validation diagnose JSON contract:\n  - Top-level keys: `status`, `diagnosis`, `fix_issues`, `harness_fixes`\n  - `fix_issues[]` keys: `id`, `title`, `body`, `priority`, `depends_on`\n  - Status enum: `needs_fixes | harness_error | infeasible`\n- In prompt body, explicitly define required input sections:\n  - Source issue title/body\n  - Failing step name\n  - Codex change diff (`git diff HEAD`) plus untracked/new-file content context\n  - Captured post-Codex stderr contents\n- Enforce self-contained fix issue body guidance in prompt:\n  - Exact file path, line, column, verbatim tool/parser error\n  - Relevant bad diff snippet\n  - Assume next implement run starts cold and only sees issue body\n- In `implement.yml`, add runtime fetch/fallback plumbing for `prompts/mode-implement-diagnose.txt` using the same pattern as existing fetched assets (`script_ref` then `main` fallback, plus fetched-manifest tracking for consumer repos).\n- Update prompt inventory/renderability arrays in CI/stable workflows to include `prompts/mode-implement-diagnose.txt`.\n\n### 3) Data structures affected\n- New prompt-defined JSON output contract (intentionally identical to validate diagnose contract).\n- No label contract changes.\n- No DB contract/index changes.\n\n### 4) API/interface changes\n- New prompt asset path available at runtime: `prompts/mode-implement-diagnose.txt`.\n- Implement reusable workflow runtime will be able to fetch this prompt in consumer repos (same fetch/fallback behavior as other fetched prompt assets).\n- No external API or env var changes required.\n\n### 5) Potential risks / edge cases\n- Contract drift risk if the new prompt differs from `mode-validate-diagnose` keys/enums.\n- Failure contexts may have empty diff or empty stderr; prompt should instruct explicit handling (no invented evidence).\n- Consumer-repo cleanup safety depends on adding the new fetched prompt to fetched-manifest tracking.\n- Existing implement inline instruction says \u201cDo not change CI workflows,\u201d but this issue requires CI workflow prompt-inventory updates; this is an operational conflict to handle during implementation.\n\n### 6) Testing considerations\n- Render check:\n  - `bash scripts/render_prompt.sh prompts/mode-implement-diagnose.txt`\n- CI prompt inventory checks:\n  - Ensure new prompt is included in `target_prompts` arrays and passes unresolved-placeholder checks.\n- Workflow syntax/sanity:\n  - Validate `implement.yml` fetch block changes and fallback behavior.\n- Guardrail:\n  - Confirm `prompts/mode-validate-diagnose.txt` is unchanged.\n\n### Conflict detection\n- Prior comment warned template-owned paths are no-op in consumer repos. Codebase confirms that for consumers, but this issue is in `*/coding-workflows` (source repo), where `prompts/` and workflow files are authoritative and commit-able.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3c335dbc7f9c4725e2bab3bb2aed458f96434bad734af1b4685c8d6690457dd4",
+  "lineage": {
+    "issue_number": 830,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24378242493",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24378242493",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/830"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414025406_e55308adc8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 830,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24378242493"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #830",
+  "timestamps": {
+    "created_at": "2026-04-14T02:54:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
