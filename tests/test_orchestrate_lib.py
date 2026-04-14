@@ -206,6 +206,48 @@ def _run_check_wave_status(state: dict, labels: dict[str, list[str]]) -> dict:
 		os.unlink(state_path)
 
 
+def _run_check_stalls(
+	state: dict,
+	labels: dict[str, list[str]],
+	threshold_minutes: int = 60,
+	now_ts: int = 2000,
+	max_recoveries: int = 5,
+	phase_thresholds_json: str | None = None,
+	stall_judge_trigger_count: int = 0,
+	enable_stall_judge: str = "false",
+) -> dict:
+	"""Run check-stalls via the CLI and return parsed JSON."""
+	with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+		json.dump(state, f)
+		state_path = f.name
+
+	import io
+	from contextlib import redirect_stdout
+
+	try:
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			orchestrate_lib.cmd_check_stalls(
+				type(
+					"Args",
+					(),
+					{
+						"state_file": state_path,
+						"labels_json": json.dumps(labels),
+						"threshold_minutes": str(threshold_minutes),
+						"max_recoveries": str(max_recoveries),
+						"phase_thresholds_json": phase_thresholds_json,
+						"now_ts": str(now_ts),
+						"stall_judge_trigger_count": str(stall_judge_trigger_count),
+						"enable_stall_judge": enable_stall_judge,
+					},
+				)()
+			)
+		return json.loads(buf.getvalue())
+	finally:
+		os.unlink(state_path)
+
+
 def test_check_wave_status_all_merged():
 	state = _make_state()
 	labels = {"10": ["ai:merged"], "11": ["ai:merged"]}
@@ -398,6 +440,56 @@ def test_detect_stalls_max_recoveries_still_skips_with_judge_enabled():
 
 	assert len(stalls) == 1
 	assert stalls[0]["recovery_action"] == "skip"
+
+
+def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls():
+	captured: dict[str, object] = {}
+	original_detect_stalls = orchestrate_lib.detect_stalls
+
+	def _fake_detect_stalls(
+		state: dict,
+		issue_labels: dict[str, list[str]],
+		threshold_minutes: int,
+		now_ts: int,
+		max_recoveries: int = 5,
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 2,
+		enable_stall_judge: bool = True,
+	) -> list[dict[str, object]]:
+		captured["state"] = state
+		captured["issue_labels"] = issue_labels
+		captured["threshold_minutes"] = threshold_minutes
+		captured["now_ts"] = now_ts
+		captured["max_recoveries"] = max_recoveries
+		captured["phase_thresholds"] = phase_thresholds
+		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
+		captured["enable_stall_judge"] = enable_stall_judge
+		return []
+
+	orchestrate_lib.detect_stalls = _fake_detect_stalls
+	try:
+		state = _make_state()
+		labels = {"10": ["ai:planning"], "11": ["ai:planning"]}
+		_ = _run_check_stalls(
+			state,
+			labels,
+			threshold_minutes=45,
+			now_ts=777,
+			max_recoveries=6,
+			phase_thresholds_json='{"ai:planning": 90}',
+			stall_judge_trigger_count=3,
+			enable_stall_judge="true",
+		)
+	finally:
+		orchestrate_lib.detect_stalls = original_detect_stalls
+
+	assert captured["threshold_minutes"] == 45
+	assert captured["now_ts"] == 777
+	assert captured["max_recoveries"] == 6
+	assert captured["phase_thresholds"] == {"ai:planning": 90}
+	assert captured["stall_judge_trigger_count"] == 3
+	assert captured["enable_stall_judge"] is True
+
 
 # ---------------------------------------------------------------------------
 # Tests: state schema

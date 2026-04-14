@@ -30,6 +30,8 @@ Allowed actions:
 - `escalate_human`
 
 Action guidance:
+- Strong preference: if linked PR `mergeable == false`, prefer `resolve_merge_conflict`.
+- Treat `mergeable == null` as unknown, not as conflict.
 - Choose `resolve_merge_conflict` only when there is a linked PR and merge
   conflict evidence indicates review/conflict resolution should run.
 - Choose retrigger/auto actions when the issue is likely recoverable with

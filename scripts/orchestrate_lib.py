@@ -228,6 +228,14 @@ def build_tracking_state(
 		"final_merge_strategy": "squash",
 		"final_merge_pr": None,
 		"final_merge_status": "pending",
+		# Self-healing telemetry for main <-> integration branch divergence.
+		# Populated at runtime by the poller; initialised here so that state
+		# schema consumers can rely on their presence without migration logic.
+		"integration_sync_status": "clean",
+		"integration_sync_last_error": "",
+		"integration_conflict_dispatch_count": 0,
+		"integration_conflict_dispatch_ts": 0,
+		"integration_conflict_unresolved_ticks": 0,
 	}
 
 
@@ -330,6 +338,8 @@ DEFAULT_PHASE_STALL_THRESHOLDS: dict[str, int] = {
 	"ai:done": 120,
 	"ai:ready-to-merge": 60,
 }
+
+RUN_STALL_JUDGE_ACTION = "run_stall_judge"
 
 STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
 	"no_labels": [
@@ -452,6 +462,10 @@ def detect_stalls(
 	minutes.  Phases not present in the dict fall back to
 	*threshold_minutes*.
 
+	When *enable_stall_judge* is true and *stall_judge_trigger_count* is
+	reached (but still below *max_recoveries*), recovery action is
+	overridden to RUN_STALL_JUDGE_ACTION for non-dedicated phases.
+
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
 		stall_duration_minutes, stall_recovery_count
@@ -508,6 +522,12 @@ def detect_stalls(
 			actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
 			action_idx = min(recovery_count, len(actions) - 1)
 			action = actions[action_idx]
+			if (
+				enable_stall_judge
+				and phase not in DEDICATED_HANDLER_PHASES
+				and stall_judge_trigger_count <= recovery_count < max_recoveries
+			):
+				action = RUN_STALL_JUDGE_ACTION
 
 		stalled.append({
 			"id": issue["id"],
@@ -778,6 +798,11 @@ def rebuild_tracking_state(
 		"final_merge_strategy": "squash",
 		"final_merge_pr": None,
 		"final_merge_status": "pending",
+		"integration_sync_status": "clean",
+		"integration_sync_last_error": "",
+		"integration_conflict_dispatch_count": 0,
+		"integration_conflict_dispatch_ts": 0,
+		"integration_conflict_unresolved_ticks": 0,
 		"tracking_issue": tracking_issue,
 		"state_rebuilt": True,
 	}
@@ -994,8 +1019,12 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 	now_ts = int(args.now_ts) if args.now_ts else int(time.time())
 	threshold = int(args.threshold_minutes)
 	max_recoveries = int(args.max_recoveries)
-	stall_judge_trigger_count = int(args.stall_judge_trigger_count)
-	enable_stall_judge = str(args.enable_stall_judge).lower() == "true"
+	stall_judge_trigger_count = int(getattr(args, "stall_judge_trigger_count", 2))
+	enable_stall_judge_raw = getattr(args, "enable_stall_judge", "true")
+	if isinstance(enable_stall_judge_raw, bool):
+		enable_stall_judge = enable_stall_judge_raw
+	else:
+		enable_stall_judge = str(enable_stall_judge_raw).lower() == "true"
 
 	phase_thresholds: dict[str, int] | None = None
 	if args.phase_thresholds_json:
@@ -1076,7 +1105,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls.add_argument("--phase-thresholds-json", default=None, help='Optional JSON: {"ai:clarification": 60, "ai:implementing": 120, ...}. Per-phase overrides.')
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
 	p_stalls.add_argument("--stall-judge-trigger-count", default="2", help="Recovery-count threshold to switch stall recovery to run_stall_judge")
-	p_stalls.add_argument("--enable-stall-judge", default="true", choices=["true", "false"], help="Enable/disable stall judge escalation action")
+	p_stalls.add_argument("--enable-stall-judge", default="true", choices=("true", "false"), help="Enable/disable stall judge escalation action")
 	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
 	p_stalls.set_defaults(func=cmd_check_stalls)
 
