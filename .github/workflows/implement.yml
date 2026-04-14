@@ -91,6 +91,10 @@ jobs:
             echo "IMPLEMENTATION_CONTEXT_FILE=${RUNTIME_DIR}/implementation_context.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
+            echo "IMPLEMENT_DIAGNOSE_PROMPT_FILE=${RUNTIME_DIR}/implement_diagnose_prompt.txt"
+            echo "IMPLEMENT_DIAGNOSE_OUTPUT_FILE=${RUNTIME_DIR}/implement_diagnose_output.txt"
+            echo "IMPLEMENT_DIAGNOSE_LOG_FILE=${RUNTIME_DIR}/implement_diagnose.log"
+            echo "IMPLEMENT_DIAGNOSE_RESULT_FILE=${RUNTIME_DIR}/implement_diagnose_result.json"
             echo "PLAN_FILE=${RUNTIME_DIR}/implementation_plan.txt"
             echo "CLARIFICATION_ANSWERS_FILE=${RUNTIME_DIR}/clarification_answers.txt"
             echo "PR_EXISTS_FILE=${RUNTIME_DIR}/existing_prs.txt"
@@ -314,6 +318,17 @@ jobs:
             fi
             if [ "${is_self_repo}" = "false" ]; then
               echo "prompts/serena-efficiency-block.txt" >> "${FETCHED_MANIFEST}"
+            fi
+          fi
+          if [ ! -f prompts/mode-implement-diagnose.txt ]; then
+            if ! _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=${script_ref}"; then
+              echo "::warning::mode-implement-diagnose.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=main"
+            fi
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "prompts/mode-implement-diagnose.txt" >> "${FETCHED_MANIFEST}"
             fi
           fi
 
@@ -1002,37 +1017,71 @@ jobs:
 
       - name: Validate syntax of changed files
         if: env.SKIP_IMPLEMENT != 'true'
+        id: validate_syntax_changed_files
         run: |
           set -euo pipefail
           ERRORS=0
 
+          CAPTURE_FILE=""
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
+            CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+          fi
+
+          append_checker_error() {
+            local file="$1"
+            local checker="$2"
+            local stderr_file="$3"
+            [ -n "${CAPTURE_FILE}" ] || return 0
+            {
+              printf '===== %s (%s) =====\n' "${file}" "${checker}"
+              if [ -s "${stderr_file}" ]; then
+                cat "${stderr_file}"
+              else
+                echo "(no stderr output)"
+              fi
+              printf '\n'
+            } >> "${CAPTURE_FILE}" || true
+          }
+
           # Check all modified/added Python files for syntax errors
           for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.py'); do
             if [ -f "$f" ]; then
-              if ! python3 -m py_compile "$f" 2>&1; then
+              checker_stderr="$(mktemp)"
+              if ! python3 -m py_compile "$f" 2>"${checker_stderr}"; then
                 echo "::error file=${f}::Syntax error in ${f}"
+                cat "${checker_stderr}" >&2
+                append_checker_error "${f}" "python3 -m py_compile" "${checker_stderr}"
                 ERRORS=$((ERRORS + 1))
               fi
+              rm -f "${checker_stderr}"
             fi
           done
 
           # Check all modified/added JS files for syntax errors
           for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.js'); do
             if [ -f "$f" ]; then
-              if ! node --check "$f" 2>&1; then
+              checker_stderr="$(mktemp)"
+              if ! node --check "$f" 2>"${checker_stderr}"; then
                 echo "::error file=${f}::Syntax error in ${f}"
+                cat "${checker_stderr}" >&2
+                append_checker_error "${f}" "node --check" "${checker_stderr}"
                 ERRORS=$((ERRORS + 1))
               fi
+              rm -f "${checker_stderr}"
             fi
           done
 
           # Check all modified/added shell scripts for syntax errors
           for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.sh'); do
             if [ -f "$f" ]; then
-              if ! bash -n "$f" 2>&1; then
+              checker_stderr="$(mktemp)"
+              if ! bash -n "$f" 2>"${checker_stderr}"; then
                 echo "::error file=${f}::Shell syntax error in ${f}"
+                cat "${checker_stderr}" >&2
+                append_checker_error "${f}" "bash -n" "${checker_stderr}"
                 ERRORS=$((ERRORS + 1))
               fi
+              rm -f "${checker_stderr}"
             fi
           done
 
@@ -1041,10 +1090,14 @@ jobs:
           # as shell and produces false failures (e.g. 'name: foo (bar)').
           for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.yml' '*.yaml'); do
             if [ -f "$f" ]; then
-              if ! python3 -c "import yaml, sys; f=open(sys.argv[1]); yaml.safe_load(f); f.close()" "$f" 2>&1; then
+              checker_stderr="$(mktemp)"
+              if ! python3 -c "import yaml, sys; f=open(sys.argv[1]); yaml.safe_load(f); f.close()" "$f" 2>"${checker_stderr}"; then
                 echo "::error file=${f}::YAML syntax error in ${f}"
+                cat "${checker_stderr}" >&2
+                append_checker_error "${f}" "python3 yaml.safe_load" "${checker_stderr}"
                 ERRORS=$((ERRORS + 1))
               fi
+              rm -f "${checker_stderr}"
             fi
           done
 
@@ -1056,8 +1109,53 @@ jobs:
 
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
+        id: protect_workflow_files
         run: |
           set -euo pipefail
+
+          STEP_NAME="Protect workflow files from implementation edits"
+          STEP_STDERR_FILE="$(mktemp)"
+          CAPTURE_FILE=""
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
+            CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+          fi
+
+          capture_step_failure() {
+            local failed_command="$1"
+            [ -n "${CAPTURE_FILE}" ] || return 0
+            {
+              printf '===== %s =====\n' "${STEP_NAME}"
+              printf 'Command: %s\n' "${failed_command}"
+              if [ -s "${STEP_STDERR_FILE}" ]; then
+                cat "${STEP_STDERR_FILE}"
+              else
+                echo "(no stderr output)"
+              fi
+              printf '\n'
+            } >> "${CAPTURE_FILE}" || true
+          }
+
+          FAILED_COMMAND=""
+          LAST_COMMAND=""
+          trap 'LAST_COMMAND="${BASH_COMMAND}"' DEBUG
+          trap 'FAILED_COMMAND="${BASH_COMMAND}"' ERR
+          on_step_exit() {
+            local exit_code="$?"
+            trap - DEBUG ERR EXIT
+            set +e
+            exec 2>&3 || true
+            exec 3>&- || true
+            wait || true
+            if [ "${exit_code}" -ne 0 ]; then
+              local failed_command="${FAILED_COMMAND:-${LAST_COMMAND:-unknown command}}"
+              capture_step_failure "${failed_command}"
+            fi
+            rm -f "${STEP_STDERR_FILE}"
+            exit "${exit_code}"
+          }
+          trap on_step_exit EXIT
+          exec 3>&2
+          exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
           if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
             echo "ALLOW_WORKFLOW_EDITS is enabled — preserving .github/workflows changes."
@@ -1074,6 +1172,50 @@ jobs:
         id: commit_changes
         run: |
           set -euo pipefail
+
+          STEP_NAME="Commit changes"
+          STEP_STDERR_FILE="$(mktemp)"
+          CAPTURE_FILE=""
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
+            CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+          fi
+
+          capture_step_failure() {
+            local failed_command="$1"
+            [ -n "${CAPTURE_FILE}" ] || return 0
+            {
+              printf '===== %s =====\n' "${STEP_NAME}"
+              printf 'Command: %s\n' "${failed_command}"
+              if [ -s "${STEP_STDERR_FILE}" ]; then
+                cat "${STEP_STDERR_FILE}"
+              else
+                echo "(no stderr output)"
+              fi
+              printf '\n'
+            } >> "${CAPTURE_FILE}" || true
+          }
+
+          FAILED_COMMAND=""
+          LAST_COMMAND=""
+          trap 'LAST_COMMAND="${BASH_COMMAND}"' DEBUG
+          trap 'FAILED_COMMAND="${BASH_COMMAND}"' ERR
+          on_step_exit() {
+            local exit_code="$?"
+            trap - DEBUG ERR EXIT
+            set +e
+            exec 2>&3 || true
+            exec 3>&- || true
+            wait || true
+            if [ "${exit_code}" -ne 0 ]; then
+              local failed_command="${FAILED_COMMAND:-${LAST_COMMAND:-unknown command}}"
+              capture_step_failure "${failed_command}"
+            fi
+            rm -f "${STEP_STDERR_FILE}"
+            exit "${exit_code}"
+          }
+          trap on_step_exit EXIT
+          exec 3>&2
+          exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
           # Remove workflow-generated/fetched artifacts BEFORE checking for
           # changes so they don't cause false-positive "file changes" detection.
@@ -1804,8 +1946,529 @@ jobs:
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
 
-      - name: Comment on issue failure
+      - name: Capture post-Codex validation errors
         if: failure() || cancelled()
+        id: capture_post_codex_validation_errors
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
+          type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
+            local _tmpf
+            _tmpf="$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null)" || return 1
+            if gh api "$@" > "${_tmpf}" 2>/dev/null; then
+              cat "${_tmpf}"
+              rm -f "${_tmpf}"
+              return 0
+            fi
+            rm -f "${_tmpf}"
+            return 1
+          }
+
+          echo "captured=false" >> "$GITHUB_OUTPUT"
+
+          if [ -z "${RUNTIME_DIR:-}" ]; then
+            exit 0
+          fi
+
+          FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' || true)"
+          if [ -z "${FAILED_STEP_NAME}" ] && [ "${{ job.status }}" = "cancelled" ]; then
+            FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+              --jq '[.jobs[].steps[] | select(.conclusion == "cancelled" or .status == "in_progress")] | first | .name // ""' || true)"
+          fi
+          echo "failed_step_name=${FAILED_STEP_NAME}" >> "$GITHUB_OUTPUT"
+
+          CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+          if [ ! -s "${CAPTURE_FILE}" ]; then
+            exit 0
+          fi
+
+          {
+            echo "===== workflow context ====="
+            echo "issue_number=${ISSUE_NUMBER}"
+            echo "job_status=${{ job.status }}"
+            echo "failed_step=${FAILED_STEP_NAME:-unknown-step}"
+            echo "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+
+            if [ -f "${CODEX_OUTPUT_FILE:-}" ]; then
+              echo "===== codex_output tail (last 200 lines) ====="
+              tail -n 200 "${CODEX_OUTPUT_FILE}" || true
+              echo
+            fi
+
+            if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
+              echo "===== codex_log tail (last 200 lines) ====="
+              tail -n 200 "${RUNTIME_DIR}/codex_log.txt" || true
+              echo
+            fi
+
+            if [ -f "${RUNTIME_DIR}/created_pr_url.err" ]; then
+              echo "===== create_pr stderr ====="
+              cat "${RUNTIME_DIR}/created_pr_url.err" || true
+              echo
+            fi
+
+            if [ -f "${RUNTIME_DIR}/existing_prs.txt" ]; then
+              echo "===== existing_prs ====="
+              cat "${RUNTIME_DIR}/existing_prs.txt" || true
+              echo
+            fi
+          } >> "${CAPTURE_FILE}" || true
+
+          if [ -s "${CAPTURE_FILE}" ]; then
+            echo "captured=true" >> "$GITHUB_OUTPUT"
+          else
+            rm -f "${CAPTURE_FILE}"
+          fi
+
+      - name: Diagnose post-Codex failure and create fix-up issues
+        if: failure() || cancelled()
+        id: diagnose_post_codex_failure
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry &>/dev/null || gh_retry() { "$@"; }
+          type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
+            local _tmpf
+            _tmpf="$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null)" || return 1
+            if gh api "$@" > "${_tmpf}" 2>/dev/null; then
+              cat "${_tmpf}"
+              rm -f "${_tmpf}"
+              return 0
+            fi
+            rm -f "${_tmpf}"
+            return 1
+          }
+
+          IMPLEMENT_DIAGNOSE_TIMEOUT_SEC=300
+          TOOL_CALL_BUDGET_IMPLEMENT_DIAGNOSE=20
+
+          echo "handled=false" >> "$GITHUB_OUTPUT"
+
+          ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+          if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementation-failed") != null' >/dev/null 2>&1; then
+            echo "Issue #${ISSUE_NUMBER} already has ai:implementation-failed label; skipping post-Codex diagnosis."
+            echo "handled=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "${RUNTIME_DIR:-}" ]; then
+            echo "RUNTIME_DIR is unavailable; leaving generic failure handling unchanged."
+            exit 0
+          fi
+
+          CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+          if [ ! -s "${CAPTURE_FILE}" ]; then
+            echo "No post-Codex validation diagnostics found at ${CAPTURE_FILE}; leaving generic failure handling unchanged."
+            exit 0
+          fi
+
+          echo "handled=true" >> "$GITHUB_OUTPUT"
+
+          ensure_implementation_failed_label() {
+            if [ -f scripts/label_helpers.sh ]; then
+              source scripts/label_helpers.sh
+              ensure_label_exists "ai:implementation-failed" "${{ github.repository }}"
+            else
+              gh_retry gh label create "ai:implementation-failed" --repo "${{ github.repository }}" \
+                --color "e11d48" --description "Implementation produced no changes or failed post-Codex validation" \
+                2>/dev/null || true
+            fi
+
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:implementation-failed' \
+              --remove-label 'ai:implementing' \
+              --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || \
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:implementation-failed' >/dev/null 2>&1 || true
+          }
+
+          FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+            --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' || true)"
+          if [ -z "${FAILED_STEP_NAME}" ] && [ "${{ job.status }}" = "cancelled" ]; then
+            FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+              --jq '[.jobs[].steps[] | select(.conclusion == "cancelled" or .status == "in_progress")] | first | .name // ""' || true)"
+          fi
+          if [ -z "${FAILED_STEP_NAME}" ]; then
+            FAILED_STEP_NAME="unknown-step"
+          fi
+
+          if [ -z "${PR_BASE_BRANCH:-}" ]; then
+            PR_BASE_BRANCH="${{ github.event.repository.default_branch }}"
+          fi
+
+          if [ -z "${ISSUE_BODY_FILE:-}" ] || [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
+            ISSUE_BODY_FILE="${RUNTIME_DIR}/issue_body_from_api.txt"
+            gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+          fi
+
+          TRACKING_ISSUE_NUM="$(sed -nE 's/.*Tracking issue:[[:space:]]*#([0-9]+).*/\1/p' "${ISSUE_BODY_FILE}" | head -n1 | tr -d '\r')"
+          if ! [[ "${TRACKING_ISSUE_NUM}" =~ ^[0-9]+$ ]]; then
+            TRACKING_ISSUE_NUM="${ISSUE_NUMBER}"
+          fi
+
+          DIFF_FILE="${RUNTIME_DIR}/implement_diagnose_git_diff.txt"
+          UNTRACKED_LIST_FILE="${RUNTIME_DIR}/implement_diagnose_untracked_files.txt"
+          UNTRACKED_CONTEXT_FILE="${RUNTIME_DIR}/implement_diagnose_untracked_context.txt"
+          git diff HEAD > "${DIFF_FILE}" || true
+          git ls-files --others --exclude-standard > "${UNTRACKED_LIST_FILE}" || true
+
+          {
+            if [ ! -s "${UNTRACKED_LIST_FILE}" ]; then
+              echo "(none)"
+            else
+              while IFS= read -r untracked_path; do
+                [ -n "${untracked_path}" ] || continue
+                echo "--- ${untracked_path} ---"
+                if [ -f "${untracked_path}" ]; then
+                  if grep -Iq . "${untracked_path}" 2>/dev/null; then
+                    head -c 16000 "${untracked_path}" || true
+                    if [ "$(wc -c < "${untracked_path}" 2>/dev/null || echo 0)" -gt 16000 ]; then
+                      echo
+                      echo "[truncated to 16000 bytes]"
+                    fi
+                  else
+                    echo "[binary file omitted]"
+                  fi
+                else
+                  echo "[file no longer exists]"
+                fi
+                echo
+              done < "${UNTRACKED_LIST_FILE}"
+            fi
+          } > "${UNTRACKED_CONTEXT_FILE}"
+
+          wf_source="${{ github.repository_owner }}/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            script_ref="${{ github.sha }}"
+          else
+            script_ref="stable"
+          fi
+
+          ensure_diagnose_asset() {
+            local local_path="$1"
+            local remote_path="$2"
+            [ -s "${local_path}" ] && return 0
+
+            mkdir -p "$(dirname "${local_path}")"
+            if ! gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${remote_path}?ref=${script_ref}" > "${local_path}" 2>/dev/null; then
+              echo "::warning::${remote_path} not found on ${script_ref}; falling back to main"
+              if ! gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/${remote_path}?ref=main" > "${local_path}" 2>/dev/null; then
+                rm -f "${local_path}"
+                return 1
+              fi
+            fi
+
+            case "${local_path}" in
+              *.sh|*.py)
+                chmod +x "${local_path}" || true
+                ;;
+            esac
+            return 0
+          }
+
+          DIAGNOSE_MODE_PROMPT_TEMPLATE="prompts/mode-implement-diagnose.txt"
+          if ! ensure_diagnose_asset "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" "prompts/mode-implement-diagnose.txt"; then
+            DIAGNOSE_MODE_PROMPT_TEMPLATE="${RUNTIME_DIR}/mode-implement-diagnose.fallback.txt"
+            cat > "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" <<'EOF'
+          Diagnose this implementation failure and return a single JSON object with keys:
+          status (needs_fixes|harness_error|infeasible), diagnosis, fix_issues, harness_fixes.
+          EOF
+          fi
+
+          DIAGNOSE_MODE_PROMPT="${DIAGNOSE_MODE_PROMPT_TEMPLATE}"
+          if ensure_diagnose_asset "scripts/render_prompt.sh" "scripts/render_prompt.sh" && \
+            ensure_diagnose_asset "prompts/serena-efficiency-block.txt" "prompts/serena-efficiency-block.txt"; then
+            DIAGNOSE_RENDERED_PROMPT="${RUNTIME_DIR}/mode-implement-diagnose.rendered.txt"
+            if bash scripts/render_prompt.sh "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" > "${DIAGNOSE_RENDERED_PROMPT}"; then
+              DIAGNOSE_MODE_PROMPT="${DIAGNOSE_RENDERED_PROMPT}"
+            else
+              echo "::warning::Failed to render ${DIAGNOSE_MODE_PROMPT_TEMPLATE}; using raw prompt."
+            fi
+          else
+            echo "::warning::Diagnose prompt render assets unavailable; using raw prompt."
+          fi
+
+          DIAGNOSE_STATIC_PREFIX_FILE="${RUNTIME_DIR}/implement_diagnose_static_prefix.txt"
+          if [ -f ./pre_assembled_static.txt ]; then
+            cp ./pre_assembled_static.txt "${DIAGNOSE_STATIC_PREFIX_FILE}" || true
+          fi
+          if [ ! -s "${DIAGNOSE_STATIC_PREFIX_FILE}" ]; then
+            cat > "${DIAGNOSE_STATIC_PREFIX_FILE}" <<'EOF'
+          You are diagnosing an AI implementation workflow failure.
+          Return exactly one JSON object and no surrounding prose.
+          The JSON object must use these keys:
+          - status (needs_fixes|harness_error|infeasible)
+          - diagnosis
+          - fix_issues
+          - harness_fixes
+          Keep the response focused on actionable diagnosis grounded in the supplied evidence.
+          EOF
+          fi
+
+          {
+            if [ -s "${DIAGNOSE_STATIC_PREFIX_FILE}" ]; then
+              cat "${DIAGNOSE_STATIC_PREFIX_FILE}"
+              echo
+            fi
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_IMPLEMENT_DIAGNOSE}"
+            echo
+            echo "=== IMPLEMENT FAILURE DIAGNOSIS TASK ==="
+            cat "${DIAGNOSE_MODE_PROMPT}"
+            echo
+            echo "=== SOURCE ISSUE BODY ==="
+            cat "${ISSUE_BODY_FILE}"
+            echo
+            echo "=== FAILED STEP NAME ==="
+            echo "${FAILED_STEP_NAME}"
+            echo
+            echo "=== WORKING TREE CHANGES (git diff HEAD) ==="
+            if [ -s "${DIFF_FILE}" ]; then
+              cat "${DIFF_FILE}"
+            else
+              echo "(no content)"
+            fi
+            echo
+            echo "=== UNTRACKED FILE CONTEXT ==="
+            if [ -s "${UNTRACKED_CONTEXT_FILE}" ]; then
+              cat "${UNTRACKED_CONTEXT_FILE}"
+            else
+              echo "(no content)"
+            fi
+            echo
+            echo "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ==="
+            cat "${CAPTURE_FILE}"
+          } > "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
+
+          extract_last_json_with_key() {
+            local source_file="$1"
+            local required_key="$2"
+            local output_file="$3"
+
+            python3 - "${source_file}" "${required_key}" "${output_file}" <<'PY'
+          import json
+          import re
+          import sys
+
+          if len(sys.argv) < 4:
+              print("Usage: extract_last_json_with_key <source_file> <required_key> <output_file>", file=sys.stderr)
+              sys.exit(1)
+
+          source_file = sys.argv[1]
+          required_key = sys.argv[2]
+          output_file = sys.argv[3]
+
+          with open(source_file, "r", encoding="utf-8", errors="replace") as handle:
+              raw = handle.read()
+
+          candidates = []
+          trimmed = raw.strip()
+          if trimmed:
+              try:
+                  parsed = json.loads(trimmed)
+                  if isinstance(parsed, dict) and required_key in parsed:
+                      candidates.append(parsed)
+              except json.JSONDecodeError:
+                  pass
+
+          cleaned = re.sub(r"```(?:json)?\s*", "", raw)
+          cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
+
+          decoder = json.JSONDecoder()
+          pos = 0
+          while pos < len(cleaned):
+              start = cleaned.find("{", pos)
+              if start == -1:
+                  break
+              try:
+                  parsed, end = decoder.raw_decode(cleaned[start:])
+                  if isinstance(parsed, dict) and required_key in parsed:
+                      candidates.append(parsed)
+                  pos = start + end
+              except json.JSONDecodeError:
+                  pos = start + 1
+
+          if not candidates:
+              print(f"No JSON object with key '{required_key}' found", file=sys.stderr)
+              sys.exit(1)
+
+          with open(output_file, "w", encoding="utf-8") as handle:
+              json.dump(candidates[-1], handle, ensure_ascii=True, indent=2)
+              handle.write("\n")
+          PY
+          }
+
+          DIAGNOSE_SUCCESS=false
+          if timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex exec --model "${MODEL_EDITOR}" --full-auto \
+            < "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" > "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" \
+            2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2); then
+            if extract_last_json_with_key "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" "status" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"; then
+              DIAGNOSE_SUCCESS=true
+            fi
+          fi
+
+          if [ "${DIAGNOSE_SUCCESS}" != "true" ]; then
+            RAW_CAPTURE_SNIPPET="$(head -c 50000 "${CAPTURE_FILE}" || true)"
+            if [ "$(wc -c < "${CAPTURE_FILE}" 2>/dev/null || echo 0)" -gt 50000 ]; then
+              RAW_CAPTURE_SNIPPET+=$'\n\n[truncated to first 50000 bytes]'
+            fi
+
+            FALLBACK_BODY="Investigate post-Codex validation failure for issue #${ISSUE_NUMBER}.\n\nThe diagnose step could not produce a valid JSON contract, so this deterministic fallback issue was generated with raw captured diagnostics.\n\n### Captured diagnostics\n\n\`\`\`text\n${RAW_CAPTURE_SNIPPET}\n\`\`\`"
+
+            jq -n \
+              --arg diagnosis "Codex diagnose failed or returned invalid JSON. Fallback fix-up issue created with raw captured diagnostics." \
+              --arg body "${FALLBACK_BODY}" \
+              '{
+                status: "needs_fixes",
+                diagnosis: $diagnosis,
+                fix_issues: [
+                  {
+                    id: "implement-post-codex-fallback",
+                    title: "Implement phase post-Codex validation failure fallback",
+                    body: $body,
+                    priority: 1,
+                    depends_on: []
+                  }
+                ],
+                harness_fixes: ""
+              }' > "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"
+          fi
+
+          DIAG_STATUS="$(jq -r '.status // "harness_error"' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+          DIAG_TEXT="$(jq -r '.diagnosis // "Implementation failed after Codex execution."' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+
+          case "${DIAG_STATUS}" in
+            needs_fixes)
+              FIX_COUNT="$(jq -r '.fix_issues | length' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+              if [ "${FIX_COUNT}" -le 0 ]; then
+                FIX_COUNT=1
+                jq -n \
+                  --arg diagnosis "Diagnosis returned needs_fixes with empty fix_issues. Generated fallback issue payload." \
+                  --arg body "No fix_issues were returned by diagnose output. Investigate implement workflow post-Codex failure handling and captured diagnostics in ${CAPTURE_FILE}." \
+                  '{
+                    status: "needs_fixes",
+                    diagnosis: $diagnosis,
+                    fix_issues: [
+                      {
+                        id: "implement-post-codex-empty-fix-issues",
+                        title: "Implement phase diagnose returned empty fix_issues",
+                        body: $body,
+                        priority: 1,
+                        depends_on: []
+                      }
+                    ],
+                    harness_fixes: ""
+                  }' > "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"
+              fi
+
+              CREATED_FIX_ISSUES_JSON='[]'
+              local_to_issue_map='{}'
+
+              for idx in $(seq 0 $((FIX_COUNT - 1))); do
+                FIX_ID="$(jq -r ".fix_issues[${idx}].id // \"implement-fix-$((idx + 1))\"" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+                FIX_TITLE="$(jq -r ".fix_issues[${idx}].title // \"Implement post-Codex fix-up $((idx + 1))\"" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+                FIX_BODY_BASE="$(jq -r ".fix_issues[${idx}].body // \"No body provided\"" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}" | sed 's/\\n/\n/g')"
+                FIX_PRIORITY="$(jq -r ".fix_issues[${idx}].priority // 5" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+
+                FIX_BODY_FULL="${FIX_BODY_BASE}
+
+                ---
+                **Orchestrator metadata** (do not edit)
+                - Tracking issue: #${TRACKING_ISSUE_NUM}
+                - Integration branch: ${PR_BASE_BRANCH}
+                - Local ID: \`${FIX_ID}\`
+                - Type: implement-fix-up (post-codex-validation)
+                - Source issue: #${ISSUE_NUMBER}
+                - Failed step: ${FAILED_STEP_NAME}
+                - Priority: ${FIX_PRIORITY}
+                - Managed by: AI Orchestrator"
+
+                CREATE_ERR_FILE="$(mktemp)"
+                if FIX_URL="$(gh_retry gh issue create \
+                  --repo "${{ github.repository }}" \
+                  --title "${FIX_TITLE}" \
+                  --body "${FIX_BODY_FULL}" 2>"${CREATE_ERR_FILE}")"; then
+                  FIX_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$' || true)"
+                  if [ -n "${FIX_NUM}" ]; then
+                    CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${FIX_NUM}" '. + [$num]')"
+                    local_to_issue_map="$(echo "${local_to_issue_map}" | jq --arg id "${FIX_ID}" --argjson num "${FIX_NUM}" '. + {($id): $num}')"
+                  else
+                    echo "::warning::Could not parse issue number from gh issue create output for local id ${FIX_ID}: ${FIX_URL}" >&2
+                  fi
+                else
+                  CREATE_ERR_MSG="$(cat "${CREATE_ERR_FILE}" 2>/dev/null || true)"
+                  echo "::warning::Failed to create fix-up issue for local id ${FIX_ID}. ${CREATE_ERR_MSG}"
+                fi
+                rm -f "${CREATE_ERR_FILE}"
+              done
+
+              for idx in $(seq 0 $((FIX_COUNT - 1))); do
+                FIX_ID="$(jq -r ".fix_issues[${idx}].id // \"implement-fix-$((idx + 1))\"" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+                FIX_NUM="$(echo "${local_to_issue_map}" | jq -r --arg id "${FIX_ID}" '.[$id] // empty')"
+                [ -n "${FIX_NUM}" ] || continue
+
+                DEP_SUMMARY=""
+                while IFS= read -r dep_id; do
+                  [ -n "${dep_id}" ] || continue
+                  DEP_NUM="$(echo "${local_to_issue_map}" | jq -r --arg dep_id "${dep_id}" '.[$dep_id] // empty')"
+                  if [ -n "${DEP_NUM}" ]; then
+                    DEP_SUMMARY+="- #${DEP_NUM} (from ${dep_id})\n"
+                  fi
+                done < <(jq -r ".fix_issues[${idx}].depends_on[]?" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")
+
+                if [ -n "${DEP_SUMMARY}" ]; then
+                  gh_retry gh issue comment "${FIX_NUM}" \
+                    --repo "${{ github.repository }}" \
+                    --body "## Dependency Notes\n\nThis fix-up should be applied after:\n${DEP_SUMMARY}" >/dev/null || \
+                    echo "::warning::Failed to post dependency notes to issue #${FIX_NUM}."
+                fi
+              done
+
+              issue_list_md="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq -r '.[] | "- #\(.)"')"
+              if [ -z "${issue_list_md}" ]; then
+                issue_list_md="- (no issue numbers captured; issue creation failed)"
+              fi
+
+              gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+                -f body="## Post-Codex validation diagnosed follow-up fixes\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nCreated fix-up issues:\n${issue_list_md}" >/dev/null || true
+
+              ensure_implementation_failed_label
+              ;;
+
+            harness_error)
+              HARNESS_FIXES="$(jq -r '.harness_fixes // "No harness fixes were provided."' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+              gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+                -f body="## Post-Codex validation harness error\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}" >/dev/null || true
+
+              ensure_implementation_failed_label
+              ;;
+
+            infeasible)
+              gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+                -f body="## Post-Codex validation marked infeasible\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}" >/dev/null || true
+
+              ensure_implementation_failed_label
+              ;;
+
+            *)
+              gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+                -f body="## Post-Codex validation diagnosis returned unknown status\n\nStatus: ${DIAG_STATUS}\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}" >/dev/null || true
+
+              ensure_implementation_failed_label
+              ;;
+          esac
+
+      - name: Comment on issue failure
+        if: (failure() || cancelled()) && steps.diagnose_post_codex_failure.outputs.handled != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
