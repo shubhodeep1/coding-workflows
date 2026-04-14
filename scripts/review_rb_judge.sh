@@ -213,6 +213,14 @@ fi
 # -----------------------------------------------------------
 # Parse judge output
 # -----------------------------------------------------------
+# Pre-initialize to guarantee JUDGE_JSON is bound under `set -u`. The
+# complex multi-line command substitution below has been observed to
+# leave JUDGE_JSON unbound in rare cases (e.g. when the python3 subshell
+# is killed mid-run by an external signal, which prevents the `|| echo ""`
+# fallback from completing). Without this default, the subsequent
+# `[ -z "${JUDGE_JSON}" ]` check fires `JUDGE_JSON: unbound variable`
+# under `set -u` and aborts the whole review_autofix job.
+JUDGE_JSON=""
 JUDGE_JSON="$(PYTHONDONTWRITEBYTECODE=1 python3 -c "
 import json, re, sys
 
@@ -250,7 +258,7 @@ print('Could not parse review-blocked judge JSON', file=sys.stderr)
 sys.exit(1)
 " 2>/dev/null || echo "")"
 
-if [ -z "${JUDGE_JSON}" ]; then
+if [ -z "${JUDGE_JSON:-}" ]; then
   echo "::warning::Could not parse review-blocked judge output — falling back to manual intervention."
   exit 0
 fi
