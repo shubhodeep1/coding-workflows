@@ -5,13 +5,22 @@
   "entry_id": "processed_command_836_4240673410_approved",
   "issue_number": 836,
   "metadata": {
+    "branch": "ai/issue-836",
+    "changed_files": [
+      ".github/workflows/implement.yml"
+    ],
+    "issue_number": 836,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/836",
+    "pr_number": 848,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/848",
+    "run_attempt": "1",
+    "run_id": "24375933717",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24375933717"
   },
   "run_attempt": 1,
   "run_id": "24375933717",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-14T01:28:41Z",
+  "status": "completed",
+  "timestamp": "2026-04-14T01:31:52Z",
   "workflow": "implement"
 }
