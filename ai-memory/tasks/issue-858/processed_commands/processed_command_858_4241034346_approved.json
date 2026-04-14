@@ -5,13 +5,28 @@
   "entry_id": "processed_command_858_4241034346_approved",
   "issue_number": 858,
   "metadata": {
+    "branch": "ai/issue-858",
+    "changed_files": [
+      ".github/workflows/validate.yml",
+      "README.md",
+      "docs/validation-phase-spec.md",
+      "prompts/mode-validate-fix-harness.txt",
+      "prompts/mode-validate-generate.txt",
+      "scripts/validate_driver.sh",
+      "scripts/validate_process.sh"
+    ],
+    "issue_number": 858,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/858",
+    "pr_number": 874,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/874",
+    "run_attempt": "1",
+    "run_id": "24378665842",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24378665842"
   },
   "run_attempt": 1,
   "run_id": "24378665842",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-14T03:02:48Z",
+  "status": "completed",
+  "timestamp": "2026-04-14T03:24:30Z",
   "workflow": "implement"
 }
