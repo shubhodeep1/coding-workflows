@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\n/answer\n\nANSWERS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The issue spec already defines `original_issue.txt` as coming from the first linked closing issue, so using that same issue for `approved_plan.txt` lookup preserves deterministic behavior and keeps scope minimal.\nQ2: The clarification choice explicitly matches the requested fallback contract and fail-open behavior; I did not find evidence in current review workflow/scripts of an alternate artifact contract that should override the recommended one.",
+  "fingerprint": "7e8f4c45bd032d2757a4686baa4870f26b0baa000f8f0e05ad860482d5f6d6aa",
+  "lineage": {
+    "issue_number": 834,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24375842693",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24375842693",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/834"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20260414012529_cc90e1bcb8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 834,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24375842693"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #834",
+  "timestamps": {
+    "created_at": "2026-04-14T01:25:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
