@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan for Item 5 (`item-5-implement-retry-partial-work-context`)\n\nClarification mapping:\n- No Q<ID> clarification questions were issued in clarify phase.\n- Interpreted answer context: `/answer [auto-answered-by-clarify]` means scope is clear and unchanged.\n- MongoDB contracts are not relevant to this workflow-only change.\n\n1. Files likely to change\n- `.github/workflows/implement.yml`\n\n2. Functions/modules to implement\n- Target the `Run Codex implementation` step, inside the retry prompt assembly branch:\n  - Current insertion point is the block that builds `${RUNTIME_DIR}/codex_prompt_retry.txt` when `attempt > 1` and `git status --porcelain` is empty.\n- Add a new best-effort context assembly block before the existing no-file-change nudge text:\n  - Header: `=== PARTIAL WORK FROM PREVIOUS ATTEMPT ===`\n  - Include `git status --short` output.\n  - Include `git diff --stat` output.\n  - Include best-effort opened/read files list from Serena artifacts, checking Serena cache/memory locations first (for example `.serena/memory*` and other available Serena metadata), with graceful fallback marker if unavailable.\n- Keep current retry condition and existing \u201cIMPORTANT: Your previous attempt produced NO file changes...\u201d message intact after inserting the new block.\n\n3. Data structures affected\n- Runtime prompt artifact: `${RUNTIME_DIR}/codex_prompt_retry.txt` (content expanded).\n- Optional runtime temp artifacts/variables for assembled context (status, diff stat, opened-files list).\n- A deterministic unavailable marker string for opened-files list when Serena metadata is absent.\n\n4. API or interface changes\n- No external API/CLI/interface changes.\n- No new env vars.\n- No label/state-machine behavior changes.\n- Internal retry prompt contract changes only (additional context section).\n\n5. Potential risks or edge cases\n- `.serena` metadata may be absent or format may differ across runs.\n- Serena stats may not include file-level read/opened entries.\n- `git diff --stat` may be empty in true no-op retries; must still render section safely.\n- Prompt growth risk if opened-files extraction is large; cap and deduplicate to keep retry prompt bounded.\n- Fail-open requirement: all metadata extraction must be non-fatal (`|| true` / fallback markers).\n\n6. Testing considerations\n- Validate workflow YAML syntax after edit.\n- Simulate retry path and inspect generated `${RUNTIME_DIR}/codex_prompt_retry.txt`:\n  - Case A: no Serena metadata present -> block renders with unavailable marker and job continues.\n  - Case B: Serena metadata present -> opened/read file list appears.\n- Verify ordering: new `=== PARTIAL WORK FROM PREVIOUS ATTEMPT ===` block appears before existing no-file-change nudge.\n- Regression check: first-attempt prompt path remains unchanged (`${CODEX_PROMPT_FILE}` behavior intact).\n\nConflict detection:\n- No factual conflicts found between issue requirements and current code. The retry prompt insertion point and no-file-change nudge already exist as described.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "dc9155bee7a066d60994c890d434bf62d4a001342516a226166f857ff449a3b3",
+  "lineage": {
+    "issue_number": 836,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24375824374",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24375824374",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/836"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414012737_e843db1d50",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 836,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24375824374"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #836",
+  "timestamps": {
+    "created_at": "2026-04-14T01:27:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
