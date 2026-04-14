@@ -756,14 +756,6 @@ fi
 # ---------------------------------------------------------------
 set_tracking_phase_label "ai:validating"
 
-if ! ensure_validation_harness_not_tracked; then
-	exit 1
-fi
-
-if ! enforce_managed_validation_artifact_contract; then
-	exit 1
-fi
-
 # Ensure validation/ is git-ignored so no workflow accidentally commits it.
 # If validation/ was previously committed to the repo, untrack and remove it
 # so the ownership-marker check below does not hard-fail on a stale checkout.
@@ -796,6 +788,14 @@ AI validation workflow and must not be committed." >/dev/null 2>&1 || true
       echo "Note: could not push validation/ cleanup commit (branch protection or permissions). Fix applied locally for this run."
     fi
   fi
+fi
+
+if ! ensure_validation_harness_not_tracked; then
+	exit 1
+fi
+
+if ! enforce_managed_validation_artifact_contract; then
+	exit 1
 fi
 
 if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then

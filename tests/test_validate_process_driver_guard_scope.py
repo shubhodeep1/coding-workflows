@@ -87,7 +87,8 @@ class TestValidateProcessDriverGuardScope(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("Found non-canonical validate driver artifacts in scripts:", result.stderr)
+        self.assertNotIn("Managed validation artifact must remain untracked:", result.stderr)
+        self.assertNotIn("Found tracked copies of managed validation artifacts:", result.stderr)
 
     def test_tracked_validation_validate_sh_is_rejected(self) -> None:
         script_text = VALIDATE_PROCESS_SCRIPT.read_text(encoding="utf-8")
