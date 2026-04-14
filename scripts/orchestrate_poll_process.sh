@@ -1197,7 +1197,6 @@ evaluate_sync_superseded_by_main() {
     SYNC_SUPERSEDED_REASON="All tracked child PRs are terminal and integration changes for child PR paths are already represented on ${default_branch}."
   fi
 }
-
 # ---------------------------------------------------------------
 # Self-healing helpers for integration-branch <-> default-branch drift
 # ---------------------------------------------------------------
@@ -1582,7 +1581,6 @@ sync_default_into_integration_branch() {
     post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}\n\nSkipping sync of \`${default_branch}\` into \`${integration_branch}\` because all tracked child PRs are terminal and the branch is now treated as superseded by \`${default_branch}\`.\n\nReason: ${SYNC_SUPERSEDED_REASON}\n\nRunbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
     return 0
   fi
-
   ensure_integration_conflict_state_fields
 
   local merge_error
@@ -1599,7 +1597,6 @@ sync_default_into_integration_branch() {
       })' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
     fi
-
     mark_integration_sync_clean "${default_branch}"
     return 0
   fi
@@ -1639,7 +1636,6 @@ sync_default_into_integration_branch() {
     post_tracking_comment "## ⚠️ Integration sync conflict\n\nUnable to sync \`${default_branch}\` into \`${integration_branch}\` due to merge conflicts. The project can continue, but final merge may require manual conflict resolution.\n\nConflicting paths:\n${conflict_paths_md}\n\nRunbook: [Rebuild integration branch](${runbook_url})"
     tg_notify "⚠️ Sync conflict for #${TRACKING_NUM}: could not merge '${default_branch}' into '${integration_branch}'."
   fi
-
   # Real conflict: trigger the self-healing loop. project_title is
   # read from state so finalize's signature-compatible call-sites can
   # keep invoking this function with just (branch, default).
@@ -4440,7 +4436,7 @@ json.dump(result, sys.stdout)
       esac
       # Skip dirty PRs — those go through the proper conflict loop
       # above so the resolver workflow can be dispatched.
-      if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "false" ]; then
+      if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "conflicting" ]; then
         continue
       fi
       # Only act on PRs that are actually behind base.
