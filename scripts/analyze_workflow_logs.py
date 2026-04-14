@@ -216,7 +216,6 @@ def build_parser() -> argparse.ArgumentParser:
 	)
 	parser.add_argument(
 		"--batch-provider",
-		choices=["auto", "openai", "anthropic"],
 		default=os.getenv("BATCH_API_PROVIDER", DEFAULT_BATCH_PROVIDER),
 		help="Batch provider routing hint.",
 	)
