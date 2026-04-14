@@ -896,7 +896,7 @@ jobs:
           fi
 
       - name: Guard plans targeting template-owned paths
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && !endsWith(github.repository, '/coding-workflows')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -909,14 +909,26 @@ jobs:
           # issue is routed back to humans with a clear reason rather than
           # producing a silent no-op PR downstream.
           #
-          # We match backtick-wrapped path tokens only — the convention Codex
-          # uses in its "Files likely to change" section and inline file
-          # references. This avoids false positives on prose mentions.
+          # This guard is skipped entirely when the workflow is running inside
+          # the canonical `*/coding-workflows` repository, because in that repo
+          # those paths *are* the source of truth and must be editable.
+          #
+          # We only scan the plan's "Files likely to change" section (and any
+          # equivalent "Files to change" heading), not prose, so that a plan
+          # which merely *mentions* `scripts/render_prompt.sh` in a verification
+          # step does not get rejected as if it were editing it.
+          FILES_SECTION_FILE="${RUNTIME_DIR}/files_section.txt"
+          perl -ne '
+            BEGIN { $in = 0 }
+            if (/^\s{0,3}#{1,6}\s*Files\b[^\n]*\bchange\b/i) { $in = 1; next; }
+            if ($in && /^\s{0,3}#{1,6}\s+\S/) { $in = 0; }
+            print if $in;
+          ' "${CODEX_OUTPUT_FILE}" > "${FILES_SECTION_FILE}"
           EXCLUDED_RE='`(scripts/|\.github/prompts/|\.github/scripts/)'
-          if grep -nE "${EXCLUDED_RE}" "${CODEX_OUTPUT_FILE}" >/dev/null; then
-            echo "::error::Plan references template-owned paths (scripts/, .github/prompts/, .github/scripts/) which are excluded from Codex commits in implement.yml. Changes to those paths belong in the coding-workflows repository."
-            echo "Offending lines:"
-            grep -nE "${EXCLUDED_RE}" "${CODEX_OUTPUT_FILE}" || true
+          if [ -s "${FILES_SECTION_FILE}" ] && grep -nE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}" >/dev/null; then
+            echo "::error::Plan's 'Files likely to change' section lists template-owned paths (scripts/, .github/prompts/, .github/scripts/) which are excluded from Codex commits in implement.yml. Changes to those paths belong in the coding-workflows repository."
+            echo "Offending lines (from Files section):"
+            grep -nE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}" || true
             source scripts/gh_helpers.sh 2>/dev/null || true
             type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
             # Clean up the progress comment so the failure comment (posted by
