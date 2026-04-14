@@ -544,6 +544,7 @@ PY
 emit_harness_prompt_context()
 {
 	local prompt_budget_bytes="${1:-204800}"
+	local per_file_budget_bytes="${2:-200000}"
 	local included_bytes=0
 	local remaining_bytes=0
 	local harness_file=""
@@ -572,6 +573,11 @@ emit_harness_prompt_context()
 			echo
 			continue
 		fi
+		if [ "${per_file_budget_bytes}" -gt 0 ] && [ "${harness_size_bytes}" -gt "${per_file_budget_bytes}" ]; then
+			echo "----- ${harness_file} (skipped: file too large for per-file prompt budget) -----"
+			echo
+			continue
+		fi
 
 		line_count="$(wc -l < "${harness_file}" 2>/dev/null | tr -d '[:space:]' || true)"
 		if ! [[ "${line_count}" =~ ^[0-9]+$ ]]; then
@@ -581,9 +587,9 @@ emit_harness_prompt_context()
 
 		remaining_bytes=$((prompt_budget_bytes - included_bytes))
 		if [ "${remaining_bytes}" -le 0 ]; then
-			echo "----- ${harness_file} (skipped: global prompt budget exhausted) -----"
+			echo "----- (Remaining harness files skipped: global prompt budget exhausted) -----"
 			echo
-			continue
+			break
 		fi
 		if [ "${estimated_output_bytes}" -gt "${prompt_budget_bytes}" ]; then
 			echo "----- ${harness_file} (skipped: file too large for global prompt budget) -----"
@@ -597,9 +603,12 @@ emit_harness_prompt_context()
 		fi
 
 		echo "----- ${harness_file} (line-numbered) -----"
-		if nl -ba "${harness_file}" 2>/dev/null || cat "${harness_file}" 2>/dev/null; then
+		if nl -ba "${harness_file}" 2>/dev/null; then
 			echo
 			included_bytes=$((included_bytes + estimated_output_bytes))
+		elif cat "${harness_file}" 2>/dev/null; then
+			echo
+			included_bytes=$((included_bytes + harness_size_bytes))
 		else
 			echo "(skipped: failed to read file contents)"
 			echo
@@ -898,7 +907,7 @@ fi
     echo
   fi
   if [ "${HARNESS_MODE}" = "fix" ]; then
-    emit_harness_prompt_context
+    emit_harness_prompt_context 104857600 200000
   fi
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
