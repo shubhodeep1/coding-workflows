@@ -1588,17 +1588,18 @@ sync_default_into_integration_branch() {
     -f base="${integration_branch}" \
     -f head="${default_branch}" \
     -f commit_message="chore: sync ${default_branch} into ${integration_branch}" 2>&1 >/dev/null)"; then
-  if [ "${sync_status}" != "active" ] || [ -n "${prev_conflict_fingerprint}" ]; then
-    jq '.sync = ((.sync // {}) + {
-      "status": "active",
-      "last_sync_outcome": "merged",
-      "last_conflict_paths": [],
-      "last_conflict_fingerprint": ""
-    })' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
+    if [ "${sync_status}" != "active" ] || [ -n "${prev_conflict_fingerprint}" ]; then
+      jq '.sync = ((.sync // {}) + {
+        "status": "active",
+        "last_sync_outcome": "merged",
+        "last_conflict_paths": [],
+        "last_conflict_fingerprint": ""
+      })' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment
+    fi
+    mark_integration_sync_clean "${default_branch}"
+    return 0
   fi
-  mark_integration_sync_clean "${default_branch}"
-  return 0
 fi
 
   if ! printf '%s' "${merge_error}" | grep -Eqi '(HTTP 409|status code 409|merge conflict|conflict)'; then
@@ -4438,7 +4439,7 @@ json.dump(result, sys.stdout)
         esac
         # Skip dirty PRs — those go through the proper conflict loop
         # above so the resolver workflow can be dispatched.
-        if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "conflicting" ]; then
+        if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "conflicting" ] || [ "${_fs_mergeable}" = "false" ]; then
           continue
         fi
         # Only act on PRs that are actually behind base.
@@ -4451,7 +4452,7 @@ json.dump(result, sys.stdout)
           continue
         fi
         echo "  [feature-sweep] PR #${_fs_num} (${_fs_head}) is behind base; calling update-branch..."
-        if gh api "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}/update-branch" \
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}/update-branch" \
           -X PUT -f expected_head_sha="${_fs_head_sha}" >/dev/null 2>&1; then
           echo "  [feature-sweep] PR #${_fs_num} fast-forwarded."
         else
@@ -4842,6 +4843,12 @@ sys.exit(1)
             ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
             FOLLOWUP_PR_BLOCKED="false"
 
+            ORCH_FOLLOWUP_OWNED="false"
+            ORCH_FOLLOWUP_TRACKING_NUM=""
+            ORCH_FOLLOWUP_INTEGRATION_BRANCH=""
+            ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
+            FOLLOWUP_PR_BLOCKED="false"
+
             if [ "${RB_TARGET_MERGED}" = "true" ]; then
               resolve_active_orchestrator_context_for_issue "${rb_issue}" "${TRACKING_NUM:-}"
               ORCH_FOLLOWUP_OWNED="${RESOLVED_ORCHESTRATOR_OWNED}"
@@ -4892,6 +4899,7 @@ sys.exit(1)
               # Skip to retry counter via nested-fi + fi
             fi
 
+            if [ "${RB_FOLLOWUP_REFUSED}" != "true" ] && { { [ "${RB_TARGET_MERGED}" = "true" ] && [ "${FOLLOWUP_PR_BLOCKED}" != "true" ]; } || { [ "${RB_TARGET_MERGED}" != "true" ] && [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; }; }; then
             if [ "${RB_FOLLOWUP_REFUSED}" != "true" ] && { { [ "${RB_TARGET_MERGED}" = "true" ] && [ "${FOLLOWUP_PR_BLOCKED}" != "true" ]; } || { [ "${RB_TARGET_MERGED}" != "true" ] && [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; }; }; then
               # Re-run the judge in editing mode on the target branch
               RB_FIX_PROMPT_FILE="${RUNTIME_DIR}/rb_fix_prompt_${rb_issue}.txt"
