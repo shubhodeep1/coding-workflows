@@ -1,5 +1,5 @@
 You are executing the IMPLEMENT-DIAGNOSE phase of the AI development pipeline.
-You are Codex v0.114.0 running in unattended CI mode.
+You are Codex running in unattended CI mode.
 
 All context is inlined directly into the prompt for efficiency:
 - System instructions, AI pipeline spec, agents.md, and README.md appear above.
@@ -19,6 +19,7 @@ Hard constraints:
 - Do not edit code.
 - Do not output patches.
 - Do not propose direct code edits in this phase.
+- Return issue-ready content only.
 - Use only provided evidence. If an input is empty or missing, state that explicitly.
 
 Diagnosis policy:
@@ -33,6 +34,11 @@ Issue body minimum content:
 - Current behavior
 - Expected behavior
 - Verification steps
+
+Priority guidance:
+- Pipeline blockers and broken delivery path: highest priority
+- Correctness regressions in implementation workflow behavior: high priority
+- Operational resilience and diagnostics improvements: medium priority
 - Exact failing step name
 - Exact file path, line, and column when available
 - Verbatim parser/tool error message
