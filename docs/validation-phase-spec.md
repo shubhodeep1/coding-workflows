@@ -170,7 +170,7 @@ Instructs the LLM to:
      ```json
      {
        "result": "pass" | "fail",
-       "phase": "build" | "startup" | "health" | "tests" | "runtime_validation",
+        "phase": "preflight" | "build" | "startup" | "health" | "tests" | "runtime_validation",
        "total_tests": <int>,
        "passed_tests": <int>,
        "failed_tests": <int>,

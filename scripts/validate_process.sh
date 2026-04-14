@@ -923,7 +923,7 @@ for attempt in 1 2; do
 		ensure_validate_wrapper
 		if [ -f validation/docker-compose.test.yml ] \
 			&& [ -d validation/tests ] \
-			&& find validation/tests -type f -name '*.sh' -print -quit | grep -q .; then
+			&& find validation/tests -maxdepth 1 -type f -name '*.sh' -print -quit | grep -q .; then
 			GENERATE_SUCCESS=true
 			break
 		fi

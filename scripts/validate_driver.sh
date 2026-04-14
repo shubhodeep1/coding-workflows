@@ -67,7 +67,7 @@ RESULT_EMITTED=0
 TEARDOWN_DONE=0
 FINAL_EXIT_CODE=1
 
-FAILURES_FILE="$(mktemp)"
+FAILURES_FILE="$(mktemp "${TMPDIR:-/tmp}/validate_failures.XXXXXX")"
 printf '[]\n' > "${FAILURES_FILE}"
 
 TEST_FILES=()
@@ -76,6 +76,7 @@ CANARY_TEST=""
 capture_compose_logs()
 {
 	if [ -f "${COMPOSE_FILE}" ]; then
+		mkdir -p "$(dirname -- "${COMPOSE_LOG}")" >/dev/null 2>&1 || true
 		docker compose -f "${COMPOSE_FILE}" logs --no-color > "${COMPOSE_LOG}" 2>&1 || true
 	fi
 }
@@ -233,6 +234,11 @@ run_preflight_checks()
 		fail_fast "preflight_compose" "docker compose is not available" "${COMPOSE_LOG}" "preflight"
 	fi
 
+	if ! command -v python3 >/dev/null 2>&1; then
+		echo "python3 is required for validation result emission" >&2
+		exit 1
+	fi
+
 	if [ ! -f "${COMPOSE_FILE}" ]; then
 		fail_fast "preflight_compose_file" "compose file not found: ${COMPOSE_FILE}" "${COMPOSE_LOG}" "preflight"
 	fi
@@ -359,6 +365,13 @@ run_single_test()
 	TOTAL_TESTS=$((TOTAL_TESTS + ok_count + not_ok_count))
 	PASSED_TESTS=$((PASSED_TESTS + ok_count))
 	FAILED_TESTS=$((FAILED_TESTS + not_ok_count))
+
+	if [ "${exit_code}" -eq 0 ] && [ "${ok_count}" -eq 0 ] && [ "${not_ok_count}" -eq 0 ]; then
+		TOTAL_TESTS=$((TOTAL_TESTS + 1))
+		FAILED_TESTS=$((FAILED_TESTS + 1))
+		append_failure "${test_name}" "test produced no TAP output" "${test_log}"
+		return 1
+	fi
 
 	if [ "${exit_code}" -eq 0 ] && [ "${not_ok_count}" -eq 0 ]; then
 		return 0
