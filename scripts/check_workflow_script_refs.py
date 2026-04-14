@@ -126,7 +126,11 @@ def main() -> int:
 	repo_root = args.repo_root.resolve()
 	if args.files:
 		scripts_dir = repo_root / "scripts"
-		errors = check_paths([f.resolve() for f in args.files], scripts_dir)
+		workflow_paths = [
+			f.resolve() if f.is_absolute() else (repo_root / f).resolve()
+			for f in args.files
+		]
+		errors = check_paths(workflow_paths, scripts_dir)
 	else:
 		errors = check_workflows(repo_root)
 

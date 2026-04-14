@@ -60,6 +60,23 @@ if [ -z "${CONFLICTED_SET}" ] || [ -z "${TOUCHED_SET}" ]; then
 	exit 2
 fi
 
+if ! REPO_ROOT="$(cd "${REPO_ROOT}" 2>/dev/null && pwd)"; then
+	echo "::error::check_resolver_diff.sh: repo-root directory not found: ${REPO_ROOT}" >&2
+	exit 2
+fi
+
+resolve_path() {
+	local path="$1"
+	if [[ "${path}" == /* ]]; then
+		printf '%s\n' "${path}"
+	else
+		printf '%s\n' "${REPO_ROOT}/${path}"
+	fi
+}
+
+CONFLICTED_SET="$(resolve_path "${CONFLICTED_SET}")"
+TOUCHED_SET="$(resolve_path "${TOUCHED_SET}")"
+
 if [ ! -f "${CONFLICTED_SET}" ]; then
 	echo "::error::check_resolver_diff.sh: conflicted-set file not found: ${CONFLICTED_SET}" >&2
 	exit 2
@@ -97,7 +114,7 @@ fi
 # ---------------------------------------------------------------------------
 # (2) Per-file syntax sanity
 # ---------------------------------------------------------------------------
-# Read touched paths into an array (preserves whitespace) and run language-
+# Read touched paths line-by-line (preserves whitespace) and run language-
 # appropriate syntax checks.  Skip files the resolver deleted.
 syntax_failed=0
 while IFS= read -r touched; do
