@@ -1008,18 +1008,25 @@ mark_integration_branch_missing_failed() {
 
 sync_rebuild_runbook_url() {
   local default_branch="$1"
+  local fallback_branch="${default_branch:-main}"
   local runbook_path="docs/orchestrator-integration-branch-rebuild-runbook.md"
   local url
 
-  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/contents/${runbook_path}?ref=${default_branch}" >/dev/null 2>&1; then
-    url="$(_gh_url "blob/${default_branch}/${runbook_path}")"
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/contents/${runbook_path}?ref=${fallback_branch}" >/dev/null 2>&1; then
+    url="$(_gh_url "blob/${fallback_branch}/${runbook_path}")"
     if [ -n "${url}" ]; then
       printf '%s' "${url}"
       return 0
     fi
   fi
 
-  printf '%s' "https://github.com/shubhodeep1/coding-workflows/blob/main/${runbook_path}"
+  url="$(_gh_url "blob/${fallback_branch}/${runbook_path}")"
+  if [ -n "${url}" ]; then
+    printf '%s' "${url}"
+    return 0
+  fi
+
+  printf '%s/%s/blob/%s/%s' "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY}" "${fallback_branch}" "${runbook_path}"
 }
 
 resolve_branch_analysis_ref() {
@@ -1157,7 +1164,8 @@ evaluate_sync_superseded_by_main() {
 
     if ! pr_files_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}/files?per_page=100" 2>/dev/null \
       | jq -sc '[.[]? | .[]? | .filename] | unique' 2>/dev/null)"; then
-      return 0
+      echo "  [superseded-check] Skipping PR #${pr_num}: unable to fetch changed files." >&2
+      continue
     fi
 
     while IFS= read -r path; do
@@ -4432,7 +4440,7 @@ json.dump(result, sys.stdout)
       esac
       # Skip dirty PRs — those go through the proper conflict loop
       # above so the resolver workflow can be dispatched.
-      if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "conflicting" ]; then
+      if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "false" ]; then
         continue
       fi
       # Only act on PRs that are actually behind base.
@@ -4829,8 +4837,13 @@ sys.exit(1)
                   FOLLOWUP_PR_BLOCKED="true"
                   FOLLOWUP_BLOCK_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}), but integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}."
                   echo "::warning::${FOLLOWUP_BLOCK_REASON}"
+                  ORIGINAL_TRACKING_NUM="${TRACKING_NUM:-}"
+                  if [ -n "${ORCH_FOLLOWUP_TRACKING_NUM:-}" ]; then
+                    TRACKING_NUM="${ORCH_FOLLOWUP_TRACKING_NUM}"
+                  fi
                   post_tracking_comment "## ⚠️ Follow-up PR blocked\n\n${FOLLOWUP_BLOCK_REASON}"
                   tg_notify "${FOLLOWUP_BLOCK_REASON}" "WARNING"
+                  TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
                 fi
               fi
             fi
@@ -4935,8 +4948,13 @@ ${RB_FIX_DESC}" || true
                     if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ] && [ "${BASE_REF}" = "${DEFAULT_BRANCH:-main}" ]; then
                       FOLLOWUP_GUARD_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}); refusing to create follow-up PR against '${BASE_REF}'. Required base is '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}'."
                       echo "::warning::${FOLLOWUP_GUARD_REASON}"
+                      ORIGINAL_TRACKING_NUM="${TRACKING_NUM:-}"
+                      if [ -n "${ORCH_FOLLOWUP_TRACKING_NUM:-}" ]; then
+                        TRACKING_NUM="${ORCH_FOLLOWUP_TRACKING_NUM}"
+                      fi
                       post_tracking_comment "## ⚠️ Follow-up PR blocked\n\n${FOLLOWUP_GUARD_REASON}"
                       tg_notify "${FOLLOWUP_GUARD_REASON}" "WARNING"
+                      TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
                       FOLLOWUP_PR_URL=""
                     else
                       FOLLOWUP_PR_URL="$(gh pr create \
