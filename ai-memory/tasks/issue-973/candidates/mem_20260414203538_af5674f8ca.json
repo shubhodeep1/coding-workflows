@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- Q1: **A** \u2192 implement on `orchestrator/project-865` (or the exact branch/PR that contains the regression), not on current `main`.\n- Q2: **B** \u2192 keep human terminalization available, but only behind a new explicit opt-in env var that defaults to legacy behavior.\n\nFactual conflict detected:\n- The currently checked-out `main` branch does **not** match the issue\u2019s described regression (`STALL_RECOVERY_ACTIONS` is legacy-compatible here, and no `ENABLE_STALL_JUDGE` path was found).  \n- Plan assumes implementation is performed on the branch that contains the stall-judge regression (`orchestrator/project-865`).\n\nImplementation plan:\n\n1. Restore backward-compatible ladder defaults in stall action selection\n- File: `scripts/orchestrate_lib.py`\n- Introduce/retain an explicit **legacy default ladder** for phase recovery (third-step autonomous outcomes like `close_and_reissue` where applicable).\n- Add a single helper to resolve recovery action by `(phase, recovery_count, max_recoveries, allow_human_terminalization)` so selection logic is centralized.\n- Ensure `detect_stalls` and `check-stalls` use this helper so default behavior is legacy-compatible even when stall-judge is disabled or unavailable.\n\n2. Gate human terminalization behind explicit opt-in (default false)\n- File: `scripts/orchestrate_poll_process.sh` (and any parser path that already handles stall-judge config)\n- Add new env var (recommended name): `ENABLE_STALL_HUMAN_TERMINALIZATION`, default `false`, truthy parsing aligned with existing env handling.\n- Pass this gate into stall action resolution paths (managed and standalone) so `escalate_human` is only reachable when explicitly enabled.\n- Keep `ENABLE_STALL_JUDGE` semantics unchanged.\n\n3. Make fail-open fallback explicitly backward-compatible\n- Files: `scripts/orchestrate_lib.py`, `scripts/orchestrate_poll_process.sh`\n- In malformed/unsupported stall-judge output paths, route fallback through the same centralized legacy-aware resolver rather than ad hoc action defaults.\n- Ensure fallback result for each `(phase, recovery index)` matches legacy ladder when opt-in is off.\n\n4. Preserve merge-conflict routing behavior\n- File: `scripts/orchestrate_poll_process.sh`\n- Do not modify the conflict self-healing path that dispatches review/autofix (`_dispatch_review_for_conflicts` flow).\n- Add/keep regression assertion that merge-conflict handling remains autonomous and unaffected by human-terminalization gating.\n\n5. Update docs to match actual defaults and opt-in behavior\n- Files: `README.md`, `agents.md`\n- Add new env var contract with default `false`.\n- Update stall-recovery behavior text: autonomous legacy ladder is default; human terminalization is opt-in.\n- Document fail-open semantics clearly (stall-judge parse/execution failure falls back to backward-compatible ladder).\n\nFiles likely to change:\n- `scripts/orchestrate_lib.py`\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_lib.py` (or equivalent stall-action unit test module)\n- `tests/test_orchestrate_poll_process.py`\n- `README.md`\n- `agents.md`\n\nData structures affected:\n- Stall recovery action mapping (phase \u2192 action ladder).\n- Stall detection output payload (`recovery_action`) from `check-stalls`.\n- Tracking issue labels only when opt-in enabled (`ai:needs-human` path).\n- Env var surface (`ENABLE_STALL_HUMAN_TERMINALIZATION`).\n\nAPI/interface changes:\n- New env var: `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`).\n- Internal CLI/interface extension may be needed for `check-stalls` to accept human-terminalization gating input.\n\nPotential risks / edge cases:\n- One code path still using raw `STALL_RECOVERY_ACTIONS` could bypass the gate (must centralize resolution).\n- Incorrect fallback when judge output is malformed/partial (must use same resolver in all fallback branches).\n- Behavior drift between orchestrator-managed and standalone stall recovery if only one path is updated.\n- Accidental impact to merge-conflict self-healing if stall action case handling is edited too broadly.\n\nTesting considerations:\n- Add/adjust tests proving:\n1. `ENABLE_STALL_JUDGE=false` uses legacy autonomous ladder outcomes by default.\n2. Malformed/unsupported stall-judge output fail-opens to backward-compatible action.\n3. `ai:needs-human` (or equivalent human terminalization) occurs **only** when `ENABLE_STALL_HUMAN_TERMINALIZATION=true`.\n4. Merge-conflict routing still uses `_dispatch_review_for_conflicts` and remains unchanged.\n- Run targeted suites:\n1. `tests/test_orchestrate_lib.py`\n2. `tests/test_orchestrate_poll_process.py`\n- Include at least one regression test per acceptance criterion to lock default/backward-compatible semantics.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "939bf51b41dba20d9617e943cc79cb7b49344a090008f44414654471aad56cc0",
+  "lineage": {
+    "issue_number": 973,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24421369307",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24421369307",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/973"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414203538_af5674f8ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 973,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24421369307"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #973",
+  "timestamps": {
+    "created_at": "2026-04-14T20:35:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
