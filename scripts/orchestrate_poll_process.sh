@@ -2170,6 +2170,12 @@ STALL_EOF
       tg_notify "Stall recovery: issue #${issue_num} stuck at ready-to-merge for ${stall_minutes}m (attempt $((recovery_count + 1))). Merge loop will retry."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       ;;
 
+    run_stall_judge)
+      echo "  Escalating stalled issue #${issue_num} to wave judge."
+      INVOKE_JUDGE_FOR_STUCK=true
+      tg_notify "Stall recovery: escalating issue #${issue_num} to wave judge after ${stall_minutes}m in '${phase}'."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+      ;;
+
     close_and_reissue)
       # Nuclear option: close the linked PR (if any) and the issue, then
       # create a fresh replacement. The new issue enters the pipeline from
@@ -4146,7 +4152,9 @@ with open('${STATE_FILE}', 'w') as f:
       post_healing_summary_comment
     fi
 
-    continue
+    if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
+      continue
+    fi
     fi  # end: INVOKE_JUDGE_FOR_STUCK != true
   fi
 
