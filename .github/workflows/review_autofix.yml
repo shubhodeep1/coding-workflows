@@ -2007,7 +2007,7 @@ jobs:
           # and PR #912 post-mortem).  Persist the list so the post-exec
           # validation step can diff against it.
           RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
-          git ls-files --unmerged | awk '{print $4}' | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+          git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
           _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
           echo "Resolver allowlist (unmerged paths at merge replay): ${_resolver_allowlist_count} entries"
           if [ "${_resolver_allowlist_count}" -gt 0 ]; then

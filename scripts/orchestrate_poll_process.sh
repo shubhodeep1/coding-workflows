@@ -4220,12 +4220,17 @@ json.dump(result, sys.stdout)
             ""|github-actions|github-actions\[bot\]) : ;;
             *) RB_HEAD_IS_EXTERNAL="true" ;;
           esac
-          case "${_rb_head_author_name}" in
-            codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
-          esac
-          case "${_rb_head_author_email}" in
-            codex@users.noreply.github.com|noreply@github.com|*@users.noreply.github.com\ \(actions\)) RB_HEAD_IS_EXTERNAL="false" ;;
-          esac
+          # Keep authenticated GitHub login authoritative. Commit author
+          # name/email are fallback hints only when login did not classify
+          # the commit as external.
+          if [ "${RB_HEAD_IS_EXTERNAL}" != "true" ]; then
+            case "${_rb_head_author_name}" in
+              codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
+            esac
+            case "${_rb_head_author_email}" in
+              codex@users.noreply.github.com|noreply@github.com|*@users.noreply.github.com\ \(actions\)) RB_HEAD_IS_EXTERNAL="false" ;;
+            esac
+          fi
         fi
 
         RB_SHOULD_PREDISPATCH="false"
