@@ -41,7 +41,7 @@ awk 'length($0) >= 4 && $0 ~ /[a-z]/' "${TMP_CONTEXT_TOKENS}" | sort -u > "${TMP
 
 MATCHED_FILES=()
 for contract_file in "${CONTRACT_FILES[@]}"; do
-	if [ -s "${TMP_CONTEXT_UNIQUE}" ] && tr '[:upper:]' '[:lower:]' < "${contract_file}" | tr -cs 'a-z0-9' '\n' | grep -qFxf "${TMP_CONTEXT_UNIQUE}"; then
+	if [ -s "${TMP_CONTEXT_UNIQUE}" ] && tr '[:upper:]' '[:lower:]' < "${contract_file}" | tr -cs 'a-z0-9' '\n' | grep -Fxf "${TMP_CONTEXT_UNIQUE}" > /dev/null; then
 		MATCHED_FILES+=("${contract_file}")
 		continue
 	fi
