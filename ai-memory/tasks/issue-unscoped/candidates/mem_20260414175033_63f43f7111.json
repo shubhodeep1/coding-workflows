@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\ntests/test_orchestrate_poll_process.py\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "45880f83e08e0f5d73754238070e890b6e9804e07c66328a897a7e2d29837a47",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 965,
+    "run_id": "24413894447",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24413894447",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414175033_63f43f7111",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 965,
+    "run_id": "24413894447"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T17:50:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
