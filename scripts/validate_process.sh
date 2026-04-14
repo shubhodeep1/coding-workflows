@@ -426,7 +426,7 @@ append_failure()
   local log_tail=""
 
   if [ -n "${log_file}" ] && [ -f "${log_file}" ]; then
-    log_tail="$(tail -n 30 "${log_file}" 2>/dev/null || true)"
+    log_tail="$(tail -c 10000 "${log_file}" | tr -d '\000' | head -n 30 2>/dev/null || true)"
   fi
 
   python3 - "${FAILURES_FILE}" "${test_name}" "${error_msg}" "${log_tail}" <<'PY'
@@ -446,28 +446,26 @@ emit_result()
 {
   local result_value="${1:-fail}"
   local duration_seconds
-  local failures_json
 
   if [ "${RESULT_EMITTED}" = "1" ]; then
     return 0
   fi
 
   duration_seconds=$(( $(date +%s) - START_TS ))
-  failures_json="$(cat "${FAILURES_FILE}" 2>/dev/null || printf '[]')"
 
   RESULT="${result_value}" \
   TOTAL_TESTS="${TOTAL_TESTS}" \
   PASSED_TESTS="${PASSED_TESTS}" \
   FAILED_TESTS="${FAILED_TESTS}" \
   DURATION_SECONDS="${duration_seconds}" \
-  FAILURES_JSON="${failures_json}" \
+  FAILURES_FILE_PATH="${FAILURES_FILE}" \
   python3 -c 'import json, os; print(json.dumps({
 "result": os.environ["RESULT"],
 "phase": "runtime_validation",
 "total_tests": int(os.environ["TOTAL_TESTS"]),
 "passed_tests": int(os.environ["PASSED_TESTS"]),
 "failed_tests": int(os.environ["FAILED_TESTS"]),
-"failures": json.loads(os.environ["FAILURES_JSON"]),
+"failures": json.load(open(os.environ["FAILURES_FILE_PATH"], encoding="utf-8")),
 "duration_seconds": int(os.environ["DURATION_SECONDS"]),
 }))'
 
@@ -476,7 +474,10 @@ emit_result()
 
 cleanup()
 {
-  docker compose -f "${COMPOSE_FILE}" logs --no-color > "${COMPOSE_LOG}" 2>/dev/null || true
+  {
+    printf '\n===== docker compose logs --no-color =====\n'
+    docker compose -f "${COMPOSE_FILE}" logs --no-color 2>/dev/null || true
+  } >> "${COMPOSE_LOG}"
   docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
   rm -f "${FAILURES_FILE}" >/dev/null 2>&1 || true
 }
@@ -1168,7 +1169,7 @@ for attempt in 1 2; do
 done
 
 if [ "${GENERATE_SUCCESS}" != "true" ]; then
-  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/validate.sh, and validation/tests/00_canary.sh at minimum)."
+  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum)."
   post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for generation logs."
   set_tracking_phase_label "ai:validation-failed"
   write_result_files "error" "Validation harness generation failed" "${local_failure_summary}"
