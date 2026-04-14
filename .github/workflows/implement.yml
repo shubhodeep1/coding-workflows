@@ -1108,6 +1108,70 @@ jobs:
             echo "Error: .github/prompts or .github/scripts is staged"
             exit 1
           fi
+
+          # -----------------------------------------------------------------
+          # Destructive-commit guard (P2 — defense-in-depth for PRs #917/#931)
+          #
+          # Before committing, inspect the staged deletion set and refuse
+          # the commit if either:
+          #
+          #   (a) any deletion touches the canonical workflow-source list
+          #       (agents.md, ai_pipeline.md, codex_system_instructions.md,
+          #        unattended_llm_system_instructions.md, prompts/**,
+          #        scripts/**, .github/ai/**) and ALLOW_WORKFLOW_EDITS is
+          #       not set to 'true'. Even on self-repo runs, deleting any
+          #       of these files is almost never what an issue asked for;
+          #       legitimate workflow-editing issues must opt in.
+          #
+          #   (b) the total number of staged deletions exceeds
+          #       BULK_DELETE_THRESHOLD (default 3) and ALLOW_BULK_DELETE
+          #       is not set to 'true'. This catches destructive paths
+          #       that don't touch the canonical list but still wipe an
+          #       unexpected number of files.
+          #
+          # On rejection, `destructive_commit_blocked` is written to the
+          # step output with the reason ('canonical-source' or
+          # 'bulk-delete'); the `destructive_commit_deletions` output
+          # carries the deletion list (newline-separated) so downstream
+          # steps (P3: label + TG alert) can act on it before exiting.
+          # -----------------------------------------------------------------
+          deleted_staged="$(git diff --cached --diff-filter=D --name-only || true)"
+          if [ -n "${deleted_staged}" ]; then
+            canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
+              | grep -E '^(agents\.md|ai_pipeline\.md|codex_system_instructions\.md|unattended_llm_system_instructions\.md|prompts/|scripts/|\.github/ai/)' \
+              || true)"
+            total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
+            threshold="${BULK_DELETE_THRESHOLD:-3}"
+
+            if [ -n "${canonical_deletions}" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ]; then
+              echo "::error::Refusing to commit: ${total_deletions} staged deletion(s) include canonical workflow-source files and ALLOW_WORKFLOW_EDITS is not 'true'."
+              echo "Canonical-source deletions blocked:"
+              printf '%s\n' "${canonical_deletions}" | sed 's/^/  - /'
+              # Emit outputs BEFORE exiting so downstream P3 step can read them.
+              {
+                echo "destructive_commit_blocked=canonical-source"
+                echo "destructive_commit_count=${total_deletions}"
+                echo 'destructive_commit_deletions<<__DCD_EOF__'
+                printf '%s\n' "${deleted_staged}"
+                echo '__DCD_EOF__'
+              } >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            if [ "${total_deletions}" -gt "${threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ]; then
+              echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds BULK_DELETE_THRESHOLD=${threshold} and ALLOW_BULK_DELETE is not 'true'."
+              echo "Deletions blocked by bulk-delete threshold:"
+              printf '%s\n' "${deleted_staged}" | sed 's/^/  - /'
+              {
+                echo "destructive_commit_blocked=bulk-delete"
+                echo "destructive_commit_count=${total_deletions}"
+                echo 'destructive_commit_deletions<<__DCD_EOF__'
+                printf '%s\n' "${deleted_staged}"
+                echo '__DCD_EOF__'
+              } >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          fi
           # If every Codex-produced change was filtered out by the path exclusions
           # above (or stripped by the fetched-manifest cleanup earlier in this step),
           # there is nothing to commit.  Treat this as a no-op rather than letting
