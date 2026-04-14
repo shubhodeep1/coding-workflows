@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\n/tmp/codex-pr-24414922999-1-31517/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24414922999-1-31517/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\nscripts/orchestrate_poll_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n/tmp/codex-pr-24414922999-1-31517/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24414922999-1-31517/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24414922999-1-31517/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24414922999-1-31517/previous_reviews/review_deepseek_deepseek-v3_2.txt:**File:**\n/tmp/codex-pr-24414922999-1-31517/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\n/tmp/codex-pr-24414922999-1-31517/previous_reviews/review_google_gemini-3-flash-preview.txt:**File:**\nscripts/orchestrate_lib.py\nscripts/orchestrate_lib.py",
+  "fingerprint": "43ab71cd253448628ec457d9407a0a1bd59fda1bc9d960d1900344a542f91902",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 961,
+    "run_id": "24414922999",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24414922999",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414181634_235eef4494",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 961,
+    "run_id": "24414922999"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T18:16:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
