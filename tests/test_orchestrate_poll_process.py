@@ -2395,7 +2395,7 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 	issue["status"] = "in_progress"
 	issue["last_seen_phase"] = "ai:done"
 	issue["status_since_ts"] = 1
-	issue["stall_recovery_count"] = 1
+	issue["stall_recovery_count"] = 2
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -2409,13 +2409,15 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 		},
 	)
 	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Stall Judge — Issue #10" in body for body in tracking_comments)
 	assert any("/approved" in body for body in issue_comments)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
-	assert issue_entry["stall_recovery_count"] == 2
+	assert issue_entry["stall_recovery_count"] == 3
 
 
 
-def test_standalone_stall_judge_escalate_human_adds_needs_human_label():
+def test_stall_judge_escalate_human_adds_needs_human_label():
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
 	issue["status"] = "in_progress"

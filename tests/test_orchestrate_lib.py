@@ -397,7 +397,7 @@ def test_detect_stalls_selects_run_stall_judge_at_trigger_threshold():
 	assert stalls[0]["recovery_action"] == "run_stall_judge"
 
 
-def test_detect_stalls_uses_ladder_when_stall_judge_disabled():
+def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_planning_phase():
 	state = _make_state()
 	state["waves"][0]["issues"][0]["status"] = "in_progress"
 	state["waves"][0]["issues"][0]["status_since_ts"] = 1
@@ -439,7 +439,7 @@ def test_detect_stalls_max_recoveries_still_skips_with_judge_enabled():
 	assert stalls[0]["recovery_action"] == "skip"
 
 
-def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls():
+def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigger_override():
 	captured: dict[str, object] = {}
 	original_detect_stalls = orchestrate_lib.detect_stalls
 

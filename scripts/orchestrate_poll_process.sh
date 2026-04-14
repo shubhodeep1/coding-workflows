@@ -1088,7 +1088,7 @@ merge_tree_conflict_paths_json() {
   fi
 
   printf '%s\n' "${merge_output}" \
-    | sed '/^[0-9a-f]\{40,\}$/d;/^$/d' \
+    | sed '1{/^[0-9a-f]\{40,\}$/d};/^$/d' \
     | jq -Rsc 'split("\n") | map(select(length > 0)) | unique'
 }
 
@@ -1175,7 +1175,7 @@ evaluate_sync_superseded_by_main() {
 	pr_merged="$(_jq_field "${pr_json}" '.merged_at != null' 'true|false')"
 	if [ -z "${pr_state}" ] || [ -z "${pr_merged}" ]; then
 	  echo "  [superseded-check] Skipping PR #${pr_num}: unable to fetch state." >&2
-	  continue
+	  return 0
 	fi
 	if [ "${pr_state}" = "open" ] && [ "${pr_merged}" != "true" ]; then
 	  return 0
@@ -4773,7 +4773,7 @@ json.dump(result, sys.stdout)
       esac
       # Skip dirty PRs — those go through the proper conflict loop
       # above so the resolver workflow can be dispatched.
-      if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "conflicting" ] || [ "${_fs_mergeable}" = "false" ]; then
+      if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "false" ]; then
         continue
       fi
       # Only act on PRs that are actually behind base.
