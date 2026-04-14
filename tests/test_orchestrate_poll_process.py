@@ -161,6 +161,10 @@ def _run_poller(
 	update_branch_fail_for_prs: list[int] | None = None,
 	review_dispatch_fail_for_prs: list[int] | None = None,
 	active_autofix_runs: list[dict] | None = None,
+	pr_get_overrides: dict[int, list[dict]] | None = None,
+	mock_git_status_porcelain: str = "",
+	mock_git_diff_cached_name_only: str = "",
+	conflict_dispatch_cooldown_secs: str | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -177,6 +181,7 @@ def _run_poller(
 	update_branch_fail_for_prs = update_branch_fail_for_prs or []
 	review_dispatch_fail_for_prs = review_dispatch_fail_for_prs or []
 	active_autofix_runs = active_autofix_runs or []
+	pr_get_overrides = pr_get_overrides or {}
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -242,6 +247,8 @@ def _run_poller(
 			"validation_workflow_runs": validation_workflow_runs,
 			"issue_linked_prs": {str(k): int(v) for k, v in issue_linked_prs.items()},
 			"timeline_fail_for_issues": [int(x) for x in timeline_fail_for_issues],
+			"pr_get_overrides": {str(k): list(v) for k, v in pr_get_overrides.items()},
+			"pr_create_calls": [],
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -444,6 +451,7 @@ if args[0] == 'pr' and len(args) >= 2 and args[1] == 'create':
 		'title': title,
 		'body': body,
 	}
+	store.setdefault('pr_create_calls', []).append({'base': base, 'head': head, 'title': title})
 	store.setdefault('prs', []).append(pr)
 	save()
 	print(f'https://github.com/owner/repo/pull/{next_num}')
@@ -640,6 +648,14 @@ if args[0] == 'api':
 		if pr is None:
 			print('{}')
 			sys.exit(0)
+		overrides = store.get('pr_get_overrides', {}).get(str(pr_num), [])
+		if isinstance(overrides, list) and overrides:
+			override = overrides.pop(0)
+			store.setdefault('pr_get_overrides', {})[str(pr_num)] = overrides
+			if isinstance(override, dict):
+				pr = dict(pr)
+				pr.update(override)
+			save()
 		pr_state = pr.get('stateFromApi', pr.get('state', 'open'))
 		if jq == '.state':
 			print(pr_state)
@@ -774,6 +790,37 @@ print('Unsupported gh call: ' + ' '.join(args), file=sys.stderr)
 sys.exit(1)
 '''
 		_write_exec(bin_dir / "gh", gh_mock)
+		_write_exec(
+			bin_dir / "git",
+			"""#!/usr/bin/env python3
+import os
+import sys
+
+args = sys.argv[1:]
+if not args:
+	sys.exit(0)
+
+status_porcelain = os.environ.get('MOCK_GIT_STATUS_PORCELAIN', '')
+cached_names = os.environ.get('MOCK_GIT_DIFF_CACHED_NAME_ONLY', '')
+cmd = args[0]
+
+if cmd == 'status' and '--porcelain' in args:
+	if status_porcelain:
+		print(status_porcelain)
+	sys.exit(0)
+
+if cmd == 'diff' and '--cached' in args and '--name-only' in args:
+	if cached_names:
+		print(cached_names)
+	sys.exit(0)
+
+# Return success for all mutating commands used by the poller fix path.
+if cmd in {'add', 'config', 'commit', 'remote', 'push', 'fetch', 'checkout', 'ls-files'}:
+	sys.exit(0)
+
+sys.exit(0)
+""",
+		)
 
 		_write_exec(
 			bin_dir / "codex",
@@ -822,8 +869,12 @@ print(json.dumps(parsed))
 				"GH_MOCK_STORE": str(store_file),
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+				"MOCK_GIT_STATUS_PORCELAIN": mock_git_status_porcelain,
+				"MOCK_GIT_DIFF_CACHED_NAME_ONLY": mock_git_diff_cached_name_only,
 			}
 		)
+		if conflict_dispatch_cooldown_secs is not None:
+			env["CONFLICT_DISPATCH_COOLDOWN_SECS"] = conflict_dispatch_cooldown_secs
 
 		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],
@@ -845,6 +896,7 @@ print(json.dumps(parsed))
 		result["merge_calls"] = result.get("merge_calls", [])
 		result["review_dispatches"] = result.get("review_dispatches", [])
 		result["update_branch_calls"] = result.get("update_branch_calls", [])
+		result["pr_create_calls"] = result.get("pr_create_calls", [])
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
 		return result
@@ -1015,6 +1067,170 @@ def test_final_merge_conflict_sets_merge_conflict_status():
 	assert result["latest_state"]["status"] == "merge_conflict"
 	assert result["latest_state"]["final_merge_status"] == "conflict"
 	assert result["latest_state"]["final_merge_pr"] == 351
+
+
+def test_superseded_sync_dedupe_and_persistence_across_cycles():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_sync_status"] = "conflict"
+	state["integration_conflict_dispatch_ts"] = 1000
+	state["integration_sync_superseded_notified"] = False
+	prs = [
+		{
+			"number": 351,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": False,
+			"mergeable_state": "dirty",
+		},
+	]
+	active_autofix_runs = [
+		{
+			"workflow": "ai-review.yml",
+			"branch": "orchestrator/project-192",
+			"status": "in_progress",
+		},
+	]
+
+	first = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		active_autofix_runs=active_autofix_runs,
+		pr_get_overrides={351: [{"mergeable_state": "dirty", "mergeable": False}]},
+		conflict_dispatch_cooldown_secs="0",
+	)
+	assert first["latest_state"]["integration_sync_status"] == "superseded"
+	assert first["latest_state"]["integration_sync_superseded_notified"] is True
+	first_warning_count = sum(
+		1 for comment in first["issues"]["192"]["comments"]
+		if "Integration sync superseded" in comment.get("body", "")
+	)
+	assert first_warning_count == 1
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		active_autofix_runs=active_autofix_runs,
+		pr_get_overrides={351: [{"mergeable_state": "dirty", "mergeable": False}]},
+		conflict_dispatch_cooldown_secs="0",
+	)
+	assert second["latest_state"]["integration_sync_status"] == "superseded"
+	assert second["latest_state"]["integration_sync_superseded_notified"] is True
+	second_warning_count = sum(
+		1 for comment in second["issues"]["192"]["comments"]
+		if "Integration sync superseded" in comment.get("body", "")
+	)
+	assert second_warning_count == 1
+
+
+def test_review_blocked_followup_pr_retargets_to_integration_branch_not_main():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	state["review_blocked_retries"] = {"10": 0}
+	prs = [
+		{
+			"number": 551,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"headSha": "mergedsha551",
+			"title": "Fix issue 10",
+			"body": "PR body",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		issue_linked_prs={10: 551},
+		pr_get_overrides={551: [
+			{"merged_at": None, "state": "open", "mergeable": True, "mergeable_state": "clean"},
+			{"merged_at": "2026-04-14T00:00:00Z", "state": "closed", "mergeable": True, "mergeable_state": "clean"},
+		]},
+		codex_json={
+			"action": "fix",
+			"justification": "need follow-up",
+			"fix_description": "guard regression path",
+			"remaining_issues_summary": "none",
+		},
+		mock_git_status_porcelain="M scripts/orchestrate_poll_process.sh",
+		mock_git_diff_cached_name_only="scripts/orchestrate_poll_process.sh",
+	)
+	assert result["pr_create_calls"], "expected follow-up PR creation"
+	followup_call = result["pr_create_calls"][-1]
+	assert followup_call["base"] == "orchestrator/project-192"
+	assert followup_call["base"] != "main"
+	assert followup_call["head"].startswith("fix/10-followup-")
+
+
+def test_review_blocked_followup_pr_refuses_when_integration_branch_missing():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	state["review_blocked_retries"] = {"10": 0}
+	prs = [
+		{
+			"number": 552,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"headSha": "mergedsha552",
+			"title": "Fix issue 10",
+			"body": "PR body",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		prs=prs,
+		existing_branches=["main"],
+		issue_linked_prs={10: 552},
+		pr_get_overrides={552: [
+			{"merged_at": None, "state": "open", "mergeable": True, "mergeable_state": "clean"},
+			{"merged_at": "2026-04-14T00:00:00Z", "state": "closed", "mergeable": True, "mergeable_state": "clean"},
+		]},
+		codex_json={
+			"action": "fix",
+			"justification": "need follow-up",
+			"fix_description": "guard regression path",
+			"remaining_issues_summary": "none",
+		},
+		mock_git_status_porcelain="M scripts/orchestrate_poll_process.sh",
+		mock_git_diff_cached_name_only="scripts/orchestrate_poll_process.sh",
+	)
+	assert result["pr_create_calls"] == []
+	refusal = result["latest_state"].get("review_blocked_followup_refusals", {}).get("10")
+	assert refusal is not None
+	assert refusal["requested_base"] == "main"
+	assert refusal["integration_branch"] == "orchestrator/project-192"
+	assert "refusing fallback to main" in refusal["reason"]
+	assert "Follow-up PR creation refused" in result["stdout"]
 
 
 def test_final_merge_waits_for_required_checks_before_merging():
