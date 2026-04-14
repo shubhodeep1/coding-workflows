@@ -606,32 +606,33 @@ def test_idempotency_skips_diagnose_and_issue_creation_when_already_failed_label
 
 
 def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid():
-	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
-		tmp_path = Path(td)
-		raw_diag = "yaml parse failed on alpha.yml\npython compile failed on beta.py\n"
-		proc, state, _runtime_dir, paths = _run_diagnose_step(
-			tmp_path,
-			issue_labels=["ai:implementing"],
-			capture_contents=raw_diag,
-			codex_mode="invalid",
-			codex_output=None,
-			failed_step_name="Validate syntax of changed files",
-			issue_body="Tracking issue: #829\n",
-		)
+	for codex_mode in ("invalid", "fail"):
+		with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+			tmp_path = Path(td)
+			raw_diag = "yaml parse failed on alpha.yml\npython compile failed on beta.py\n"
+			proc, state, _runtime_dir, paths = _run_diagnose_step(
+				tmp_path,
+				issue_labels=["ai:implementing"],
+				capture_contents=raw_diag,
+				codex_mode=codex_mode,
+				codex_output=None,
+				failed_step_name="Validate syntax of changed files",
+				issue_body="Tracking issue: #829\n",
+			)
 
-		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert proc.returncode == 0, f"mode={codex_mode}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
 
-		result = json.loads(_read_file(paths["result_file"]))
-		assert result.get("status") == "needs_fixes"
-		assert "Fallback fix-up issue created" in result.get("diagnosis", "")
+			result = json.loads(_read_file(paths["result_file"]))
+			assert result.get("status") == "needs_fixes"
+			assert "Fallback fix-up issue created" in result.get("diagnosis", "")
 
-		created_issues = state.get("created_issues", [])
-		assert len(created_issues) == 1
-		created = created_issues[0]
-		assert created["title"] == "Implement phase post-Codex validation failure fallback"
-		assert "The diagnose step could not produce a valid JSON contract" in created["body"]
-		assert "yaml parse failed on alpha.yml" in created["body"]
-		assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
+			created_issues = state.get("created_issues", [])
+			assert len(created_issues) == 1
+			created = created_issues[0]
+			assert created["title"] == "Implement phase post-Codex validation failure fallback"
+			assert "The diagnose step could not produce a valid JSON contract" in created["body"]
+			assert "yaml parse failed on alpha.yml" in created["body"]
+			assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
 
 
 def test_out_of_scope_noop_when_capture_file_missing():
