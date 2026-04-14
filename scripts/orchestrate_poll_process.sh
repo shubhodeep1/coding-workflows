@@ -1120,15 +1120,16 @@ evaluate_sync_superseded_by_main() {
   fi
 
   for pr_num in "${pr_numbers[@]}"; do
-    pr_json="$(_fetch_pr_json "${pr_num}")"
-    pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
-    pr_merged="$(_jq_field "${pr_json}" '.merged_at != null' 'true|false')"
-    if [ -z "${pr_state}" ] || [ -z "${pr_merged}" ]; then
-      return 0
-    fi
-    if [ "${pr_state}" = "open" ] && [ "${pr_merged}" != "true" ]; then
-      return 0
-    fi
+	pr_json="$(_fetch_pr_json "${pr_num}")"
+	pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
+	pr_merged="$(_jq_field "${pr_json}" '.merged_at != null' 'true|false')"
+	if [ -z "${pr_state}" ] || [ -z "${pr_merged}" ]; then
+	  echo "  [superseded-check] Skipping PR #${pr_num}: unable to fetch state." >&2
+	  continue
+	fi
+	if [ "${pr_state}" = "open" ] && [ "${pr_merged}" != "true" ]; then
+	  return 0
+	fi
 
     if ! pr_files_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}/files?per_page=100" 2>/dev/null \
       | jq -sc '[.[]? | .[]? | .filename] | unique' 2>/dev/null)"; then
