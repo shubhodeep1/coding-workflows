@@ -4167,6 +4167,105 @@ json.dump(result, sys.stdout)
         echo "  PR #${RB_PR} is already merged. Judge fixes will target a follow-up PR against ${DEFAULT_BRANCH:-main}."
       fi
 
+      # ------------------------------------------------------------------
+      # Pre-judge auto-unstick / dirty-first dispatch
+      # ------------------------------------------------------------------
+      # The review-blocked judge decides merge/fix/close_and_reissue — it
+      # is NOT a merge-conflict resolver, and its "fix" path does not
+      # touch the merge state.  Two situations must be handled BEFORE the
+      # judge is invoked, because otherwise the PR sits stuck for one or
+      # more poll cycles while retries are consumed unproductively:
+      #
+      #   1. PR is dirty (mergeable=false): the only way to unstick it is
+      #      to dispatch review_autofix.yml, which runs the in-workflow
+      #      Codex conflict resolver on a clean runner.  Do that here and
+      #      skip the judge for this tick — the next tick will re-enter
+      #      this loop against (hopefully) a resolved PR.
+      #
+      #   2. The PR head commit is external (not codex-bot / not a
+      #      GitHub Actions bot): an external actor has pushed a fix
+      #      since the ai:review-blocked label was applied.  This is
+      #      exactly the "push a new commit to re-trigger" contract the
+      #      review_autofix.yml failure comment promises — but when the
+      #      pushing identity uses the GITHUB_TOKEN (Claude Code on the
+      #      web, a custom wrapper action) GitHub deliberately suppresses
+      #      the pull_request.synchronize event, so internal-review.yml
+      #      never wakes up and the PR stays stuck.  Bridge that gap by
+      #      dispatching review_autofix.yml explicitly and clearing the
+      #      ai:review-blocked label so the PR re-enters the normal
+      #      phase loop.
+      #
+      # Both paths funnel through _dispatch_review_for_conflicts, which
+      # already has cycle-local dedup (guard 1) and active-run detection
+      # (guard 2) so duplicate dispatches are cheap no-ops.  Gated by
+      # REVIEW_BLOCKED_AUTO_UNSTICK (default "true") for emergency
+      # kill-switch use.
+      REVIEW_BLOCKED_AUTO_UNSTICK="${REVIEW_BLOCKED_AUTO_UNSTICK:-true}"
+      if [ "${REVIEW_BLOCKED_AUTO_UNSTICK}" = "true" ] && [ "${RB_PR_STATE}" = "open" ] && [ "${RB_PR_MERGED}" != "true" ]; then
+        RB_PR_MERGEABLE="$(_jq_field "${_rb_pr_json}" '.mergeable' 'true|false')"
+        RB_HEAD_REF_PRECHECK="$(echo "${_rb_pr_json}" | jq -r '.head.ref // ""')"
+        RB_HEAD_SHA_PRECHECK="$(echo "${_rb_pr_json}" | jq -r '.head.sha // ""')"
+
+        # Classify the head commit's author.  Orchestrator-produced
+        # commits use the codex-bot identity; anything else is
+        # "external" and a signal that someone (human or external
+        # automation) has intervened and wants review retriggered.
+        RB_HEAD_IS_EXTERNAL="false"
+        if [ -n "${RB_HEAD_SHA_PRECHECK}" ] && [ "${RB_HEAD_SHA_PRECHECK}" != "null" ]; then
+          _rb_head_commit_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${RB_HEAD_SHA_PRECHECK}" 2>/dev/null || echo "{}")"
+          _rb_head_author_login="$(echo "${_rb_head_commit_json}" | jq -r '.author.login // ""')"
+          _rb_head_author_name="$(echo "${_rb_head_commit_json}" | jq -r '.commit.author.name // ""')"
+          _rb_head_author_email="$(echo "${_rb_head_commit_json}" | jq -r '.commit.author.email // ""')"
+          case "${_rb_head_author_login}" in
+            ""|github-actions|github-actions\[bot\]) : ;;
+            *) RB_HEAD_IS_EXTERNAL="true" ;;
+          esac
+          case "${_rb_head_author_name}" in
+            codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
+          esac
+          case "${_rb_head_author_email}" in
+            codex@users.noreply.github.com|noreply@github.com|*@users.noreply.github.com\ \(actions\)) RB_HEAD_IS_EXTERNAL="false" ;;
+          esac
+        fi
+
+        RB_SHOULD_PREDISPATCH="false"
+        RB_PREDISPATCH_REASON=""
+        if [ "${RB_PR_MERGEABLE}" = "false" ]; then
+          RB_SHOULD_PREDISPATCH="true"
+          RB_PREDISPATCH_REASON="merge conflicts (mergeable=false)"
+        elif [ "${RB_HEAD_IS_EXTERNAL}" = "true" ]; then
+          RB_SHOULD_PREDISPATCH="true"
+          RB_PREDISPATCH_REASON="external head commit ${RB_HEAD_SHA_PRECHECK:0:7} by ${_rb_head_author_login:-${_rb_head_author_name:-unknown}}"
+        fi
+
+        if [ "${RB_SHOULD_PREDISPATCH}" = "true" ] && [ -n "${RB_HEAD_REF_PRECHECK}" ] && [ "${RB_HEAD_REF_PRECHECK}" != "null" ]; then
+          echo "  [review-blocked] Pre-judge dispatch for PR #${RB_PR}: ${RB_PREDISPATCH_REASON}"
+          _predispatch_rc=0
+          _dispatch_review_for_conflicts "${RB_PR}" "${RB_HEAD_REF_PRECHECK}" || _predispatch_rc=$?
+          if [ "${_predispatch_rc}" -eq 0 ]; then
+            # Dispatched successfully.  When the trigger was an external
+            # head commit, also clear the ai:review-blocked label so the
+            # PR re-enters the normal phase loop on subsequent ticks —
+            # the dispatched review_autofix run will re-apply the label
+            # itself if it hits trouble again, so this is a safe reset.
+            if [ "${RB_HEAD_IS_EXTERNAL}" = "true" ]; then
+              gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                --remove-label 'ai:review-blocked' 2>/dev/null || true
+              echo "  [review-blocked] Cleared ai:review-blocked on issue #${rb_issue} (external commit detected)."
+              tg_notify "Review-blocked PR #${RB_PR} (issue #${rb_issue}) auto-unstuck: external head commit detected, review workflow dispatched."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
+            else
+              tg_notify "Review-blocked PR #${RB_PR} (issue #${rb_issue}) has merge conflicts; pre-judge dispatched conflict resolver."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
+            fi
+            REVIEW_BLOCKED_STATE_CHANGED=true
+            continue
+          elif [ "${_predispatch_rc}" -eq 2 ]; then
+            echo "  [review-blocked] Pre-judge dispatch skipped (active run or cycle-local dupe); falling through to judge."
+          else
+            echo "::warning::[review-blocked] Pre-judge dispatch failed for PR #${RB_PR}; falling through to judge."
+          fi
+        fi
+      fi
+
       # Collect full PR context for the judge
       PR_DIFF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
         -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"

@@ -199,12 +199,42 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh; do
+          # Required bootstrap scripts: must be available on ${script_ref}
+          # OR the main branch.  When a required script is missing from
+          # both refs — which typically means review_autofix.yml was
+          # modified to reference a script that never landed (e.g.
+          # hallucinated by the merge-conflict resolver) — abort with a
+          # clear, actionable error rather than letting bash -e propagate
+          # an opaque "Process completed with exit code 1" that masks the
+          # root cause and cascades into unrelated "unbound variable"
+          # errors in downstream cleanup steps.
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh"
+          # Optional bootstrap scripts: allowed to be missing from both
+          # refs.  The bootstrap emits a warning and continues — callers
+          # that depend on these must themselves tolerate absence.  Keep
+          # this list empty unless a genuinely optional helper is added;
+          # the default should always be "required".
+          OPTIONAL_BOOTSTRAP_SCRIPTS=""
+          for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
             if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main"
+              if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
+                echo "::error::Required bootstrap script '${f}' is missing from both ${script_ref} and main in ${wf_source}. This usually means review_autofix.yml references a file that was never committed (common cause: a hallucinated [ai-merge-resolve] commit added a new bootstrap entry without its corresponding script). Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the current contents of scripts/ on main."
+                exit 1
+              fi
+            fi
+            chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
+          done
+          for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
+            if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
+              if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
+                echo "::warning::Optional bootstrap script '${f}' not available on ${script_ref} or main; downstream features relying on this helper will be unavailable."
+                continue
+              fi
             fi
             chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
           done
@@ -900,6 +930,17 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Early guard: if the Create runtime workspace step never ran
+          # (e.g. a prior step failed before RUNTIME_CONTEXT_DIR was
+          # written to $GITHUB_ENV), this step would otherwise fail with
+          # "unbound variable" under set -u and mask the real root-cause
+          # error in the failure notification step.  Skip cleanly so the
+          # job's failure reason stays pinned to the actual first failure.
+          if [ -z "${RUNTIME_CONTEXT_DIR:-}" ]; then
+            echo "::warning::RUNTIME_CONTEXT_DIR not set; runtime workspace step did not complete. Skipping runtime context capture."
+            exit 0
+          fi
+
           mkdir -p "${RUNTIME_CONTEXT_DIR}"
 
           git status --short --branch > "${RUNTIME_CONTEXT_DIR}/git_status.txt" || true
@@ -1278,6 +1319,13 @@ jobs:
           SERENA_WARN_THRESHOLD: ${{ vars.SERENA_WARN_THRESHOLD_REVIEW || '50' }}
         run: |
           set -euo pipefail
+          # Early guard: if the Create runtime workspace step never ran,
+          # RUNTIME_DIR and PREVIOUS_REVIEWS_DIR are unset and expanding
+          # them under set -u would mask the real root-cause error.
+          if [ -z "${RUNTIME_DIR:-}" ] || [ -z "${PREVIOUS_REVIEWS_DIR:-}" ]; then
+            echo "::warning::RUNTIME_DIR/PREVIOUS_REVIEWS_DIR not set; runtime workspace step did not complete. Skipping Serena efficiency report."
+            exit 0
+          fi
           SERENA_REPORT_FILE="${RUNTIME_DIR}/serena_efficiency_report.md"
           echo "SERENA_REPORT_FILE=${SERENA_REPORT_FILE}" >> "$GITHUB_ENV"
 
@@ -1949,6 +1997,23 @@ jobs:
 
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
 
+          # Capture the set of actually-unmerged paths produced by this
+          # merge replay.  This is the authoritative allowlist the Codex
+          # resolver is permitted to modify: the resolver prompt
+          # explicitly restricts edits to files containing conflict
+          # markers, so anything the editor touches outside this set is
+          # a prompt violation (and in the past has been a sign of
+          # hallucinated output — see the downstream workflow-file guard
+          # and PR #912 post-mortem).  Persist the list so the post-exec
+          # validation step can diff against it.
+          RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
+          git ls-files --unmerged | awk '{print $4}' | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+          _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+          echo "Resolver allowlist (unmerged paths at merge replay): ${_resolver_allowlist_count} entries"
+          if [ "${_resolver_allowlist_count}" -gt 0 ]; then
+            sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
+          fi
+
           # Defensive: `git merge --no-commit` auto-stages merged hunks (and
           # conflict-marked hunks) into the index for every path both sides
           # touched, including protected paths (scripts/, prompts/, .serena/,
@@ -2132,6 +2197,62 @@ jobs:
               touched_count="$(wc -l < "${RESOLVER_TOUCHED_FILE}" | tr -d '[:space:]')"
               echo "Resolver-touched files (${touched_count}):"
               sed 's/^/ - /' "${RESOLVER_TOUCHED_FILE}" || true
+
+              # Allowlist validation (hallucination guard):
+              # The conflict-resolver prompt explicitly forbids editing
+              # files that don't contain conflict markers.  Compare the
+              # files Codex actually touched against the unmerged-paths
+              # allowlist captured right after the merge replay.  Any
+              # .github/workflows/*.y(a)ml file touched outside the
+              # allowlist is treated as a hallucinated modification —
+              # the highest-risk class of editor drift, because a
+              # corrupt workflow file poisons every subsequent run's
+              # bootstrap (see PR #912 post-mortem where the resolver
+              # added 300 lines referencing files that never existed).
+              # Non-workflow out-of-allowlist files emit a warning only,
+              # since the merge-staged index may legitimately contain
+              # auto-resolved files Codex lightly touched.
+              if [ -s "${RESOLVER_ALLOWLIST_FILE:-/nonexistent}" ] || [ -f "${RESOLVER_ALLOWLIST_FILE:-/nonexistent}" ]; then
+                WORKFLOW_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_workflow_violations.txt"
+                OTHER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_other_violations.txt"
+                : > "${WORKFLOW_VIOLATIONS_FILE}"
+                : > "${OTHER_VIOLATIONS_FILE}"
+                while IFS= read -r _touched_path; do
+                  [ -z "${_touched_path}" ] && continue
+                  if grep -Fxq "${_touched_path}" "${RESOLVER_ALLOWLIST_FILE}"; then
+                    continue
+                  fi
+                  case "${_touched_path}" in
+                    .github/workflows/*.yml|.github/workflows/*.yaml)
+                      printf '%s\n' "${_touched_path}" >> "${WORKFLOW_VIOLATIONS_FILE}"
+                      ;;
+                    *)
+                      printf '%s\n' "${_touched_path}" >> "${OTHER_VIOLATIONS_FILE}"
+                      ;;
+                  esac
+                done < "${RESOLVER_TOUCHED_FILE}"
+
+                if [ -s "${OTHER_VIOLATIONS_FILE}" ]; then
+                  echo "::warning::Conflict resolver touched non-workflow files that were not in the unmerged set. This may be benign (e.g. auto-merged index updates) but is worth noting:"
+                  sed 's/^/ - /' "${OTHER_VIOLATIONS_FILE}" || true
+                fi
+
+                if [ -s "${WORKFLOW_VIOLATIONS_FILE}" ]; then
+                  echo "::error::Conflict resolver modified GitHub workflow files that were NOT in the unmerged set. This is the signature of a hallucinated [ai-merge-resolve] edit and must not be committed — a corrupt workflow file would break every subsequent run's bootstrap. Refusing to commit."
+                  echo "Unmerged paths captured before codex exec (allowlist):"
+                  if [ -s "${RESOLVER_ALLOWLIST_FILE}" ]; then
+                    sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
+                  else
+                    echo "  (allowlist is empty — the merge replay produced no unmerged paths)"
+                  fi
+                  echo "Workflow files touched by resolver but NOT in allowlist:"
+                  sed 's/^/ - /' "${WORKFLOW_VIOLATIONS_FILE}" || true
+                  exit 1
+                fi
+              else
+                echo "::warning::Resolver allowlist file missing; skipping hallucination guard. Falling through to existing commit-gate protections."
+              fi
+
               # Stage the editor's conflict resolutions on top of the
               # existing merge index.  Crucially, we KEEP .git/MERGE_HEAD
               # in place AND we do NOT reset the index to HEAD.  Both
@@ -2786,7 +2907,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          rm -rf "${RUNTIME_DIR}"
+          # Guard: RUNTIME_DIR is only written to $GITHUB_ENV by the
+          # Create runtime workspace step.  If an earlier step failed
+          # before that step ran, expanding "${RUNTIME_DIR}" under set -u
+          # would raise "unbound variable" and mask the real root-cause
+          # error.  Skip cleanly when unset (nothing to clean up anyway).
+          if [ -n "${RUNTIME_DIR:-}" ]; then
+            rm -rf "${RUNTIME_DIR}"
+          fi
 
           # Remove workflow-fetched support files that were preserved for
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
