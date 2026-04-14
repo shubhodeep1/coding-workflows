@@ -281,8 +281,10 @@ jobs:
 > set of unmerged paths from the merge replay into
 > `RESOLVER_ALLOWLIST_FILE` and — after Codex exec returns — rejects
 > the commit with a hard `::error::` if any `.github/workflows/*.y(a)ml`
-> file was touched outside that allowlist. Non-workflow out-of-allowlist
-> edits emit a warning only. Both guards are automatic and have no
+> file was touched outside that allowlist. This allowlist-enforcement
+> path currently runs on the workflow source repository path
+> (`IS_WORKFLOW_SOURCE_REPO=true`). Non-workflow out-of-allowlist edits
+> emit a warning only. Both guards are automatic and have no
 > configuration surface.
 
 **`.github/workflows/ai-issue-pr-status.yml`** — Syncs issue labels when PRs are merged/closed
