@@ -397,7 +397,7 @@ def test_detect_stalls_selects_run_stall_judge_at_trigger_threshold():
 	assert stalls[0]["recovery_action"] == "run_stall_judge"
 
 
-def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_planning_phase():
+def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_implementing_phase():
 	state = _make_state()
 	state["waves"][0]["issues"][0]["status"] = "in_progress"
 	state["waves"][0]["issues"][0]["status_since_ts"] = 1
@@ -416,6 +416,26 @@ def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_planning_phase(
 
 	assert len(stalls) == 1
 	assert stalls[0]["recovery_action"] == "close_and_reissue"
+
+
+def test_detect_stalls_skips_needs_human_label():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 3
+	labels = {"10": ["ai:implementing", "ai:needs-human"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert stalls == []
 
 
 def test_detect_stalls_max_recoveries_still_skips_with_judge_enabled():
@@ -550,7 +570,7 @@ def test_detect_stalls_still_skips_at_or_above_max_recoveries():
 	assert result[0]["recovery_action"] == "skip"
 
 
-def test_detect_stalls_uses_ladder_when_stall_judge_disabled():
+def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_planning_phase_low_trigger():
 	now_ts = 5000
 	waves = [
 		{
@@ -581,7 +601,7 @@ def test_detect_stalls_uses_ladder_when_stall_judge_disabled():
 	assert result[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:planning"][1]
 
 
-def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls():
+def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_legacy_defaults():
 	captured: dict[str, object] = {}
 	original_detect_stalls = orchestrate_lib.detect_stalls
 

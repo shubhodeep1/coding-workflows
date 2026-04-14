@@ -492,6 +492,8 @@ def detect_stalls(
 			continue
 
 		labels = issue_labels.get(str(gh_num), [])
+		if "ai:needs-human" in labels:
+			continue
 		phase = determine_phase(labels)
 
 		if phase in TERMINAL_PHASES:

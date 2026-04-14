@@ -2364,7 +2364,7 @@ def test_stall_judge_resolve_merge_conflict_dispatches_review_and_increments_onc
 
 
 
-def test_stall_judge_escalate_human_does_not_increment_counter():
+def test_stall_judge_escalate_human_adds_needs_human_label_and_increments_counter():
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
 	issue["status"] = "in_progress"
@@ -2386,6 +2386,25 @@ def test_stall_judge_escalate_human_does_not_increment_counter():
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 3
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_escalate_human_issue_not_redetected_after_needs_human():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing", "ai:needs-human"]},
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert not any("/approved" in body or "/reclarify" in body for body in issue_comments)
+	assert not any("Stall Judge — Issue #10" in body for body in tracking_comments)
 
 
 
@@ -2416,29 +2435,6 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 	assert issue_entry["stall_recovery_count"] == 3
 
 
-
-def test_stall_judge_escalate_human_adds_needs_human_label():
-	state = _base_state(status="in_progress")
-	issue = state["waves"][0]["issues"][0]
-	issue["status"] = "in_progress"
-	issue["last_seen_phase"] = "ai:implementing"
-	issue["status_since_ts"] = 1
-	issue["stall_recovery_count"] = 2
-	result = _run_poller(
-		state=state,
-		enable_validation="false",
-		max_validate_cycles="3",
-		issue_labels={10: ["ai:implementing"]},
-		mock_stall_judge_json={
-			"action": "escalate_human",
-			"justification": "human needed",
-			"target_pr": None,
-			"head_ref": None,
-		},
-	)
-	assert "ai:needs-human" in result["issues"]["10"]["labels"]
-	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
-	assert issue_entry["stall_recovery_count"] == 3
 
 def test_no_labels_open_issue_uses_bounded_recovery_policy():
 	state = _base_state(status="in_progress")

@@ -2406,6 +2406,8 @@ for i, ch in enumerate(cleaned):
             start = i
         brace_depth += 1
     elif ch == '}':
+        if brace_depth == 0:
+            continue
         brace_depth -= 1
         if brace_depth == 0 and start is not None:
             candidate = cleaned[start:i+1]
@@ -4773,7 +4775,7 @@ json.dump(result, sys.stdout)
       esac
       # Skip dirty PRs — those go through the proper conflict loop
       # above so the resolver workflow can be dispatched.
-      if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "false" ]; then
+      if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "false" ] || [ "${_fs_mergeable}" = "conflicting" ]; then
         continue
       fi
       # Only act on PRs that are actually behind base.
