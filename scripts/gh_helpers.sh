@@ -206,7 +206,10 @@ gh_retry_to_file()
 _safe_gh_jq()
 {
 	local _tmpf
-	_tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX")
+	if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then
+		echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $*" >&2
+		return 1
+	fi
 	if gh api "$@" > "${_tmpf}"; then
 		cat "${_tmpf}"
 		rm -f "${_tmpf}"
@@ -236,7 +239,10 @@ gh_api_json_to_file()
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
 	local attempt=1
 	local stderr_file
-	stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_api_json_stderr.XXXXXX")
+	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_api_json_stderr.XXXXXX" 2>/dev/null); then
+		echo "::error::gh_api_json_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		return 1
+	fi
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
 		: > "${outfile}"
