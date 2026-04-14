@@ -191,15 +191,27 @@ enforce_no_renamed_driver_artifacts()
     return 0
   fi
 
-  local unexpected_driver_files
-  unexpected_driver_files="$({
+  local candidate_driver_files
+  local candidate
+  local renamed_driver_files=""
+  candidate_driver_files="$({
     git ls-files -- 'scripts/validate*.sh'
     git ls-files --others --exclude-standard -- 'scripts/validate*.sh'
   } 2>/dev/null | awk '$0 != "scripts/validate_process.sh" && $0 != "scripts/validate_driver.sh"' | sort -u)"
 
-  if [ -n "${unexpected_driver_files}" ]; then
-    echo "Found non-canonical validate driver artifacts in scripts/:" >&2
-    echo "${unexpected_driver_files}" >&2
+  while IFS= read -r candidate; do
+    [ -n "${candidate}" ] || continue
+    [ -f "${candidate}" ] || continue
+
+    if cmp -s "${candidate}" "scripts/validate_process.sh" \
+      || { [ -f "scripts/validate_driver.sh" ] && cmp -s "${candidate}" "scripts/validate_driver.sh"; }; then
+      renamed_driver_files="${renamed_driver_files}${candidate}"$'\n'
+    fi
+  done <<< "${candidate_driver_files}"
+
+  if [ -n "${renamed_driver_files}" ]; then
+    echo "Found renamed managed validate driver artifacts in scripts/:" >&2
+    printf '%s' "${renamed_driver_files}" >&2
     return 1
   fi
 
