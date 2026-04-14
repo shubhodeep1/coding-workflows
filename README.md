@@ -1027,7 +1027,7 @@ Use this after manual intervention (e.g. fixing a problematic issue, merging a s
 | `COMPOSE_FILE` | `validation/docker-compose.test.yml` | Compose file used by runtime validation. |
 | `TEST_DIR` | `validation/tests` | Test script directory. |
 | `LOG_DIR` | `validation/logs` | Runtime log directory. |
-| `CANARY_PATTERN` | `00_canary*.sh` | Canary test filename pattern. |
+| `CANARY_PATTERN` | `*canary*.sh` | Canary test filename pattern. |
 | `CANARY_REQUIRED` | `1` | Requires canary test before remaining tests. |
 | `VALIDATION_TEST_USERNAME` | `validation-user` | Synthetic validation credential default. |
 | `VALIDATION_TEST_PASSWORD` | `validation-password` | Synthetic validation credential default. |
