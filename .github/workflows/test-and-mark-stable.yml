@@ -1516,6 +1516,7 @@ jobs:
             prompts/mode-clarify.txt
             prompts/mode-plan.txt
             prompts/mode-implement.txt
+            prompts/mode-implement-diagnose.txt
             prompts/mode-orchestrate.txt
             prompts/mode-workflow-analysis.txt
             prompts/mode-judge.txt
