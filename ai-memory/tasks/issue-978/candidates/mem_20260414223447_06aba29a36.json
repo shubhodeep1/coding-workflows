@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\n/answer\n\nANSWERS:\nQ1: A\n\nRATIONALE:\nQ1: The current repo docs explicitly state that `validation/validate.sh` is generated as a thin runtime wrapper and treated as transient/non-committed, which matches option A. Option B would document future behavior before implementation lands, and C would reduce clarity on the runtime contract.",
+  "fingerprint": "5e6e01d2814df96cb2123f4ebeeffe748f7f910b29a0c23106954917ac63c7ae",
+  "lineage": {
+    "issue_number": 978,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24426302520",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24426302520",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/978"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20260414223447_06aba29a36",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 978,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24426302520"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #978",
+  "timestamps": {
+    "created_at": "2026-04-14T22:34:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
