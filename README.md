@@ -1001,7 +1001,7 @@ Use this after manual intervention (e.g. fixing a problematic issue, merging a s
 - Startup guard scope is managed-artifact only: consumer-owned helper scripts are allowed.
 - Managed artifact contract at startup:
   - Generated validation harness artifacts must remain transient/untracked.
-  - Tracked copies of managed validation artifacts are blocked outside canonical harness paths.
+  - Tracked copies of managed validation artifacts under `scripts/` (including renamed `scripts/validate*.sh` driver artifacts) are blocked.
   - Before execution, validation runs pre-flight checks (`docker compose config`, shell syntax, and compose build path resolution).
 - Pre-flight failures are classified as terminal `harness_error` for that run.
 - The first generated test must be a canary infrastructure check (`00_canary.sh` style); infra-only canary failures shortcut to `harness_error`, while app startup/crash signals continue to diagnosis.
