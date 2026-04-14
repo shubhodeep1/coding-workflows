@@ -10,7 +10,7 @@ OUT_FILE="$1"
 shift
 
 CONTRACTS_DIR="db/contracts"
-MAX_LINES_PER_CONTRACT=120
+MAX_LINES_PER_CONTRACT=200
 
 mkdir -p "$(dirname "${OUT_FILE}")"
 printf '=== DB CONTRACTS (relevant) ===\n' > "${OUT_FILE}"
@@ -41,17 +41,28 @@ awk 'length($0) >= 4 && $0 ~ /[a-z]/' "${TMP_CONTEXT_TOKENS}" | sort -u > "${TMP
 
 MATCHED_FILES=()
 for contract_file in "${CONTRACT_FILES[@]}"; do
-	if [ -s "${TMP_CONTEXT_UNIQUE}" ] && tr '[:upper:]' '[:lower:]' < "${contract_file}" | tr -cs 'a-z0-9' '\n' | grep -Fxf "${TMP_CONTEXT_UNIQUE}" > /dev/null; then
-		MATCHED_FILES+=("${contract_file}")
-		continue
-	fi
+	: > "${TMP_FILE_TOKENS}"
 
-	printf '%s\n' "$(basename "${contract_file}")" \
+	printf '%s\n' "$(basename "${contract_file}" ."${contract_file##*.}")" \
 		| tr '[:upper:]' '[:lower:]' \
 		| tr -cs 'a-z0-9' '\n' \
-		| awk 'length($0) >= 4 && $0 ~ /[a-z]/' > "${TMP_FILE_TOKENS}"
+		| awk 'length($0) >= 4 && $0 ~ /[a-z]/' >> "${TMP_FILE_TOKENS}"
 
-	if [ -s "${TMP_CONTEXT_UNIQUE}" ] && grep -qFxf "${TMP_CONTEXT_UNIQUE}" "${TMP_FILE_TOKENS}"; then
+	awk '
+		BEGIN { IGNORECASE = 1 }
+		/^[[:space:]]*collection[[:space:]]*:/ {
+			value = $0
+			sub(/^[[:space:]]*collection[[:space:]]*:[[:space:]]*/, "", value)
+			sub(/[[:space:]]+#.*$/, "", value)
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+			print tolower(value)
+			exit
+		}
+	' "${contract_file}" \
+		| tr -cs 'a-z0-9' '\n' \
+		| awk 'length($0) >= 4 && $0 ~ /[a-z]/' >> "${TMP_FILE_TOKENS}"
+
+	if [ -s "${TMP_CONTEXT_UNIQUE}" ] && [ -s "${TMP_FILE_TOKENS}" ] && grep -qFxf "${TMP_CONTEXT_UNIQUE}" "${TMP_FILE_TOKENS}"; then
 		MATCHED_FILES+=("${contract_file}")
 	fi
 done
