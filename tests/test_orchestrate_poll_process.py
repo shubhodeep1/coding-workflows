@@ -1272,22 +1272,23 @@ def test_validation_fixing_redispatches_when_fix_issues_merged():
 
 def test_review_blocked_merged_fix_followup_retargets_base_to_integration_branch():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	assert "RB_INTEGRATION_BRANCH=\"$(jq -r '.integration_branch // \"\"' \"${STATE_FILE}\"" in script
-	assert "retargeting merged follow-up base from ${BASE_REF} to ${RB_INTEGRATION_BRANCH}" in script
-	assert "BASE_REF=\"${RB_INTEGRATION_BRANCH}\"" in script
+	assert "resolve_active_orchestrator_context_for_issue \"${rb_issue}\" \"${TRACKING_NUM:-}\"" in script
+	assert "BASE_REF=\"${ORCH_FOLLOWUP_INTEGRATION_BRANCH}\"" in script
+	assert "Retargeting base to ${BASE_REF}." in script
 
 
 def test_review_blocked_merged_fix_followup_refuses_when_integration_branch_invalid():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	assert "Refusing merged follow-up PR for #${RB_PR}: integration branch context '${RB_INTEGRATION_BRANCH}' is invalid" in script
+	assert "RB_FOLLOWUP_REFUSED=\"true\"" in script
+	assert "integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}." in script
 	assert "Refused merged follow-up PR creation for review-blocked issue #${rb_issue}" in script
 
 
 def test_review_blocked_merged_fix_followup_keeps_default_base_without_integration_context():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	assert "elif [ -n \"${RB_INTEGRATION_BRANCH}\" ] && [ \"${RB_INTEGRATION_BRANCH_VALID}\" != \"true\" ]; then" in script
+	assert ": \"${BASE_REF:=${DEFAULT_BRANCH:-main}}\"" in script
 	assert "if [ \"${RB_INTEGRATION_BRANCH_VALID}\" = \"true\" ]" in script
-	assert "&& { [ \"${BASE_REF}\" = \"${RB_DEFAULT_BASE_REF}\" ] || [ \"${BASE_REF}\" = \"main\" ]; }; then" in script
+	assert "&& { [ \"${BASE_REF}\" = \"${DEFAULT_BRANCH:-main}\" ] || [ \"${BASE_REF}\" = \"main\" ]; }; then" in script
 
 
 def test_validation_fixing_backfills_ai_merged_from_linked_merged_pr_evidence():
