@@ -2393,14 +2393,14 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
 	issue["status"] = "in_progress"
-	issue["last_seen_phase"] = "ai:done"
+	issue["last_seen_phase"] = "ai:awaiting-approval"
 	issue["status_since_ts"] = 1
 	issue["stall_recovery_count"] = 2
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		issue_labels={10: ["ai:done"]},
+		issue_labels={10: ["ai:awaiting-approval"]},
 		mock_stall_judge_json={
 			"action": "nonsense",
 			"justification": "bad output",
