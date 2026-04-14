@@ -175,7 +175,7 @@ jobs:
 
           ARTIFACTS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" 2>/dev/null || echo '{}')"
           if [ -n "${ARTIFACTS_JSON}" ]; then
-            ARTIFACT_ID="$(printf '%s' "${ARTIFACTS_JSON}" | jq -r --arg name "${BATCH_ARTIFACT_NAME}" '.artifacts // [] | map(select(.name == $name and .expired == false)) | sort_by(.created_at) | last | .id // empty')"
+            ARTIFACT_ID="$(printf '%s' "${ARTIFACTS_JSON}" | jq -r --arg name "${BATCH_ARTIFACT_NAME}" --arg branch "${GITHUB_REF_NAME}" '.artifacts // [] | map(select(.name == $name and .expired == false and (((.workflow_run // {}) | .head_branch // "") == $branch))) | sort_by(.created_at) | last | .id // empty')"
             if [ -n "${ARTIFACT_ID}" ]; then
               TMP_DIR="$(mktemp -d)"
               if gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "${TMP_DIR}/batch-state.zip" 2>/dev/null; then
@@ -196,7 +196,7 @@ jobs:
           ANALYZE_EXIT=0
           REPORT_FILE=""
           set +e
-          REPORT_FILE="$(${cmd[@]})"
+          REPORT_FILE="$("${cmd[@]}")"
           ANALYZE_EXIT=$?
           set -e
 
