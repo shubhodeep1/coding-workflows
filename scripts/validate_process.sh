@@ -1112,14 +1112,6 @@ if ! enforce_managed_validation_artifact_contract; then
 	exit 1
 fi
 
-if ! ensure_validation_harness_not_tracked; then
-	exit 1
-fi
-
-if ! enforce_managed_validation_artifact_contract; then
-	exit 1
-fi
-
 if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then
 	echo "Refusing to use non-directory 'validation' path." >&2
 	exit 1
