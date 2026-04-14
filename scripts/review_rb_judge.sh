@@ -123,8 +123,6 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
     cat ./pre_assembled_static.txt
   fi
   echo
-  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
-  echo
   echo "=== REVIEW-BLOCKED JUDGE TASK ==="
   echo
   if [ -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
@@ -135,6 +133,8 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
   else
     echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."
   fi
+  echo
+  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
   echo
   if [ -n "${FIRST_ISSUE}" ]; then
     echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
@@ -421,7 +421,7 @@ case "${RB_ACTION}" in
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
             rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
-            rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py
+            rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py
             rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh
             rm -rf ai-memory
             rm -rf .serena
@@ -430,7 +430,7 @@ case "${RB_ACTION}" in
         unset _rb_origin_url
 
         if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
         else
           git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
         fi
