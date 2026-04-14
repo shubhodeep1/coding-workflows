@@ -1221,7 +1221,8 @@ jobs:
           # On the workflow source repo, snapshot the working-tree state before
           # the editor runs.  The "Commit changes" step below uses this snapshot
           # to stage ONLY files the editor actually wrote to (computed by
-          # hashing each file pre/post), instead of relying on hardcoded
+          # hashing each file pre/post plus executable-bit changes), instead of
+          # relying on hardcoded
           # ':!scripts/<helper>' pathspec excludes that cannot unstage files
           # already in the index.  This lets any script — including former
           # "canonical helpers" like review_apply_fixes.sh — be legitimately
@@ -1238,8 +1239,11 @@ jobs:
             # cheap and makes the snapshot reusable from the resolver step.
             while IFS= read -r -d '' snap_path; do
               [ -f "${snap_path}" ] || continue
-              printf 'T\t%s\t%s\n' \
+              snap_exec=0
+              [ -x "${snap_path}" ] && snap_exec=1
+              printf 'T\t%s\t%s\t%s\n' \
                 "$(git hash-object -- "${snap_path}")" \
+                "${snap_exec}" \
                 "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
             done < <(git ls-files -z | sort -zu)
             while IFS= read -r snap_path; do
@@ -1376,18 +1380,24 @@ jobs:
             if [ -f "${PRE_EDITOR_STATE_FILE:-/nonexistent}" ]; then
               PRE_UNTRACKED_LIST="$(mktemp)"
               POST_UNTRACKED_LIST="$(mktemp)"
-              while IFS=$'\t' read -r diff_kind diff_a diff_b; do
+              while IFS=$'\t' read -r diff_kind diff_a diff_b diff_c; do
                 case "${diff_kind}" in
                   T)
                     old_sha="${diff_a}"
-                    diff_path="${diff_b}"
+                    old_exec="${diff_b}"
+                    diff_path="${diff_c}"
                     [ -z "${diff_path}" ] && continue
                     if [ ! -e "${diff_path}" ]; then
                       printf '%s\n' "${diff_path}" >> "${CODEX_TOUCHED_FILE}"
                       continue
                     fi
                     new_sha="$(git hash-object -- "${diff_path}" 2>/dev/null || true)"
-                    if [ -n "${new_sha}" ] && [ "${new_sha}" != "${old_sha}" ]; then
+                    if [ -x "${diff_path}" ]; then
+                      new_exec=1
+                    else
+                      new_exec=0
+                    fi
+                    if { [ -n "${new_sha}" ] && [ "${new_sha}" != "${old_sha}" ]; } || [ "${new_exec}" != "${old_exec}" ]; then
                       printf '%s\n' "${diff_path}" >> "${CODEX_TOUCHED_FILE}"
                     fi
                     ;;
@@ -2006,6 +2016,7 @@ jobs:
           # On the workflow source repo, snapshot the post-merge working-tree
           # state before Codex resolves conflicts.  The commit logic below
           # uses it to stage ONLY files Codex actually wrote during resolution,
+          # including executable-bit-only updates,
           # discarding files that git merge auto-staged but Codex never
           # touched.  The auto-merged hunks will replay naturally when the PR
           # is eventually merged into BASE, so skipping them here is safe.
@@ -2017,8 +2028,11 @@ jobs:
             # We only need to hash each working-tree file once.
             while IFS= read -r -d '' snap_path; do
               [ -f "${snap_path}" ] || continue
-              printf 'T\t%s\t%s\n' \
+              snap_exec=0
+              [ -x "${snap_path}" ] && snap_exec=1
+              printf 'T\t%s\t%s\t%s\n' \
                 "$(git hash-object -- "${snap_path}")" \
+                "${snap_exec}" \
                 "${snap_path}" >> "${PRE_RESOLVER_STATE_FILE}"
             done < <(git ls-files -z | sort -zu)
             while IFS= read -r snap_path; do
@@ -2075,18 +2089,24 @@ jobs:
               if [ -f "${PRE_RESOLVER_STATE_FILE:-/nonexistent}" ]; then
                 PRE_UNTRACKED_LIST="$(mktemp)"
                 POST_UNTRACKED_LIST="$(mktemp)"
-                while IFS=$'\t' read -r diff_kind diff_a diff_b; do
+                while IFS=$'\t' read -r diff_kind diff_a diff_b diff_c; do
                   case "${diff_kind}" in
                     T)
                       old_sha="${diff_a}"
-                      diff_path="${diff_b}"
+                      old_exec="${diff_b}"
+                      diff_path="${diff_c}"
                       [ -z "${diff_path}" ] && continue
                       if [ ! -e "${diff_path}" ]; then
                         printf '%s\n' "${diff_path}" >> "${RESOLVER_TOUCHED_FILE}"
                         continue
                       fi
                       new_sha="$(git hash-object -- "${diff_path}" 2>/dev/null || true)"
-                      if [ -n "${new_sha}" ] && [ "${new_sha}" != "${old_sha}" ]; then
+                      if [ -x "${diff_path}" ]; then
+                        new_exec=1
+                      else
+                        new_exec=0
+                      fi
+                      if { [ -n "${new_sha}" ] && [ "${new_sha}" != "${old_sha}" ]; } || [ "${new_exec}" != "${old_exec}" ]; then
                         printf '%s\n' "${diff_path}" >> "${RESOLVER_TOUCHED_FILE}"
                       fi
                       ;;
