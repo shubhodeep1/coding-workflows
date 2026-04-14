@@ -680,6 +680,24 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 3. Repeat a few times to smooth routing variance.
 4. In this repo, also confirm generated prompts still keep `pre_assembled_static.txt` (or `judge_static.txt`) content at the top.
 
+## Runtime Repo Overview Artifact
+
+- Codex workflows now generate a runtime-only `repo_overview.txt` at repository root via `scripts/build_repo_overview.sh`.
+- The artifact is restored/saved with `actions/cache` keyed by:
+  - `**/package.json`
+  - `**/pyproject.toml`
+  - `**/go.mod`
+  - `**/Cargo.toml`
+  - `.pre-commit-config.yaml`
+  - `**/Dockerfile`
+  - `.github/workflows/*.yml`
+- Generation is deterministic and fail-open:
+  - computes `inputs_hash` from the same inputs
+  - exits without rewriting when current header hash matches
+  - regenerates only when inputs change
+  - uses `tree` when available, else falls back to `find . -maxdepth 2 -type d`
+- `repo_overview.txt` is ignored by git and must not be committed.
+
 ### Expected savings assumptions
 
 - Savings are workload-dependent and primarily correlate with:
