@@ -69,6 +69,7 @@ class TestValidateProcessDriverGuardScope(unittest.TestCase):
         script_text = VALIDATE_PROCESS_SCRIPT.read_text(encoding="utf-8")
         function_blocks = "\n".join(
             [
+                _extract_function(script_text, "enforce_no_renamed_driver_artifacts"),
                 _extract_function(script_text, "ensure_validation_harness_not_tracked"),
                 _extract_function(script_text, "enforce_managed_validation_artifact_contract"),
             ]
@@ -84,10 +85,12 @@ class TestValidateProcessDriverGuardScope(unittest.TestCase):
             result = _run_guard(
                 repo_dir,
                 function_blocks,
-                "ensure_validation_harness_not_tracked && enforce_managed_validation_artifact_contract",
+                "enforce_no_renamed_driver_artifacts && ensure_validation_harness_not_tracked && enforce_managed_validation_artifact_contract",
             )
 
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Found non-canonical validate driver artifacts in scripts:", result.stderr)
+        self.assertNotIn("Found renamed managed validate driver artifacts in scripts/:", result.stderr)
         self.assertNotIn("is tracked by git; it must remain transient.", result.stderr)
         self.assertNotIn("Managed validation artifact contract violation detected:", result.stderr)
 
