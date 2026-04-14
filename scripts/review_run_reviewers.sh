@@ -36,7 +36,100 @@ if [ -n "${PR_NUMBER:-}" ] && [ -n "${REPOSITORY:-}" ] && command -v gh >/dev/nu
   fi
 fi
 
+normalize_openrouter_usage() {
+  local log_file="$1"
+  local call_label="$2"
+  local model_name="$3"
+  PYTHONDONTWRITEBYTECODE=1 python3 - "$log_file" "$call_label" "$model_name" <<'PY'
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+try:
+	from openrouter_prompt_cache import format_usage_value, normalize_usage
+except ModuleNotFoundError:
+	from scripts.openrouter_prompt_cache import format_usage_value, normalize_usage
+
+log_path = Path(sys.argv[1])
+call_label = sys.argv[2]
+model_name = sys.argv[3]
+cache_enabled = "false" if os.getenv("OPENROUTER_PROMPT_CACHE_DISABLED", "false").strip().lower() in {"1", "true", "yes", "on", "y"} else "true"
+
+usage = normalize_usage(None)
+if log_path.exists():
+	text = log_path.read_text(encoding="utf-8", errors="replace")
+	matches = re.findall(r"\{\s*\"usage\"\s*:\s*\{.*?\}\s*\}", text, flags=re.DOTALL)
+	for raw in matches:
+		try:
+			payload = json.loads(raw)
+		except json.JSONDecodeError:
+			continue
+		if not isinstance(payload, dict):
+			continue
+		usage = normalize_usage(payload.get("usage") if isinstance(payload.get("usage"), dict) else None)
+		if isinstance(payload.get("model"), str) and payload.get("model"):
+			model_name = payload["model"]
+		break
+
+print(
+	"INFO: openrouter usage "
+	f"phase=review_autofix_cache_probe call={call_label} model={model_name} "
+	f"cache_enabled={cache_enabled} "
+	"cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na "
+	f"prompt_tokens={format_usage_value(usage.get('prompt_tokens'))} "
+	f"completion_tokens={format_usage_value(usage.get('completion_tokens'))} "
+	f"total_tokens={format_usage_value(usage.get('total_tokens'))} "
+	f"cache_creation_input_tokens={format_usage_value(usage.get('cache_creation_input_tokens'))} "
+	f"cache_read_input_tokens={format_usage_value(usage.get('cache_read_input_tokens'))}"
+)
+PY
+}
+
+run_cache_probe() {
+  local probe_model
+  probe_model="$(printf '%s\n' "${REVIEWER_MODELS}" | sed '/^$/d' | head -n1)"
+  if [ -z "${probe_model}" ]; then
+    return 0
+  fi
+  local probe_prompt_file probe_prompt probe_log_one probe_log_two probe_home probe_out
+  probe_prompt_file="${PREVIOUS_REVIEWS_DIR}/cache_probe_prompt.txt"
+  probe_log_one="${PREVIOUS_REVIEWS_DIR}/cache_probe_call_1.log"
+  probe_log_two="${PREVIOUS_REVIEWS_DIR}/cache_probe_call_2.log"
+  probe_out="${PREVIOUS_REVIEWS_DIR}/cache_probe_output.txt"
+  cat > "${probe_prompt_file}" <<'EOF'
+Return exactly the word CACHE_PROBE_OK.
+EOF
+  {
+    cat ./pre_assembled_static.txt
+    echo
+    cat "${probe_prompt_file}"
+  } > "${probe_out}"
+
+  probe_home="$(mktemp -d "${RUNNER_TEMP:-${HOME}/.cache}/codex_home_probe.XXXXXX")"
+  local old_codex_home="${CODEX_HOME:-}"
+  if [ -d "${CODEX_HOME:-}" ]; then
+    cp -r "${CODEX_HOME}/." "${probe_home}/"
+  fi
+  export CODEX_HOME="${probe_home}"
+
+  codex exec --model "${probe_model}" --full-auto "$(cat "${probe_out}")" >/dev/null 2>"${probe_log_one}" || true
+  codex exec --model "${probe_model}" --full-auto "$(cat "${probe_out}")" >/dev/null 2>"${probe_log_two}" || true
+
+  normalize_openrouter_usage "${probe_log_one}" "1" "${probe_model}" || true
+  normalize_openrouter_usage "${probe_log_two}" "2" "${probe_model}" || true
+  if [ -n "${old_codex_home}" ]; then
+    export CODEX_HOME="${old_codex_home}"
+  else
+    unset CODEX_HOME
+  fi
+  rm -rf "${probe_home}" 2>/dev/null || true
+}
+
 mkdir -p "${PREVIOUS_REVIEWS_DIR}"
+
+run_cache_probe || true
 
 PROMPT_ARTIFACT_PATH_HINT="$(printf '%s\n' \
   'WORKING DIRECTORY + ARTIFACT PATH (MANDATORY)' \
@@ -463,6 +556,10 @@ mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 {
   cat ./pre_assembled_static.txt
   echo
+  if [ -n "${TOOL_CALL_BUDGET_JUDGE:-}" ]; then
+    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
+    echo
+  fi
   echo "=== MEMORY CONTEXT (REVIEWER) ==="
   if [ -s "${MEMORY_CONTEXT_FILE}" ]; then
     cat "${MEMORY_CONTEXT_FILE}"

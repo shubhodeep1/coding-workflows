@@ -59,6 +59,18 @@ Rules:
 - Keep normal Serena-first code navigation/editing workflow for repository semantics.
 - If Context7 is unavailable or errors, continue without it. Do not block implementation.
 
+## OpenRouter Prompt Cache Instrumentation
+
+- Default behavior uses `OPENROUTER_PROMPT_CACHE_DISABLED=false`.
+- Keep prompt assembly cache-friendly: stable static prefix first, dynamic issue/PR/runtime suffix second.
+- Add explicit `cache_control: { type: "ephemeral" }` only for direct OpenRouter HTTP calls that already exist.
+- Skip explicit cache breakpoint injection for Gemini-family model IDs.
+- Normalize usage telemetry into:
+  - `cache_creation_input_tokens`
+  - `cache_read_input_tokens`
+  - `prompt_tokens`, `completion_tokens`, `total_tokens`
+- Enforce fail-open behavior: if cache metadata is rejected or unavailable, continue without failing the workflow.
+
 ---
 
 ## 0. Prime Directive (NON-NEGOTIABLE)

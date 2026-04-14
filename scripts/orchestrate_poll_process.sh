@@ -3770,11 +3770,11 @@ json.dump(result, sys.stdout)
       {
         cat "${RUNTIME_DIR}/judge_static.txt"
         echo
-        echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
-        echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
         bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt
+        echo
+        echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
         echo
         echo "=== ISSUE #${rb_issue} (original requirement) ==="
         echo
@@ -4638,11 +4638,11 @@ ${PR_DIFF}
   {
     cat "${RUNTIME_DIR}/judge_static.txt"
     echo
-    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
-    echo
     echo "=== JUDGE TASK ==="
     echo
     bash scripts/render_prompt.sh prompts/mode-judge.txt
+    echo
+    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
     echo "=== PROJECT SPEC ==="
     echo

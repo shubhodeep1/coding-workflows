@@ -48,6 +48,7 @@ jobs:
       ISSUE_TITLE: ${{ github.event.issue.title }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY_RESPOND || 'low' }}
+      OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
     steps:
       - name: Check orchestrator metadata
@@ -140,7 +141,7 @@ jobs:
             done; return 1
           }
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -407,13 +408,13 @@ jobs:
           {
             cat ./pre_assembled_static.txt
             echo
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo
             echo "=== CLARIFY RESPOND TASK ==="
             bash scripts/render_prompt.sh prompts/mode-clarify-respond.txt
             echo
             echo "=== MEMORY CONTEXT ==="
             cat "${RUNTIME_DIR}/memory_context.txt"
-            echo
-            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
             echo "=== PROJECT CONTEXT (from tracking issue) ==="
             cat "${RUNTIME_DIR}/tracking_body.txt"

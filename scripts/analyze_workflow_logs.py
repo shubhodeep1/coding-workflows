@@ -17,6 +17,23 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+	from openrouter_prompt_cache import (
+		add_ephemeral_cache_breakpoint,
+		format_usage_value,
+		is_cache_disabled,
+		normalize_usage,
+		should_retry_without_breakpoint,
+	)
+except ModuleNotFoundError:
+	from scripts.openrouter_prompt_cache import (
+		add_ephemeral_cache_breakpoint,
+		format_usage_value,
+		is_cache_disabled,
+		normalize_usage,
+		should_retry_without_breakpoint,
+	)
+
 DEFAULT_MODEL = "openai/gpt-5.3-codex"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_PROMPT_FILE = "prompts/mode-workflow-analysis.txt"
@@ -562,41 +579,64 @@ def call_openrouter(
 	request_timeout_seconds: int,
 	thinking_level: str | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
-	payload = {
-		"model": model,
-		"messages": messages,
-		"temperature": temperature,
-		"max_tokens": max_tokens,
-	}
-	normalized_thinking_level = ""
-	if thinking_level is not None:
-		normalized_thinking_level = str(thinking_level).strip()
-	if normalized_thinking_level:
-		payload["reasoning"] = normalized_thinking_level
-	request_body = json.dumps(payload).encode("utf-8")
-	request = urllib.request.Request(
-		f"{base_url.rstrip('/')}/chat/completions",
-		data=request_body,
-		headers={
-			"Content-Type": "application/json",
-			"Authorization": f"Bearer {api_key}",
-		},
-		method="POST",
+	base_messages = [dict(message) for message in messages]
+	messages_with_breakpoint, breakpoint_enabled = add_ephemeral_cache_breakpoint(
+		base_messages,
+		model_id=model,
 	)
+	request_messages = messages_with_breakpoint
+	had_cache_fallback_retry = False
 
-	try:
-		with urllib.request.urlopen(request, timeout=request_timeout_seconds) as response:
-			response_text = response.read().decode("utf-8")
-	except urllib.error.HTTPError as exc:
+	def build_payload(payload_messages: list[dict[str, Any]]) -> dict[str, Any]:
+		payload_data = {
+			"model": model,
+			"messages": payload_messages,
+			"temperature": temperature,
+			"max_tokens": max_tokens,
+		}
+		normalized_thinking_level = ""
+		if thinking_level is not None:
+			normalized_thinking_level = str(thinking_level).strip()
+		if normalized_thinking_level:
+			payload_data["reasoning"] = normalized_thinking_level
+		return payload_data
+
+	response_text = ""
+	while True:
+		payload = build_payload(request_messages)
+		request_body = json.dumps(payload).encode("utf-8")
+		request = urllib.request.Request(
+			f"{base_url.rstrip('/')}/chat/completions",
+			data=request_body,
+			headers={
+				"Content-Type": "application/json",
+				"Authorization": f"Bearer {api_key}",
+			},
+			method="POST",
+		)
+
 		try:
-			error_text = exc.read().decode("utf-8", errors="replace")
-		except Exception:  # noqa: BLE001
-			error_text = ""
-		raise RuntimeError(
-			f"OpenRouter request failed (HTTP {exc.code}): {error_text or exc.reason}"
-		) from exc
-	except (urllib.error.URLError, OSError, TimeoutError) as exc:
-		raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
+			with urllib.request.urlopen(request, timeout=request_timeout_seconds) as response:
+				response_text = response.read().decode("utf-8")
+			break
+		except urllib.error.HTTPError as exc:
+			try:
+				error_text = exc.read().decode("utf-8", errors="replace")
+			except Exception:  # noqa: BLE001
+				error_text = ""
+			if (
+				breakpoint_enabled
+				and not had_cache_fallback_retry
+				and should_retry_without_breakpoint(exc.code, error_text)
+			):
+				had_cache_fallback_retry = True
+				request_messages = base_messages
+				continue
+			raise RuntimeError(
+				f"OpenRouter request failed (HTTP {exc.code}): {error_text or exc.reason}"
+			) from exc
+		except (urllib.error.URLError, OSError, TimeoutError) as exc:
+			raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
 
 	try:
 		response_payload = json.loads(response_text)
@@ -616,7 +656,10 @@ def call_openrouter(
 		raise RuntimeError("OpenRouter response did not include message content")
 
 	usage_value = response_payload.get("usage")
-	usage = usage_value if isinstance(usage_value, dict) else None
+	usage = normalize_usage(usage_value) if isinstance(usage_value, dict) else None
+	if usage is not None:
+		usage["cache_breakpoint_enabled"] = breakpoint_enabled and not is_cache_disabled()
+		usage["cache_breakpoint_fallback_retry"] = had_cache_fallback_retry
 	return content.rstrip() + "\n", usage
 
 
@@ -747,8 +790,20 @@ def main(argv: list[str] | None = None) -> int:
 		prompt_tokens = _to_int(usage.get("prompt_tokens"), 0)
 		completion_tokens = _to_int(usage.get("completion_tokens"), 0)
 		total_tokens = _to_int(usage.get("total_tokens"), 0)
+		cache_creation_tokens = usage.get("cache_creation_input_tokens")
+		cache_read_tokens = usage.get("cache_read_input_tokens")
+		cache_breakpoint_enabled = usage.get("cache_breakpoint_enabled")
+		cache_breakpoint_retry = usage.get("cache_breakpoint_fallback_retry")
+		cache_enabled = "false" if is_cache_disabled() else "true"
 		print(
-			f"INFO: openrouter usage prompt_tokens={prompt_tokens} completion_tokens={completion_tokens} total_tokens={total_tokens}",
+			"INFO: openrouter usage "
+			f"phase=workflow_log_analysis model={str(args.model or DEFAULT_MODEL)} "
+			f"cache_enabled={cache_enabled} "
+			f"cache_breakpoint_enabled={str(bool(cache_breakpoint_enabled)).lower()} "
+			f"cache_breakpoint_fallback_retry={str(bool(cache_breakpoint_retry)).lower()} "
+			f"prompt_tokens={prompt_tokens} completion_tokens={completion_tokens} total_tokens={total_tokens} "
+			f"cache_creation_input_tokens={format_usage_value(cache_creation_tokens)} "
+			f"cache_read_input_tokens={format_usage_value(cache_read_tokens)}",
 			file=sys.stderr,
 		)
 	print(str(output_path))
