@@ -1317,7 +1317,7 @@ jobs:
           exit 1
 
       - name: Handle no-op implementation
-        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false'
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.commit_changes.outputs.destructive_commit_blocked == ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1806,7 +1806,7 @@ jobs:
             --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
 
       - name: Comment on issue failure
-        if: failure() || cancelled()
+        if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1831,7 +1831,7 @@ jobs:
             -f body="${REASON}"
 
       - name: Telegram failure notification
-        if: failure() || cancelled()
+        if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
