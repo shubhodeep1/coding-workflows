@@ -517,17 +517,11 @@ def detect_stalls(
 		if recovery_count >= max_recoveries:
 			action = "skip"
 		elif enable_stall_judge and recovery_count >= stall_judge_trigger_count:
-			action = "run_stall_judge"
+			action = RUN_STALL_JUDGE_ACTION
 		else:
 			actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
 			action_idx = min(recovery_count, len(actions) - 1)
 			action = actions[action_idx]
-			if (
-				enable_stall_judge
-				and phase not in DEDICATED_HANDLER_PHASES
-				and stall_judge_trigger_count <= recovery_count < max_recoveries
-			):
-				action = RUN_STALL_JUDGE_ACTION
 
 		stalled.append({
 			"id": issue["id"],

@@ -1022,6 +1022,8 @@ ensure_eager_final_pr() {
     discovered="$(printf '%s\n' "${pr_url}" | grep -oE '/pull/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
   fi
 
+  [[ "${discovered}" =~ ^[0-9]+$ ]] || discovered=""
+
   if [ -n "${discovered}" ]; then
     jq --argjson final_pr "${discovered}" '.final_merge_pr = $final_pr' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -1128,7 +1130,7 @@ invoke_judge_for_integration_conflict() {
     echo "   short diagnosis in the commit message."
   } > "${prompt_file}"
 
-  if cat "${prompt_file}" | codex exec --model "${MODEL_EDITOR:-openai/gpt-5.3-codex}" --full-auto > "${output_file}" 2>&1; then
+  if cat "${prompt_file}" | codex exec --model "${MODEL_EDITOR:-openai/gpt-5.3-codex}" --full-auto > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}"
     return 0
@@ -1393,6 +1395,9 @@ finalize_integration_merge_if_needed() {
   # the primary fix for the #832-style stall: previously this code path
   # set final_merge_status=conflict and halted with no recovery.
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "false" ]; then
+    jq --argjson final_pr "${final_pr}" \
+      '.status = "merge_conflict" | .final_merge_pr = $final_pr | .final_merge_status = "conflict"' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     echo "  [final-merge] PR #${final_pr} is not mergeable; invoking self-healing flow."
     heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "final PR #${final_pr} mergeable=false" || true
     return 1
@@ -1436,6 +1441,9 @@ finalize_integration_merge_if_needed() {
   # GitHub despite our pre-merge mergeability check (race with a push
   # to default). Hand off to the healing flow instead of halting.
   if [ "${pr_mergeable}" = "false" ]; then
+    jq --argjson final_pr "${final_pr}" \
+      '.status = "merge_conflict" | .final_merge_pr = $final_pr | .final_merge_status = "conflict"' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     echo "  [final-merge] Post-attempt mergeability=false on PR #${final_pr}; invoking self-healing flow."
     heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "final PR #${final_pr} became unmergeable during merge" || true
     return 1
