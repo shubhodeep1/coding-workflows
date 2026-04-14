@@ -425,15 +425,32 @@ run_preflight_checks()
 	PRE_FLIGHT_STATUS="running"
 	: > "${PRE_FLIGHT_LOG_FILE}"
 
+	# Emit the tail of the pre-flight log to stderr so that the failing command's
+	# output is visible directly in the GitHub Actions job log, without requiring
+	# the validation_preflight.log artifact to be downloaded. Structured with
+	# clear delimiter markers for grep-ability per CLAUDE.md §8.
+	_emit_preflight_tail()
+	{
+		local reason="$1"
+		{
+			echo "##[error]Pre-flight failed: ${reason}"
+			echo "----- validation_preflight.log (tail -n 40) -----"
+			tail -n 40 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true
+			echo "-------------------------------------------------"
+		} >&2
+	}
+
 	if [ ! -f validation/docker-compose.test.yml ]; then
 		echo "Missing validation/docker-compose.test.yml" >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "validation/docker-compose.test.yml missing"
 		return 1
 	fi
 
 	if ! docker compose -f validation/docker-compose.test.yml config --quiet >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 		echo "Compose syntax/validation check failed." >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "docker compose config failed (YAML/schema invalid). Common cause: YAML must use space indentation, not tabs."
 		return 1
 	fi
 
@@ -442,6 +459,7 @@ run_preflight_checks()
 	if [ "${shell_count}" -eq 0 ]; then
 		echo "No shell scripts found under validation/." >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "no shell scripts found under validation/"
 		return 1
 	fi
 
@@ -449,6 +467,7 @@ run_preflight_checks()
 		if ! bash -n "${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 			echo "Shell syntax check failed: ${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
+			_emit_preflight_tail "bash -n failed for ${shell_file}"
 			return 1
 		fi
 	done < <(find validation -type f -name '*.sh' -not -path 'validation/logs/*' | sort)
@@ -514,6 +533,7 @@ print("Build context and dockerfile path checks passed.")
 PY
 	then
 		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "build context / dockerfile path resolution failed"
 		return 1
 	fi
 
