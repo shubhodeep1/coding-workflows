@@ -1151,10 +1151,14 @@ jobs:
           deleted_staged="$(git diff --cached --diff-filter=D --name-only || true)"
           if [ -n "${deleted_staged}" ]; then
             canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
-              | grep -E '^(agents\.md|ai_pipeline\.md|codex_system_instructions\.md|unattended_llm_system_instructions\.md|prompts/|scripts/|\.github/ai/)' \
+              | grep -E '^(agents\.md|ai_pipeline\.md|codex_system_instructions\.md|unattended_llm_system_instructions\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
               || true)"
             total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
             threshold="${BULK_DELETE_THRESHOLD:-3}"
+            if ! [[ "${threshold}" =~ ^[0-9]+$ ]]; then
+              echo "::warning::Invalid BULK_DELETE_THRESHOLD='${threshold}'; defaulting to 3."
+              threshold=3
+            fi
 
             if [ -n "${canonical_deletions}" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ]; then
               echo "::error::Refusing to commit: ${total_deletions} staged deletion(s) include canonical workflow-source files and ALLOW_WORKFLOW_EDITS is not 'true'."
