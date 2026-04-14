@@ -448,6 +448,7 @@ jobs:
             semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-
       - name: Semantic cache lookup
         id: semantic_cache_lookup
+        if: always()
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -687,7 +688,7 @@ jobs:
           done
 
       - name: Semantic cache store
-        if: success() && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        if: always() && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -714,7 +715,7 @@ jobs:
           fi
 
       - name: Save semantic cache SQLite
-        if: success() && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        if: always() && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
