@@ -320,6 +320,17 @@ jobs:
               echo "prompts/serena-efficiency-block.txt" >> "${FETCHED_MANIFEST}"
             fi
           fi
+          if [ ! -f prompts/mode-implement-diagnose.txt ]; then
+            if ! _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=${script_ref}"; then
+              echo "::warning::mode-implement-diagnose.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=main"
+            fi
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "prompts/mode-implement-diagnose.txt" >> "${FETCHED_MANIFEST}"
+            fi
+          fi
 
           if [ ! -f prompts/mode-implement-diagnose.txt ]; then
             if ! _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
@@ -1005,37 +1016,71 @@ jobs:
 
       - name: Validate syntax of changed files
         if: env.SKIP_IMPLEMENT != 'true'
+        id: validate_syntax_changed_files
         run: |
           set -euo pipefail
           ERRORS=0
 
+          CAPTURE_FILE=""
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
+            CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+          fi
+
+          append_checker_error() {
+            local file="$1"
+            local checker="$2"
+            local stderr_file="$3"
+            [ -n "${CAPTURE_FILE}" ] || return 0
+            {
+              printf '===== %s (%s) =====\n' "${file}" "${checker}"
+              if [ -s "${stderr_file}" ]; then
+                cat "${stderr_file}"
+              else
+                echo "(no stderr output)"
+              fi
+              printf '\n'
+            } >> "${CAPTURE_FILE}" || true
+          }
+
           # Check all modified/added Python files for syntax errors
           for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.py'); do
             if [ -f "$f" ]; then
-              if ! python3 -m py_compile "$f" 2>&1; then
+              checker_stderr="$(mktemp)"
+              if ! python3 -m py_compile "$f" 2>"${checker_stderr}"; then
                 echo "::error file=${f}::Syntax error in ${f}"
+                cat "${checker_stderr}" >&2
+                append_checker_error "${f}" "python3 -m py_compile" "${checker_stderr}"
                 ERRORS=$((ERRORS + 1))
               fi
+              rm -f "${checker_stderr}"
             fi
           done
 
           # Check all modified/added JS files for syntax errors
           for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.js'); do
             if [ -f "$f" ]; then
-              if ! node --check "$f" 2>&1; then
+              checker_stderr="$(mktemp)"
+              if ! node --check "$f" 2>"${checker_stderr}"; then
                 echo "::error file=${f}::Syntax error in ${f}"
+                cat "${checker_stderr}" >&2
+                append_checker_error "${f}" "node --check" "${checker_stderr}"
                 ERRORS=$((ERRORS + 1))
               fi
+              rm -f "${checker_stderr}"
             fi
           done
 
           # Check all modified/added shell scripts for syntax errors
           for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.sh'); do
             if [ -f "$f" ]; then
-              if ! bash -n "$f" 2>&1; then
+              checker_stderr="$(mktemp)"
+              if ! bash -n "$f" 2>"${checker_stderr}"; then
                 echo "::error file=${f}::Shell syntax error in ${f}"
+                cat "${checker_stderr}" >&2
+                append_checker_error "${f}" "bash -n" "${checker_stderr}"
                 ERRORS=$((ERRORS + 1))
               fi
+              rm -f "${checker_stderr}"
             fi
           done
 
@@ -1044,10 +1089,14 @@ jobs:
           # as shell and produces false failures (e.g. 'name: foo (bar)').
           for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.yml' '*.yaml'); do
             if [ -f "$f" ]; then
-              if ! python3 -c "import yaml, sys; f=open(sys.argv[1]); yaml.safe_load(f); f.close()" "$f" 2>&1; then
+              checker_stderr="$(mktemp)"
+              if ! python3 -c "import yaml, sys; f=open(sys.argv[1]); yaml.safe_load(f); f.close()" "$f" 2>"${checker_stderr}"; then
                 echo "::error file=${f}::YAML syntax error in ${f}"
+                cat "${checker_stderr}" >&2
+                append_checker_error "${f}" "python3 yaml.safe_load" "${checker_stderr}"
                 ERRORS=$((ERRORS + 1))
               fi
+              rm -f "${checker_stderr}"
             fi
           done
 
@@ -1059,8 +1108,53 @@ jobs:
 
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
+        id: protect_workflow_files
         run: |
           set -euo pipefail
+
+          STEP_NAME="Protect workflow files from implementation edits"
+          STEP_STDERR_FILE="$(mktemp)"
+          CAPTURE_FILE=""
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
+            CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+          fi
+
+          capture_step_failure() {
+            local failed_command="$1"
+            [ -n "${CAPTURE_FILE}" ] || return 0
+            {
+              printf '===== %s =====\n' "${STEP_NAME}"
+              printf 'Command: %s\n' "${failed_command}"
+              if [ -s "${STEP_STDERR_FILE}" ]; then
+                cat "${STEP_STDERR_FILE}"
+              else
+                echo "(no stderr output)"
+              fi
+              printf '\n'
+            } >> "${CAPTURE_FILE}" || true
+          }
+
+          FAILED_COMMAND=""
+          LAST_COMMAND=""
+          trap 'LAST_COMMAND="${BASH_COMMAND}"' DEBUG
+          trap 'FAILED_COMMAND="${BASH_COMMAND}"' ERR
+          on_step_exit() {
+            local exit_code="$?"
+            trap - DEBUG ERR EXIT
+            set +e
+            exec 2>&3 || true
+            exec 3>&- || true
+            wait || true
+            if [ "${exit_code}" -ne 0 ]; then
+              local failed_command="${FAILED_COMMAND:-${LAST_COMMAND:-unknown command}}"
+              capture_step_failure "${failed_command}"
+            fi
+            rm -f "${STEP_STDERR_FILE}"
+            exit "${exit_code}"
+          }
+          trap on_step_exit EXIT
+          exec 3>&2
+          exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
           if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
             echo "ALLOW_WORKFLOW_EDITS is enabled — preserving .github/workflows changes."
@@ -1077,6 +1171,50 @@ jobs:
         id: commit_changes
         run: |
           set -euo pipefail
+
+          STEP_NAME="Commit changes"
+          STEP_STDERR_FILE="$(mktemp)"
+          CAPTURE_FILE=""
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
+            CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+          fi
+
+          capture_step_failure() {
+            local failed_command="$1"
+            [ -n "${CAPTURE_FILE}" ] || return 0
+            {
+              printf '===== %s =====\n' "${STEP_NAME}"
+              printf 'Command: %s\n' "${failed_command}"
+              if [ -s "${STEP_STDERR_FILE}" ]; then
+                cat "${STEP_STDERR_FILE}"
+              else
+                echo "(no stderr output)"
+              fi
+              printf '\n'
+            } >> "${CAPTURE_FILE}" || true
+          }
+
+          FAILED_COMMAND=""
+          LAST_COMMAND=""
+          trap 'LAST_COMMAND="${BASH_COMMAND}"' DEBUG
+          trap 'FAILED_COMMAND="${BASH_COMMAND}"' ERR
+          on_step_exit() {
+            local exit_code="$?"
+            trap - DEBUG ERR EXIT
+            set +e
+            exec 2>&3 || true
+            exec 3>&- || true
+            wait || true
+            if [ "${exit_code}" -ne 0 ]; then
+              local failed_command="${FAILED_COMMAND:-${LAST_COMMAND:-unknown command}}"
+              capture_step_failure "${failed_command}"
+            fi
+            rm -f "${STEP_STDERR_FILE}"
+            exit "${exit_code}"
+          }
+          trap on_step_exit EXIT
+          exec 3>&2
+          exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
           # Remove workflow-generated/fetched artifacts BEFORE checking for
           # changes so they don't cause false-positive "file changes" detection.

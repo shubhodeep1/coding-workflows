@@ -214,7 +214,30 @@ jobs:
               sleep "$RATE_LIMIT_BACKOFF"
               echo ""; return 1
             fi
+            cat /tmp/gh_api_err >&2 2>/dev/null || true
             echo ""; return 1
+          }
+
+          # Robust workflow run-ID capture — retries on empty results to ride out
+          # the brief race window where the matching run isn't yet indexed by the
+          # API, and widens pagination to per_page=100 in case of high concurrent
+          # workflow run volume on the target repo. Returns the run id on stdout
+          # (empty string if all attempts fail).
+          capture_run_id() {
+            local name_re="$1"
+            local result=""
+            local _attempt
+            for _attempt in 1 2 3 4 5; do
+              result=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
+                --jq "[.workflow_runs[] | select(.name | test(\"${name_re}\"; \"i\")) | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .id // empty" || echo "")
+              if [ -n "$result" ] && [ "$result" != "null" ]; then
+                printf '%s' "$result"
+                return 0
+              fi
+              sleep 2
+            done
+            printf ''
+            return 0
           }
 
           while true; do
@@ -247,8 +270,7 @@ jobs:
             # Clarify succeeded if we see planning or awaiting-approval
             if echo "$LABELS" | grep -qE 'ai:planning|ai:awaiting-approval'; then
               echo "✓ Clarify phase completed — issue moved to planning"
-              CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Clarif"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
+              CLARIFY_RUN_ID=$(capture_run_id "Clarif")
               echo "run_id=${CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
@@ -301,7 +323,30 @@ jobs:
               sleep "$RATE_LIMIT_BACKOFF"
               echo ""; return 1
             fi
+            cat /tmp/gh_api_err >&2 2>/dev/null || true
             echo ""; return 1
+          }
+
+          # Robust workflow run-ID capture — retries on empty results to ride out
+          # the brief race window where the matching run isn't yet indexed by the
+          # API, and widens pagination to per_page=100 in case of high concurrent
+          # workflow run volume on the target repo. Returns the run id on stdout
+          # (empty string if all attempts fail).
+          capture_run_id() {
+            local name_re="$1"
+            local result=""
+            local _attempt
+            for _attempt in 1 2 3 4 5; do
+              result=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
+                --jq "[.workflow_runs[] | select(.name | test(\"${name_re}\"; \"i\")) | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .id // empty" || echo "")
+              if [ -n "$result" ] && [ "$result" != "null" ]; then
+                printf '%s' "$result"
+                return 0
+              fi
+              sleep 2
+            done
+            printf ''
+            return 0
           }
 
           while true; do
@@ -339,8 +384,7 @@ jobs:
 
             if echo "$LABELS" | grep -q 'ai:awaiting-approval'; then
               echo "✓ Plan phase completed — awaiting approval"
-              PLAN_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
+              PLAN_RUN_ID=$(capture_run_id "Plan")
               echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
               exit 0
@@ -349,8 +393,7 @@ jobs:
             # Check for auto-approved (if AUTO_IMPLEMENT_ON_CLEAR_PLAN is on)
             if echo "$LABELS" | grep -q 'ai:implementing'; then
               echo "✓ Plan phase completed with auto-approval — already implementing"
-              PLAN_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
+              PLAN_RUN_ID=$(capture_run_id "Plan")
               echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=auto_approved" >> "$GITHUB_OUTPUT"
               exit 0
@@ -431,7 +474,30 @@ jobs:
               sleep "$RATE_LIMIT_BACKOFF"
               echo ""; return 1
             fi
+            cat /tmp/gh_api_err >&2 2>/dev/null || true
             echo ""; return 1
+          }
+
+          # Robust workflow run-ID capture — retries on empty results to ride out
+          # the brief race window where the matching run isn't yet indexed by the
+          # API, and widens pagination to per_page=100 in case of high concurrent
+          # workflow run volume on the target repo. Returns the run id on stdout
+          # (empty string if all attempts fail).
+          capture_run_id() {
+            local name_re="$1"
+            local result=""
+            local _attempt
+            for _attempt in 1 2 3 4 5; do
+              result=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
+                --jq "[.workflow_runs[] | select(.name | test(\"${name_re}\"; \"i\")) | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .id // empty" || echo "")
+              if [ -n "$result" ] && [ "$result" != "null" ]; then
+                printf '%s' "$result"
+                return 0
+              fi
+              sleep 2
+            done
+            printf ''
+            return 0
           }
 
           while true; do
@@ -451,8 +517,7 @@ jobs:
 
             if [ -n "$PR_NUMBER" ]; then
               echo "✓ Implementation PR #${PR_NUMBER} created"
-              IMPL_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
+              IMPL_RUN_ID=$(capture_run_id "Implement")
               echo "run_id=${IMPL_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
               echo "status=success" >> "$GITHUB_OUTPUT"
@@ -1451,6 +1516,7 @@ jobs:
             prompts/mode-clarify.txt
             prompts/mode-plan.txt
             prompts/mode-implement.txt
+            prompts/mode-implement-diagnose.txt
             prompts/mode-orchestrate.txt
             prompts/mode-workflow-analysis.txt
             prompts/mode-judge.txt
