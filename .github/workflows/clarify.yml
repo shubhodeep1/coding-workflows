@@ -224,13 +224,23 @@ jobs:
       - name: Fetch issue comments
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
-          # Fetch all comments in chronological order (asc) so semantic cache
-          # keys include full thread history on long issues.
-          gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
-            | jq -c 'add // []' > "${ISSUE_COMMENTS_FILE}"
+          # Keep clarify prompt context bounded to preserve historical behavior.
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+          # Build full thread history only when semantic cache is enabled.
+          if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
+            if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+              | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
+              echo "::warning::Semantic cache thread-history fetch failed; continuing with empty thread history (fail-open)"
+              : > "${THREAD_HISTORY_FILE}"
+            fi
+          else
+            : > "${THREAD_HISTORY_FILE}"
+          fi
 
       - name: Set clarification phase label
         env:
@@ -292,13 +302,12 @@ jobs:
       - name: Build context file
         run: |
           set -euo pipefail
-          jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}" > "${THREAD_HISTORY_FILE}"
           {
             echo "ISSUE DESCRIPTION"
             printf '%s\n\n' "$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
             echo "ISSUE COMMENTS"
             # Comments are already in chronological order (direction=asc fetch).
-            cat "${THREAD_HISTORY_FILE}"
+            jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${ISSUE_CONTEXT_FILE}"
 
       - name: Create Codex config
@@ -423,18 +432,20 @@ jobs:
 
       - name: Install Redis Python client
         if: vars.SEMANTIC_CACHE_BACKEND == 'redis'
+        continue-on-error: true
         run: |
           set -euo pipefail
           python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
 
       - name: Restore semantic cache SQLite
         if: vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
-        uses: actions/cache@v4
+        continue-on-error: true
+        uses: actions/cache/restore@v4
         with:
-          path: /tmp/semantic_cache.sqlite3
-          key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL }}
+          path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
+          key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-
+            semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-
       - name: Semantic cache lookup
         id: semantic_cache_lookup
         env:
@@ -704,10 +715,11 @@ jobs:
 
       - name: Save semantic cache SQLite
         if: success() && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
-        uses: actions/cache@v4
+        continue-on-error: true
+        uses: actions/cache/save@v4
         with:
-          path: /tmp/semantic_cache.sqlite3
-          key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL }}
+          path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
+          key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Write run summary
         if: always()
         env:
