@@ -1243,16 +1243,16 @@ set +e
 # Run validation in background, tee output to log file
 if [ -f validation/validate.sh ]; then
   if grep -q 'scripts/validate_driver.sh' validation/validate.sh && [ ! -f scripts/validate_driver.sh ]; then
-    GENERATED_VALIDATE_SCRIPT_PATH=""
     ensure_runtime_validation_driver
+    GENERATED_VALIDATE_SCRIPT_PATH="${VALIDATION_RUNNER_FILE}"
     "${VALIDATION_RUNNER_FILE}" > "${VALIDATION_LOG_FILE}" 2>&1 &
   else
     GENERATED_VALIDATE_SCRIPT_PATH="validation/validate.sh"
     bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1 &
   fi
 else
-  GENERATED_VALIDATE_SCRIPT_PATH=""
   ensure_runtime_validation_driver
+  GENERATED_VALIDATE_SCRIPT_PATH="${VALIDATION_RUNNER_FILE}"
   "${VALIDATION_RUNNER_FILE}" > "${VALIDATION_LOG_FILE}" 2>&1 &
 fi
 VALIDATION_PID=$!
