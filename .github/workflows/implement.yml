@@ -245,7 +245,7 @@ jobs:
             done; return 1
           }
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh extract_db_contracts.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh extract_db_contracts.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py build_repo_overview.sh; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -385,6 +385,20 @@ jobs:
             echo "🔬 Smoke test detected — switching to low reasoning effort"
             echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
           fi
+
+      - name: Restore cached repo overview
+        if: env.SKIP_IMPLEMENT != 'true'
+        uses: actions/cache@v5
+        continue-on-error: true
+        with:
+          path: repo_overview.txt
+          key: repo-overview-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pyproject.toml', '**/go.mod', '**/Cargo.toml', '.pre-commit-config.yaml', '**/Dockerfile', '.github/workflows/*.yml') }}
+
+      - name: Build repo overview artifact
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/build_repo_overview.sh || true
 
       - name: Fetch issue comments
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1190,6 +1204,7 @@ jobs:
           # The manifest tracks exactly which files were fetched — caller-repo
           # files that were never touched are safe.
           rm -f ./pre_assembled_static.txt
+          rm -f ./repo_overview.txt
           if [ -f "${FETCHED_MANIFEST}" ]; then
             while IFS= read -r fetched_file; do
               [ -n "${fetched_file}" ] && rm -f "${fetched_file}"

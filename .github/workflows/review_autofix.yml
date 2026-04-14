@@ -199,7 +199,7 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh build_repo_overview.sh; do
             if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -280,6 +280,18 @@ jobs:
           npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
           sudo apt-get update
           sudo apt-get install -y jq curl python3
+
+      - name: Restore cached repo overview
+        uses: actions/cache@v5
+        continue-on-error: true
+        with:
+          path: repo_overview.txt
+          key: repo-overview-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pyproject.toml', '**/go.mod', '**/Cargo.toml', '.pre-commit-config.yaml', '**/Dockerfile', '.github/workflows/*.yml') }}
+
+      - name: Build repo overview artifact
+        run: |
+          set -euo pipefail
+          REPO_OVERVIEW_ROOT="${GITHUB_WORKSPACE}" bash "${SUPPORT_SCRIPTS_DIR}/build_repo_overview.sh" || true
 
       - name: Install uv for Serena
         uses: astral-sh/setup-uv@v7
@@ -1473,6 +1485,7 @@ jobs:
           # They are cleaned up in the final "Cleanup temporary artifacts" step.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
+            rm -f ./repo_overview.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
           fi
 
@@ -2127,6 +2140,7 @@ jobs:
           # from git add via ':!scripts', ':!.serena', ':!prompts' patterns.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
+            rm -f ./repo_overview.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
           fi
 
@@ -2754,7 +2768,8 @@ jobs:
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
-            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh
+            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/build_repo_overview.sh
             rm -rf .serena prompts
             rm -f .github/ai/orchestrate_schema.v1.json
+            rm -f repo_overview.txt
           fi
