@@ -27,6 +27,15 @@ if [ -f "scripts/tg_helpers.sh" ]; then
   source scripts/tg_helpers.sh
 fi
 
+# Process-lifetime cache of labels we've already verified exist on the
+# repo.  `ensure_label_exists` is called from 10+ code paths with a
+# small, repeating set of label names; each call used to hit
+# /repos/{owner}/{repo}/labels/{name} even when the same label had
+# already been confirmed earlier in the same cycle.  Labels are
+# persistent on the repo side, so caching within a single orchestrator
+# invocation is safe and collapses dozens of API calls into a handful.
+declare -gA _ENSURED_LABELS_CACHE=()
+
 # _gh_url constructs a full GitHub URL for the current repository.
 _gh_url() {
   if [ -z "${GITHUB_REPOSITORY:-}" ]; then
@@ -414,6 +423,14 @@ extract_latest_valid_orchestrator_state() {
 
 ensure_label_exists() {
   local label_name="$1"
+
+  # Fast path: already verified (or created) earlier in this process.
+  # Labels are persistent on the repo so a prior confirmation is still
+  # valid for the lifetime of this orchestrator invocation.
+  if [ -n "${_ENSURED_LABELS_CACHE[${label_name}]+set}" ]; then
+    return 0
+  fi
+
   local contract_file=".github/ai/label_contract.v1.json"
   local color="1d76db"
   local description="AI workflow label"
@@ -440,13 +457,23 @@ ensure_label_exists() {
   local encoded_name
   encoded_name="$(printf '%s' "${label_name}" | jq -sRr @uri)"
   if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+    _ENSURED_LABELS_CACHE[${label_name}]=1
     return 0
   fi
 
-  gh_retry gh label create "${label_name}" \
+  if gh_retry gh label create "${label_name}" \
     --repo "${GITHUB_REPOSITORY}" \
     --color "${color}" \
-    --description "${description}" >/dev/null || true
+    --description "${description}" >/dev/null 2>&1; then
+    _ENSURED_LABELS_CACHE[${label_name}]=1
+    return 0
+  fi
+
+  # Creation can fail if another concurrent actor created the label first.
+  # Cache only when a follow-up read confirms the label now exists.
+  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+    _ENSURED_LABELS_CACHE[${label_name}]=1
+  fi
 }
 
 set_tracking_phase_label() {
@@ -1816,18 +1843,25 @@ close_linked_pr() {
 STANDALONE_STATE_MARKER_OPEN="<!-- AI_STANDALONE_STALL_STATE_V1"
 STANDALONE_STATE_MARKER_CLOSE="AI_STANDALONE_STALL_STATE_V1 -->"
 
-get_standalone_state_comment_id() {
-  local issue_num="$1"
-  gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
-    | jq -s -r 'add // [] | [.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | first | .id // ""' \
+# Pure parsing helpers: extract standalone state info from a pre-fetched
+# comments JSON array (the array shape returned by GitHub's
+# /issues/{n}/comments endpoint after paginate-flattening).  Using these
+# lets callers that already hold the comments list avoid re-hitting the
+# GitHub API just to re-parse the same data, which was previously a
+# significant contributor to rate-limit pressure during standalone stall
+# recovery sweeps.
+_extract_standalone_state_comment_id_from_comments() {
+  local comments_json="$1"
+  printf '%s' "${comments_json:-[]}" \
+    | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" '(. // []) | [.[] | select((.body // "") | contains($marker))] | max_by(.created_at // "") | .id // ""' \
     2>/dev/null || true
 }
 
-read_standalone_state_json() {
-  local issue_num="$1"
+_extract_standalone_state_json_from_comments() {
+  local comments_json="$1"
   local state_raw
-  state_raw="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
-    | jq -s -r 'add // [] | [.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | first | .body // ""' \
+  state_raw="$(printf '%s' "${comments_json:-[]}" \
+    | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" '(. // []) | [.[] | select((.body // "") | contains($marker))] | max_by(.created_at // "") | .body // ""' \
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
@@ -1836,7 +1870,7 @@ read_standalone_state_json() {
   fi
 
   local extracted
-  extracted="$(printf '%s' "${state_raw}" | sed -n '/^<!-- AI_STANDALONE_STALL_STATE_V1$/,/^AI_STANDALONE_STALL_STATE_V1 -->$/p' | sed '1d;$d')"
+  extracted="$(printf '%s' "${state_raw}" | sed -n "/^${STANDALONE_STATE_MARKER_OPEN}$/,/^${STANDALONE_STATE_MARKER_CLOSE}$/p" | sed '1d;$d')"
   if [ -z "${extracted}" ]; then
     echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
     return
@@ -1858,6 +1892,27 @@ read_standalone_state_json() {
   ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
 }
 
+# Fetch the issue comments once and return the latest standalone state
+# comment id.  Thin wrapper around the pure-parsing helper above; kept
+# for callers that don't already have a comments list in hand.
+get_standalone_state_comment_id() {
+  local issue_num="$1"
+  local comments_json
+  if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+    comments_json='[]'
+  fi
+  _extract_standalone_state_comment_id_from_comments "${comments_json}"
+}
+
+read_standalone_state_json() {
+  local issue_num="$1"
+  local comments_json
+  if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+    comments_json='[]'
+  fi
+  _extract_standalone_state_json_from_comments "${comments_json}"
+}
+
 write_standalone_state_json() {
   local issue_num="$1"
   local state_json="$2"
@@ -1868,7 +1923,17 @@ write_standalone_state_json() {
 ${state_json}
 ${STANDALONE_STATE_MARKER_CLOSE}"
 
-  comment_id="$(get_standalone_state_comment_id "${issue_num}")"
+  # Optional 3rd argument: caller-supplied comment id.  Passing it (even
+  # empty) skips the otherwise-automatic lookup, which saves a full
+  # paginated /comments fetch whenever the caller already knows whether
+  # a state comment exists (e.g. the standalone stall recovery loop,
+  # which parses it out of its own cached comments_json).  Empty string
+  # means "known-not-present, create a new comment".
+  if [ "$#" -ge 3 ]; then
+    comment_id="$3"
+  else
+    comment_id="$(get_standalone_state_comment_id "${issue_num}")"
+  fi
   if [ -n "${comment_id}" ] && [ "${comment_id}" != "null" ]; then
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
       -X PATCH -f body="${comment_body}" >/dev/null 2>&1 || true
@@ -1905,6 +1970,154 @@ PY
   else
     echo "${action}"
   fi
+}
+
+# Run both standalone-stall marker searches in a single GraphQL
+# request via aliases, replacing two paginated REST /search/issues
+# round-trips with one.  Returns a JSON object of the form
+#   {"state": [{number:N},...], "clarify": [{number:N},...]}
+# where each list normally comes from the single GraphQL request. If
+# either query reports pagination (`hasNextPage`), we fall back to the
+# original paginated REST search for complete coverage. On GraphQL
+# failure, returns empty lists so the caller degrades gracefully.
+_fetch_standalone_marker_issues_graphql() {
+  local q_state="repo:${GITHUB_REPOSITORY} is:issue is:open \"AI_STANDALONE_STALL_STATE_V1\" in:comments"
+  local q_clarify="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments"
+  local query='query($q_state: String!, $q_clarify: String!) {
+  state: search(query: $q_state, type: ISSUE, first: 100) {
+    pageInfo { hasNextPage }
+    nodes { ... on Issue { number } }
+  }
+  clarify: search(query: $q_clarify, type: ISSUE, first: 100) {
+    pageInfo { hasNextPage }
+    nodes { ... on Issue { number } }
+  }
+}'
+  local resp
+  if ! resp="$(gh_retry gh api graphql \
+      -F q_state="${q_state}" \
+      -F q_clarify="${q_clarify}" \
+      -f query="${query}" 2>/dev/null)"; then
+    echo '{"state":[],"clarify":[]}'
+    return
+  fi
+
+  local state_has_next
+  local clarify_has_next
+  state_has_next="$(printf '%s' "${resp}" | jq -r '.data.state.pageInfo.hasNextPage // false' 2>/dev/null || echo "false")"
+  clarify_has_next="$(printf '%s' "${resp}" | jq -r '.data.clarify.pageInfo.hasNextPage // false' 2>/dev/null || echo "false")"
+  if [ "${state_has_next}" = "true" ] || [ "${clarify_has_next}" = "true" ]; then
+    local marker_state
+    local marker_clarify
+    marker_state="$(gh_retry gh api --paginate "search/issues" -f per_page=100 -f q="${q_state}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+    marker_clarify="$(gh_retry gh api --paginate "search/issues" -f per_page=100 -f q="${q_clarify}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+    jq -cn --argjson state "${marker_state}" --argjson clarify "${marker_clarify}" '{state:$state,clarify:$clarify}'
+    return
+  fi
+
+  echo "${resp}" | jq -c '{
+      state: [((.data.state.nodes // [])[] | select(. != null) | {number})],
+      clarify: [((.data.clarify.nodes // [])[] | select(. != null) | {number})]
+    }' 2>/dev/null || echo '{"state":[],"clarify":[]}'
+}
+
+# Batch-fetch labels and recent comments for a list of candidate issue
+# numbers via a single GraphQL query per batch (aliased issue selectors).
+# Replaces the per-candidate REST /labels and /comments round-trips
+# with ceil(N / batch_size) GraphQL calls.  Returns a JSON object keyed
+# by stringified issue number:
+#   { "123": {"labels": ["ai:clarification"],
+#             "comments": [{"id":N,"body":"...","created_at":"..."},...]},
+#     ... }
+# Comment shape mirrors the REST response (.id / .body / .created_at)
+# so existing parsers (e.g. _extract_standalone_state_comment_id_from_comments)
+# keep working unchanged.
+#
+# Trade-off: we fetch `comments(last: 100)` which covers only the 100
+# newest comments rather than the full pagination walk the REST path
+# did.  In practice the standalone-state marker comment is written
+# every poll cycle (so it's always in the recent window), and the
+# ai:clarification-questions marker is added near the top of the
+# clarification phase before high comment counts accrue.  If an issue
+# drifts past 100 comments *and* has an ancient marker, the
+# label-based detection path still catches it.
+_fetch_candidate_issue_details_graphql() {
+  local numbers_json="$1"
+  local count
+  count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
+  if [ -z "${count}" ] || [ "${count}" -eq 0 ]; then
+    echo '{}'
+    return
+  fi
+
+  local owner="${GITHUB_REPOSITORY%%/*}"
+  local name="${GITHUB_REPOSITORY##*/}"
+  local batch_size=25
+  local merged='{}'
+  local start=0
+  local end
+  local i
+  local n
+  local query
+  local fragment
+  local batch_resp
+  local batch_transformed
+
+  while [ "${start}" -lt "${count}" ]; do
+    end=$(( start + batch_size ))
+    [ "${end}" -gt "${count}" ] && end="${count}"
+
+    fragment=""
+    for ((i=start; i<end; i++)); do
+      n="$(printf '%s' "${numbers_json}" | jq -r ".[${i}]")"
+      [[ "${n}" =~ ^[0-9]+$ ]] || continue
+      fragment+=$'\n'"        i${i}: issue(number: ${n}) {
+          number
+          labels(first: 50) { nodes { name } }
+          comments(last: 100) { nodes { databaseId body createdAt } }
+        }"
+    done
+
+    if [ -z "${fragment}" ]; then
+      start="${end}"
+      continue
+    fi
+
+    query="query {
+  repository(owner: \"${owner}\", name: \"${name}\") {${fragment}
+  }
+}"
+
+    if ! batch_resp="$(gh_retry gh api graphql -f query="${query}" 2>/dev/null)"; then
+      # Leave this batch's issues out of the cache; the loop-level
+      # fallbacks (empty labels/comments → issue skipped naturally)
+      # keep the cycle moving without crashing.
+      start="${end}"
+      continue
+    fi
+
+    batch_transformed="$(printf '%s' "${batch_resp}" | jq -c '
+      (.data.repository // {}) | to_entries | map(
+        select(.value != null and (.value.number? != null)) | {
+          key: (.value.number | tostring),
+          value: {
+            labels: [(.value.labels.nodes // [])[]?.name],
+            comments: [(.value.comments.nodes // [])[]? | {
+              id: .databaseId,
+              body: .body,
+              created_at: .createdAt
+            }]
+          }
+        }
+      ) | from_entries
+    ' 2>/dev/null || echo '{}')"
+
+    merged="$(jq -s '.[0] * .[1]' <(printf '%s\n' "${merged}") <(printf '%s\n' "${batch_transformed}") 2>/dev/null || echo "${merged}")"
+
+    start="${end}"
+  done
+
+  echo "${merged}"
 }
 
 run_standalone_stall_recovery() {
@@ -1960,20 +2173,25 @@ run_standalone_stall_recovery() {
   local marker_issues
   local marker_state
   local marker_clarify
-  marker_state="$(gh_retry gh api --paginate "search/issues" \
-    -f per_page=100 \
-    -f q="repo:${GITHUB_REPOSITORY} is:issue is:open \"AI_STANDALONE_STALL_STATE_V1\" in:comments" \
-    2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
-  marker_clarify="$(gh_retry gh api --paginate "search/issues" \
-    -f per_page=100 \
-    -f q="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments" \
-    2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+  local _markers_resp
+  # Combined GraphQL search: one API call replaces the two REST
+  # /search/issues round-trips (one per marker variant).
+  _markers_resp="$(_fetch_standalone_marker_issues_graphql)"
+  marker_state="$(printf '%s' "${_markers_resp}" | jq -c '.state // []' 2>/dev/null || echo '[]')"
+  marker_clarify="$(printf '%s' "${_markers_resp}" | jq -c '.clarify // []' 2>/dev/null || echo '[]')"
   marker_issues="$(jq -s 'add | unique_by(.number)' <(printf '%s\n' "${marker_state}") <(printf '%s\n' "${marker_clarify}"))"
 
   local candidates
   candidates="$(jq -s 'add | unique_by(.number)' <(printf '%s\n' "${labeled_issues}") <(printf '%s\n' "${marker_issues}"))"
 
   ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set)"
+
+  # Batch-fetch labels + recent comments for every candidate in a
+  # single GraphQL query per 25-issue batch.  This replaces the
+  # per-candidate REST calls to /issues/{n}/labels and
+  # /issues/{n}/comments that used to run inside the loop below.
+  local _candidate_details_json
+  _candidate_details_json="$(_fetch_candidate_issue_details_graphql "$(printf '%s' "${candidates}" | jq -c '[.[].number]')")"
 
   local c_count
   c_count="$(echo "${candidates}" | jq 'length')"
@@ -2001,10 +2219,20 @@ run_standalone_stall_recovery() {
     if [ -n "${orchestrator_managed_set}" ] && echo "${orchestrator_managed_set}" | grep -qxF "${issue_num}"; then
       continue
     fi
-    labels_json="$(get_issue_labels_json "${issue_num}")"
-    has_pipeline_label="$(echo "${labels_json}" | jq -r --argjson wanted "${pipeline_labels}" '[.[] | select($wanted | index(.))] | length')"
 
-    comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
+    # Pull labels + comments out of the pre-fetched batched cache
+    # instead of issuing fresh /issues/{n}/labels and
+    # /issues/{n}/comments REST calls for each candidate.  On cache
+    # miss (e.g. GraphQL batch failure) fall back to the REST helpers
+    # so a transient GraphQL error doesn't strand an entire cycle.
+    if printf '%s' "${_candidate_details_json}" | jq -e --arg n "${issue_num}" 'has($n)' >/dev/null 2>&1; then
+      labels_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].labels // []')"
+      comments_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].comments // []')"
+    else
+      labels_json="$(get_issue_labels_json "${issue_num}")"
+      comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
+    fi
+    has_pipeline_label="$(echo "${labels_json}" | jq -r --argjson wanted "${pipeline_labels}" '[.[] | select($wanted | index(.))] | length')"
     has_marker="$(echo "${comments_json}" | jq -r '[.[] | select((.body // "") | test("<!-- AI_STANDALONE_STALL_STATE_V1|<!-- ai:clarification-questions -->"))] | length')"
 
     if [ "${has_pipeline_label}" -eq 0 ] && [ "${has_marker}" -eq 0 ]; then
@@ -2024,8 +2252,13 @@ PY
       continue
     fi
 
-    state_comment_id="$(get_standalone_state_comment_id "${issue_num}")"
-    state_json="$(read_standalone_state_json "${issue_num}")"
+    # Reuse the comments_json we already fetched above instead of
+    # re-hitting /issues/{n}/comments via the API-backed helpers for
+    # both the standalone state comment id and the standalone state
+    # JSON. Passing the threaded state_comment_id below also avoids
+    # the additional lookup inside write_standalone_state_json.
+    state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
+    state_json="$(_extract_standalone_state_json_from_comments "${comments_json}")"
 
     updated_state="$(python3 - "$state_json" "$phase" <<'PY'
 import json, sys, time
@@ -2069,7 +2302,7 @@ PY
     elapsed_minutes="$(( ( $(date +%s) - status_since ) / 60 ))"
     if [ "${status_since}" -le 0 ] || [ "${elapsed_minutes}" -lt "${threshold_minutes}" ]; then
       if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
-        write_standalone_state_json "${issue_num}" "${updated_state}"
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
       fi
       continue
     fi
@@ -2080,7 +2313,7 @@ PY
 	if issue_has_active_workflow "${issue_num}"; then
 	  echo "  [standalone-stall] Issue #${issue_num} has a recent active workflow run — skipping recovery."
 	  if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
-		write_standalone_state_json "${issue_num}" "${updated_state}"
+		write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
 	  fi
       continue
     fi
@@ -2263,7 +2496,10 @@ state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
 )"
-          write_standalone_state_json "${new_num}" "${new_state}"
+          # new_num is a brand-new issue with no comments, so we
+          # know no prior state comment exists — pass "" to skip
+          # the redundant lookup inside write_standalone_state_json.
+          write_standalone_state_json "${new_num}" "${new_state}" ""
           tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
         else
           local failed_state
@@ -2277,7 +2513,7 @@ state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
 )"
-          write_standalone_state_json "${issue_num}" "${failed_state}"
+          write_standalone_state_json "${issue_num}" "${failed_state}" "${state_comment_id}"
           tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted close-and-reissue but could not create replacement issue." "ERROR"
         fi
         took_action="true"
@@ -2311,7 +2547,7 @@ PY
     fi
 
     if [ "${action}" != "close_and_reissue" ]; then
-      write_standalone_state_json "${issue_num}" "${updated_state}"
+      write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
     fi
   done
 }
