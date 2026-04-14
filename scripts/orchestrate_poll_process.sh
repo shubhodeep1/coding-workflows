@@ -542,7 +542,7 @@ validation_fix_issue_has_merged_pr_evidence() {
   local github_api_base="${GITHUB_API_URL:-https://api.github.com}"
   local pr_api_prefix="${github_api_base}/repos/${GITHUB_REPOSITORY}/pulls/"
 
-  if ! timeline_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null)"; then
+  if ! timeline_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
     return 2
   fi
 
