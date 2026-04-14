@@ -1321,18 +1321,25 @@ close_linked_pr() {
 STANDALONE_STATE_MARKER_OPEN="<!-- AI_STANDALONE_STALL_STATE_V1"
 STANDALONE_STATE_MARKER_CLOSE="AI_STANDALONE_STALL_STATE_V1 -->"
 
-get_standalone_state_comment_id() {
-  local issue_num="$1"
-  gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
-    | jq -s -r 'add // [] | [.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | first | .id // ""' \
+# Pure parsing helpers: extract standalone state info from a pre-fetched
+# comments JSON array (the array shape returned by GitHub's
+# /issues/{n}/comments endpoint after paginate-flattening).  Using these
+# lets callers that already hold the comments list avoid re-hitting the
+# GitHub API just to re-parse the same data, which was previously a
+# significant contributor to rate-limit pressure during standalone stall
+# recovery sweeps.
+_extract_standalone_state_comment_id_from_comments() {
+  local comments_json="$1"
+  printf '%s' "${comments_json:-[]}" \
+    | jq -r '(. // []) | [.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | sort_by(.created_at // "") | last | .id // ""' \
     2>/dev/null || true
 }
 
-read_standalone_state_json() {
-  local issue_num="$1"
+_extract_standalone_state_json_from_comments() {
+  local comments_json="$1"
   local state_raw
-  state_raw="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" \
-    | jq -s -r 'add // [] | [.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | first | .body // ""' \
+  state_raw="$(printf '%s' "${comments_json:-[]}" \
+    | jq -r '(. // []) | [.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | sort_by(.created_at // "") | last | .body // ""' \
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
@@ -1363,6 +1370,27 @@ read_standalone_state_json() {
   ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
 }
 
+# Fetch the issue comments once and return the latest standalone state
+# comment id.  Thin wrapper around the pure-parsing helper above; kept
+# for callers that don't already have a comments list in hand.
+get_standalone_state_comment_id() {
+  local issue_num="$1"
+  local comments_json
+  if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+    comments_json='[]'
+  fi
+  _extract_standalone_state_comment_id_from_comments "${comments_json}"
+}
+
+read_standalone_state_json() {
+  local issue_num="$1"
+  local comments_json
+  if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+    comments_json='[]'
+  fi
+  _extract_standalone_state_json_from_comments "${comments_json}"
+}
+
 write_standalone_state_json() {
   local issue_num="$1"
   local state_json="$2"
@@ -1373,7 +1401,17 @@ write_standalone_state_json() {
 ${state_json}
 ${STANDALONE_STATE_MARKER_CLOSE}"
 
-  comment_id="$(get_standalone_state_comment_id "${issue_num}")"
+  # Optional 3rd argument: caller-supplied comment id.  Passing it (even
+  # empty) skips the otherwise-automatic lookup, which saves a full
+  # paginated /comments fetch whenever the caller already knows whether
+  # a state comment exists (e.g. the standalone stall recovery loop,
+  # which parses it out of its own cached comments_json).  Empty string
+  # means "known-not-present, create a new comment".
+  if [ "$#" -ge 3 ]; then
+    comment_id="$3"
+  else
+    comment_id="$(get_standalone_state_comment_id "${issue_num}")"
+  fi
   if [ -n "${comment_id}" ] && [ "${comment_id}" != "null" ]; then
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
       -X PATCH -f body="${comment_body}" >/dev/null 2>&1 || true
@@ -1529,8 +1567,13 @@ PY
       continue
     fi
 
-    state_comment_id="$(get_standalone_state_comment_id "${issue_num}")"
-    state_json="$(read_standalone_state_json "${issue_num}")"
+    # Reuse the comments_json we already fetched above instead of
+    # re-hitting /issues/{n}/comments twice more via the API-backed
+    # helpers.  Same result, three fewer paginated fetches per
+    # iteration (one here, two inside write_standalone_state_json
+    # below via the threaded state_comment_id).
+    state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
+    state_json="$(_extract_standalone_state_json_from_comments "${comments_json}")"
 
     updated_state="$(python3 - "$state_json" "$phase" <<'PY'
 import json, sys, time
@@ -1574,7 +1617,7 @@ PY
     elapsed_minutes="$(( ( $(date +%s) - status_since ) / 60 ))"
     if [ "${status_since}" -le 0 ] || [ "${elapsed_minutes}" -lt "${threshold_minutes}" ]; then
       if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
-        write_standalone_state_json "${issue_num}" "${updated_state}"
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
       fi
       continue
     fi
@@ -1585,7 +1628,7 @@ PY
 	if issue_has_active_workflow "${issue_num}"; then
 	  echo "  [standalone-stall] Issue #${issue_num} has a recent active workflow run — skipping recovery."
 	  if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
-		write_standalone_state_json "${issue_num}" "${updated_state}"
+		write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
 	  fi
       continue
     fi
@@ -1768,7 +1811,10 @@ state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
 )"
-          write_standalone_state_json "${new_num}" "${new_state}"
+          # new_num is a brand-new issue with no comments, so we
+          # know no prior state comment exists — pass "" to skip
+          # the redundant lookup inside write_standalone_state_json.
+          write_standalone_state_json "${new_num}" "${new_state}" ""
           tg_notify_issue "${issue_num}" "Standalone stall recovery: closed and re-issued as #${new_num} (phase: ${phase}, stuck ${elapsed_minutes}m)." "WARNING"
         else
           local failed_state
@@ -1782,7 +1828,7 @@ state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
 )"
-          write_standalone_state_json "${issue_num}" "${failed_state}"
+          write_standalone_state_json "${issue_num}" "${failed_state}" "${state_comment_id}"
           tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted close-and-reissue but could not create replacement issue." "ERROR"
         fi
         took_action="true"
@@ -1816,7 +1862,7 @@ PY
     fi
 
     if [ "${action}" != "close_and_reissue" ]; then
-      write_standalone_state_json "${issue_num}" "${updated_state}"
+      write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
     fi
   done
 }
