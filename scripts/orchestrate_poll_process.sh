@@ -2774,7 +2774,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 
   CURRENT_WAVE="$(jq -r '.current_wave' "${STATE_FILE}")"
   TOTAL_WAVES="$(jq -r '.total_waves' "${STATE_FILE}")"
-  JUDGE_CYCLE="$(jq -r '.judge_cycle' "${STATE_FILE}")"
+  JUDGE_CYCLE="$(jq -r '.judge_cycle // 0' "${STATE_FILE}")"
+  if ! [[ "${JUDGE_CYCLE}" =~ ^[0-9]+$ ]]; then
+    JUDGE_CYCLE="0"
+  fi
   JUDGE_STALL_CYCLES="$(jq -r '.judge_stall_cycles // .judge_cycle' "${STATE_FILE}")"
   # Backward compat: read recovery_count (new) or migrate from recovery_attempted (old)
   RECOVERY_COUNT="$(jq -r '.recovery_count // (if .recovery_attempted == true then 1 else 0 end)' "${STATE_FILE}")"
