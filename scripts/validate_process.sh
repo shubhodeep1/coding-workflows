@@ -907,7 +907,7 @@ fi
     echo
   fi
   if [ "${HARNESS_MODE}" = "fix" ]; then
-    emit_harness_prompt_context 104857600 200000
+    emit_harness_prompt_context
   fi
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"
