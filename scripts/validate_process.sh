@@ -548,6 +548,8 @@ emit_harness_prompt_context()
 	local remaining_bytes=0
 	local harness_file=""
 	local harness_size_bytes=0
+	local line_count=0
+	local estimated_output_bytes=0
 
 	echo "=== EXISTING HARNESS FILES ==="
 
@@ -557,7 +559,7 @@ emit_harness_prompt_context()
 		return 0
 	fi
 
-	while IFS= read -r harness_file; do
+	while IFS= read -r -d '' harness_file; do
 		if [ -s "${harness_file}" ] && ! grep -Iq . "${harness_file}"; then
 			echo "----- ${harness_file} (skipped: non-text file) -----"
 			echo
@@ -571,29 +573,38 @@ emit_harness_prompt_context()
 			continue
 		fi
 
+		line_count="$(wc -l < "${harness_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+		if ! [[ "${line_count}" =~ ^[0-9]+$ ]]; then
+			line_count=0
+		fi
+		estimated_output_bytes=$((harness_size_bytes + (line_count * 12)))
+
 		remaining_bytes=$((prompt_budget_bytes - included_bytes))
 		if [ "${remaining_bytes}" -le 0 ]; then
 			echo "----- ${harness_file} (skipped: global prompt budget exhausted) -----"
 			echo
 			continue
 		fi
-		if [ "${harness_size_bytes}" -gt "${prompt_budget_bytes}" ]; then
+		if [ "${estimated_output_bytes}" -gt "${prompt_budget_bytes}" ]; then
 			echo "----- ${harness_file} (skipped: file too large for global prompt budget) -----"
 			echo
 			continue
 		fi
-		if [ "${harness_size_bytes}" -gt "${remaining_bytes}" ]; then
+		if [ "${estimated_output_bytes}" -gt "${remaining_bytes}" ]; then
 			echo "----- ${harness_file} (skipped: global prompt budget would be exceeded) -----"
 			echo
 			continue
 		fi
 
 		echo "----- ${harness_file} (line-numbered) -----"
-		nl -ba "${harness_file}" 2>/dev/null || cat "${harness_file}" 2>/dev/null || true
-		echo
-
-		included_bytes=$((included_bytes + harness_size_bytes))
-	done < <(find validation -type f -not -path 'validation/logs/*' | sort)
+		if nl -ba "${harness_file}" 2>/dev/null || cat "${harness_file}" 2>/dev/null; then
+			echo
+			included_bytes=$((included_bytes + estimated_output_bytes))
+		else
+			echo "(skipped: failed to read file contents)"
+			echo
+		fi
+	done < <(find validation -type f -not -path 'validation/logs/*' -print0 | sort -z)
 }
 
 trap cleanup_runtime_containers EXIT
