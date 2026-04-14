@@ -171,6 +171,53 @@ class TestHardhatRpcProbe(unittest.TestCase):
                 f"{fname} must include 'type == \"object\"' guard in JSON-RPC pattern",
             )
 
+    def test_validate_generate_prompt_contract_scoped_to_repo_artifacts(self) -> None:
+        """Ensure generate prompt only asks for per-repo artifacts and test-script contract."""
+        from pathlib import Path
+
+        prompt_file = Path(__file__).resolve().parent.parent / "prompts" / "mode-validate-generate.txt"
+        content = prompt_file.read_text(encoding="utf-8")
+
+        required_fragments = (
+            "validation/Dockerfile.app",
+            "validation/docker-compose.test.yml",
+            "validation/validate.env",
+            "validation/tests/00_canary.sh",
+            "validation/tests/NN_*.sh",
+            "Test script contract (MANDATORY):",
+            "The canonical runtime driver assembles final validation JSON",
+        )
+        for fragment in required_fragments:
+            self.assertIn(fragment, content, f"mode-validate-generate.txt must include: {fragment}")
+
+        forbidden_fragments = (
+            "`validation/validate.sh` requirements:",
+            "final JSON must be emitted on EVERY exit path",
+            "emit_result()",
+            "fail_fast()",
+            "trap on_exit EXIT",
+            "safe final JSON emission",
+            "grep-safe TAP counting",
+        )
+        for fragment in forbidden_fragments:
+            self.assertNotIn(fragment, content, f"mode-validate-generate.txt must not include: {fragment}")
+
+        coverage_keys = (
+            '"build_verification"',
+            '"startup_health_checks"',
+            '"local_service_integration"',
+            '"route_testing"',
+            '"inbound_handler_testing"',
+            '"existing_test_suite_execution"',
+            '"env_var_validation"',
+            '"dependency_auditing"',
+            '"migration_verification"',
+            '"graceful_shutdown"',
+            '"error_format_validation"',
+        )
+        for key in coverage_keys:
+            self.assertIn(key, content, f"mode-validate-generate.txt must preserve coverage key {key}")
+
 
 # ---------------------------------------------------------------------------
 # Standalone runner (matches CI convention: python3 tests/test_*.py)
