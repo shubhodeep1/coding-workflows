@@ -286,8 +286,11 @@ jobs:
             if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/prompts/conflict-resolver.txt?ref=${script_ref}"; then
               echo "::warning::conflict-resolver.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/conflict-resolver.txt?ref=main"
+              if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/conflict-resolver.txt?ref=main"; then
+                echo "::warning::conflict-resolver.txt not found on main either; downstream conflict resolution will fail with a specific missing-template error."
+                rm -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+              fi
             fi
           fi
 
@@ -2048,7 +2051,7 @@ jobs:
           CONFLICTED_FILES_COUNT="${CONFLICTED_FILES_COUNT}" \
             CONFLICTED_FILES_LIST="${CONFLICTED_FILES_LIST}" \
             PROMPT_TPL="${PROMPT_TPL}" \
-            python3 -c 'import os,sys; tpl=open(os.environ["PROMPT_TPL"]).read(); sys.stdout.write(tpl.replace("{{CONFLICTED_FILES_COUNT}}",os.environ["CONFLICTED_FILES_COUNT"]).replace("{{CONFLICTED_FILES_LIST}}",os.environ["CONFLICTED_FILES_LIST"]))' \
+            python3 -c 'import os,sys; tpl=open(os.environ["PROMPT_TPL"], encoding="utf-8").read(); sys.stdout.write(tpl.replace("{{CONFLICTED_FILES_COUNT}}",os.environ["CONFLICTED_FILES_COUNT"]).replace("{{CONFLICTED_FILES_LIST}}",os.environ["CONFLICTED_FILES_LIST"]))' \
             > "${CONFLICT_RESOLVER_PROMPT_FILE}"
 
           # On the workflow source repo, snapshot the post-merge working-tree
