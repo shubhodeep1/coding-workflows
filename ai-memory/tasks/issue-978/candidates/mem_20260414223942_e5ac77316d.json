@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping used for planning:\n- Q1: A interpreted as: document current behavior where `validation/validate.sh` can be generated transiently at runtime, but is never committed to consumer repos.\n\nConflict detected:\n- The issue scope line \u201c`validation/validate.sh` is no longer generated in consumer workspace\u201d conflicts with Q1:A and current implementation/docs. Plan resolves this by documenting transient runtime generation + non-commit guarantee (not \u201cno longer generated\u201d).\n\nImplementation plan\n\n1. Files likely to change\n- `README.md`\n- `agents.md`\n- No functional/code changes expected.\n- `.github/ai/consumer_repos.json` expected unchanged (verification-only).\n\n2. Functions/modules to anchor documentation (reference-only, not edited unless mismatch found)\n- `scripts/validate_process.sh` for transient wrapper generation and managed-artifact/non-commit enforcement.\n- `scripts/validate_driver.sh` for canonical runtime driver location and `validation/validate.env` defaults.\n- `.github/workflows/mark-stable.yml` and `.github/workflows/test-and-mark-stable.yml` for dispatch source (`.github/ai/consumer_repos.json`).\n\n3. Data structures/contracts to document\n- `validation/validate.env` contract with explicit variables and conservative defaults sourced from `scripts/validate_driver.sh` (at minimum: `APP_SERVICE=app`, `APP_URL=http://localhost:8080/health`, `HEALTH_TIMEOUT=120`, `HEALTH_POLL_INTERVAL=2`, `PHASE=runtime_validation`; plus existing validation credential/test-path knobs already supported).\n- Validation result JSON compatibility contract (keys emitted by driver): `result`, `phase`, `total_tests`, `passed_tests`, `failed_tests`, `failures`, `duration_seconds`.\n- Backward-compatibility statement that existing env names, JSON keys, and log keys are preserved.\n\n4. API/interface changes\n- Documentation-only interface clarification.\n- Explicitly state split-driver model:\n  - Canonical driver lives in `coding-workflows/scripts/` (`scripts/validate_driver.sh`).\n  - Consumer wrappers fetch/use runtime artifacts; validation wrapper remains transient and untracked.\n- Explicitly state wrapper refresh/update dispatch source remains `.github/ai/consumer_repos.json`.\n\n5. Risks/edge cases\n- Risk of documenting future behavior instead of current behavior (mitigated by honoring Q1:A).\n- Risk of drift between README and agents guidance (mitigated by parallel updates in both files).\n- Risk of over-broad compatibility claims; wording should guarantee key-name stability without implying frozen implementation details.\n\n6. Testing/verification considerations\n- Consistency check across docs for `validation/validate.sh` wording (must uniformly say transient runtime generation + never committed).\n- Cross-check `validate.env` defaults against `scripts/validate_driver.sh`.\n- Cross-check dispatch-source wording against `mark-stable`/`test-and-mark-stable` workflow logic.\n- Confirm no unintended edits to `.github/ai/consumer_repos.json` or workflow behavior (docs-only delta).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8c7ea560a99cc71618d9c239622460ff19340d4cf3b60ca9bfccae38ca7df908",
+  "lineage": {
+    "issue_number": 978,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24426336700",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24426336700",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/978"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414223942_e5ac77316d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 978,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24426336700"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #978",
+  "timestamps": {
+    "created_at": "2026-04-14T22:39:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
