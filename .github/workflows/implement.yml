@@ -1466,6 +1466,51 @@ jobs:
             cat "${PLAN_FILE}"
           } > "${RUNTIME_DIR}/issue_context_for_summary.txt"
 
+          BASE_REF="origin/${PR_BASE_BRANCH}"
+          DIFF_RANGE="${BASE_REF}...HEAD"
+          HAS_BASE_REF="false"
+          if git rev-parse --verify "${BASE_REF}" >/dev/null 2>&1; then
+            HAS_BASE_REF="true"
+          fi
+
+          {
+            echo
+            echo "=== CHANGED FILES (this PR) ==="
+            if [ "${HAS_BASE_REF}" = "true" ]; then
+              if ! git diff --stat "${DIFF_RANGE}"; then
+                echo "Unavailable: unable to compute diff stat for ${DIFF_RANGE}."
+              fi
+            else
+              echo "Unavailable: base ref ${BASE_REF} not found; skipping diff stat."
+            fi
+
+            echo
+            echo "=== FILE LIST ==="
+            if [ "${HAS_BASE_REF}" = "true" ]; then
+              mapfile -t PR_CHANGED_FILES < <(git diff --name-only "${DIFF_RANGE}" || true)
+              TOTAL_FILES="${#PR_CHANGED_FILES[@]}"
+              if [ "${TOTAL_FILES}" -eq 0 ]; then
+                echo "(no changed files detected)"
+              else
+                LIMIT=100
+                PRINT_COUNT="${TOTAL_FILES}"
+                if [ "${PRINT_COUNT}" -gt "${LIMIT}" ]; then
+                  PRINT_COUNT="${LIMIT}"
+                fi
+
+                for ((i = 0; i < PRINT_COUNT; i++)); do
+                  echo "${PR_CHANGED_FILES[i]}"
+                done
+
+                if [ "${TOTAL_FILES}" -gt "${LIMIT}" ]; then
+                  echo "... and $((TOTAL_FILES - LIMIT)) more"
+                fi
+              fi
+            else
+              echo "Unavailable: base ref ${BASE_REF} not found; skipping file list."
+            fi
+          } >> "${RUNTIME_DIR}/issue_context_for_summary.txt"
+
           CONFIG_FILE="${HOME}/.codex/config.toml"
           CONFIG_BACKUP_FILE="${RUNTIME_DIR}/codex_config_issue_summary_backup.toml"
           HAD_CONFIG="false"
