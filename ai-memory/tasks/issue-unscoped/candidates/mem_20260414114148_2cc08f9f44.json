@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/clarify.yml\n`.github/workflows/implement.yml`\n`scripts/orchestrate_poll_process.sh`\n`scripts/review_apply_fixes.sh`\nscripts/orchestrate_poll_process.sh\nscripts/orchestrate_poll_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/implement.yml\n.github/workflows/implement.yml\nREADME.md\n`.github/workflows/clarify.yml`\n`scripts/protected_paths.txt`\nscripts/orchestrate_psych_oscillate_process.workflow\nscripts/protected_paths.txt\nscripts/review_apply_fixes.sh",
+  "fingerprint": "8dd46e75ab0c8f44eceb4265a7f98acdaa612cdbe6c1eadea61f2079a167be4b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 912,
+    "run_id": "24396462684",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24396462684",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414114148_2cc08f9f44",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 912,
+    "run_id": "24396462684"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 6 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T11:41:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
