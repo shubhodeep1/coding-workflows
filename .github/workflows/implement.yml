@@ -1363,7 +1363,7 @@ jobs:
         # sourcing label_helpers.sh / tg_helpers.sh, because the
         # fetched-manifest cleanup earlier in the commit step may have
         # already removed those helper scripts in consumer-repo runs.
-        if: env.SKIP_IMPLEMENT != 'true' && failure() && steps.commit_changes.outputs.destructive_commit_blocked != ''
+        if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked != ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
