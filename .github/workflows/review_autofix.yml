@@ -888,10 +888,19 @@ jobs:
           echo "REVIEWER_REASONING_EFFORT=${selected_reasoning}" >> "$GITHUB_ENV"
 
           if [ -f "${HOME}/.codex/config.toml" ]; then
-            sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${selected_reasoning}\"/" "${HOME}/.codex/config.toml"
+            sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${selected_reasoning}\"/" "${HOME}/.codex/config.toml"
           fi
 
-          echo "reviewer_reasoning_selection: {\"cycle_index\":${cycle_index},\"selected_reasoning_level\":\"${selected_reasoning}\",\"schedule_source\":\"${schedule_source}\",\"kill_switch_enabled\":${kill_switch_enabled},\"smoke_override\":${smoke_override},\"configured_schedule\":\"${schedule_csv}\"}"
+          reviewer_reasoning_selection_json="$(jq -cn \
+            --argjson cycle_index "${cycle_index}" \
+            --arg selected_reasoning_level "${selected_reasoning}" \
+            --arg schedule_source "${schedule_source}" \
+            --argjson kill_switch_enabled "${kill_switch_enabled}" \
+            --argjson smoke_override "${smoke_override}" \
+            --arg configured_schedule "${schedule_csv}" \
+            '{cycle_index:$cycle_index,selected_reasoning_level:$selected_reasoning_level,schedule_source:$schedule_source,kill_switch_enabled:$kill_switch_enabled,smoke_override:$smoke_override,configured_schedule:$configured_schedule}'
+          )"
+          echo "reviewer_reasoning_selection: ${reviewer_reasoning_selection_json}"
 
       - name: Generate diff context
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
@@ -1292,7 +1301,7 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
-          sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
+          sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
           echo "Updated reasoning effort to ${EDITOR_REASONING_EFFORT} for editor phase"
 
       - name: Apply fixes with editor model
