@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -157,6 +158,7 @@ def _run_poller(
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
 	issue_linked_prs: dict[int, int] | None = None,
+	merge_tree_conflict_paths: list[str] | None = None,
 	timeline_fail_for_issues: list[int] | None = None,
 	update_branch_fail_for_prs: list[int] | None = None,
 	review_dispatch_fail_for_prs: list[int] | None = None,
@@ -173,6 +175,7 @@ def _run_poller(
 	validation_workflow_runs = validation_workflow_runs or []
 	issue_closed = issue_closed or {}
 	issue_linked_prs = issue_linked_prs or {}
+	merge_tree_conflict_paths = merge_tree_conflict_paths or []
 	timeline_fail_for_issues = timeline_fail_for_issues or []
 	update_branch_fail_for_prs = update_branch_fail_for_prs or []
 	review_dispatch_fail_for_prs = review_dispatch_fail_for_prs or []
@@ -240,6 +243,7 @@ def _run_poller(
 			"blocked_check_shas": blocked_check_shas,
 			"validation_workflow_runs": validation_workflow_runs,
 			"issue_linked_prs": {str(k): int(v) for k, v in issue_linked_prs.items()},
+			"merge_tree_conflict_paths": list(merge_tree_conflict_paths),
 			"timeline_fail_for_issues": [int(x) for x in timeline_fail_for_issues],
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
@@ -606,7 +610,26 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	m = re.search(r'/pulls/(\d+)$', path)
+	m_files = re.search(r'/pulls/(\d+)/files(\?.*)?$', path)
 	m_update = re.search(r'/pulls/(\d+)/update-branch$', path)
+	if m_files:
+		pr_num = int(m_files.group(1))
+		pr = None
+		for item in store.get('prs', []):
+			if item.get('number') == pr_num:
+				pr = item
+				break
+		files = []
+		if pr is not None:
+			files = [{'filename': f} for f in pr.get('files', [])]
+		if jq:
+			import subprocess as _sp
+			p = _sp.run(['jq', '-r', jq], input=json.dumps(files), capture_output=True, text=True)
+			print(p.stdout.rstrip())
+		else:
+			print(json.dumps(files))
+		sys.exit(0)
+
 	if m_update and method == 'PUT':
 		pr_num = int(m_update.group(1))
 		store.setdefault('update_branch_calls', []).append(pr_num)
@@ -762,6 +785,37 @@ sys.exit(1)
 '''
 		_write_exec(bin_dir / "gh", gh_mock)
 
+		real_git = shutil.which("git")
+		assert real_git is not None
+		_write_exec(
+			bin_dir / "git",
+			r'''#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+store_path = Path(os.environ['GH_MOCK_STORE'])
+store = json.loads(store_path.read_text(encoding='utf-8'))
+args = sys.argv[1:]
+real_git = os.environ.get('REAL_GIT_BIN', 'git')
+
+if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and '--name-only' in args:
+	paths = list(store.get('merge_tree_conflict_paths', []))
+	if paths:
+		print('f' * 40)
+		for path in paths:
+			print(path)
+		sys.exit(1)
+	print('f' * 40)
+	sys.exit(0)
+
+proc = subprocess.run([real_git, *args])
+sys.exit(proc.returncode)
+''',
+		)
+
 		_write_exec(
 			bin_dir / "codex",
 			"""#!/usr/bin/env python3
@@ -807,6 +861,8 @@ print(json.dumps(parsed))
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"GH_MOCK_STORE": str(store_file),
+				"GH_RETRY_MAX_ATTEMPTS": "1",
+				"REAL_GIT_BIN": real_git,
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			}
@@ -976,6 +1032,160 @@ def test_missing_integration_branch_marks_failed():
 	assert result["latest_state"]["status"] == "failed"
 	assert result["latest_state"]["final_merge_status"] == "failed"
 	assert "final_merge_error" in result["latest_state"]
+
+
+def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "main"
+	prs = [
+		{
+			"number": 901,
+			"state": "closed",
+			"merged": False,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+			"files": ["scripts/orchestrate_poll_process.sh"],
+		},
+	]
+	first = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 901},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	assert first["latest_state"]["sync"]["status"] == "superseded-by-main"
+	assert first["latest_state"]["sync"]["superseded_notified"] is True
+	assert first["latest_state"]["final_merge_status"] == "superseded-by-main"
+	assert first["merge_calls"] == []
+
+	first_comment_bodies = [c.get("body", "") for c in first["issues"]["192"]["comments"]]
+	first_superseded_comments = [
+		body
+		for body in first_comment_bodies
+		if "Integration branch superseded by" in body
+	]
+	assert len(first_superseded_comments) == 1
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[
+			body for body in first_comment_bodies if "ORCHESTRATOR_STATE_V1" not in body
+		],
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 901},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	second_comment_bodies = [c.get("body", "") for c in second["issues"]["192"]["comments"]]
+	second_superseded_comments = [
+		body
+		for body in second_comment_bodies
+		if "Integration branch superseded by" in body
+	]
+	assert len(second_superseded_comments) == 1
+	assert second["merge_calls"] == []
+
+
+def test_sync_conflict_comment_includes_paths_and_runbook_link():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "main"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["src/a.py", "src/b.py"],
+	)
+	assert result["latest_state"]["sync"]["status"] == "conflict"
+	assert result["latest_state"]["sync"]["last_conflict_paths"] == ["src/a.py", "src/b.py"]
+
+	conflict_comments = [
+		c.get("body", "")
+		for c in result["issues"]["192"]["comments"]
+		if "## ⚠️ Integration sync conflict" in c.get("body", "")
+	]
+	assert len(conflict_comments) == 1
+	assert "- `src/a.py`" in conflict_comments[0]
+	assert "- `src/b.py`" in conflict_comments[0]
+	assert "orchestrator-integration-branch-rebuild-runbook.md" in conflict_comments[0]
+
+
+def test_sync_conflict_dedupe_skips_identical_warnings():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "main"
+	first = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["src/a.py"],
+	)
+	first_comment_bodies = [c.get("body", "") for c in first["issues"]["192"]["comments"]]
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[
+			body for body in first_comment_bodies if "ORCHESTRATOR_STATE_V1" not in body
+		],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["src/a.py"],
+	)
+	conflict_comments = [
+		c.get("body", "")
+		for c in second["issues"]["192"]["comments"]
+		if "## ⚠️ Integration sync conflict" in c.get("body", "")
+	]
+	assert len(conflict_comments) == 1
+
+
+def test_sync_conflict_posts_again_when_conflict_set_changes():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "main"
+	first = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["src/a.py"],
+	)
+	first_comment_bodies = [c.get("body", "") for c in first["issues"]["192"]["comments"]]
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[
+			body for body in first_comment_bodies if "ORCHESTRATOR_STATE_V1" not in body
+		],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["src/b.py"],
+	)
+	conflict_comments = [
+		c.get("body", "")
+		for c in second["issues"]["192"]["comments"]
+		if "## ⚠️ Integration sync conflict" in c.get("body", "")
+	]
+	assert len(conflict_comments) == 2
+	assert "- `src/b.py`" in conflict_comments[-1]
 
 
 def test_final_merge_conflict_sets_merge_conflict_status():
