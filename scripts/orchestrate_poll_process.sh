@@ -1038,7 +1038,7 @@ invoke_judge_for_integration_conflict() {
   {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
-    echo "model = \"${MODEL_EDITOR:-}\""
+    echo "model = \"${MODEL_EDITOR:-openai/gpt-5.3-codex}\""
     echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-high}\""
     if [ -f "${catalog_path}" ]; then
       echo "model_catalog_json = \"${catalog_path}\""
@@ -1109,7 +1109,7 @@ invoke_judge_for_integration_conflict() {
     echo "   short diagnosis in the commit message."
   } > "${prompt_file}"
 
-  if cat "${prompt_file}" | codex exec --model "${MODEL_EDITOR:-}" --full-auto > "${output_file}" 2>&1; then
+  if cat "${prompt_file}" | codex exec --model "${MODEL_EDITOR:-openai/gpt-5.3-codex}" --full-auto > "${output_file}" 2>&1; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}"
     return 0
@@ -1173,7 +1173,7 @@ heal_integration_branch_conflict() {
     if invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}"; then
       # Reset unresolved ticks so the resolver loop can resume after
       # the judge's push. Keep dispatch_count as audit trail.
-      jq '.integration_sync_status = "healing" | .integration_conflict_unresolved_ticks = 0' \
+      jq '.integration_sync_status = "healing" | .integration_conflict_unresolved_ticks = 0 | .integration_sync_last_error = ""' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_tracking_comment "## 🛠️ Integration judge invoked\n\nFinal PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${INTEGRATION_CONFLICT_MAX_RETRIES} automated resolver attempts. The judge has been invoked with full PR context to resolve conflicts. The poller will retry merge on the next tick."
       return 0
@@ -1195,6 +1195,10 @@ heal_integration_branch_conflict() {
   _dispatch_review_for_conflicts "${final_pr}" "${integration_branch}" || dispatch_rc=$?
 
   if [ "${dispatch_rc}" -eq 2 ]; then
+    jq --argjson ts "${now_ts}" \
+      '.integration_sync_status = "healing" |
+       .integration_conflict_dispatch_ts = $ts' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     echo "  [integration-heal] Resolver already in flight for PR #${final_pr}; skipping dispatch this tick."
     return 0
   fi
@@ -4036,9 +4040,8 @@ json.dump(result, sys.stdout)
   # Real conflicts still fall through to the in-progress loop on the
   # next tick via the mergeable=false path.
   #
-  # Throttled by the existing _CONFLICT_DISPATCH_TRACKER file so we
-  # don't thrash the API. No dispatch to review workflow here — this
-  # is a pure fast-forward pass.
+  # This pass is bounded per poll tick via --limit 100 and does not
+  # dispatch review workflows; it only attempts update-branch.
   echo "  [feature-sweep] Scanning open ai/issue-* PRs for base-branch drift..."
   _FEATURE_SWEEP_JSON="$(gh pr list \
     --repo "${GITHUB_REPOSITORY}" \
