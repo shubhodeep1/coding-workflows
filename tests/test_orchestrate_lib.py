@@ -525,6 +525,66 @@ def test_label_contract_matches_helper_catalog_and_phase_priority():
 	)
 
 
+def test_resolve_stall_recovery_action_defaults_to_legacy_autonomous_ladder():
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		phase="ai:implementing",
+		recovery_count=2,
+		max_recoveries=5,
+		allow_human_terminalization=False,
+	)
+	assert action == "close_and_reissue"
+
+
+def test_resolve_stall_recovery_action_allows_opt_in_human_terminalization():
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		phase="ai:implementing",
+		recovery_count=2,
+		max_recoveries=5,
+		allow_human_terminalization=True,
+	)
+	assert action == "escalate_human"
+
+
+def test_resolve_stall_recovery_action_fail_open_invalid_judged_action_uses_fallback():
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		phase="ai:done",
+		recovery_count=2,
+		max_recoveries=5,
+		allow_human_terminalization=False,
+		judged_action="definitely_not_an_action",
+	)
+	assert action == "close_and_reissue"
+
+
+def test_detect_stalls_respects_human_terminalization_flag():
+	state = _make_state()
+	now_ts = 1_700_000_000
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = now_ts - (130 * 60)
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+	issue_labels = {"10": ["ai:implementing"]}
+
+	legacy = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=issue_labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		max_recoveries=5,
+		allow_human_terminalization=False,
+	)
+	opt_in = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=issue_labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		max_recoveries=5,
+		allow_human_terminalization=True,
+	)
+
+	assert legacy and legacy[0]["recovery_action"] == "close_and_reissue"
+	assert opt_in and opt_in[0]["recovery_action"] == "escalate_human"
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------

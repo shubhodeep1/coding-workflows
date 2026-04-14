@@ -377,6 +377,84 @@ STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
 	],
 }
 
+STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION: dict[str, list[str]] = {
+	"no_labels": [
+		"retrigger_pipeline",
+		"retrigger_pipeline",
+		"escalate_human",
+	],
+	"ai:clarification": [
+		"auto_respond_clarify",
+		"auto_respond_clarify",
+		"escalate_human",
+	],
+	"ai:planning": [
+		"retrigger_plan",
+		"retrigger_plan",
+		"escalate_human",
+	],
+	"ai:implementing": [
+		"retrigger_implement",
+		"retrigger_implement",
+		"escalate_human",
+	],
+	"ai:done": [
+		"retrigger_review",
+		"retrigger_review",
+		"escalate_human",
+	],
+}
+
+VALID_STALL_RECOVERY_ACTIONS: set[str] = {
+	action
+	for actions in (
+		list(STALL_RECOVERY_ACTIONS.values()) +
+		list(STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION.values())
+	)
+	for action in actions
+}
+VALID_STALL_RECOVERY_ACTIONS.add("skip")
+
+
+def _coerce_bool(value: Any) -> bool:
+	if isinstance(value, bool):
+		return value
+	if value is None:
+		return False
+	return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_stall_recovery_action(
+	phase: str,
+	recovery_count: int,
+	max_recoveries: int,
+	allow_human_terminalization: bool = False,
+	judged_action: str | None = None,
+) -> str:
+	"""Resolve the effective stall recovery action for the given issue phase.
+
+	When *judged_action* is provided, only supported actions are accepted;
+	unsupported/malformed values fail-open to the declarative ladder outcome.
+	"""
+	if recovery_count >= max_recoveries:
+		return "skip"
+
+	default_actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
+	actions = default_actions
+	if allow_human_terminalization:
+		actions = STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION.get(phase, default_actions)
+
+	action_idx = min(recovery_count, len(actions) - 1)
+	fallback_action = actions[action_idx]
+
+	if judged_action is None:
+		return fallback_action
+
+	candidate = str(judged_action).strip()
+	if candidate in VALID_STALL_RECOVERY_ACTIONS:
+		return candidate
+	return fallback_action
+
 
 def determine_phase(labels: list[str]) -> str:
 	"""Determine the current pipeline phase from issue labels.
@@ -446,6 +524,7 @@ def detect_stalls(
 	now_ts: int,
 	max_recoveries: int = 5,
 	phase_thresholds: dict[str, int] | None = None,
+	allow_human_terminalization: bool = False,
 ) -> list[dict[str, Any]]:
 	"""Detect stalled issues in the current wave.
 
@@ -505,13 +584,12 @@ def detect_stalls(
 
 		recovery_count = issue.get("stall_recovery_count", 0)
 
-		# Determine recovery action
-		if recovery_count >= max_recoveries:
-			action = "skip"
-		else:
-			actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
-			action_idx = min(recovery_count, len(actions) - 1)
-			action = actions[action_idx]
+		action = resolve_stall_recovery_action(
+			phase=phase,
+			recovery_count=int(recovery_count),
+			max_recoveries=max_recoveries,
+			allow_human_terminalization=allow_human_terminalization,
+		)
 
 		stalled.append({
 			"id": issue["id"],
@@ -1003,6 +1081,7 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 	now_ts = int(args.now_ts) if args.now_ts else int(time.time())
 	threshold = int(args.threshold_minutes)
 	max_recoveries = int(args.max_recoveries)
+	allow_human_terminalization = _coerce_bool(args.allow_human_terminalization)
 
 	phase_thresholds: dict[str, int] | None = None
 	if args.phase_thresholds_json:
@@ -1013,6 +1092,7 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 	stalls = detect_stalls(
 		state, issue_labels, threshold, now_ts, max_recoveries,
 		phase_thresholds=phase_thresholds,
+		allow_human_terminalization=allow_human_terminalization,
 	)
 	_print_json({"ok": True, "stalls": stalls, "count": len(stalls)})
 	return 0
@@ -1080,6 +1160,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls.add_argument("--threshold-minutes", required=True, help="Fallback stall threshold in minutes (used when a phase has no specific override)")
 	p_stalls.add_argument("--phase-thresholds-json", default=None, help='Optional JSON: {"ai:clarification": 60, "ai:implementing": 120, ...}. Per-phase overrides.')
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
+	p_stalls.add_argument("--allow-human-terminalization", default="false", help="When true, allow opt-in terminal human escalation actions from the recovery ladder")
 	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
 	p_stalls.set_defaults(func=cmd_check_stalls)
 

@@ -253,6 +253,7 @@ def _run_poller(
 	state: dict,
 	enable_validation: str,
 	max_validate_cycles: str,
+	enable_stall_human_terminalization: str = "false",
 	tracking_labels: list[str] | None = None,
 	tracking_comments: list[str] | None = None,
 	issue_labels: dict[int, list[str]] | None = None,
@@ -983,6 +984,7 @@ print(json.dumps(parsed))
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
+				"ENABLE_STALL_HUMAN_TERMINALIZATION": enable_stall_human_terminalization,
 				"GH_MOCK_STORE": str(store_file),
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
@@ -2333,6 +2335,47 @@ def test_no_labels_open_issue_uses_bounded_recovery_policy():
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1
 	assert issue_entry["status"] == "in_progress"
+
+
+def test_default_stall_recovery_third_attempt_remains_legacy_autonomous():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "ai:implementing"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+	)
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert "ai:review-blocked" not in result["issues"]["10"]["labels"]
+	# Legacy ladder behavior at attempt 3 is close-and-reissue: old issue closes,
+	# replacement issue is reattached in state as pending.
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["github_issue"] != 10
+	assert issue_entry["status"] == "pending"
+
+
+def test_opt_in_human_terminalization_escalates_stalled_issue():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "ai:implementing"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_stall_human_terminalization="true",
+		issue_labels={10: ["ai:implementing"]},
+	)
+	issue_labels_after = result["issues"]["10"]["labels"]
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert "ai:review-blocked" in issue_labels_after
+	assert "ai:closed" not in issue_labels_after
+	assert any("ai:stall-human-escalation" in body for body in issue_comments)
 
 
 def test_state_extraction_with_special_chars_in_comment_bodies():
