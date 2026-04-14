@@ -1077,6 +1077,13 @@ merge_tree_conflict_paths_json() {
 
 merge_tree_conflict_fingerprint() {
   local conflict_paths_json="$1"
+  local default_ref="${2:-}"
+  local integration_ref="${3:-}"
+  if [ "${conflict_paths_json}" = '[]' ] && [ -n "${default_ref}" ] && [ -n "${integration_ref}" ]; then
+    printf '%s|%s|%s' "${conflict_paths_json}" "$(git rev-parse --verify "${default_ref}" 2>/dev/null || echo '')" "$(git rev-parse --verify "${integration_ref}" 2>/dev/null || echo '')" \
+      | sha256sum | awk '{print $1}'
+    return 0
+  fi
   printf '%s' "${conflict_paths_json}" | sha256sum | awk '{print $1}'
 }
 
@@ -1641,7 +1648,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
     && integration_ref="$(resolve_branch_analysis_ref "${integration_branch}")"; then
     conflict_paths_json="$(merge_tree_conflict_paths_json "${default_ref}" "${integration_ref}" 2>/dev/null || echo '[]')"
   fi
-  conflict_fingerprint="$(merge_tree_conflict_fingerprint "${conflict_paths_json}")"
+  conflict_fingerprint="$(merge_tree_conflict_fingerprint "${conflict_paths_json}" "${default_ref}" "${integration_ref}")"
 
   jq --arg fp "${conflict_fingerprint}" --argjson paths "${conflict_paths_json}" \
     '.sync = ((.sync // {}) + {
