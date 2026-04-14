@@ -1979,11 +1979,11 @@ jobs:
           The repository currently contains files with Git merge conflict markers.
 
           Conflict markers appear in this format:
-          [conflict-start] HEAD
+          <start-marker> HEAD
           code
-          [conflict-separator]
+          <separator-marker>
           other code
-          [conflict-end] branch
+          <end-marker> branch
 
           Your task:
           Resolve merge conflicts safely.
