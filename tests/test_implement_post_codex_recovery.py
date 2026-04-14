@@ -470,6 +470,68 @@ def _read_file(path: str) -> str:
 		return ""
 	return p.read_text(encoding="utf-8")
 
+def _step_block_text(step_name: str) -> str:
+	return "\n".join(_step_block(step_name))
+
+
+def test_noop_failure_labeling_is_gated_on_non_destructive_failures() -> None:
+	wf = _workflow_text()
+	assert (
+		"if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' "
+		"&& steps.commit_changes.outputs.destructive_commit_blocked == ''"
+	) in wf, (
+		"Handle no-op implementation must be skipped when destructive_commit_blocked is set "
+		"so destructive-guard failures cannot transition the issue into ai:implementation-failed"
+	)
+
+
+def test_failure_comment_step_skips_destructive_blocked_runs() -> None:
+	wf = _workflow_text()
+	assert (
+		"if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''"
+	) in wf, (
+		"Generic failure comment flow must be disabled for destructive-blocked runs to avoid "
+		"re-adding ai:awaiting-approval"
+	)
+
+
+def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
+	telegram_block = _step_block_text("Telegram failure notification")
+	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''" in telegram_block, (
+		"Post-failure Telegram flow must be skipped for destructive-blocked runs; only the dedicated "
+		"destructive-guard CRITICAL alert should fire"
+	)
+
+
+def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow() -> None:
+	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	lowered = destructive_block.lower()
+	assert "--add-label 'ai:destructive-blocked'" in destructive_block, (
+		"Destructive guard must preserve ai:destructive-blocked human-halt signaling"
+	)
+	assert "ai:implementation-failed" not in destructive_block, (
+		"Destructive guard block must not apply ai:implementation-failed"
+	)
+	assert "fix-up" not in lowered and "fixup" not in lowered, (
+		"Destructive guard block must not trigger fix-up issue generation"
+	)
+
+	capture_block = _step_block_text("Capture post-Codex validation errors")
+	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''" in capture_block, (
+		"Captured validation diagnostics must not run for destructive-blocked failures"
+	)
+
+	diagnose_block = _step_block_text("Diagnose post-Codex failure and create fix-up issues")
+	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''" in diagnose_block, (
+		"Diagnose/fix-up automation must be skipped for destructive-blocked runs"
+	)
+
+	wf = _workflow_text()
+	assert "FIX_COUNT=\"$(jq -r '(.fix_issues // []) | if type == \"array\" then length else 0 end' \"${IMPLEMENT_DIAGNOSE_RESULT_FILE}\")\"" in wf, (
+		"needs_fixes handling must tolerate non-array fix_issues without aborting"
+	)
+
+
 
 def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
@@ -578,7 +640,7 @@ def test_needs_fixes_labels_source_issue_and_generic_failure_step_is_bypassed():
 	wf = _workflow_text()
 	assert "--add-label 'ai:implementation-failed'" in wf
 	assert "--remove-label 'ai:awaiting-approval'" in wf
-	assert "if: (failure() || cancelled()) && steps.diagnose_post_codex_failure.outputs.handled != 'true'" in wf
+	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true'" in wf
 
 
 def test_idempotency_skips_diagnose_and_issue_creation_when_already_failed_label():
