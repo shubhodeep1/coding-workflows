@@ -2454,6 +2454,44 @@ def test_no_labels_open_issue_uses_bounded_recovery_policy():
 	assert issue_entry["status"] == "in_progress"
 
 
+def test_managed_stall_recovery_skips_needs_human_phase():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "ai:needs-human"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:planning", "ai:needs-human"]},
+	)
+
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 2
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert not any("Stall recovery" in body or "/approved" in body or "/answer" in body for body in issue_comments)
+
+
+def test_standalone_stall_recovery_skips_needs_human_candidates():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:needs-human"]},
+	)
+
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert not any("Standalone stall recovery" in body for body in issue_comments)
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"].get("closed", False) is False
+
+
 def test_state_extraction_with_special_chars_in_comment_bodies():
 	"""State extraction succeeds when surrounding comments have backticks/quotes/markdown."""
 	state = _base_state(status="in_progress")

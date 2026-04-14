@@ -415,7 +415,7 @@ def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_implementing_ph
 	)
 
 	assert len(stalls) == 1
-	assert stalls[0]["recovery_action"] == "close_and_reissue"
+	assert stalls[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][2]
 
 
 def test_detect_stalls_skips_needs_human_label():
@@ -807,6 +807,24 @@ def test_reconcile_wave_status_terminal_non_regression():
 	)
 	assert status_closed == "closed"
 	assert source_closed == "stored_terminal"
+
+
+def test_detect_stalls_skips_needs_human_phase():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["last_seen_phase"] = "ai:needs-human"
+	issue["stall_recovery_count"] = 2
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels={"10": ["ai:planning", "ai:needs-human"], "11": []},
+		threshold_minutes=1,
+		now_ts=10_000,
+	)
+
+	assert stalls == []
 
 
 def test_label_contract_matches_helper_catalog_and_phase_priority():

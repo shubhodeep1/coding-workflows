@@ -300,6 +300,7 @@ def format_wave_status_comment(state: dict[str, Any], wave_idx: int) -> str:
 PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:merged",
 	"ai:closed",
+	"ai:needs-human",
 	"ai:ready-to-merge",
 	"ai:review-blocked",
 	"ai:implementation-failed",
@@ -320,7 +321,7 @@ TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"
 
 # Phases already handled by dedicated logic in the poller — stall detector
 # should not double-act on these.
-DEDICATED_HANDLER_PHASES: set[str] = {"ai:review-blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
+DEDICATED_HANDLER_PHASES: set[str] = {"ai:needs-human", "ai:review-blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
 
 # Escalating recovery actions per detected phase.
 # The poller indexes into this list using the per-issue stall_recovery_count.
@@ -345,37 +346,37 @@ STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
 	"no_labels": [
 		"retrigger_pipeline",
 		"retrigger_pipeline",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:clarification": [
 		"auto_respond_clarify",
 		"auto_respond_clarify",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:planning": [
 		"retrigger_plan",
 		"retrigger_plan",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:awaiting-approval": [
 		"auto_approve",
 		"auto_approve",
-		"auto_approve",
+		"escalate_human",
 	],
 	"ai:implementing": [
 		"retrigger_implement",
 		"retrigger_implement",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:done": [
 		"retrigger_review",
 		"retrigger_review",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:ready-to-merge": [
 		"attempt_merge",
 		"attempt_merge",
-		"attempt_merge",
+		"escalate_human",
 	],
 }
 
