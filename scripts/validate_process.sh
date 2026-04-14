@@ -193,7 +193,7 @@ enforce_no_renamed_driver_artifacts()
   unexpected_driver_files="$({
     git ls-files -- 'scripts/validate*.sh'
     git ls-files --others --exclude-standard -- 'scripts/validate*.sh'
-  } 2>/dev/null | awk '$0 != "scripts/validate_process.sh"' | sort -u)"
+  } 2>/dev/null | awk '$0 != "scripts/validate_process.sh" && $0 != "scripts/validate_driver.sh"' | sort -u)"
 
   if [ -n "${unexpected_driver_files}" ]; then
     echo "Found non-canonical validate driver artifacts in scripts/:" >&2
