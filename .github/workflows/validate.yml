@@ -123,6 +123,7 @@ jobs:
           fetch_from_ref_or_local() {
             local repo_path="$1"
             local target_path="$2"
+            local require_remote="${3:-false}"
             local tmp_path="${target_path}.tmp"
             local attempt=1
             while [ "${attempt}" -le 5 ]; do
@@ -140,9 +141,14 @@ jobs:
             done
 
             rm -f "${tmp_path}"
-            if [ -f "${target_path}" ]; then
+            if [ "${require_remote}" != "true" ] && [ -f "${target_path}" ]; then
               echo "Using local fallback for ${target_path} (not found on ${script_ref}: ${repo_path})"
               return 0
+            fi
+
+            if [ "${require_remote}" = "true" ]; then
+              echo "Missing required remote file: ${repo_path} (${script_ref}); local fallback is disabled for this file." >&2
+              exit 1
             fi
 
             echo "Missing required file: ${repo_path} (${script_ref}) and local fallback ${target_path}" >&2
@@ -150,11 +156,26 @@ jobs:
           }
 
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh ai_labels.py validate_process.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
+          for f in gh_helpers.sh setup_serena.sh ai_labels.py render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
             fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"
             chmod +x "scripts/${f}"
             _fetched_scripts+=("${f}")
           done
+
+          require_remote_canonical_scripts=false
+          if [ "${{ github.repository }}" != "${wf_source}" ]; then
+            require_remote_canonical_scripts=true
+          fi
+
+          canonical_validate_driver="scripts/validate_driver.sh"
+          fetch_from_ref_or_local "${canonical_validate_driver}" "${canonical_validate_driver}" "${require_remote_canonical_scripts}"
+          chmod +x "${canonical_validate_driver}"
+          _fetched_scripts+=(validate_driver.sh)
+
+          canonical_validate_process="scripts/validate_process.sh"
+          fetch_from_ref_or_local "${canonical_validate_process}" "${canonical_validate_process}" "${require_remote_canonical_scripts}"
+          chmod +x "${canonical_validate_process}"
+          _fetched_scripts+=(validate_process.sh)
 
           # Source rate-limit helpers as soon as gh_helpers.sh is available.
           source scripts/gh_helpers.sh 2>/dev/null || true

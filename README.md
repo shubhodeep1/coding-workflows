@@ -934,6 +934,7 @@ This phase starts only after the orchestrator judge returns `complete`.
 - Non-terminal failure: `needs_fixes` diagnosis with fix-up issues (enters the fix/revalidate loop).
 - Terminal failure: validation dispatch failure, harness error, infeasible diagnosis, unknown diagnosis payload, closed fix-up issues, or cycle limit exceeded.
 - Terminal failure label: `ai:validation-failed`.
+- Managed artifact contract: startup checks now enforce only managed artifacts (`scripts/validate_process.sh`, optional `scripts/validate_driver.sh`) and the transient `validation/validate.sh` rule. Repos may keep unrelated consumer scripts without failing validation.
 
 ### Manual Reset: `/revalidate`
 
@@ -995,11 +996,13 @@ Use this after manual intervention (e.g. fixing a problematic issue, merging a s
 
 - Cycle 1 generates a new harness under `validation/`.
 - Cycle 2+ reuses and targeted-fixes the existing owned harness when `validation/` is present (for example, restored from artifacts); otherwise it safely falls back to full regeneration.
-- Startup guard scope is managed-artifact only: consumer-owned helper scripts (for example, `scripts/validate_local.sh`) are allowed.
+- The generated runtime harness delegates to checked-in `scripts/validate_driver.sh`.
+- Canonical runtime harness behavior now lives in `scripts/validate_driver.sh` (pre-flight, compose startup/logging, health polling, canary gating, TAP-safe counting, result emission/finalization).
+- Startup guard scope is managed-artifact only: consumer-owned helper scripts are allowed.
 - Managed artifact contract at startup:
-  - `validation/validate.sh` must remain transient/untracked.
-  - Tracked copies of managed validation artifacts are blocked outside canonical `validation/` paths.
-  - Before execution, validation runs pre-flight checks (`docker compose config`, shell syntax, and compose build path resolution).
+  - Generated validation harness artifacts must remain transient/untracked.
+  - Tracked copies of managed validation artifacts are blocked outside canonical harness paths.
+- Before execution, validation runs pre-flight checks (`docker compose config`, shell syntax, and compose build path resolution).
 - Pre-flight failures are classified as terminal `harness_error` for that run.
 - The first generated test must be a canary infrastructure check (`00_canary.sh` style); infra-only canary failures shortcut to `harness_error`, while app startup/crash signals continue to diagnosis.
 

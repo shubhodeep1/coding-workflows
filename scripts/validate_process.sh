@@ -76,10 +76,14 @@ POST_GENERATE_STATUS_FILE="${RUNTIME_DIR}/post_generate_git_status.txt"
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRIOR_RESULT_JSON_FILE="${RUNTIME_DIR}/prior_validation_result.json"
 PRIOR_CONTAINER_LOGS_FILE="${RUNTIME_DIR}/prior_container_logs_tail.txt"
+VALIDATION_RUNNER_FILE="${RUNTIME_DIR}/validation_runtime_driver.sh"
 
 HINTS_SOURCE="none"
 HARNESS_MODE="generate"
 PRE_FLIGHT_STATUS="not_run"
+GENERATED_VALIDATE_SCRIPT_PATH=""
+CANONICAL_VALIDATE_DRIVER_REL="scripts/validate_process.sh"
+CANONICAL_VALIDATE_HARNESS_REL="validation/validate.sh"
 
 mkdir -p "${RUNTIME_DIR}"
 printf 'null\n' > "${NULL_JSON_FILE}"
@@ -146,6 +150,72 @@ fi
 is_tracking_run()
 {
   [ "${TRACKING_ISSUE_NUM}" -gt 0 ]
+}
+
+enforce_canonical_driver_path()
+{
+  local script_source="${BASH_SOURCE[0]:-$0}"
+  case "${script_source}" in
+    "${CANONICAL_VALIDATE_DRIVER_REL}"|"./${CANONICAL_VALIDATE_DRIVER_REL}"|*/"${CANONICAL_VALIDATE_DRIVER_REL}")
+      return 0
+      ;;
+    *)
+      echo "Refusing to run validate driver from non-canonical path '${script_source}'. Expected ${CANONICAL_VALIDATE_DRIVER_REL}." >&2
+      return 1
+      ;;
+  esac
+}
+
+ensure_validation_harness_not_tracked()
+{
+  if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+    return 0
+  fi
+
+  if git ls-files --error-unmatch -- "${CANONICAL_VALIDATE_HARNESS_REL}" >/dev/null 2>&1; then
+    echo "${CANONICAL_VALIDATE_HARNESS_REL} is tracked by git; it must remain transient." >&2
+    return 1
+  fi
+
+  if git diff --cached --name-only -- "${CANONICAL_VALIDATE_HARNESS_REL}" | grep -q .; then
+    echo "${CANONICAL_VALIDATE_HARNESS_REL} is staged in git; it must remain unstaged/untracked." >&2
+    return 1
+  fi
+
+  return 0
+}
+
+enforce_no_renamed_driver_artifacts()
+{
+  if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+    return 0
+  fi
+
+  local candidate_driver_files
+  local candidate
+  local renamed_driver_files=""
+  candidate_driver_files="$({
+    git ls-files -- 'scripts/validate*.sh'
+    git ls-files --others --exclude-standard -- 'scripts/validate*.sh'
+  } 2>/dev/null | awk '$0 != "scripts/validate_process.sh" && $0 != "scripts/validate_driver.sh"' | sort -u)"
+
+  while IFS= read -r candidate; do
+    [ -n "${candidate}" ] || continue
+    [ -f "${candidate}" ] || continue
+
+    if cmp -s "${candidate}" "scripts/validate_process.sh" \
+      || { [ -f "scripts/validate_driver.sh" ] && cmp -s "${candidate}" "scripts/validate_driver.sh"; }; then
+      renamed_driver_files="${renamed_driver_files}${candidate}"$'\n'
+    fi
+  done <<< "${candidate_driver_files}"
+
+  if [ -n "${renamed_driver_files}" ]; then
+    echo "Found renamed managed validate driver artifacts in scripts/:" >&2
+    printf '%s' "${renamed_driver_files}" >&2
+    return 1
+  fi
+
+  return 0
 }
 
 post_tracking_comment()
@@ -260,6 +330,14 @@ set_tracking_phase_label()
   return 0
 }
 
+if ! enforce_canonical_driver_path; then
+  exit 1
+fi
+
+if ! enforce_no_renamed_driver_artifacts; then
+  exit 1
+fi
+
 extract_last_json_with_key()
 {
   local source_file="$1"
@@ -316,6 +394,186 @@ with open(output_file, "w", encoding="utf-8") as handle:
 PY
 }
 
+is_validation_harness_runnable()
+{
+	if [ -f validation/docker-compose.test.yml ] \
+		&& [ -f validation/validate.env ] \
+		&& [ -f validation/tests/00_canary.sh ] \
+		&& find validation/tests -maxdepth 1 -type f -name '*.sh' -print -quit | grep -q .; then
+		GENERATED_VALIDATE_SCRIPT_PATH=""
+		return 0
+	fi
+
+	GENERATED_VALIDATE_SCRIPT_PATH=""
+	return 1
+}
+
+ensure_runtime_validation_driver()
+{
+  cat > "${VALIDATION_RUNNER_FILE}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+COMPOSE_FILE="validation/docker-compose.test.yml"
+TEST_DIR="validation/tests"
+LOG_DIR="validation/logs"
+COMPOSE_LOG="${LOG_DIR}/compose.log"
+ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
+START_TS="$(date +%s)"
+
+if [ -f "${ENV_FILE}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+  set +a
+fi
+
+mkdir -p "${LOG_DIR}"
+: > "${COMPOSE_LOG}"
+
+TOTAL_TESTS=0
+PASSED_TESTS=0
+FAILED_TESTS=0
+FAILURES_FILE="$(mktemp)"
+RESULT_EMITTED=0
+printf '[]' > "${FAILURES_FILE}"
+
+append_failure()
+{
+  local test_name="$1"
+  local error_msg="$2"
+  local log_file="${3:-}"
+  local log_tail=""
+
+  if [ -n "${log_file}" ] && [ -f "${log_file}" ]; then
+    log_tail="$(tail -c 10000 "${log_file}" | tr -d '\000' | tail -n 30 2>/dev/null || true)"
+  fi
+
+  python3 - "${FAILURES_FILE}" "${test_name}" "${error_msg}" "${log_tail}" <<'PY'
+import json
+import sys
+
+path, test_name, error_msg, log_tail = sys.argv[1:5]
+with open(path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+payload.append({"test": test_name, "error": error_msg, "log_tail": log_tail})
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle)
+PY
+}
+
+emit_result()
+{
+  local result_value="${1:-fail}"
+  local duration_seconds
+
+  if [ "${RESULT_EMITTED}" = "1" ]; then
+    return 0
+  fi
+
+  duration_seconds=$(( $(date +%s) - START_TS ))
+
+  RESULT="${result_value}" \
+  TOTAL_TESTS="${TOTAL_TESTS}" \
+  PASSED_TESTS="${PASSED_TESTS}" \
+  FAILED_TESTS="${FAILED_TESTS}" \
+  DURATION_SECONDS="${duration_seconds}" \
+  FAILURES_FILE_PATH="${FAILURES_FILE}" \
+  python3 -c 'import json, os; print(json.dumps({
+"result": os.environ["RESULT"],
+"phase": "runtime_validation",
+"total_tests": int(os.environ["TOTAL_TESTS"]),
+"passed_tests": int(os.environ["PASSED_TESTS"]),
+"failed_tests": int(os.environ["FAILED_TESTS"]),
+"failures": json.load(open(os.environ["FAILURES_FILE_PATH"], encoding="utf-8")),
+"duration_seconds": int(os.environ["DURATION_SECONDS"]),
+}))'
+
+  RESULT_EMITTED=1
+}
+
+cleanup()
+{
+  {
+    printf '\n===== docker compose logs --no-color =====\n'
+    docker compose -f "${COMPOSE_FILE}" logs --no-color 2>/dev/null || true
+  } >> "${COMPOSE_LOG}"
+  docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
+  rm -f "${FAILURES_FILE}" >/dev/null 2>&1 || true
+}
+
+trap cleanup EXIT
+
+if ! docker compose -f "${COMPOSE_FILE}" up -d --build >> "${COMPOSE_LOG}" 2>&1; then
+  TOTAL_TESTS=$((TOTAL_TESTS + 1))
+  FAILED_TESTS=$((FAILED_TESTS + 1))
+  append_failure "compose_up" "failed to build/start compose services" "${COMPOSE_LOG}"
+  emit_result fail
+  exit 1
+fi
+
+mapfile -t test_scripts < <(find "${TEST_DIR}" -maxdepth 1 -type f -name '*.sh' | sort)
+if [ "${#test_scripts[@]}" -eq 0 ]; then
+  TOTAL_TESTS=$((TOTAL_TESTS + 1))
+  FAILED_TESTS=$((FAILED_TESTS + 1))
+  append_failure "tests_missing" "no validation test scripts found under ${TEST_DIR}"
+  emit_result fail
+  exit 1
+fi
+
+if [ "$(basename "${test_scripts[0]}")" != "00_canary.sh" ]; then
+  TOTAL_TESTS=$((TOTAL_TESTS + 1))
+  FAILED_TESTS=$((FAILED_TESTS + 1))
+  append_failure "canary_missing" "first validation test script must be validation/tests/00_canary.sh"
+  emit_result fail
+  exit 1
+fi
+
+for test_script in "${test_scripts[@]}"; do
+  test_name="$(basename "${test_script}")"
+  test_log="${LOG_DIR}/${test_name}.log"
+
+  echo "=== RUN ${test_name} ==="
+  set +e
+  bash "${test_script}" > "${test_log}" 2>&1
+  test_rc=$?
+  set -e
+
+  cat "${test_log}" || true
+
+  ok_count="$(grep -E -c '^ok[[:space:]]+[0-9]+' "${test_log}" || true)"
+  TOTAL_TESTS=$((TOTAL_TESTS + ok_count))
+  PASSED_TESTS=$((PASSED_TESTS + ok_count))
+
+  not_ok_count=0
+  while IFS= read -r not_ok_line; do
+    [ -z "${not_ok_line}" ] && continue
+    not_ok_count=$((not_ok_count + 1))
+    append_failure "${test_name}" "${not_ok_line}" "${test_log}"
+  done < <(grep -E '^not ok[[:space:]]+[0-9]+([[:space:]]+-[[:space:]].*)?$' "${test_log}" || true)
+
+  TOTAL_TESTS=$((TOTAL_TESTS + not_ok_count))
+  FAILED_TESTS=$((FAILED_TESTS + not_ok_count))
+
+  if [ "${test_rc}" -ne 0 ] && [ "${not_ok_count}" -eq 0 ]; then
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    FAILED_TESTS=$((FAILED_TESTS + 1))
+    append_failure "${test_name}:unexpected_error" "script exited with code ${test_rc} without TAP 'not ok' output" "${test_log}"
+  fi
+done
+
+if [ "${FAILED_TESTS}" -eq 0 ]; then
+  emit_result pass
+  exit 0
+fi
+
+emit_result fail
+exit 1
+EOF
+
+  chmod +x "${VALIDATION_RUNNER_FILE}"
+}
+
 write_status_file()
 {
   local status="$1"
@@ -366,7 +624,7 @@ write_metadata_file()
     --arg validation_log_file "${VALIDATION_LOG_FILE}" \
     --arg generate_log_file "${GENERATE_LOG_FILE}" \
     --arg diagnose_log_file "${DIAGNOSE_LOG_FILE}" \
-    --arg generated_validate_file "validation/validate.sh" \
+    --arg generated_validate_file "${GENERATED_VALIDATE_SCRIPT_PATH}" \
     --arg generated_compose_file "validation/docker-compose.test.yml" \
     --argjson created_fix_issues "${CREATED_FIX_ISSUES_JSON}" \
     --slurpfile validation_result "${validation_file}" \
@@ -390,7 +648,7 @@ write_metadata_file()
         validation_log: $validation_log_file,
         generate_log: $generate_log_file,
         diagnose_log: $diagnose_log_file,
-        generated_validate_script: $generated_validate_file,
+        generated_validate_script: (if ($generated_validate_file | length) > 0 then $generated_validate_file else null end),
         generated_compose_file: $generated_compose_file,
         validation_logs_dir: "validation/logs"
       }
@@ -420,6 +678,25 @@ cleanup_runtime_containers()
   fi
 }
 
+ensure_validate_wrapper()
+{
+	# Only generate the wrapper if the canonical driver exists.
+	# When absent, the runtime fallback driver will be used instead.
+	if [ ! -f scripts/validate_driver.sh ]; then
+		return 0
+	fi
+	mkdir -p validation
+	cat > validation/validate.sh <<'EOF'
+#!/usr/bin/env bash
+# Auto-generated by coding-workflows — DO NOT EDIT
+
+set -euo pipefail
+
+exec bash scripts/validate_driver.sh "$@"
+EOF
+	chmod +x validation/validate.sh
+}
+
 run_preflight_checks()
 {
 	PRE_FLIGHT_STATUS="running"
@@ -444,6 +721,49 @@ run_preflight_checks()
 		echo "Missing validation/docker-compose.test.yml" >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
 		_emit_preflight_tail "validation/docker-compose.test.yml missing"
+		return 1
+	fi
+
+	# Validate legacy wrapper only if it exists. Canonical artifact mode
+	# (validate.env + tests/00_canary.sh + compose) does not require it.
+	if [ -f validation/validate.sh ]; then
+		if ! bash -n validation/validate.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+			echo "Shell syntax check failed: validation/validate.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+			PRE_FLIGHT_STATUS="fail"
+			_emit_preflight_tail "bash -n failed for validation/validate.sh"
+			return 1
+		fi
+
+		if ! grep -q 'scripts/validate_driver.sh' validation/validate.sh; then
+			echo "validation/validate.sh must delegate to scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+			PRE_FLIGHT_STATUS="fail"
+			_emit_preflight_tail "validation/validate.sh is not a thin wrapper"
+			return 1
+		fi
+
+		if [ -f scripts/validate_driver.sh ]; then
+			if ! bash -n scripts/validate_driver.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+				echo "Shell syntax check failed: scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+				PRE_FLIGHT_STATUS="fail"
+				_emit_preflight_tail "bash -n failed for scripts/validate_driver.sh"
+				return 1
+			fi
+		else
+			echo "scripts/validate_driver.sh not present; allowing runtime fallback driver selection" >> "${PRE_FLIGHT_LOG_FILE}"
+		fi
+	fi
+
+	if [ ! -f validation/validate.env ]; then
+		echo "Missing validation/validate.env" >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "validation/validate.env missing"
+		return 1
+	fi
+
+	if [ ! -f validation/tests/00_canary.sh ]; then
+		echo "Missing validation/tests/00_canary.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "validation/tests/00_canary.sh missing"
 		return 1
 	fi
 
@@ -541,44 +861,61 @@ PY
 	return 0
 }
 
-ensure_validation_harness_not_tracked()
-{
-	if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
-		return 0
-	fi
-
-	if [ -n "$(git ls-files --error-unmatch -- validation/validate.sh 2>/dev/null || true)" ]; then
-		echo "Managed validation artifact must remain untracked: validation/validate.sh" >&2
-		echo "Remove it from git tracking with: git rm --cached -- validation/validate.sh" >&2
-		return 1
-	fi
-
-	return 0
-}
-
 enforce_managed_validation_artifact_contract()
 {
 	if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
 		return 0
 	fi
 
-	local tracked_path
-	local duplicate_paths=()
-	while IFS= read -r tracked_path; do
-		case "${tracked_path}" in
-			validation/validate.sh|validation/docker-compose.test.yml|validation/.ai-validation-owned)
-				continue
-				;;
-			*/validation/validate.sh|*/validation/docker-compose.test.yml|*/validation/.ai-validation-owned)
-				duplicate_paths+=("${tracked_path}")
-				;;
-		esac
-	done < <(git ls-files 2>/dev/null || true)
+	local canonical_path
+	local canonical_hash
+	local tracked_script
+	local tracked_hash
+	local has_violation=false
+	local -a canonical_paths
+	local -a tracked_scripts
+	local -a violations
 
-	if [ "${#duplicate_paths[@]}" -gt 0 ]; then
-		echo "Found tracked copies of managed validation artifacts:" >&2
-		printf '  %s\n' "${duplicate_paths[@]}" >&2
-		echo "Managed artifacts are only allowed at validation/{validate.sh,docker-compose.test.yml,.ai-validation-owned}." >&2
+	canonical_paths=(
+		"scripts/validate_process.sh"
+		"scripts/validate_driver.sh"
+	)
+
+	if git ls-files --error-unmatch -- "${CANONICAL_VALIDATE_HARNESS_REL}" >/dev/null 2>&1; then
+		violations+=("${CANONICAL_VALIDATE_HARNESS_REL} is tracked. validation/ artifacts must remain transient and untracked.")
+		has_violation=true
+	fi
+
+	mapfile -t tracked_scripts < <(git ls-files -- 'scripts/*.sh' 2>/dev/null || true)
+
+	for canonical_path in "${canonical_paths[@]}"; do
+		if [ ! -f "${canonical_path}" ] || [ -L "${canonical_path}" ]; then
+			continue
+		fi
+
+		if ! canonical_hash="$(git hash-object -- "${canonical_path}" 2>/dev/null)"; then
+			continue
+		fi
+
+		for tracked_script in "${tracked_scripts[@]}"; do
+			if [ -z "${tracked_script}" ] || [ "${tracked_script}" = "${canonical_path}" ] || [ ! -f "${tracked_script}" ] || [ -L "${tracked_script}" ]; then
+				continue
+			fi
+
+			if ! tracked_hash="$(git hash-object -- "${tracked_script}" 2>/dev/null)"; then
+				continue
+			fi
+
+			if [ "${tracked_hash}" = "${canonical_hash}" ]; then
+				violations+=("${tracked_script} is a tracked copy of managed artifact ${canonical_path}.")
+				has_violation=true
+			fi
+		done
+	done
+
+	if [ "${has_violation}" = true ]; then
+		echo "Managed validation artifact contract violation detected:" >&2
+		printf ' - %s\n' "${violations[@]}" >&2
 		return 1
 	fi
 
@@ -756,38 +1093,23 @@ fi
 # ---------------------------------------------------------------
 set_tracking_phase_label "ai:validating"
 
-# Ensure validation/ is git-ignored so no workflow accidentally commits it.
-# If validation/ was previously committed to the repo, untrack and remove it
-# so the ownership-marker check below does not hard-fail on a stale checkout.
-# Changes are committed and pushed so the fix is permanent (one-time).
 if command -v git >/dev/null 2>&1 && [ -d .git ]; then
-  _vd_needs_commit=false
-
-  if ! grep -qxF 'validation/' .gitignore 2>/dev/null; then
-    echo 'validation/' >> .gitignore
-    _vd_needs_commit=true
+  if ! grep -qxF 'validation/' .git/info/exclude 2>/dev/null; then
+    echo 'validation/' >> .git/info/exclude
   fi
+fi
 
-  if [ -n "$(git ls-files -- validation/ 2>/dev/null)" ]; then
-    echo "Untracking previously committed validation/ directory."
-    git rm -r --cached -- validation/ >/dev/null 2>&1 || true
-    rm -rf validation
-    _vd_needs_commit=true
-  fi
+if ! ensure_validation_harness_not_tracked; then
+  local_failure_summary="${CANONICAL_VALIDATE_HARNESS_REL} is tracked in git. Runtime validation harness must remain untracked."
+  post_tracking_comment "## ⚠️ Runtime validation harness tracking violation\n\n${local_failure_summary}\n\nRemove it from git tracking in the consumer repository and rerun validation."
+  set_tracking_phase_label "ai:validation-failed"
+  write_result_files "error" "Validation harness tracking violation" "${local_failure_summary}"
+  tg_notify "Validation harness tracking violation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+  exit 1
+fi
 
-  if [ "${_vd_needs_commit}" = true ]; then
-    git add .gitignore 2>/dev/null || true
-    git \
-      -c user.name="ai-workflow[bot]" \
-      -c user.email="ai-workflow[bot]@users.noreply.github.com" \
-      commit -m "chore: gitignore validation/ and remove from tracking
-
-The validation/ directory is a transient workspace used by the
-AI validation workflow and must not be committed." >/dev/null 2>&1 || true
-    if ! git push >/dev/null 2>&1; then
-      echo "Note: could not push validation/ cleanup commit (branch protection or permissions). Fix applied locally for this run."
-    fi
-  fi
+if ! enforce_managed_validation_artifact_contract; then
+	exit 1
 fi
 
 if ! ensure_validation_harness_not_tracked; then
@@ -806,7 +1128,7 @@ fi
 if [ "${VALIDATION_CYCLE}" -gt 1 ] \
 	&& [ -d validation ] \
 	&& [ -f validation/.ai-validation-owned ] \
-	&& [ -f validation/validate.sh ]; then
+	&& is_validation_harness_runnable; then
 	HARNESS_MODE="fix"
 	mkdir -p validation/logs
 	find validation/logs -mindepth 1 -delete 2>/dev/null || true
@@ -820,6 +1142,8 @@ else
 	mkdir -p validation/logs
 	touch validation/.ai-validation-owned
 fi
+
+ensure_validate_wrapper
 
 if command -v git >/dev/null 2>&1; then
   git status --porcelain --untracked-files=all -- . ':!validation/**' | sort > "${PRE_GENERATE_STATUS_FILE}" 2>/dev/null || true
@@ -929,7 +1253,8 @@ GENERATE_SUCCESS=false
 for attempt in 1 2; do
   echo "Validation harness ${HARNESS_MODE} attempt ${attempt}/2"
   if cat "${GENERATE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${GENERATE_OUTPUT_FILE}" 2> >(tee -a "${GENERATE_LOG_FILE}" >&2); then
-    if [ -f validation/validate.sh ]; then
+    ensure_validate_wrapper
+    if is_validation_harness_runnable; then
       GENERATE_SUCCESS=true
       break
     fi
@@ -940,7 +1265,7 @@ for attempt in 1 2; do
 done
 
 if [ "${GENERATE_SUCCESS}" != "true" ]; then
-  local_failure_summary="Codex did not generate a runnable validation/validate.sh harness."
+  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum)."
   post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for generation logs."
   set_tracking_phase_label "ai:validation-failed"
   write_result_files "error" "Validation harness generation failed" "${local_failure_summary}"
@@ -966,6 +1291,15 @@ if command -v git >/dev/null 2>&1; then
 fi
 
 find validation -type f -name '*.sh' -exec chmod +x {} +
+
+if ! ensure_validation_harness_not_tracked; then
+  local_failure_summary="${CANONICAL_VALIDATE_HARNESS_REL} became tracked/staged after harness generation."
+  post_tracking_comment "## ⚠️ Runtime validation harness tracking violation\n\n${local_failure_summary}\n\nValidation harness files must remain transient and untracked."
+  set_tracking_phase_label "ai:validation-failed"
+  write_result_files "error" "Validation harness tracking violation" "${local_failure_summary}"
+  tg_notify "Validation harness tracking violation after generation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+  exit 1
+fi
 
 
 # ---------------------------------------------------------------
@@ -1003,7 +1337,20 @@ VALIDATION_IDLE_KILLED=0
 
 set +e
 # Run validation in background, tee output to log file
-bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1 &
+if [ -f validation/validate.sh ]; then
+  if grep -q 'scripts/validate_driver.sh' validation/validate.sh && [ ! -f scripts/validate_driver.sh ]; then
+    ensure_runtime_validation_driver
+    GENERATED_VALIDATE_SCRIPT_PATH="${VALIDATION_RUNNER_FILE}"
+    "${VALIDATION_RUNNER_FILE}" > "${VALIDATION_LOG_FILE}" 2>&1 &
+  else
+    GENERATED_VALIDATE_SCRIPT_PATH="validation/validate.sh"
+    bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1 &
+  fi
+else
+  ensure_runtime_validation_driver
+  GENERATED_VALIDATE_SCRIPT_PATH="${VALIDATION_RUNNER_FILE}"
+  "${VALIDATION_RUNNER_FILE}" > "${VALIDATION_LOG_FILE}" 2>&1 &
+fi
 VALIDATION_PID=$!
 
 # Monitor the log file for activity; kill if idle too long
@@ -1118,9 +1465,9 @@ if [ "${RESULT_KIND}" != "pass" ] || [ "${VALIDATION_EXIT}" -ne 0 ]; then
 		(.passed_tests > 0) and
 		(.failed_tests == 0) and
 		(.passed_tests == .total_tests) and
-		((.failures | length == 0) or ((.failures | length == 1) and (.failures[0].test == "validate.sh:unexpected_error")))
+		((.failures | length == 0) or ((.failures | length == 1) and ((.failures[0].test // "") | endswith(":unexpected_error"))))
 	' "${VALIDATION_RESULT_FILE}" >/dev/null 2>&1; then
-		echo "::warning::Harness exited ${VALIDATION_EXIT} with result '${RESULT_KIND}' but all ${PASSED_TESTS}/${TOTAL_TESTS} tests passed (failed_tests=0). Overriding to pass (likely scripting bug in generated validate.sh)."
+		echo "::warning::Harness exited ${VALIDATION_EXIT} with result '${RESULT_KIND}' but all ${PASSED_TESTS}/${TOTAL_TESTS} tests passed (failed_tests=0). Overriding to pass (likely scripting bug in generated harness script)."
 		# Strip the synthetic unexpected_error failure entry and fix result
 		jq '.result = "pass" | .failures = [] | .phase = "runtime_validation"' "${VALIDATION_RESULT_FILE}" > "${VALIDATION_RESULT_FILE}.tmp"
 		mv "${VALIDATION_RESULT_FILE}.tmp" "${VALIDATION_RESULT_FILE}"
