@@ -116,7 +116,7 @@ compute_rb_token_budget_hint() {
   local prompt_file="$1"
   local model_slug="$2"
   local catalog_path model_meta prompt_bytes prompt_tokens context_window
-  local effective_percent_raw effective_context usage_percent
+  local effective_percent_raw effective_context remaining_tokens
 
   prompt_bytes="$(wc -c < "${prompt_file}" 2>/dev/null | tr -d '[:space:]' || true)"
   if ! [[ "${prompt_bytes}" =~ ^[0-9]+$ ]]; then
@@ -158,8 +158,12 @@ compute_rb_token_budget_hint() {
     fi
   fi
 
-  usage_percent="$(awk -v t="${prompt_tokens}" -v c="${effective_context}" 'BEGIN { printf "%.2f", (t / c) * 100.0 }')"
-  echo "estimated_tokens=${prompt_tokens}; effective_context=${effective_context}; estimated_usage_percent=${usage_percent}%"
+  remaining_tokens=$(( effective_context - prompt_tokens ))
+  if [ "${remaining_tokens}" -lt 0 ]; then
+    remaining_tokens=0
+  fi
+
+  echo "${remaining_tokens} (approx remaining context tokens; advisory only)"
 }
 
 # -----------------------------------------------------------
