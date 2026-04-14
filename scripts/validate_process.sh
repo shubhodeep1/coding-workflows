@@ -668,6 +668,11 @@ cleanup_runtime_containers()
 
 ensure_validate_wrapper()
 {
+	# Only generate the wrapper if the canonical driver exists.
+	# When absent, the runtime fallback driver will be used instead.
+	if [ ! -f scripts/validate_driver.sh ]; then
+		return 0
+	fi
 	mkdir -p validation
 	cat > validation/validate.sh <<'EOF'
 #!/usr/bin/env bash
@@ -707,36 +712,33 @@ run_preflight_checks()
 		return 1
 	fi
 
-	if [ ! -f validation/validate.sh ]; then
-		echo "Missing validation/validate.sh" >> "${PRE_FLIGHT_LOG_FILE}"
-		PRE_FLIGHT_STATUS="fail"
-		_emit_preflight_tail "validation/validate.sh missing"
-		return 1
-	fi
-
-	if ! bash -n validation/validate.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
-		echo "Shell syntax check failed: validation/validate.sh" >> "${PRE_FLIGHT_LOG_FILE}"
-		PRE_FLIGHT_STATUS="fail"
-		_emit_preflight_tail "bash -n failed for validation/validate.sh"
-		return 1
-	fi
-
-	if ! grep -q 'scripts/validate_driver.sh' validation/validate.sh; then
-		echo "validation/validate.sh must delegate to scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
-		PRE_FLIGHT_STATUS="fail"
-		_emit_preflight_tail "validation/validate.sh is not a thin wrapper"
-		return 1
-	fi
-
-	if [ -f scripts/validate_driver.sh ]; then
-		if ! bash -n scripts/validate_driver.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
-			echo "Shell syntax check failed: scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+	# Validate legacy wrapper only if it exists. Canonical artifact mode
+	# (validate.env + tests/00_canary.sh + compose) does not require it.
+	if [ -f validation/validate.sh ]; then
+		if ! bash -n validation/validate.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+			echo "Shell syntax check failed: validation/validate.sh" >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
-			_emit_preflight_tail "bash -n failed for scripts/validate_driver.sh"
+			_emit_preflight_tail "bash -n failed for validation/validate.sh"
 			return 1
 		fi
-	else
-		echo "scripts/validate_driver.sh not present; allowing runtime fallback driver selection" >> "${PRE_FLIGHT_LOG_FILE}"
+
+		if ! grep -q 'scripts/validate_driver.sh' validation/validate.sh; then
+			echo "validation/validate.sh must delegate to scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+			PRE_FLIGHT_STATUS="fail"
+			_emit_preflight_tail "validation/validate.sh is not a thin wrapper"
+			return 1
+		fi
+
+		if [ -f scripts/validate_driver.sh ]; then
+			if ! bash -n scripts/validate_driver.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+				echo "Shell syntax check failed: scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+				PRE_FLIGHT_STATUS="fail"
+				_emit_preflight_tail "bash -n failed for scripts/validate_driver.sh"
+				return 1
+			fi
+		else
+			echo "scripts/validate_driver.sh not present; allowing runtime fallback driver selection" >> "${PRE_FLIGHT_LOG_FILE}"
+		fi
 	fi
 
 	if [ ! -f validation/validate.env ]; then
@@ -1040,7 +1042,8 @@ fi
 
 if [ "${VALIDATION_CYCLE}" -gt 1 ] \
 	&& [ -d validation ] \
-	&& [ -f validation/.ai-validation-owned ]; then
+	&& [ -f validation/.ai-validation-owned ] \
+	&& is_validation_harness_runnable; then
 	HARNESS_MODE="fix"
 	mkdir -p validation/logs
 	find validation/logs -mindepth 1 -delete 2>/dev/null || true
