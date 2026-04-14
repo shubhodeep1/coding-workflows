@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\n/answer\n\nANSWERS:\nQ1: A\n\nRATIONALE:\nQ1: I found no occurrences of `ENABLE_STALL_JUDGE`, `STALL_JUDGE_TRIGGER_COUNT`, or `run_stall_judge` in the current repository, so the docs should follow implemented behavior only. This keeps documentation aligned with actual code and avoids introducing names before implementation exists.",
+  "fingerprint": "60aea7a362e19349afc549fd0bcb7e1237abad6ba92ba2772aa2456feda6f078",
+  "lineage": {
+    "issue_number": 953,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24405988521",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24405988521",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/953"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20260414145337_71e996de35",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 953,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24405988521"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #953",
+  "timestamps": {
+    "created_at": "2026-04-14T14:53:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
