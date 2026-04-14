@@ -89,6 +89,7 @@ jobs:
             echo "ISSUE_SUMMARY_PROMPT_FILE=${RUNTIME_DIR}/issue_summary_prompt.txt"
             echo "ISSUE_SUMMARY_FILE=${RUNTIME_DIR}/issue_summary.md"
             echo "IMPLEMENTATION_CONTEXT_FILE=${RUNTIME_DIR}/implementation_context.txt"
+            echo "DB_CONTRACTS_RELEVANT_FILE=${RUNTIME_DIR}/db_contracts_relevant.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
             echo "PLAN_FILE=${RUNTIME_DIR}/implementation_plan.txt"
@@ -244,7 +245,7 @@ jobs:
             done; return 1
           }
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh extract_db_contracts.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -547,6 +548,29 @@ jobs:
             | map(select(.user.type == "User" and ((.body // "") | test("(?i)^\\s*/answer\\b"))))
             | if length == 0 then "None" else .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n" end' "${ISSUE_COMMENTS_FILE}" > "${CLARIFICATION_ANSWERS_FILE}"
 
+      - name: Extract relevant DB contracts
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+
+          ISSUE_CONTEXT_FILE="${RUNTIME_DIR}/issue_body_db_context.txt"
+
+          printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_CONTEXT_FILE}"
+
+          if ! bash scripts/extract_db_contracts.sh "${DB_CONTRACTS_RELEVANT_FILE}" "${ISSUE_CONTEXT_FILE}" "${CLARIFICATION_ANSWERS_FILE}" "${PLAN_FILE}"; then
+            {
+              echo "=== DB CONTRACTS (relevant) ==="
+              echo "[marker] failed to extract DB contracts; continuing without snippets."
+            } > "${DB_CONTRACTS_RELEVANT_FILE}" || true
+          fi
+
+          if [ ! -s "${DB_CONTRACTS_RELEVANT_FILE}" ]; then
+            {
+              echo "=== DB CONTRACTS (relevant) ==="
+              echo "[marker] DB contract extraction produced no output."
+            } > "${DB_CONTRACTS_RELEVANT_FILE}" || true
+          fi
+
       - name: Build implementation context
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -559,6 +583,8 @@ jobs:
             echo
             echo "APPROVED IMPLEMENTATION PLAN"
             cat "${PLAN_FILE}"
+            echo
+            cat "${DB_CONTRACTS_RELEVANT_FILE}"
             echo
             echo "ISSUE COMMENTS"
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
