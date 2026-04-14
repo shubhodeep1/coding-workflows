@@ -5074,12 +5074,11 @@ ${RB_FIX_DESC}
               git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
             fi
 
-            # Increment retry counter only when a fix attempt was actually made.
-            if [ "${RB_FOLLOWUP_REFUSED}" != "true" ]; then
-              jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
-                "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-              REVIEW_BLOCKED_STATE_CHANGED=true
-            fi
+            # Increment retry counter for every handling pass so refused follow-ups
+            # do not re-trigger indefinitely without reaching a final decision.
+            jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
+              "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+            REVIEW_BLOCKED_STATE_CHANGED=true
           fi
           fi
           ;;
