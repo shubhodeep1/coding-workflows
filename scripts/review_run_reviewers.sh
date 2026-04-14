@@ -50,6 +50,9 @@ PROMPT_RUNTIME_CONTEXT_HINT="$(printf '%s\n' \
   'Useful files include git_status.txt, git_diff_stat.txt, shallow_tree.txt, environment_sorted.txt, recent_commits.txt, branches.txt, workflow_snapshot.yml, and run_logs_best_effort.txt.' \
   "Example command: cat ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
 
+ORIGINAL_ISSUE_UNAVAILABLE_MARKER="${ORIGINAL_ISSUE_UNAVAILABLE_MARKER:-UNAVAILABLE: linked closing issue body could not be resolved.}"
+APPROVED_PLAN_UNAVAILABLE_MARKER="${APPROVED_PLAN_UNAVAILABLE_MARKER:-UNAVAILABLE: approved plan could not be resolved.}"
+
 cat > "${REVIEWER_PROMPT_BODY_FILE}" <<__REVIEWER_PROMPT__
 SYMBOL-LEVEL DIFF SUMMARY
 A compact symbol-level summary of what changed is available at:
@@ -463,6 +466,20 @@ mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 {
   cat ./pre_assembled_static.txt
   echo
+  echo "=== ORIGINAL ISSUE ==="
+  if [ -s "${ORIGINAL_ISSUE_FILE:-}" ]; then
+    cat "${ORIGINAL_ISSUE_FILE}"
+  else
+    echo "${ORIGINAL_ISSUE_UNAVAILABLE_MARKER}"
+  fi
+  echo
+  echo "=== APPROVED PLAN ==="
+  if [ -s "${APPROVED_PLAN_FILE:-}" ]; then
+    cat "${APPROVED_PLAN_FILE}"
+  else
+    echo "${APPROVED_PLAN_UNAVAILABLE_MARKER}"
+  fi
+  echo
   echo "=== MEMORY CONTEXT (REVIEWER) ==="
   if [ -s "${MEMORY_CONTEXT_FILE}" ]; then
     cat "${MEMORY_CONTEXT_FILE}"
@@ -477,6 +494,9 @@ mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
   echo
   cat "${REVIEWER_PROMPT_BODY_FILE}"
 } > "${REVIEWER_PROMPT_FILE}"
+
+echo "Reviewer prompt bytes: $(wc -c < "${REVIEWER_PROMPT_FILE}")"
+echo "Reviewer prompt sha256: $(sha256sum "${REVIEWER_PROMPT_FILE}" | awk '{print $1}')"
 
 run_reviewer() {
   local model="$1"
