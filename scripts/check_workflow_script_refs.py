@@ -66,10 +66,13 @@ def check_workflows(repo_root: pathlib.Path) -> list[str]:
 	if not scripts_dir.is_dir():
 		errors.append(f"scripts directory does not exist: {scripts_dir}")
 		return errors
-	for yml in sorted(workflow_dir.glob("*.yml")):
+	workflow_files = sorted(
+		set(workflow_dir.glob("*.yml")) | set(workflow_dir.glob("*.yaml"))
+	)
+	for yml in workflow_files:
 		try:
-			text = yml.read_text()
-		except OSError as exc:
+			text = yml.read_text(encoding="utf-8")
+		except (OSError, UnicodeDecodeError) as exc:
 			errors.append(f"{yml.name}: cannot read ({exc})")
 			continue
 		refs = extract_refs(text)
@@ -91,8 +94,8 @@ def check_paths(paths: Iterable[pathlib.Path], scripts_dir: pathlib.Path) -> lis
 	errors: list[str] = []
 	for p in paths:
 		try:
-			text = p.read_text()
-		except OSError as exc:
+			text = p.read_text(encoding="utf-8")
+		except (OSError, UnicodeDecodeError) as exc:
 			errors.append(f"{p}: cannot read ({exc})")
 			continue
 		for ref in sorted(extract_refs(text)):
