@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Add post-Codex implement failure diagnosis + fix-up issue recovery\",\"issues\":[{\"id\":\"implement-diagnose-prompt-plumbing\",\"title\":\"Add mode-implement-diagnose prompt and wire prompt availability checks\",\"priority\":1},{\"id\":\"post-codex-error-capture\",\"title\":\"Aggregate post-Codex validation/protect/commit diagnostics into a shared capture file\",\"priority\":1},{\"id\":\"post-codex-diagnose-fixup-step\",\"title\":\"Add diagnose-and-create-fix-up cleanup step for post-Codex failures and enforce implementation-failed labeling\",\"priority\":1},{\"id\":\"post-codex-recovery-tests\",\"title\":\"Add automated tests for implement diagnose contract, capture aggregation, fix-up creation, and idempotency\",\"priority\":2},{\"id\":\"docs-post-codex-recovery\",\"title\":\"Document post-Codex implement failure recovery path in README (and agents.md if applicable)\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"implement-diagnose-prompt-plumbing\",\"to\":\"post-codex-diagnose-fixup-step\"},{\"from\":\"post-codex-error-capture\",\"to\":\"post-codex-diagnose-fixup-step\"},{\"from\":\"implement-diagnose-prompt-plumbing\",\"to\":\"post-codex-recovery-tests\"},{\"from\":\"post-codex-error-capture\",\"to\":\"post-codex-recovery-tests\"},{\"from\":\"post-codex-diagnose-fixup-step\",\"to\":\"post-codex-recovery-tests\"},{\"from\":\"post-codex-diagnose-fixup-step\",\"to\":\"docs-post-codex-recovery\"}]}",
+  "fingerprint": "32200894a9dd326f06ccb1e13ceb4fad34774e7607adc83ce2368aeaae5768ee",
+  "lineage": {
+    "issue_number": 829,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24375428654",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24375428654",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260414011640_8877219f23",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 829,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24375428654"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Decomposed project 'Add post-Codex implement failure diagnosis + fix-up issue recovery' into 5 issues (tracking #829)",
+  "timestamps": {
+    "created_at": "2026-04-14T01:16:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
