@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":870,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/870\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/890\",\"pr_number\":890,\"branch\":\"ai/issue-870\",\"run_id\":\"24379494637\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/24379494637\",\"changed_files\":[\"README.md\",\"docs/orchestrator-integration-branch-rebuild-runbook.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "f372a601ae7eb771a3aa4ecdaa37c608667e8f3dbf62d3801545576dc34f050b",
+  "lineage": {
+    "issue_number": 870,
+    "parent_ids": [],
+    "pr_number": 890,
+    "run_id": "24379494637",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24379494637",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/890"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260414041231_be5ca41c5a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 870,
+    "level": "run",
+    "pr_number": 890,
+    "run_id": "24379494637"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #870: https://github.com/shubhodeep1/coding-workflows/pull/890",
+  "timestamps": {
+    "created_at": "2026-04-14T04:12:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
