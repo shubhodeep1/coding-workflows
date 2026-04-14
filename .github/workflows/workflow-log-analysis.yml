@@ -161,6 +161,7 @@ jobs:
         id: analyze
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
           THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || '' }}
           BATCH_API_DISABLED: ${{ vars.BATCH_API_DISABLED || 'false' }}
           BATCH_API_PROVIDER: ${{ vars.BATCH_API_PROVIDER || 'auto' }}

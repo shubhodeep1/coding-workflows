@@ -31,6 +31,7 @@ jobs:
       ISSUE_URL: ${{ github.event.issue.html_url }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'medium' }}
+      OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
     steps:
       - name: Log trigger context
@@ -119,7 +120,7 @@ jobs:
             done; return 1
           }
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py semantic_cache.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -663,12 +664,13 @@ jobs:
           {
             cat ./pre_assembled_static.txt
             echo
-            cat "${RUNTIME_DIR}/memory_context.txt"
-            echo
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
             bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+            echo
+            echo "=== AI MEMORY CONTEXT ==="
+            cat "${RUNTIME_DIR}/memory_context.txt"
             echo
             echo "=== ISSUE CONTEXT ==="
             cat "${ISSUE_CONTEXT_FILE}"

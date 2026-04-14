@@ -11,10 +11,13 @@ import tempfile
 import urllib.error
 from datetime import date, datetime, timezone
 from pathlib import Path
+import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ANALYZER_PATH = REPO_ROOT / "scripts" / "analyze_workflow_logs.py"
+if str(REPO_ROOT) not in sys.path:
+	sys.path.insert(0, str(REPO_ROOT))
 
 
 spec = importlib.util.spec_from_file_location("analyze_workflow_logs", ANALYZER_PATH)
@@ -109,6 +112,8 @@ def test_build_parser_batch_defaults_from_env():
 def test_call_openrouter_builds_payload_and_parses_response():
 	captured = {"url": "", "payload": {}, "headers": []}
 	orig_urlopen = analyzer.urllib.request.urlopen
+	old_cache_disabled = os.environ.get("OPENROUTER_PROMPT_CACHE_DISABLED")
+	os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = "false"
 
 	class FakeResponse:
 		def __init__(self, body: str):
@@ -132,7 +137,12 @@ def test_call_openrouter_builds_payload_and_parses_response():
 			json.dumps(
 				{
 					"choices": [{"message": {"content": "# report"}}],
-					"usage": {"prompt_tokens": 11, "completion_tokens": 22, "total_tokens": 33},
+					"usage": {
+						"prompt_tokens": 11,
+						"completion_tokens": 22,
+						"total_tokens": 33,
+						"prompt_tokens_details": {"cache_write_tokens": 7, "cached_tokens": 5},
+					},
 				}
 			)
 		)
@@ -151,18 +161,32 @@ def test_call_openrouter_builds_payload_and_parses_response():
 		)
 	finally:
 		analyzer.urllib.request.urlopen = orig_urlopen
+		if old_cache_disabled is None:
+			os.environ.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
+		else:
+			os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = old_cache_disabled
 
 	assert content == "# report\n"
-	assert usage == {"prompt_tokens": 11, "completion_tokens": 22, "total_tokens": 33}
+	assert usage == {
+		"prompt_tokens": 11,
+		"completion_tokens": 22,
+		"total_tokens": 33,
+		"cache_creation_input_tokens": 7,
+		"cache_read_input_tokens": 5,
+		"cache_breakpoint_enabled": True,
+		"cache_breakpoint_fallback_retry": False,
+	}
 	assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
 	assert captured["payload"]["model"] == "openai/gpt-5.3-codex"
 	assert captured["payload"]["max_tokens"] == 123
 	assert captured["payload"]["reasoning"] == "high"
+	assert captured["payload"]["messages"][0]["cache_control"] == {"type": "ephemeral"}
 	assert any(k.lower() == "authorization" and v == "Bearer test-key" for k, v in captured["headers"])
-
 
 def test_call_openrouter_omits_reasoning_when_thinking_level_empty_or_none():
 	orig_urlopen = analyzer.urllib.request.urlopen
+	old_cache_disabled = os.environ.get("OPENROUTER_PROMPT_CACHE_DISABLED")
+	os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = "false"
 
 	class FakeResponse:
 		def __init__(self, body: str):
@@ -200,6 +224,7 @@ def test_call_openrouter_omits_reasoning_when_thinking_level_empty_or_none():
 		assert content == "# ok\n"
 		assert usage is None
 		assert "reasoning" not in captured_payload
+		assert captured_payload["messages"][0]["cache_control"] == {"type": "ephemeral"}
 
 	try:
 		run_case("")
@@ -207,7 +232,10 @@ def test_call_openrouter_omits_reasoning_when_thinking_level_empty_or_none():
 		run_case(None)
 	finally:
 		analyzer.urllib.request.urlopen = orig_urlopen
-
+		if old_cache_disabled is None:
+			os.environ.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
+		else:
+			os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = old_cache_disabled
 
 def test_call_openrouter_http_error_is_reported():
 	orig_urlopen = analyzer.urllib.request.urlopen
@@ -238,6 +266,178 @@ def test_call_openrouter_http_error_is_reported():
 			assert "HTTP 429" in str(exc)
 	finally:
 		analyzer.urllib.request.urlopen = orig_urlopen
+
+
+def test_call_openrouter_skips_breakpoint_for_gemini_models():
+	captured_payload: dict[str, object] = {}
+	orig_urlopen = analyzer.urllib.request.urlopen
+	old_cache_disabled = os.environ.get("OPENROUTER_PROMPT_CACHE_DISABLED")
+	os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = "false"
+
+	class FakeResponse:
+		def __init__(self, body: str):
+			self._body = body
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb):
+			return False
+
+		def read(self) -> bytes:
+			return self._body.encode("utf-8")
+
+	def fake_urlopen(request, timeout=0):
+		del timeout
+		captured_payload.clear()
+		captured_payload.update(json.loads(request.data.decode("utf-8")))
+		return FakeResponse(json.dumps({"choices": [{"message": {"content": "# ok"}}]}))
+
+	analyzer.urllib.request.urlopen = fake_urlopen
+	try:
+		content, usage = analyzer.call_openrouter(
+			api_key="test-key",
+			model="google/gemini-2.5-pro",
+			messages=[{"role": "user", "content": "hello"}],
+			temperature=0.0,
+			max_tokens=123,
+			base_url="https://openrouter.ai/api/v1",
+			request_timeout_seconds=17,
+		)
+	finally:
+		analyzer.urllib.request.urlopen = orig_urlopen
+		if old_cache_disabled is None:
+			os.environ.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
+		else:
+			os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = old_cache_disabled
+
+	assert content == "# ok\n"
+	assert usage is None
+	assert "cache_control" not in captured_payload["messages"][0]
+
+
+def test_call_openrouter_disables_breakpoint_when_cache_switch_enabled():
+	captured_payload: dict[str, object] = {}
+	orig_urlopen = analyzer.urllib.request.urlopen
+	old_cache_disabled = os.environ.get("OPENROUTER_PROMPT_CACHE_DISABLED")
+	os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = "true"
+
+	class FakeResponse:
+		def __init__(self, body: str):
+			self._body = body
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb):
+			return False
+
+		def read(self) -> bytes:
+			return self._body.encode("utf-8")
+
+	def fake_urlopen(request, timeout=0):
+		del timeout
+		captured_payload.clear()
+		captured_payload.update(json.loads(request.data.decode("utf-8")))
+		return FakeResponse(json.dumps({"choices": [{"message": {"content": "# ok"}}], "usage": {"prompt_tokens": 3}}))
+
+	analyzer.urllib.request.urlopen = fake_urlopen
+	try:
+		content, usage = analyzer.call_openrouter(
+			api_key="test-key",
+			model="openai/gpt-5.3-codex",
+			messages=[{"role": "user", "content": "hello"}],
+			temperature=0.0,
+			max_tokens=123,
+			base_url="https://openrouter.ai/api/v1",
+			request_timeout_seconds=17,
+		)
+	finally:
+		analyzer.urllib.request.urlopen = orig_urlopen
+		if old_cache_disabled is None:
+			os.environ.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
+		else:
+			os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = old_cache_disabled
+
+	assert content == "# ok\n"
+	assert usage is not None
+	assert usage["cache_breakpoint_enabled"] is False
+	assert "cache_control" not in captured_payload["messages"][0]
+
+
+def test_call_openrouter_retries_without_breakpoint_on_cache_control_error():
+	payloads: list[dict[str, object]] = []
+	orig_urlopen = analyzer.urllib.request.urlopen
+	old_cache_disabled = os.environ.get("OPENROUTER_PROMPT_CACHE_DISABLED")
+	os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = "false"
+
+	class FakeResponse:
+		def __init__(self, body: str):
+			self._body = body
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb):
+			return False
+
+		def read(self) -> bytes:
+			return self._body.encode("utf-8")
+
+	def fake_urlopen(request, timeout=0):
+		del timeout
+		payload = json.loads(request.data.decode("utf-8"))
+		payloads.append(payload)
+		if len(payloads) == 1:
+			raise urllib.error.HTTPError(
+				url=request.full_url,
+				code=422,
+				msg="Unprocessable Entity",
+				hdrs=None,
+				fp=io.BytesIO(b'{"error":"cache_control is not supported"}'),
+			)
+		return FakeResponse(
+			json.dumps(
+				{
+					"choices": [{"message": {"content": "# ok"}}],
+					"usage": {
+						"prompt_tokens": 8,
+						"completion_tokens": 4,
+						"total_tokens": 12,
+						"cache_creation_input_tokens": 2,
+						"cache_read_input_tokens": 1,
+					},
+				}
+			)
+		)
+
+	analyzer.urllib.request.urlopen = fake_urlopen
+	try:
+		content, usage = analyzer.call_openrouter(
+			api_key="test-key",
+			model="openai/gpt-5.3-codex",
+			messages=[{"role": "user", "content": "hello"}],
+			temperature=0.0,
+			max_tokens=64,
+			base_url="https://openrouter.ai/api/v1",
+			request_timeout_seconds=10,
+		)
+	finally:
+		analyzer.urllib.request.urlopen = orig_urlopen
+		if old_cache_disabled is None:
+			os.environ.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
+		else:
+			os.environ["OPENROUTER_PROMPT_CACHE_DISABLED"] = old_cache_disabled
+
+	assert content == "# ok\n"
+	assert len(payloads) == 2
+	assert payloads[0]["messages"][0]["cache_control"] == {"type": "ephemeral"}
+	assert "cache_control" not in payloads[1]["messages"][0]
+	assert usage is not None
+	assert usage["cache_creation_input_tokens"] == 2
+	assert usage["cache_read_input_tokens"] == 1
+	assert usage["cache_breakpoint_enabled"] is True
+	assert usage["cache_breakpoint_fallback_retry"] is True
 
 
 def test_batch_capability_decision_supported_with_provider_hint():
