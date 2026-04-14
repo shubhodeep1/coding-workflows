@@ -401,17 +401,33 @@ case "${RB_ACTION}" in
         git config user.name "codex-bot"
         git config user.email "codex@users.noreply.github.com"
 
-        # Clean up workflow-fetched artifacts before committing
-        if [[ "${REPOSITORY}" != *"/coding-workflows" ]]; then
-          rm -f ./pre_assembled_static.txt
-          rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-          rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
-          rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py
-          rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh
-          rm -rf ai-memory
-          rm -rf .serena
-          rm -rf prompts
-        fi
+        # Clean up workflow-fetched artifacts before committing.
+        #
+        # Gate on the git origin URL rather than ${REPOSITORY}: the env
+        # var (and GITHUB_REPOSITORY) is user-controllable and any test
+        # harness that sets e.g. REPOSITORY=owner/repo while running this
+        # script as a subprocess from the real coding-workflows checkout
+        # would trip this block and rm the tracked source files under
+        # that checkout (see PRs #917/#931 for the incident in the sibling
+        # orchestrate_poll_process.sh cleanup block). The remote URL
+        # reflects the actual checkout on disk, not a user-overridable
+        # env var. Unknown/empty URL is fail-closed: skip cleanup.
+        _rb_origin_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+        case "${_rb_origin_url}" in
+          ""|*/coding-workflows|*/coding-workflows.git|*/coding-workflows/|*/coding-workflows.git/)
+            : # self-repo or unknown — keep files; consumer-repo-only cleanup
+            ;;
+          *)
+            rm -f ./pre_assembled_static.txt
+            rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
+            rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py
+            rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh
+            rm -rf ai-memory
+            rm -rf .serena
+            ;;
+        esac
+        unset _rb_origin_url
 
         if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
           git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
@@ -514,4 +530,3 @@ ${RB_FIX_DESC}"
     echo "::warning::Unknown review-blocked judge action: ${RB_ACTION} — falling back to manual intervention."
     ;;
 esac
-

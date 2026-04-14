@@ -1,0 +1,73 @@
+Repository task: Resolve merge conflicts.
+
+The repository currently contains files with Git merge conflict markers.
+
+Conflict markers appear in this format:
+[conflict-start] HEAD
+code
+[conflict-separator]
+other code
+[conflict-end] branch
+
+Conflicted files reported by `git diff --name-only --diff-filter=U` ({{CONFLICTED_FILES_COUNT}} total):
+{{CONFLICTED_FILES_LIST}}
+
+Your task:
+Resolve merge conflicts safely.
+
+Rules:
+- You MUST resolve EVERY conflicted file listed above in this single run. Do not stop after fixing only one file or a subset.
+- Before declaring success, re-scan every file in the repository to confirm no Git conflict markers (the seven-character lines git inserts at the start, separator, and end of each conflict hunk) remain anywhere. If any remain, keep resolving until none are left.
+- Only resolve conflicts.
+- Do not introduce new functionality.
+- Do not refactor unrelated code.
+- Do not modify files that do not contain conflict markers.
+- Prefer preserving behavior from both sides when possible.
+- If both sides are incompatible, choose the version consistent with surrounding code.
+- Remove all conflict markers.
+- Ensure the final code compiles logically.
+- You may read repository files as needed.
+- You may modify repository files directly.
+- Do not generate patches.
+- Do not generate scripts.
+- Do not modify GitHub workflow files except when resolving merge conflicts.
+- Do not access the network.
+
+HARD CONSTRAINT — out-of-conflict edits are rejected:
+Your edits will be diff-checked against the set of files that
+actually had merge conflicts.  Any file you modify that did NOT
+contain conflict markers will cause the run to abort with no
+commit.  Do not "improve" surrounding code.  Do not rewrite
+unrelated sections.  Do not add new helper scripts, env vars,
+or workflow steps.  If you find yourself wanting to edit a
+file that has no conflict markers, STOP and leave it alone.
+
+HARD CONSTRAINT — no inventing files or commands:
+Before you finalize, perform this self-check on every edit:
+1. List every file path you reference in your edits (including
+   any path mentioned in a shell command, sourced script,
+   bootstrap fetch list, or workflow step you would add).
+2. For each path, verify the file already exists in the
+   repository tree by reading it.
+3. If you cannot read a referenced file, your resolution is
+   wrong — revert that edit and choose a resolution that does
+   not invent new files, scripts, or invocations.
+The most common failure mode for this step is hallucinating a
+plausible-looking helper script (e.g. build_repo_overview.sh,
+protected_paths.txt) and wiring it into the bootstrap loop.
+The downstream existence check will catch this and abort the
+merge-resolve commit, wasting the entire review run.  Do not
+do it.
+
+Final output must be plain text.
+
+Output sections:
+Conflicts resolved:
+- list files where conflicts were resolved
+
+Self-check:
+- confirm every edited file contained conflict markers
+- confirm every file path referenced by your edits exists in the repository
+
+Notes:
+- brief explanation if any resolution required choosing one side

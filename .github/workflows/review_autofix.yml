@@ -199,40 +199,22 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          # Required bootstrap scripts: must be available on ${script_ref}
-          # OR the main branch.  When a required script is missing from
-          # both refs — which typically means review_autofix.yml was
-          # modified to reference a script that never landed (e.g.
-          # hallucinated by the merge-conflict resolver) — abort with a
-          # clear, actionable error rather than letting bash -e propagate
-          # an opaque "Process completed with exit code 1" that masks the
-          # root cause and cascades into unrelated "unbound variable"
-          # errors in downstream cleanup steps.
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh"
-          # Optional bootstrap scripts: allowed to be missing from both
-          # refs.  The bootstrap emits a warning and continues — callers
-          # that depend on these must themselves tolerate absence.  Keep
-          # this list empty unless a genuinely optional helper is added;
-          # the default should always be "required".
-          OPTIONAL_BOOTSTRAP_SCRIPTS=""
-          for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh; do
+            # Defensive: when neither fetch succeeds we MUST NOT abort the
+            # bootstrap with `set -e`.  A single missing helper script used
+            # to crash the whole job (PR #912 hallucination), which then
+            # cascaded into "unbound variable" failures across every later
+            # step.  Downgrade both fetch failures to warnings; downstream
+            # steps that actually need the missing file will fail with a
+            # specific error pointing at that file, not a stack of unbound
+            # variables.
             if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
               if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
-                echo "::error::Required bootstrap script '${f}' is missing from both ${script_ref} and main in ${wf_source}. This usually means review_autofix.yml references a file that was never committed (common cause: a hallucinated [ai-merge-resolve] commit added a new bootstrap entry without its corresponding script). Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the current contents of scripts/ on main."
-                exit 1
-              fi
-            fi
-            chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
-          done
-          for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
-            if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
-              if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
-                echo "::warning::Optional bootstrap script '${f}' not available on ${script_ref} or main; downstream features relying on this helper will be unavailable."
+                echo "::warning::${f} not found on main either; downstream steps that need it will fail with a specific error."
+                rm -f "${SUPPORT_SCRIPTS_DIR}/${f}"
                 continue
               fi
             fi
@@ -292,6 +274,23 @@ jobs:
               echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
               _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            fi
+          fi
+          # Conflict resolver prompt template. Extracted from an inline heredoc
+          # in the "Prepare merge-conflict resolver prompt and pre-snapshot"
+          # step so that run: block stays under GitHub Actions' 21,000-char
+          # template-expression limit. Missing file is a hard error when the
+          # conflict resolver actually runs; fetched here so consumer repos
+          # that don't ship the file themselves still get it from stable/main.
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
+            if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/conflict-resolver.txt?ref=${script_ref}"; then
+              echo "::warning::conflict-resolver.txt not found on ${script_ref}; falling back to main"
+              if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/conflict-resolver.txt?ref=main"; then
+                echo "::warning::conflict-resolver.txt not found on main either; downstream conflict resolution will fail with a specific missing-template error."
+                rm -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+              fi
             fi
           fi
 
@@ -1099,6 +1098,7 @@ jobs:
           check_soft_file "${SUPPORT_CODEX_INSTRUCTIONS_FILE}"
           check_soft_file "${SUPPORT_AGENTS_FILE}"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+          check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           check_soft_file "${LAST_RUN_DIFF_FILE}"
           check_soft_file "${LAST_RUN_CHANGED_FILES_FILE}"
@@ -1806,14 +1806,22 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
+              # Defensive: see the longer comment on the matching loop in
+              # the "Fetch support scripts" step above.  Both fallback
+              # branches are guarded so a missing file degrades to a
+              # warning rather than aborting the whole job.
               if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/scripts/${f}?ref=main"
+                if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
+                  echo "::warning::${f} not found on main either; downstream steps that need it will fail with a specific error."
+                  rm -f "${SUPPORT_SCRIPTS_DIR}/${f}"
+                  continue
+                fi
               fi
               chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
             fi
@@ -1949,7 +1957,14 @@ jobs:
           fi
           rm -rf "${UNTRACKED_BACKUP}"
 
-      - name: Resolve merge conflicts with Codex
+      - name: Prepare merge-conflict resolver prompt and pre-snapshot
+        # Split from "Run Codex resolver, validate, stage, commit" below so
+        # that neither run: block exceeds GitHub Actions' 21,000-char
+        # template-expression limit. A single combined step used to weigh in
+        # at 24.6 KB and silently broke review_autofix.yml's parseability
+        # from internal-review.yml. Both halves share the identical if:
+        # condition so they short-circuit together.
+        #
         # Run conflict resolution even when max_iterations_reached — conflict
         # resolution is not an autofix iteration and should not be blocked by
         # the iteration cap.  Also runs when did_commit is true since the push
@@ -2038,46 +2053,41 @@ jobs:
           done
           rm -rf "${RESOLVE_STASH}"
 
-          cat > "${CONFLICT_RESOLVER_PROMPT_FILE}" <<__CONFLICT_RESOLVER_PROMPT__
-          Repository task: Resolve merge conflicts.
+          # Enumerate the unmerged paths git is currently tracking so the
+          # resolver prompt can name every conflicted file explicitly.  Without
+          # this enumeration Codex tends to discover and fix only one file per
+          # invocation, leaving the rest of the conflicts to subsequent
+          # workflow runs.  Listing them up-front and requiring all of them be
+          # resolved in a single pass turns the resolver back into a one-shot
+          # operation.
+          CONFLICTED_FILES_RAW="$(git diff --name-only --diff-filter=U 2>/dev/null || true)"
+          if [ -n "${CONFLICTED_FILES_RAW}" ]; then
+            CONFLICTED_FILES_COUNT="$(printf '%s\n' "${CONFLICTED_FILES_RAW}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+            CONFLICTED_FILES_LIST="$(printf '%s\n' "${CONFLICTED_FILES_RAW}" | sed '/^$/d; s/^/          - /')"
+          else
+            CONFLICTED_FILES_COUNT="0"
+            CONFLICTED_FILES_LIST="          (git did not report any unmerged paths; scan the working tree for conflict markers and resolve every file that contains them)"
+          fi
+          echo "Conflict resolver: ${CONFLICTED_FILES_COUNT} unmerged path(s) to resolve in this run."
 
-          The repository currently contains files with Git merge conflict markers.
-
-          Conflict markers appear in this format:
-          [conflict-start] HEAD
-          code
-          [conflict-separator]
-          other code
-          [conflict-end] branch
-
-          Your task:
-          Resolve merge conflicts safely.
-
-          Rules:
-          - Only resolve conflicts.
-          - Do not introduce new functionality.
-          - Do not refactor unrelated code.
-          - Do not modify files that do not contain conflict markers.
-          - Prefer preserving behavior from both sides when possible.
-          - If both sides are incompatible, choose the version consistent with surrounding code.
-          - Remove all conflict markers.
-          - Ensure the final code compiles logically.
-          - You may read repository files as needed.
-          - You may modify repository files directly.
-          - Do not generate patches.
-          - Do not generate scripts.
-          - Do not modify GitHub workflow files except when resolving merge conflicts.
-          - Do not access the network.
-
-          Final output must be plain text.
-
-          Output sections:
-          Conflicts resolved:
-          - list files where conflicts were resolved
-
-          Notes:
-          - brief explanation if any resolution required choosing one side
-          __CONFLICT_RESOLVER_PROMPT__
+          # Render the conflict resolver prompt from the template file under
+          # prompts/. The template body used to live inline as a heredoc in
+          # this run: block, but its size pushed the whole step past GitHub
+          # Actions' 21,000-char template-expression limit, which caused the
+          # entire review_autofix.yml to fail parsing from internal-review.yml
+          # (silent — no check_runs, no error in Actions UI). Keeping the
+          # prompt in a separate file under prompts/ lets it grow without
+          # ever re-approaching the limit.
+          PROMPT_TPL="${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+          if [ ! -f "${PROMPT_TPL}" ]; then
+            echo "::error::Conflict resolver prompt template missing: ${PROMPT_TPL}"
+            exit 1
+          fi
+          CONFLICTED_FILES_COUNT="${CONFLICTED_FILES_COUNT}" \
+            CONFLICTED_FILES_LIST="${CONFLICTED_FILES_LIST}" \
+            PROMPT_TPL="${PROMPT_TPL}" \
+            python3 -c 'import os,sys; tpl=open(os.environ["PROMPT_TPL"], encoding="utf-8").read(); sys.stdout.write(tpl.replace("{{CONFLICTED_FILES_COUNT}}",os.environ["CONFLICTED_FILES_COUNT"]).replace("{{CONFLICTED_FILES_LIST}}",os.environ["CONFLICTED_FILES_LIST"]))' \
+            > "${CONFLICT_RESOLVER_PROMPT_FILE}"
 
           # On the workflow source repo, snapshot the post-merge working-tree
           # state before Codex resolves conflicts.  The commit logic below
@@ -2106,7 +2116,41 @@ jobs:
                 printf 'U\t%s\n' "${snap_path}" >> "${PRE_RESOLVER_STATE_FILE}"
             done < <(git ls-files --others --exclude-standard)
             echo "Pre-resolver snapshot captured: $(wc -l < "${PRE_RESOLVER_STATE_FILE}") entries"
+
+            # Capture the set of paths that actually have merge conflicts
+            # right now, before the resolver runs.  This is the canonical
+            # whitelist for "files the resolver is allowed to edit"; the
+            # post-resolver guard (check_resolver_diff.sh) rejects any
+            # touched file that is not in this set.
+            CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
+            : > "${CONFLICTED_PATHS_FILE}"
+            git ls-files --unmerged | awk '{print $4}' | sort -u >> "${CONFLICTED_PATHS_FILE}"
+            # Belt-and-suspenders: also include any tracked file that
+            # currently contains a literal git conflict marker.  This
+            # catches paths git auto-merged but left with residual markers
+            # (rare but possible with --no-ff).
+            git grep -lE '^(<<<<<<< |>>>>>>> )' -- ':!*.md' 2>/dev/null \
+              >> "${CONFLICTED_PATHS_FILE}" || true
+            sort -u -o "${CONFLICTED_PATHS_FILE}" "${CONFLICTED_PATHS_FILE}"
+            echo "Conflicted paths captured: $(wc -l < "${CONFLICTED_PATHS_FILE}") entries"
           fi
+
+      - name: Run Codex resolver, validate, stage, commit
+        # Second half of the split merge-conflict resolver step. Carries the
+        # identical if: condition as the prepare step above so the two halves
+        # short-circuit together — any change to one must be mirrored to the
+        # other. See the comment block on the prepare step for why the step
+        # was split.
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true'
+        run: |
+          set -euo pipefail
+
+          # Re-derive runtime paths set in the prepare step. Shell variables
+          # do not cross step boundaries; RUNTIME_DIR itself is in
+          # $GITHUB_ENV so it survives, and both paths are deterministic
+          # functions of RUNTIME_DIR.
+          PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
+          CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
 
           attempt=1
           while [ "${attempt}" -le 3 ]; do
@@ -2251,6 +2295,45 @@ jobs:
                 fi
               else
                 echo "::warning::Resolver allowlist file missing; skipping hallucination guard. Falling through to existing commit-gate protections."
+              fi
+
+              # Hard guardrail against hallucinated merge resolutions.
+              # check_resolver_diff.sh enforces three invariants:
+              #   1. touched ⊆ conflicted  — the resolver may only edit
+              #      files that actually had merge markers.  This is what
+              #      catches the PR #912 failure mode where the resolver
+              #      added 300 lines + references to nonexistent helper
+              #      scripts under the guise of "merge resolution".
+              #   2. bash -n / py_compile / json.load on every touched
+              #      file — catches truncated heredocs and similar.
+              #   3. Workflow → script reference integrity for any
+              #      modified .github/workflows/*.yml — would have caught
+              #      build_repo_overview.sh / protected_paths.txt.
+              # On failure: skip the merge-resolve commit and exit 1 so
+              # the run goes to ai:review-blocked instead of pushing a
+              # broken commit that breaks every subsequent autofix run.
+              if [ ! -f "${CONFLICTED_PATHS_FILE:-/nonexistent}" ]; then
+                echo "::error::Conflicted-paths snapshot missing; refusing to create [ai-merge-resolve] commit without resolver validation."
+                echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+                rm -f "${RESOLVER_TOUCHED_FILE}"
+                exit 1
+              fi
+
+              if [ ! -x "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" ]; then
+                echo "::error::check_resolver_diff.sh is missing or not executable; refusing to create [ai-merge-resolve] commit without resolver validation."
+                echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+                rm -f "${RESOLVER_TOUCHED_FILE}"
+                exit 1
+              fi
+
+              if ! "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \
+                  --conflicted-set "${CONFLICTED_PATHS_FILE}" \
+                  --touched-set    "${RESOLVER_TOUCHED_FILE}" \
+                  --repo-root      "${PWD}"; then
+                echo "::error::Conflict resolver output failed validation; skipping [ai-merge-resolve] commit."
+                echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+                rm -f "${RESOLVER_TOUCHED_FILE}"
+                exit 1
               fi
 
               # Stage the editor's conflict resolutions on top of the
