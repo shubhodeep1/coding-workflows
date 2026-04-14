@@ -769,8 +769,8 @@ resolve_active_orchestrator_context_for_issue() {
     tracking_comments_pages_file="${RUNTIME_DIR}/tracking_issue_${tracking_num}_comments_pages.json"
     rm -f "${tracking_comments_pages_file}"
     if gh_retry_to_file "${tracking_comments_pages_file}" gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${tracking_num}/comments?per_page=100"; then
-      tracking_comments_merged="$(jq -s 'add // []' "${tracking_comments_pages_file}" 2>/dev/null || echo '[]')"
-      if printf '%s' "${tracking_comments_merged}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      if tracking_comments_merged="$(jq -s 'add // []' "${tracking_comments_pages_file}" 2>/dev/null)" && \
+        printf '%s' "${tracking_comments_merged}" | jq -e 'type == "array"' >/dev/null 2>&1; then
         tracking_comments="${tracking_comments_merged}"
       fi
     fi
