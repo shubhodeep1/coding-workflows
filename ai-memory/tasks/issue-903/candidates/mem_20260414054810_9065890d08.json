@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` questions were asked in Clarify; `/answer [auto-answered-by-clarify]` means proceed with the issue scope as written.\n\n1. Files likely to change\n- `prompts/mode-validate-generate.txt` (primary, required)\n- `tests/test_validate_harness_rpc.py` (or a new prompt-contract test file under `tests/`) to lock the new prompt contract and prevent regressions\n- `docs/validation-phase-spec.md` to keep deliverables/spec text aligned with the new prompt contract\n- Conditional coordination file: `scripts/validate_process.sh` only if canonical-driver migration is not already present in the target integration branch\n\n2. Functions/modules/sections to implement\n- In `prompts/mode-validate-generate.txt`, rewrite `Required outputs` to only require:\n  - `validation/Dockerfile.app`\n  - `validation/docker-compose.test.yml`\n  - `validation/validate.env`\n  - `validation/tests/00_canary.sh` \u2026 `NN_*.sh`\n- Remove prompt sections that prescribe `validation/validate.sh` generation or internals:\n  - `validation/validate.sh requirements`\n  - `emit_result` / `fail_fast` pattern requirements\n  - `EXIT` trap implementation details\n  - final JSON assembly implementation details tied to `validate.sh`\n  - TAP grep safety internals that are only relevant to harness shell internals\n- Keep and preserve the 11-category coverage block and applicability behavior unchanged.\n- Keep test-script contract details that the runtime driver still needs (TAP output conventions and any script-level JSON expectations consumed by runtime), but express them as test-script requirements only.\n\n3. Data structures affected\n- Prompt JSON output schema in `mode-validate-generate.txt` remains the same shape (`status`, `summary`, `artifacts`, `run_commands`, `coverage`, `assumptions`, `safety_constraints`, `blockers`).\n- `coverage` object must preserve all 11 existing keys and current implemented/skipped semantics exactly (no renames, no additions/removals).\n- `artifacts[].path` expectations change to per-repo artifact set above; `validation/validate.sh` must be removed from artifact expectations.\n\n4. API/interface changes\n- Interface change is prompt-level contract only:\n  - Generated artifact ownership shifts to per-repo assets (`Dockerfile.app`, compose, env, test scripts).\n  - Prompt no longer instructs Codex to generate/micro-implement `validation/validate.sh`.\n- No env var/key/contract renames.\n- Test script interface remains compatible with runtime expectations (TAP-first script outputs and runtime-consumable result signaling where applicable).\n\n5. Potential risks/edge cases\n- Over-pruning risk: removing runtime-required TAP/JSON script contract details could break driver parsing.\n- Coverage regression risk: accidental edits to the 11-category coverage logic would violate acceptance criteria.\n- Hidden compatibility risk: existing RPC guidance (`Cannot index object with number`, `.result`, `type == \"object\"`) is currently test-enforced and must remain.\n- Integration risk if not already migrated: current `scripts/validate_process.sh` still references `validation/validate.sh` generation/execution, which conflicts with this issue\u2019s target contract.\n\n6. Testing considerations\n- Add/update prompt contract tests to assert:\n  - Presence of required per-repo artifacts (`Dockerfile.app`, `docker-compose.test.yml`, `validate.env`, `validation/tests/00_canary.sh` pattern).\n  - Absence of `validation/validate.sh` generation/internals language (`emit_result`, `fail_fast`, explicit `EXIT trap` internals, final JSON assembly internals).\n  - Coverage block still contains all 11 categories unchanged.\n- Run existing prompt-related regression tests (`tests/test_validate_harness_rpc.py`) to ensure required RPC guidance remains intact.\n- Run repository test/lint checks that cover prompt integrity and workflow docs consistency.\n\nConflict detection (explicit)\n- Factual conflict with current codebase: `scripts/validate_process.sh` presently validates existence and executes `validation/validate.sh` (generation success checks and runtime execution path), while this issue requires prompt outputs to exclude `validate.sh`.\n- Factual conflict with docs: `docs/validation-phase-spec.md` still documents `validation/validate.sh` as a generated deliverable.\n- Implementation should be coordinated with canonical-driver rollout state in the integration branch so prompt changes do not outpace runtime expectations.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "042ea017762bdde84e01187dc7d39b4a4a2923efe00ee7c2bab36c1ba69c80b5",
+  "lineage": {
+    "issue_number": 903,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24382922376",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24382922376",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/903"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414054810_9065890d08",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 903,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24382922376"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #903",
+  "timestamps": {
+    "created_at": "2026-04-14T05:48:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
