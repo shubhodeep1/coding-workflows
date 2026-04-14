@@ -5,13 +5,28 @@
   "entry_id": "processed_command_970_4246320027_approved",
   "issue_number": 970,
   "metadata": {
+    "branch": "ai/issue-970",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/mark-stable.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "README.md",
+      "scripts/openrouter_prompt_cache.py",
+      "scripts/validate_process.sh",
+      "tests/test_validate_process_driver_guard_scope.py"
+    ],
+    "issue_number": 970,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/970",
+    "pr_number": 971,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/971",
+    "run_attempt": "1",
+    "run_id": "24416815883",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24416815883"
   },
   "run_attempt": 1,
   "run_id": "24416815883",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-14T18:46:07Z",
+  "status": "completed",
+  "timestamp": "2026-04-14T19:00:49Z",
   "workflow": "implement"
 }
