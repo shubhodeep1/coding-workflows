@@ -300,6 +300,7 @@ def format_wave_status_comment(state: dict[str, Any], wave_idx: int) -> str:
 PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:merged",
 	"ai:closed",
+	"ai:needs-human",
 	"ai:ready-to-merge",
 	"ai:review-blocked",
 	"ai:implementation-failed",
@@ -320,7 +321,7 @@ TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"
 
 # Phases already handled by dedicated logic in the poller — stall detector
 # should not double-act on these.
-DEDICATED_HANDLER_PHASES: set[str] = {"ai:review-blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
+DEDICATED_HANDLER_PHASES: set[str] = {"ai:needs-human", "ai:review-blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
 
 # Escalating recovery actions per detected phase.
 # The poller indexes into this list using the per-issue stall_recovery_count.
@@ -339,41 +340,43 @@ DEFAULT_PHASE_STALL_THRESHOLDS: dict[str, int] = {
 	"ai:ready-to-merge": 60,
 }
 
+RUN_STALL_JUDGE_ACTION = "run_stall_judge"
+
 STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
 	"no_labels": [
 		"retrigger_pipeline",
 		"retrigger_pipeline",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:clarification": [
 		"auto_respond_clarify",
 		"auto_respond_clarify",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:planning": [
 		"retrigger_plan",
 		"retrigger_plan",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:awaiting-approval": [
 		"auto_approve",
 		"auto_approve",
-		"auto_approve",
+		"escalate_human",
 	],
 	"ai:implementing": [
 		"retrigger_implement",
 		"retrigger_implement",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:done": [
 		"retrigger_review",
 		"retrigger_review",
-		"close_and_reissue",
+		"escalate_human",
 	],
 	"ai:ready-to-merge": [
 		"attempt_merge",
 		"attempt_merge",
-		"attempt_merge",
+		"escalate_human",
 	],
 }
 
@@ -446,6 +449,8 @@ def detect_stalls(
 	now_ts: int,
 	max_recoveries: int = 5,
 	phase_thresholds: dict[str, int] | None = None,
+	stall_judge_trigger_count: int = 2,
+	enable_stall_judge: bool = True,
 ) -> list[dict[str, Any]]:
 	"""Detect stalled issues in the current wave.
 
@@ -457,6 +462,10 @@ def detect_stalls(
 	*phase_thresholds* maps phase labels to per-phase thresholds in
 	minutes.  Phases not present in the dict fall back to
 	*threshold_minutes*.
+
+	When *enable_stall_judge* is true and *stall_judge_trigger_count* is
+	reached (but still below *max_recoveries*), recovery action is
+	overridden to RUN_STALL_JUDGE_ACTION for non-dedicated phases.
 
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
@@ -484,6 +493,8 @@ def detect_stalls(
 			continue
 
 		labels = issue_labels.get(str(gh_num), [])
+		if "ai:needs-human" in labels:
+			continue
 		phase = determine_phase(labels)
 
 		if phase in TERMINAL_PHASES:
@@ -508,6 +519,8 @@ def detect_stalls(
 		# Determine recovery action
 		if recovery_count >= max_recoveries:
 			action = "skip"
+		elif enable_stall_judge and stall_judge_trigger_count >= 1 and recovery_count >= stall_judge_trigger_count:
+			action = RUN_STALL_JUDGE_ACTION
 		else:
 			actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
 			action_idx = min(recovery_count, len(actions) - 1)
@@ -1003,6 +1016,14 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 	now_ts = int(args.now_ts) if args.now_ts else int(time.time())
 	threshold = int(args.threshold_minutes)
 	max_recoveries = int(args.max_recoveries)
+	stall_judge_trigger_count = int(getattr(args, "stall_judge_trigger_count", 2))
+	if stall_judge_trigger_count < 1:
+		raise OrchestrateError(f"stall_judge_trigger_count must be a positive integer, got {stall_judge_trigger_count!r}")
+	enable_stall_judge_raw = getattr(args, "enable_stall_judge", "true")
+	if isinstance(enable_stall_judge_raw, bool):
+		enable_stall_judge = enable_stall_judge_raw
+	else:
+		enable_stall_judge = str(enable_stall_judge_raw).lower() == "true"
 
 	phase_thresholds: dict[str, int] | None = None
 	if args.phase_thresholds_json:
@@ -1013,6 +1034,8 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 	stalls = detect_stalls(
 		state, issue_labels, threshold, now_ts, max_recoveries,
 		phase_thresholds=phase_thresholds,
+		stall_judge_trigger_count=stall_judge_trigger_count,
+		enable_stall_judge=enable_stall_judge,
 	)
 	_print_json({"ok": True, "stalls": stalls, "count": len(stalls)})
 	return 0
@@ -1080,6 +1103,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls.add_argument("--threshold-minutes", required=True, help="Fallback stall threshold in minutes (used when a phase has no specific override)")
 	p_stalls.add_argument("--phase-thresholds-json", default=None, help='Optional JSON: {"ai:clarification": 60, "ai:implementing": 120, ...}. Per-phase overrides.')
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
+	p_stalls.add_argument("--stall-judge-trigger-count", default="2", help="Recovery-count threshold to switch stall recovery to run_stall_judge")
+	p_stalls.add_argument("--enable-stall-judge", default="true", choices=("true", "false"), help="Enable/disable stall judge escalation action")
 	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
 	p_stalls.set_defaults(func=cmd_check_stalls)
 
