@@ -236,6 +236,14 @@ run_preflight_checks()
 
 	if ! command -v python3 >/dev/null 2>&1; then
 		echo "python3 is required for validation result emission" >&2
+		RESULT="fail"
+		PHASE="preflight"
+		TOTAL_TESTS=1
+		PASSED_TESTS=0
+		FAILED_TESTS=1
+		RESULT_EMITTED=1
+		FINAL_EXIT_CODE=1
+		printf '%s\n' '{"result":"fail","phase":"preflight","total_tests":1,"passed_tests":0,"failed_tests":1,"failures":[{"test":"preflight_python3","error":"python3 is required for validation result emission","log_tail":""}],"duration_seconds":0}'
 		exit 1
 	fi
 
