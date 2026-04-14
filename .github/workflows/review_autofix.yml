@@ -1425,6 +1425,7 @@ jobs:
             # other reasons (reviewer artifacts, lingering merge state from
             # earlier retries, etc.).
             git read-tree HEAD
+            git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
             while IFS= read -r touched_path; do
               [ -z "${touched_path}" ] && continue
               case "${touched_path}" in
@@ -2133,6 +2134,7 @@ jobs:
               # merge commit that carries every auto-merged hunk.  The real
               # merge-into-BASE will replay those hunks naturally later.
               git read-tree HEAD
+              git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
               rm -f .git/MERGE_HEAD .git/MERGE_MSG .git/MERGE_MODE .git/AUTO_MERGE 2>/dev/null || true
               while IFS= read -r touched_path; do
                 [ -z "${touched_path}" ] && continue
