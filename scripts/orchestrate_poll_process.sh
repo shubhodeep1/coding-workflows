@@ -2016,10 +2016,15 @@ stall_recovery_action_is_terminal() {
 
 _robust_parse_json_file() {
   local file_path="$1"
+  local parse_log="${RUNTIME_DIR:-/tmp}/stall_judge.log"
   python3 -c "
 import json, re, sys
 
-raw = open(sys.argv[1], 'r').read()
+try:
+    raw = open(sys.argv[1], 'r').read()
+except FileNotFoundError:
+    print(f'File not found: {sys.argv[1]}', file=sys.stderr)
+    sys.exit(1)
 
 try:
     data = json.loads(raw.strip())
@@ -2051,7 +2056,7 @@ for i, ch in enumerate(cleaned):
 
 print('Could not parse JSON output', file=sys.stderr)
 sys.exit(1)
-" -- "${file_path}" 2>/dev/null || echo ""
+" "${file_path}" 2>> "${parse_log}" || echo ""
 }
 
 execute_stall_recovery_action() {
@@ -2340,8 +2345,13 @@ invoke_stall_judge() {
   local fallback_action
   fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
 
+  local comments_issue_num="${issue_num}"
+  if [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
+    comments_issue_num="${TRACKING_NUM}"
+  fi
+
   local issue_comments_json
-  issue_comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
+  issue_comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${comments_issue_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
   local recent_comments
   recent_comments="$(printf '%s' "${issue_comments_json}" | jq -c '[.[] | {author: (.user.login // ""), created_at: (.created_at // ""), body: (.body // "")}] | (if length > 8 then .[-8:] else . end)' 2>/dev/null || echo '[]')"
 
@@ -2437,7 +2447,10 @@ invoke_stall_judge() {
   local static_file="${RUNTIME_DIR}/judge_static.txt"
 
   if [ ! -s "${static_file}" ]; then
-    assemble_judge_static_context "${static_file}" || return 1
+    if ! assemble_judge_static_context "${static_file}"; then
+      echo "WARNING: failed to assemble stall judge static context; continuing with fallback-safe execution" >&2
+      : > "${static_file}"
+    fi
   fi
 
   {
@@ -5229,8 +5242,6 @@ fi
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
     fi
-      _stall_check_args+=(--stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}")
-      _stall_check_args+=(--enable-stall-judge "${ENABLE_STALL_JUDGE}")
 
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
