@@ -559,7 +559,7 @@ jobs:
 
           while IFS= read -r target_path; do
             [ -n "${target_path}" ] || continue
-            [ "${target_path}" = "${target_path#*../}" ] || continue
+            case "${target_path}" in /*|../*|*/../*) continue ;; esac
             {
               printf '### %s\n' "${target_path}"
               git log --oneline -n 10 -- "${target_path}" || true
