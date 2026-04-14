@@ -415,7 +415,7 @@ def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_planning_phase(
 	)
 
 	assert len(stalls) == 1
-	assert stalls[0]["recovery_action"] == "close_and_reissue"
+	assert stalls[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][2]
 
 
 def test_detect_stalls_max_recoveries_still_skips_with_judge_enabled():

@@ -300,8 +300,8 @@ def format_wave_status_comment(state: dict[str, Any], wave_idx: int) -> str:
 PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:merged",
 	"ai:closed",
-	"ai:ready-to-merge",
 	"ai:needs-human",
+	"ai:ready-to-merge",
 	"ai:review-blocked",
 	"ai:implementation-failed",
 	"ai:validated",
