@@ -454,16 +454,19 @@ ensure_label_exists() {
     return 0
   fi
 
-  gh_retry gh label create "${label_name}" \
+  if gh_retry gh label create "${label_name}" \
     --repo "${GITHUB_REPOSITORY}" \
     --color "${color}" \
-    --description "${description}" >/dev/null || true
-  # Cache unconditionally after the create attempt: either the label now
-  # exists, or the create silently failed and re-trying within the same
-  # cycle will fail the same way.  This preserves the original
-  # silent-failure semantics (the `|| true` above already suppresses
-  # errors) while avoiding a futile re-check on every subsequent caller.
-  _ENSURED_LABELS_CACHE[${label_name}]=1
+    --description "${description}" >/dev/null 2>&1; then
+    _ENSURED_LABELS_CACHE[${label_name}]=1
+    return 0
+  fi
+
+  # Creation can fail if another concurrent actor created the label first.
+  # Cache only when a follow-up read confirms the label now exists.
+  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+    _ENSURED_LABELS_CACHE[${label_name}]=1
+  fi
 }
 
 set_tracking_phase_label() {
@@ -1355,7 +1358,7 @@ STANDALONE_STATE_MARKER_CLOSE="AI_STANDALONE_STALL_STATE_V1 -->"
 _extract_standalone_state_comment_id_from_comments() {
   local comments_json="$1"
   printf '%s' "${comments_json:-[]}" \
-    | jq -r '(. // []) | [.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | sort_by(.created_at // "") | last | .id // ""' \
+    | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" '(. // []) | [.[] | select((.body // "") | contains($marker))] | max_by(.created_at // "") | .id // ""' \
     2>/dev/null || true
 }
 
@@ -1363,7 +1366,7 @@ _extract_standalone_state_json_from_comments() {
   local comments_json="$1"
   local state_raw
   state_raw="$(printf '%s' "${comments_json:-[]}" \
-    | jq -r '(. // []) | [.[] | select((.body // "") | contains("<!-- AI_STANDALONE_STALL_STATE_V1"))] | sort_by(.created_at // "") | last | .body // ""' \
+    | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" '(. // []) | [.[] | select((.body // "") | contains($marker))] | max_by(.created_at // "") | .body // ""' \
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
@@ -1372,7 +1375,7 @@ _extract_standalone_state_json_from_comments() {
   fi
 
   local extracted
-  extracted="$(printf '%s' "${state_raw}" | sed -n '/^<!-- AI_STANDALONE_STALL_STATE_V1$/,/^AI_STANDALONE_STALL_STATE_V1 -->$/p' | sed '1d;$d')"
+  extracted="$(printf '%s' "${state_raw}" | sed -n "/^${STANDALONE_STATE_MARKER_OPEN}$/,/^${STANDALONE_STATE_MARKER_CLOSE}$/p" | sed '1d;$d')"
   if [ -z "${extracted}" ]; then
     echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0}'
     return
@@ -1478,19 +1481,20 @@ PY
 # request via aliases, replacing two paginated REST /search/issues
 # round-trips with one.  Returns a JSON object of the form
 #   {"state": [{number:N},...], "clarify": [{number:N},...]}
-# where each list is capped at 100 results (GraphQL search first-page
-# cap) — sufficient in practice because the marker searches are a
-# backup path for un-labelled issues, and labelled issues are still
-# picked up via the separate label-list enumeration.  On GraphQL
+# where each list normally comes from the single GraphQL request. If
+# either query reports pagination (`hasNextPage`), we fall back to the
+# original paginated REST search for complete coverage. On GraphQL
 # failure, returns empty lists so the caller degrades gracefully.
 _fetch_standalone_marker_issues_graphql() {
   local q_state="repo:${GITHUB_REPOSITORY} is:issue is:open \"AI_STANDALONE_STALL_STATE_V1\" in:comments"
   local q_clarify="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments"
   local query='query($q_state: String!, $q_clarify: String!) {
   state: search(query: $q_state, type: ISSUE, first: 100) {
+    pageInfo { hasNextPage }
     nodes { ... on Issue { number } }
   }
   clarify: search(query: $q_clarify, type: ISSUE, first: 100) {
+    pageInfo { hasNextPage }
     nodes { ... on Issue { number } }
   }
 }'
@@ -1502,6 +1506,20 @@ _fetch_standalone_marker_issues_graphql() {
     echo '{"state":[],"clarify":[]}'
     return
   fi
+
+  local state_has_next
+  local clarify_has_next
+  state_has_next="$(printf '%s' "${resp}" | jq -r '.data.state.pageInfo.hasNextPage // false' 2>/dev/null || echo "false")"
+  clarify_has_next="$(printf '%s' "${resp}" | jq -r '.data.clarify.pageInfo.hasNextPage // false' 2>/dev/null || echo "false")"
+  if [ "${state_has_next}" = "true" ] || [ "${clarify_has_next}" = "true" ]; then
+    local marker_state
+    local marker_clarify
+    marker_state="$(gh_retry gh api --paginate "search/issues" -f per_page=100 -f q="${q_state}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+    marker_clarify="$(gh_retry gh api --paginate "search/issues" -f per_page=100 -f q="${q_clarify}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+    jq -cn --argjson state "${marker_state}" --argjson clarify "${marker_clarify}" '{state:$state,clarify:$clarify}'
+    return
+  fi
+
   echo "${resp}" | jq -c '{
       state: [((.data.state.nodes // [])[] | select(. != null) | {number})],
       clarify: [((.data.clarify.nodes // [])[] | select(. != null) | {number})]
@@ -1740,10 +1758,10 @@ PY
     fi
 
     # Reuse the comments_json we already fetched above instead of
-    # re-hitting /issues/{n}/comments twice more via the API-backed
-    # helpers.  Same result, three fewer paginated fetches per
-    # iteration (one here, two inside write_standalone_state_json
-    # below via the threaded state_comment_id).
+    # re-hitting /issues/{n}/comments via the API-backed helpers for
+    # both the standalone state comment id and the standalone state
+    # JSON. Passing the threaded state_comment_id below also avoids
+    # the additional lookup inside write_standalone_state_json.
     state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
     state_json="$(_extract_standalone_state_json_from_comments "${comments_json}")"
 
