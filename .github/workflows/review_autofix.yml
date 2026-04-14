@@ -569,7 +569,7 @@ jobs:
 
           if [ ! -s "${APPROVED_PLAN_FILE}" ] || grep -q "^UNAVAILABLE:" "${APPROVED_PLAN_FILE}"; then
             resolve_plan_from_artifact() {
-              local head_ref head_sha implementation_run_id artifact_id
+              local head_ref head_sha implementation_run_id artifact_id workflow_name
 
               head_ref="$(jq -r '.head.ref // empty' "${PR_PAYLOAD_FILE}")"
               head_sha="$(jq -r '.head.sha // empty' "${PR_PAYLOAD_FILE}")"
@@ -578,25 +578,30 @@ jobs:
                 return 1
               fi
 
-              if ! gh_retry /tmp/gh_ai_implement_runs.json api -X GET repos/${{ github.repository }}/actions/workflows/ai-implement.yml/runs -f head_branch="${head_ref}" -f per_page=20; then
-                echo "::warning::Unable to list ai-implement workflow runs for branch ${head_ref}."
-                return 1
-              fi
+              implementation_run_id=""
+              for workflow_name in ai-implement.yml implement.yml internal-implement.yml; do
+                if ! gh_retry /tmp/gh_ai_implement_runs.json api -X GET repos/${{ github.repository }}/actions/workflows/"${workflow_name}"/runs -f head_branch="${head_ref}" -f per_page=20; then
+                  continue
+                fi
 
-              implementation_run_id="$(jq -r '
-                [
-                  .workflow_runs[]?
-                  | select((.status // "") == "completed")
-                  | select((.head_branch // "") == $head_ref)
-                  | select(($head_sha | length) == 0 or (.head_sha // "") == $head_sha)
-                ]
-                | sort_by(.created_at // "")
-                | reverse
-                | .[0].id // empty
-              ' --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" /tmp/gh_ai_implement_runs.json)"
+                implementation_run_id="$(jq -r '
+                  [
+                    .workflow_runs[]?
+                    | select((.status // "") == "completed")
+                    | select((.head_branch // "") == $head_ref)
+                    | select(($head_sha | length) == 0 or (.head_sha // "") == $head_sha)
+                  ]
+                  | sort_by(.created_at // "")
+                  | reverse
+                  | .[0].id // empty
+                ' --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" /tmp/gh_ai_implement_runs.json)"
+                if [ -n "${implementation_run_id}" ]; then
+                  break
+                fi
+              done
 
               if [ -z "${implementation_run_id}" ]; then
-                echo "::warning::No completed ai-implement run found for branch ${head_ref}."
+                echo "::warning::No completed implement workflow run found for branch ${head_ref}."
                 return 1
               fi
 
