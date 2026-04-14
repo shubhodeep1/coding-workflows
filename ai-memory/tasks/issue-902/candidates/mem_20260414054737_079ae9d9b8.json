@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan\n\nClarification mapping:\n- Q1: A -> Canonical runtime driver stays `scripts/validate_process.sh` and is the executed entrypoint.\n- Q2: A -> Keep generating/using `validation/validate.sh`, but it must remain transient/untracked.\n- Q3: A -> Keep validate on its existing `fetch_from_ref_or_local` fetch pattern; do not migrate to `_gh_api_fetch`.\n\nConflict detection:\n- The issue asks to \u201cupdate validate workflow wiring\u201d so runtime executes `coding-workflows/scripts` driver, but current `.github/workflows/validate.yml` already runs `bash scripts/validate_process.sh`. Plan therefore focuses on hardening guarantees and artifact hygiene, not architectural rewiring.\n\n1) Files likely to change\n- `.github/workflows/validate.yml` (primary)\n- `scripts/validate_process.sh` (primary, minimal path/guard updates)\n- `workflow-templates/ai-validate.yml` (conditional; only if wrapper reference/inputs need sync wording)\n- `.github/workflows/internal-validate.yml` (conditional; only if wrapper parity adjustments are required)\n\n2) Functions/modules to implement\n- Validate reusable workflow fetch/invocation block:\n  - Keep `fetch_from_ref_or_local` as the mechanism.\n  - Ensure canonical driver fetch target remains exactly `scripts/validate_process.sh` (no alias/new filename).\n  - Make runtime invocation explicitly tied to that canonical path.\n- Validation process script runtime hygiene:\n  - Preserve harness generation/execution flow (`validation/validate.sh`).\n  - Add/strengthen post-generation and pre-exit guardrails so `validation/validate.sh` is never left tracked.\n  - Add/strengthen checks that no alternate fetched driver artifact name is introduced by workflow wiring.\n- Wrapper integration point:\n  - Keep wrappers as pure YAML `uses` indirection; no callback/standalone logic additions.\n\n3) Data structures affected\n- Workflow shell state in validate reusable:\n  - `_fetched_scripts` list and generated `scripts/.gitignore` entries.\n- Validation runtime artifact contract in `validate_process.sh`:\n  - `validation/validate.sh` as transient harness path.\n  - Existing metadata/status JSON outputs under `${RUNTIME_DIR}` remain format-compatible.\n- No MongoDB collections/contracts are affected.\n\n4) API or interface changes\n- No change to reusable workflow inputs/outputs (`tracking_issue`, `compose_file`, `validation_timeout` stay stable).\n- No change to wrapper invocation contract in consumer repos.\n- No change to `.ai/validate.yml` hint schema or hint-source semantics (`committed` / `discovered` / `none` behavior preserved).\n- No new external API integration; existing GitHub contents fetch behavior remains via current helper pattern.\n\n5) Potential risks / edge cases\n- Canonical guarantee risk: `fetch_from_ref_or_local` currently allows local fallback if remote fetch fails; this can violate \u201ccanonical fetched driver\u201d intent in consumer repos.\n- Pre-tracked repo state risk: consumer repos that already track `validation/` or `validation/validate.sh` can bypass transient-only expectation unless explicitly untracked each run.\n- Artifact drift risk: introducing any renamed driver path would violate acceptance even if execution succeeds.\n- Backward compatibility risk: changing harness flow could break existing validation diagnose/fix cycle; must keep `validation/validate.sh` lifecycle intact.\n\n6) Testing considerations\n- Workflow-level validation:\n  - Run validate reusable through wrapper and confirm logs show execution of `scripts/validate_process.sh`.\n  - Confirm script fetch path still uses current validate helper mechanism.\n- Git hygiene checks in a consumer-style workspace:\n  - After run, `git status --porcelain` must not show tracked `validation/validate.sh`.\n  - After run, no newly tracked fetched driver artifact under alternate name.\n- Regression checks:\n  - `.ai/validate.yml` present: hints source remains `committed`.\n  - `.ai/validate.yml` absent: discovery/none fallback still behaves as before.\n  - Multi-cycle validation (generate/fix paths) still executes and reports as before.\n\nAcceptance mapping\n- Canonical runtime driver executed: enforced by explicit canonical fetch+invoke path.\n- No committed transient artifacts: enforced by untracked/tracked guardrails for `validation/validate.sh` and driver artifacts.\n- `.ai/validate.yml` semantics unchanged: preserved by leaving hint flow logic intact while only adjusting driver wiring/hygiene guards.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "54344d0cd8c896b5c0dce2915fadcc075d93142ffcedb11133e10f461fe6a131",
+  "lineage": {
+    "issue_number": 902,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24382956961",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24382956961",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/902"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414054737_079ae9d9b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 902,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24382956961"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #902",
+  "timestamps": {
+    "created_at": "2026-04-14T05:47:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
