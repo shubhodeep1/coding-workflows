@@ -5,13 +5,22 @@
   "entry_id": "processed_command_949_4244415498_approved",
   "issue_number": 949,
   "metadata": {
+    "branch": "ai/issue-949",
+    "changed_files": [
+      "README.md"
+    ],
+    "issue_number": 949,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/949",
+    "pr_number": 950,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/950",
+    "run_attempt": "1",
+    "run_id": "24402870243",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24402870243"
   },
   "run_attempt": 1,
   "run_id": "24402870243",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-14T13:53:31Z",
+  "status": "completed",
+  "timestamp": "2026-04-14T13:57:11Z",
   "workflow": "implement"
 }
