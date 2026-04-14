@@ -103,8 +103,8 @@ print_languages_section()
 	if ! file_list="$(safe_git_ls_files 2>/dev/null)"; then
 		file_list="$(
 			cd "${REPO_ROOT}" || exit 0
-			find . -type f \
-				\( -path './.git/*' -o -path './node_modules/*' -o -path './.serena/*' -o -path './validation/*' \) -prune -o \
+			find . \
+				\( -path './.git' -o -path './node_modules' -o -path './.serena' -o -path './validation' \) -prune -o \
 				-type f -print | sed 's#^\./##'
 		)"
 	fi
@@ -243,7 +243,10 @@ if [ -n "${current_hash}" ] && [ "${current_hash}" = "${inputs_hash}" ]; then
 	exit 0
 fi
 
-generated_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+generated_at="$(git -C "${REPO_ROOT}" log -1 --format=%cI 2>/dev/null || true)"
+if [ -z "${generated_at}" ]; then
+	generated_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+fi
 
 {
 	echo "=== REPO OVERVIEW ==="

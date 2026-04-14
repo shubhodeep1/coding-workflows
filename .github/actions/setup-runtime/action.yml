@@ -99,10 +99,10 @@ runs:
       run: |
         set -euo pipefail
         script_path="${GITHUB_ACTION_PATH}/../../../scripts/build_repo_overview.sh"
-        if [ -x "${script_path}" ]; then
+        if [ -f "${script_path}" ] && [ -r "${script_path}" ]; then
           REPO_OVERVIEW_ROOT="${GITHUB_WORKSPACE}" bash "${script_path}" || true
         else
-          echo "::warning::Missing repo overview generator at ${script_path}; continuing without repo_overview.txt"
+          echo "::warning::Repo overview generator is missing or unreadable at ${script_path}; continuing without repo_overview.txt"
         fi
 
     - name: Validate required environment variables
