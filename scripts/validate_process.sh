@@ -428,12 +428,12 @@ run_preflight_checks()
 	# Emit the tail of the pre-flight log to stderr so that the failing command's
 	# output is visible directly in the GitHub Actions job log, without requiring
 	# the validation_preflight.log artifact to be downloaded. Structured with
-	# clear delimiter markers for grep-ability per CLAUDE.md §8.
+	# clear delimiter markers so the excerpt is easy to scan and grep in CI logs.
 	_emit_preflight_tail()
 	{
 		local reason="$1"
 		{
-			echo "##[error]Pre-flight failed: ${reason}"
+			echo "::error::Pre-flight failed: ${reason}"
 			echo "----- validation_preflight.log (tail -n 40) -----"
 			tail -n 40 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true
 			echo "-------------------------------------------------"
