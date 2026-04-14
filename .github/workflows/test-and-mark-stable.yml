@@ -214,6 +214,7 @@ jobs:
               sleep "$RATE_LIMIT_BACKOFF"
               echo ""; return 1
             fi
+            cat /tmp/gh_api_err >&2 2>/dev/null || true
             echo ""; return 1
           }
 
@@ -322,6 +323,7 @@ jobs:
               sleep "$RATE_LIMIT_BACKOFF"
               echo ""; return 1
             fi
+            cat /tmp/gh_api_err >&2 2>/dev/null || true
             echo ""; return 1
           }
 
@@ -472,6 +474,7 @@ jobs:
               sleep "$RATE_LIMIT_BACKOFF"
               echo ""; return 1
             fi
+            cat /tmp/gh_api_err >&2 2>/dev/null || true
             echo ""; return 1
           }
 
