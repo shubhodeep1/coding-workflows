@@ -1114,9 +1114,12 @@ jobs:
           on_step_exit() {
             local exit_code="$?"
             trap - DEBUG ERR EXIT
+            set +e
+            exec 2>&3 || true
+            exec 3>&- || true
+            wait || true
             if [ "${exit_code}" -ne 0 ]; then
               local failed_command="${FAILED_COMMAND:-${LAST_COMMAND:-unknown command}}"
-              set +e
               capture_step_failure "${failed_command}"
             fi
             rm -f "${STEP_STDERR_FILE}"
@@ -1171,9 +1174,12 @@ jobs:
           on_step_exit() {
             local exit_code="$?"
             trap - DEBUG ERR EXIT
+            set +e
+            exec 2>&3 || true
+            exec 3>&- || true
+            wait || true
             if [ "${exit_code}" -ne 0 ]; then
               local failed_command="${FAILED_COMMAND:-${LAST_COMMAND:-unknown command}}"
-              set +e
               capture_step_failure "${failed_command}"
             fi
             rm -f "${STEP_STDERR_FILE}"
