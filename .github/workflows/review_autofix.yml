@@ -199,7 +199,7 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh protected_paths.txt; do
             if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -760,10 +760,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          leaked_paths="$(git ls-files -- 'scripts/' 'prompts/' '.serena/' '.github/scripts/' '.github/prompts/' 'ai-memory/' 2>/dev/null || true)"
+          protected_paths_file="${SUPPORT_SCRIPTS_DIR}/protected_paths.txt"
+          if [ ! -f "${protected_paths_file}" ]; then
+            echo "::warning::Missing protected paths list (${protected_paths_file}); skipping preflight protected-path check."
+            exit 0
+          fi
+
+          protected_ls_targets=()
+          while IFS= read -r protected_path; do
+            [ -n "${protected_path}" ] || continue
+            protected_ls_targets+=("${protected_path}")
+          done < <(sed '/^[[:space:]]*$/d' "${protected_paths_file}")
+
+          leaked_paths="$(git ls-files -- "${protected_ls_targets[@]}" 2>/dev/null || true)"
           if [ -n "${leaked_paths}" ]; then
             leaked_count="$(printf '%s\n' "${leaked_paths}" | sed '/^$/d' | wc -l | tr -d ' ')"
-            echo "::warning::Consumer repo tracks ${leaked_count} workflow runtime/helper artifact(s) under scripts/, prompts/, .serena/, .github/scripts/, .github/prompts/, or ai-memory/. These will be auto-unstaged before commit, but please remove them from the repo (git rm -r --cached + commit) to prevent repeated friction on every merge with the base branch."
+            echo "::warning::Consumer repo tracks ${leaked_count} workflow runtime/helper artifact(s) under protected paths from scripts/protected_paths.txt. These will be auto-unstaged before commit, but please remove them from the repo (git rm -r --cached + commit) to prevent repeated friction on every merge with the base branch."
             echo "Tracked protected paths found on ${TARGET_BRANCH:-HEAD}:"
             printf '%s\n' "${leaked_paths}" | sed '/^$/d; s/^/ - /'
           else
@@ -1276,6 +1288,34 @@ jobs:
         run: |
           set -euo pipefail
 
+          protected_paths_file="${SUPPORT_SCRIPTS_DIR}/protected_paths.txt"
+          if [ ! -f "${protected_paths_file}" ]; then
+            echo "::error::Missing protected paths file: ${protected_paths_file}"
+            exit 1
+          fi
+          mapfile -t protected_paths < <(sed '/^[[:space:]]*$/d' "${protected_paths_file}")
+          if [ "${#protected_paths[@]}" -eq 0 ]; then
+            echo "::error::Protected paths list is empty: ${protected_paths_file}"
+            exit 1
+          fi
+
+          protected_pathspec_excludes=()
+          protected_reset_targets=()
+          protected_regex_parts=()
+          for protected_path in "${protected_paths[@]}"; do
+            normalized_path="${protected_path%/}"
+            [ -n "${normalized_path}" ] || continue
+            protected_pathspec_excludes+=(":!${normalized_path}")
+            protected_reset_targets+=("${normalized_path}")
+            escaped_path="$(printf '%s' "${normalized_path}" | sed -e 's/[][(){}.^$+*?|\\-]/\\\\&/g')"
+            protected_regex_parts+=("${escaped_path}/")
+          done
+          if [ "${#protected_regex_parts[@]}" -gt 0 ]; then
+            protected_paths_regex="^($(IFS='|'; echo "${protected_regex_parts[*]}"))"
+          else
+            protected_paths_regex='^$'
+          fi
+
           echo "DID_COMMIT=false" >> "$GITHUB_ENV"
           echo "did_commit=false" >> "$GITHUB_OUTPUT"
 
@@ -1331,15 +1371,60 @@ jobs:
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-            git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+            add_u_excludes=(
+              ':!node_modules'
+              ':!scripts/memory_helpers.sh'
+              ':!scripts/ai_memory.py'
+              ':!scripts/ai_memory_lib.py'
+              ':!scripts/review_run_reviewers.sh'
+              ':!scripts/review_apply_fixes.sh'
+              ':!scripts/review_rb_judge.sh'
+              ':!ai-memory'
+              ':!.github/prompts'
+              ':!.github/scripts'
+            )
+            add_o_excludes=(
+              ':!node_modules'
+              ':!.serena'
+              ':!scripts/memory_helpers.sh'
+              ':!scripts/ai_memory.py'
+              ':!scripts/ai_memory_lib.py'
+              ':!scripts/review_run_reviewers.sh'
+              ':!scripts/review_apply_fixes.sh'
+              ':!scripts/review_rb_judge.sh'
+              ':!ai-memory'
+              ':!.github/prompts'
+              ':!.github/scripts'
+            )
           elif [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-            git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+            add_u_excludes=(
+              ':!node_modules'
+              ':!scripts/memory_helpers.sh'
+              ':!scripts/ai_memory.py'
+              ':!scripts/ai_memory_lib.py'
+              ':!scripts/review_run_reviewers.sh'
+              ':!scripts/review_apply_fixes.sh'
+              ':!scripts/review_rb_judge.sh'
+              ':!ai-memory'
+              ':!.github/prompts'
+              ':!.github/scripts'
+            )
+            add_o_excludes=(
+              ':!node_modules'
+              ':!.serena'
+              ':!scripts'
+              ':!prompts'
+              ':!.github/ai'
+              ':!ai-memory'
+              ':!.github/prompts'
+              ':!.github/scripts'
+            )
           else
-            git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+            add_u_excludes=("${protected_pathspec_excludes[@]}")
+            add_o_excludes=("${protected_pathspec_excludes[@]}" ':!.github/ai')
           fi
+          git add -u -- "${add_u_excludes[@]}"
+          git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
 
           echo "Staged files before commit:"
           STAGED_FILES="$(git diff --cached --name-only || true)"
@@ -1356,9 +1441,9 @@ jobs:
             git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
-          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq "${protected_paths_regex}"; then
             echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+            git reset -q HEAD -- "${protected_reset_targets[@]}" 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
           if [ "${PROTECTED_LEAKED}" = "true" ]; then
@@ -1656,7 +1741,7 @@ jobs:
               else return 1; fi
             done; return 1
           }
-          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh protected_paths.txt; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
@@ -1808,6 +1893,34 @@ jobs:
         run: |
           set -euo pipefail
 
+          protected_paths_file="${SUPPORT_SCRIPTS_DIR}/protected_paths.txt"
+          if [ ! -f "${protected_paths_file}" ]; then
+            echo "::error::Missing protected paths file: ${protected_paths_file}"
+            exit 1
+          fi
+          mapfile -t protected_paths < <(sed '/^[[:space:]]*$/d' "${protected_paths_file}")
+          if [ "${#protected_paths[@]}" -eq 0 ]; then
+            echo "::error::Protected paths list is empty: ${protected_paths_file}"
+            exit 1
+          fi
+
+          protected_pathspec_excludes=()
+          protected_reset_targets=()
+          protected_regex_parts=()
+          for protected_path in "${protected_paths[@]}"; do
+            normalized_path="${protected_path%/}"
+            [ -n "${normalized_path}" ] || continue
+            protected_pathspec_excludes+=(":!${normalized_path}")
+            protected_reset_targets+=("${normalized_path}")
+            escaped_path="$(printf '%s' "${normalized_path}" | sed -e 's/[][(){}.^$+*?|\\-]/\\\\&/g')"
+            protected_regex_parts+=("${escaped_path}/")
+          done
+          if [ "${#protected_regex_parts[@]}" -gt 0 ]; then
+            protected_paths_regex="^($(IFS='|'; echo "${protected_regex_parts[*]}"))"
+          else
+            protected_paths_regex='^$'
+          fi
+
           echo "Running Codex resolver"
 
           # Ensure committer identity is set (see "Detect merge conflicts" step).
@@ -1859,8 +1972,8 @@ jobs:
           # Skipped on the workflow source repo itself, where these paths are
           # real source code.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
-            git checkout -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+            git reset -q HEAD -- "${protected_reset_targets[@]}" 2>/dev/null || true
+            git checkout -- "${protected_reset_targets[@]}" 2>/dev/null || true
           fi
 
           # Restore stashed dirs so Codex has its full environment.
@@ -1949,15 +2062,60 @@ jobs:
             git config user.email "codex@users.noreply.github.com"
             git rm -r --cached node_modules 2>/dev/null || true
             if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-              git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+              add_u_excludes=(
+                ':!node_modules'
+                ':!scripts/memory_helpers.sh'
+                ':!scripts/ai_memory.py'
+                ':!scripts/ai_memory_lib.py'
+                ':!scripts/review_run_reviewers.sh'
+                ':!scripts/review_apply_fixes.sh'
+                ':!scripts/review_rb_judge.sh'
+                ':!ai-memory'
+                ':!.github/prompts'
+                ':!.github/scripts'
+              )
+              add_o_excludes=(
+                ':!node_modules'
+                ':!.serena'
+                ':!scripts/memory_helpers.sh'
+                ':!scripts/ai_memory.py'
+                ':!scripts/ai_memory_lib.py'
+                ':!scripts/review_run_reviewers.sh'
+                ':!scripts/review_apply_fixes.sh'
+                ':!scripts/review_rb_judge.sh'
+                ':!ai-memory'
+                ':!.github/prompts'
+                ':!.github/scripts'
+              )
             elif [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-              git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+              add_u_excludes=(
+                ':!node_modules'
+                ':!scripts/memory_helpers.sh'
+                ':!scripts/ai_memory.py'
+                ':!scripts/ai_memory_lib.py'
+                ':!scripts/review_run_reviewers.sh'
+                ':!scripts/review_apply_fixes.sh'
+                ':!scripts/review_rb_judge.sh'
+                ':!ai-memory'
+                ':!.github/prompts'
+                ':!.github/scripts'
+              )
+              add_o_excludes=(
+                ':!node_modules'
+                ':!.serena'
+                ':!scripts'
+                ':!prompts'
+                ':!.github/ai'
+                ':!ai-memory'
+                ':!.github/prompts'
+                ':!.github/scripts'
+              )
             else
-              git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+              add_u_excludes=("${protected_pathspec_excludes[@]}")
+              add_o_excludes=("${protected_pathspec_excludes[@]}" ':!.github/ai')
             fi
+            git add -u -- "${add_u_excludes[@]}"
+            git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
             echo "Staged files before commit:"
             STAGED_FILES="$(git diff --cached --name-only || true)"
             printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
@@ -1973,9 +2131,9 @@ jobs:
               git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
-            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq "${protected_paths_regex}"; then
               echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-              git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+              git reset -q HEAD -- "${protected_reset_targets[@]}" 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
             if [ "${PROTECTED_LEAKED}" = "true" ]; then

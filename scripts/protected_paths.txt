@@ -1,0 +1,7 @@
+scripts/
+prompts/
+.github/prompts/
+.github/scripts/
+.serena/
+ai-memory/
+node_modules/

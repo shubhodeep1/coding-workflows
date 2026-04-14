@@ -244,7 +244,7 @@ jobs:
             done; return 1
           }
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py protected_paths.txt; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -756,6 +756,9 @@ jobs:
             echo "=== AI MEMORY CONTEXT ==="
             cat "${MEMORY_CONTEXT_FILE}"
             echo
+            echo "=== PROTECTED PATHS (do not modify) ==="
+            sed '/^[[:space:]]*$/d' scripts/protected_paths.txt
+            echo
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
@@ -1062,6 +1065,34 @@ jobs:
         run: |
           set -euo pipefail
 
+          protected_paths_file="scripts/protected_paths.txt"
+          if [ ! -f "${protected_paths_file}" ]; then
+            echo "::error::Missing protected paths file: ${protected_paths_file}"
+            exit 1
+          fi
+          mapfile -t protected_paths < <(sed '/^[[:space:]]*$/d' "${protected_paths_file}")
+          if [ "${#protected_paths[@]}" -eq 0 ]; then
+            echo "::error::Protected paths list is empty: ${protected_paths_file}"
+            exit 1
+          fi
+
+          protected_pathspec_excludes=()
+          protected_reset_targets=()
+          protected_regex_parts=()
+          for protected_path in "${protected_paths[@]}"; do
+            normalized_path="${protected_path%/}"
+            [ -n "${normalized_path}" ] || continue
+            protected_pathspec_excludes+=(":!${normalized_path}")
+            protected_reset_targets+=("${normalized_path}")
+            escaped_path="$(printf '%s' "${normalized_path}" | sed -e 's/[][(){}.^$+*?|\\-]/\\\\&/g')"
+            protected_regex_parts+=("${escaped_path}/")
+          done
+          if [ "${#protected_regex_parts[@]}" -gt 0 ]; then
+            protected_paths_regex="^($(IFS='|'; echo "${protected_regex_parts[*]}"))"
+          else
+            protected_paths_regex='^$'
+          fi
+
           # Remove workflow-generated/fetched artifacts BEFORE checking for
           # changes so they don't cause false-positive "file changes" detection.
           # The manifest tracks exactly which files were fetched — caller-repo
@@ -1097,15 +1128,17 @@ jobs:
           add_u_excludes=(':!node_modules')
           add_o_excludes=(':!node_modules' ':!.serena' ':!.github/ai')
           if [ "${is_self_repo}" = "false" ]; then
-            add_u_excludes+=(':!scripts' ':!.github/prompts' ':!.github/scripts')
-            add_o_excludes+=(':!scripts' ':!prompts' ':!.github/prompts' ':!.github/scripts')
+            add_u_excludes=("${protected_pathspec_excludes[@]}")
+            add_o_excludes=("${protected_pathspec_excludes[@]}" ':!.github/ai')
           fi
           git add -u -- "${add_u_excludes[@]}"
           git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
           echo "Staged files before commit:"
-          git diff --cached --name-only | sed 's/^/ - /' || true
-          if [ "${is_self_repo}" = "false" ] && git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
-            echo "Error: .github/prompts or .github/scripts is staged"
+          STAGED_FILES="$(git diff --cached --name-only || true)"
+          printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
+          if [ "${is_self_repo}" = "false" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq "${protected_paths_regex}"; then
+            echo "Error: protected paths are staged"
+            git reset -q HEAD -- "${protected_reset_targets[@]}" 2>/dev/null || true
             exit 1
           fi
           # If every Codex-produced change was filtered out by the path exclusions
