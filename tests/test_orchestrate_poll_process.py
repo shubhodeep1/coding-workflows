@@ -70,6 +70,30 @@ def _make_poller_sandbox(target: Path) -> None:
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
+		["git", "-C", str(target), "config", "user.email", "sandbox@example.com"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "config", "user.name", "Poller Sandbox"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "checkout", "-B", "main"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "commit", "--allow-empty", "-m", "sandbox init", "--quiet"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
 		[
 			"git", "-C", str(target), "remote", "add",
 			"origin", "https://github.com/test-harness/poller-sandbox.git",
@@ -1221,6 +1245,48 @@ def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
 	]
 	assert len(second_superseded_comments) == 1
 	assert second["merge_calls"] == []
+
+
+def test_superseded_state_reactivates_when_timeline_lookup_fails_for_other_issue():
+	state = _base_state(status="in_progress")
+	state["status"] = "done"
+	state["total_issues"] = 2
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_status"] = "superseded-by-main"
+	state["final_merge_pr"] = 300
+	state["sync"] = {
+		"status": "superseded-by-main",
+		"superseded_notified": True,
+		"last_sync_outcome": "superseded-skip",
+		"superseded_at": "2026-04-14T00:00:00Z",
+	}
+	state["waves"][0]["issues"].append({"id": "issue-2", "github_issue": 11, "status": "pending"})
+	state["issue_number_map"]["issue-2"] = 11
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 11: ["ai:implementing"]},
+		issue_linked_prs={11: 902},
+		prs=[
+			{
+				"number": 902,
+				"state": "open",
+				"merged": False,
+				"baseRefName": "main",
+				"headRefName": "ai/issue-11",
+				"mergeable": None,
+				"mergeable_state": "unknown",
+				"files": ["scripts/orchestrate_poll_process.sh"],
+			},
+		],
+		timeline_fail_for_issues=[10],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+	)
+	assert result["latest_state"]["sync"]["status"] == "conflict"
+	assert "Integration sync conflict" in "\n".join(c.get("body", "") for c in result["issues"]["192"]["comments"])
+	assert "keeping sync paused for now" not in (result["stdout"] + result["stderr"])
 
 
 def test_sync_conflict_comment_includes_paths_and_runbook_link():

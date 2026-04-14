@@ -1148,7 +1148,7 @@ evaluate_sync_superseded_by_main() {
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | unique | .[]' \
       2>/dev/null)"; then
       SYNC_SUPERSEDED_CONFIDENT="false"
-      return 0
+      continue
     fi
     while IFS= read -r pr_num; do
       [[ "${pr_num}" =~ ^[0-9]+$ ]] || continue
@@ -1173,6 +1173,7 @@ evaluate_sync_superseded_by_main() {
 	  continue
 	fi
 	if [ "${pr_state}" = "open" ] && [ "${pr_merged}" != "true" ]; then
+	  SYNC_SUPERSEDED_CONFIDENT="true"
 	  return 0
 	fi
 
@@ -1624,7 +1625,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
   fi
 
   evaluate_sync_superseded_by_main "${integration_branch}" "${default_branch}"
-  if [ "${SYNC_SUPERSEDED_BY_MAIN}" = "true" ]; then
+  if [ "${SYNC_SUPERSEDED_CONFIDENT:-true}" = "true" ] && [ "${SYNC_SUPERSEDED_BY_MAIN}" = "true" ]; then
     runbook_url="$(sync_rebuild_runbook_url "${default_branch}")"
     jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       --arg reason "${SYNC_SUPERSEDED_REASON}" \
