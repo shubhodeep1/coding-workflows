@@ -4602,7 +4602,7 @@ json.dump(result, sys.stdout)
                   codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
                 esac
                 case "${_rb_head_author_email}" in
-                  codex@users.noreply.github.com|*+github-actions\[bot\]@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
+                  codex@users.noreply.github.com|github-actions\[bot\]@users.noreply.github.com|*+github-actions\[bot\]@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
                 esac
                 ;;
             esac
@@ -4642,7 +4642,8 @@ json.dump(result, sys.stdout)
             REVIEW_BLOCKED_STATE_CHANGED=true
             continue
           elif [ "${_predispatch_rc}" -eq 2 ]; then
-            echo "  [review-blocked] Pre-judge dispatch skipped (active run or cycle-local dupe); falling through to judge."
+            echo "  [review-blocked] Pre-judge dispatch skipped (active run or cycle-local dupe); skipping judge this tick."
+            continue
           else
             echo "::warning::[review-blocked] Pre-judge dispatch failed for PR #${RB_PR}; falling through to judge."
           fi
