@@ -1011,7 +1011,7 @@ ${reason}"
 sync_rebuild_runbook_url() {
   local default_branch="$1"
   local fallback_branch="${default_branch:-main}"
-  local runbook_path="docs/rollback-runbook.md"
+  local runbook_path="docs/orchestrator-integration-branch-rebuild-runbook.md"
   local url
 
   if gh_retry gh api "repos/${GITHUB_REPOSITORY}/contents/${runbook_path}?ref=${fallback_branch}" >/dev/null 2>&1; then
@@ -1438,7 +1438,6 @@ heal_integration_branch_conflict() {
     '.integration_sync_status = "conflict" |
      .integration_sync_last_error = $err' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-
   # Circuit breaker: after MAX retries, escalate to judge instead of
   # dispatching one more resolver run.
   if [ "${unresolved_ticks}" -ge "${INTEGRATION_CONFLICT_MAX_RETRIES}" ]; then

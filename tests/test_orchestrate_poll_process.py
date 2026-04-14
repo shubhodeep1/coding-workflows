@@ -1129,7 +1129,7 @@ def test_sync_conflict_comment_includes_paths_and_runbook_link():
 	assert len(conflict_comments) == 1
 	assert "- `src/a.py`" in conflict_comments[0]
 	assert "- `src/b.py`" in conflict_comments[0]
-	assert "docs/rollback-runbook.md" in conflict_comments[0]
+	assert "orchestrator-integration-branch-rebuild-runbook.md" in conflict_comments[0]
 
 
 def test_sync_conflict_dedupe_skips_identical_warnings():
@@ -1219,7 +1219,6 @@ def test_sync_conflict_escalates_to_judge_immediately_after_retry_budget_exhaust
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration judge invoked" in body for body in tracking_bodies)
 	assert result["review_dispatches"] == []
-
 
 def test_final_merge_conflict_sets_merge_conflict_status():
 	state = _base_state(status="in_progress")
