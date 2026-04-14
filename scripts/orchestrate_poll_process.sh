@@ -895,7 +895,7 @@ integration_branch_exists() {
   [ -n "${branch_name}" ] || return 1
   local branch_ref
   local gh_error
-  branch_ref="$(printf '%s' "${branch_name}" | jq -sRr @uri)"
+  branch_ref="$(printf '%s' "${branch_name}" | jq -sRr '@uri | gsub("%2F"; "/")')"
 
   if gh_error="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" 2>&1 >/dev/null)"; then
     return 0
@@ -1001,7 +1001,9 @@ mark_integration_branch_missing_failed() {
      .final_merge_error = $reason' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
-  post_tracking_comment "## ❌ Integration branch missing\n\n${reason}"
+  post_tracking_comment "## ❌ Integration branch missing
+
+${reason}"
   tg_notify "❌ Project #${TRACKING_NUM} failed: missing integration branch '${integration_branch}'."
   tg_cleanup_msgs "${TRACKING_NUM}"
 }
@@ -1272,7 +1274,11 @@ ensure_eager_final_pr() {
       --base "${default_branch}" \
       --head "${integration_branch}" \
       --title "feat: ${project_title}" \
-      --body "Squash merge of orchestrator project #${TRACKING_NUM}.\n\nThis PR is created eagerly by the self-healing pipeline so that \`main\` <-> \`${integration_branch}\` drift can be resolved continuously rather than only at finalize time.\n\nRefs #${TRACKING_NUM}" 2>/dev/null || true)"
+      --body "Squash merge of orchestrator project #${TRACKING_NUM}.
+
+This PR is created eagerly by the self-healing pipeline so that \`main\` <-> \`${integration_branch}\` drift can be resolved continuously rather than only at finalize time.
+
+Refs #${TRACKING_NUM}" 2>/dev/null || true)"
     discovered="$(printf '%s\n' "${pr_url}" | grep -oE '/pull/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
   fi
 
@@ -1448,7 +1454,9 @@ heal_integration_branch_conflict() {
       # the judge's push. Keep dispatch_count as audit trail.
       jq '.integration_sync_status = "healing" | .integration_conflict_unresolved_ticks = 0 | .integration_sync_last_error = ""' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_tracking_comment "## 🛠️ Integration judge invoked\n\nFinal PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${INTEGRATION_CONFLICT_MAX_RETRIES} automated resolver attempts. The judge has been invoked with full PR context to resolve conflicts. The poller will retry merge on the next tick."
+      post_tracking_comment "## 🛠️ Integration judge invoked
+
+Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${INTEGRATION_CONFLICT_MAX_RETRIES} automated resolver attempts. The judge has been invoked with full PR context to resolve conflicts. The poller will retry merge on the next tick."
       return 0
     fi
     jq --arg err "judge escalation failed: ${error_msg}" \
@@ -1458,7 +1466,9 @@ heal_integration_branch_conflict() {
        .integration_sync_last_error = $err' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
-    post_tracking_comment "## ❌ Integration self-healing exhausted\n\nFinal PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could not be made mergeable after ${INTEGRATION_CONFLICT_MAX_RETRIES} automated attempts AND a judge escalation that itself failed. Manual intervention required."
+    post_tracking_comment "## ❌ Integration self-healing exhausted
+
+Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could not be made mergeable after ${INTEGRATION_CONFLICT_MAX_RETRIES} automated attempts AND a judge escalation that itself failed. Manual intervention required."
     tg_notify "❌ Integration self-healing exhausted for #${TRACKING_NUM} (PR #${final_pr}). Manual intervention required."
     return 1
   fi
@@ -1493,7 +1503,9 @@ heal_integration_branch_conflict() {
       # conflict episode to avoid the every-tick spam pattern seen on
       # #832. Subsequent dispatches log to the state comment instead.
       if [ "${unresolved_ticks}" -eq 1 ]; then
-        post_tracking_comment "## 🔧 Integration self-healing started\n\nDetected a real merge conflict while syncing \`${default_branch}\` into \`${integration_branch}\`. Dispatched the review/autofix workflow against final PR #${final_pr} for automated resolution. Will retry up to ${INTEGRATION_CONFLICT_MAX_RETRIES} times before escalating to the judge."
+        post_tracking_comment "## 🔧 Integration self-healing started
+
+Detected a real merge conflict while syncing \`${default_branch}\` into \`${integration_branch}\`. Dispatched the review/autofix workflow against final PR #${final_pr} for automated resolution. Will retry up to ${INTEGRATION_CONFLICT_MAX_RETRIES} times before escalating to the judge."
       fi
       tg_notify "🔧 Integration conflict on #${TRACKING_NUM}: dispatched resolver for PR #${final_pr} (attempt ${dispatch_count}, unresolved_ticks=${unresolved_ticks})." "WARNING"
       ;;
@@ -1517,7 +1529,9 @@ mark_integration_sync_clean() {
         .integration_sync_last_error = "" |
         .integration_conflict_unresolved_ticks = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_tracking_comment "## ✅ Integration self-healing resolved\n\n\`${default_branch}\` now merges cleanly into the integration branch. Final merge will proceed on the next poll tick."
+    post_tracking_comment "## ✅ Integration self-healing resolved
+
+\`${default_branch}\` now merges cleanly into the integration branch. Final merge will proceed on the next poll tick."
   fi
 }
 
@@ -1549,7 +1563,11 @@ sync_default_into_integration_branch() {
         })' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
-      post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}\n\nThe integration branch \`${integration_branch}\` is marked as **superseded-by-main**. Sync is intentionally skipped in future poll cycles to avoid repeated conflict churn.\n\nRunbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
+      post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}
+
+The integration branch \`${integration_branch}\` is marked as **superseded-by-main**. Sync is intentionally skipped in future poll cycles to avoid repeated conflict churn.
+
+Runbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
     fi
     return 0
   fi
@@ -1578,7 +1596,13 @@ sync_default_into_integration_branch() {
       })' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
-    post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}\n\nSkipping sync of \`${default_branch}\` into \`${integration_branch}\` because all tracked child PRs are terminal and the branch is now treated as superseded by \`${default_branch}\`.\n\nReason: ${SYNC_SUPERSEDED_REASON}\n\nRunbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
+    post_tracking_comment "## ✅ Integration branch superseded by ${default_branch}
+
+Skipping sync of \`${default_branch}\` into \`${integration_branch}\` because all tracked child PRs are terminal and the branch is now treated as superseded by \`${default_branch}\`.
+
+Reason: ${SYNC_SUPERSEDED_REASON}
+
+Runbook (if you need to rebuild the integration branch): [Rebuild integration branch](${runbook_url})"
     return 0
   fi
   ensure_integration_conflict_state_fields
@@ -1633,7 +1657,14 @@ sync_default_into_integration_branch() {
     post_state_comment
     runbook_url="$(sync_rebuild_runbook_url "${default_branch}")"
     conflict_paths_md="$(format_conflict_paths_markdown "${conflict_paths_json}")"
-    post_tracking_comment "## ⚠️ Integration sync conflict\n\nUnable to sync \`${default_branch}\` into \`${integration_branch}\` due to merge conflicts. The project can continue, but final merge may require manual conflict resolution.\n\nConflicting paths:\n${conflict_paths_md}\n\nRunbook: [Rebuild integration branch](${runbook_url})"
+    post_tracking_comment "## ⚠️ Integration sync conflict
+
+Unable to sync \`${default_branch}\` into \`${integration_branch}\` due to merge conflicts. The project can continue, but final merge may require manual conflict resolution.
+
+Conflicting paths:
+${conflict_paths_md}
+
+Runbook: [Rebuild integration branch](${runbook_url})"
     tg_notify "⚠️ Sync conflict for #${TRACKING_NUM}: could not merge '${default_branch}' into '${integration_branch}'."
   fi
   # Real conflict: trigger the self-healing loop. project_title is
@@ -1709,12 +1740,16 @@ finalize_integration_merge_if_needed() {
       --base "${default_branch}" \
       --head "${integration_branch}" \
       --title "feat: ${project_title}" \
-      --body "Squash merge of orchestrator project #${TRACKING_NUM}.\n\nRefs #${TRACKING_NUM}" 2>/dev/null || true)"
+      --body "Squash merge of orchestrator project #${TRACKING_NUM}.
+
+Refs #${TRACKING_NUM}" 2>/dev/null || true)"
     final_pr="$(printf '%s\n' "${final_pr_url}" | grep -oE '/pull/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
   fi
 
   if [ -z "${final_pr}" ]; then
-    post_tracking_comment "## ⚠️ Final merge could not start\n\nUnable to create or locate the final integration PR from \`${integration_branch}\` to \`${default_branch}\`."
+    post_tracking_comment "## ⚠️ Final merge could not start
+
+Unable to create or locate the final integration PR from \`${integration_branch}\` to \`${default_branch}\`."
     return 1
   fi
 
@@ -1765,7 +1800,9 @@ finalize_integration_merge_if_needed() {
        .integration_conflict_unresolved_ticks = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
-    post_tracking_comment "## ✅ Final merge complete\n\nIntegration branch \`${integration_branch}\` was squash-merged into \`${default_branch}\` via PR #${final_pr}."
+    post_tracking_comment "## ✅ Final merge complete
+
+Integration branch \`${integration_branch}\` was squash-merged into \`${default_branch}\` via PR #${final_pr}."
     return 0
   fi
 
@@ -1794,7 +1831,9 @@ finalize_integration_merge_if_needed() {
     return 1
   fi
 
-  post_tracking_comment "## ⚠️ Final merge blocked\n\nFinal PR #${final_pr} could not be merged automatically. Review branch protections/checks and merge manually if needed."
+  post_tracking_comment "## ⚠️ Final merge blocked
+
+Final PR #${final_pr} could not be merged automatically. Review branch protections/checks and merge manually if needed."
   return 1
 }
 
@@ -1937,9 +1976,16 @@ dispatch_validation_if_needed() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     if [ -n "${integration_branch}" ]; then
-      post_tracking_comment "## 🧪 Runtime validation dispatched\n\n- Cycle: ${validation_cycle}\n- Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`\n- Ref: \`${integration_branch}\`"
+      post_tracking_comment "## 🧪 Runtime validation dispatched
+
+- Cycle: ${validation_cycle}
+- Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`
+- Ref: \`${integration_branch}\`"
     else
-      post_tracking_comment "## 🧪 Runtime validation dispatched\n\n- Cycle: ${validation_cycle}\n- Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`"
+      post_tracking_comment "## 🧪 Runtime validation dispatched
+
+- Cycle: ${validation_cycle}
+- Workflow: \`${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}\`"
     fi
     tg_notify "🧪 Validation dispatched for project #${TRACKING_NUM} (cycle ${validation_cycle})." "DEBUG"
     return 0
@@ -1971,7 +2017,11 @@ mark_validation_failed() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     set_tracking_phase_label "ai:validation-recovery"
-    post_tracking_comment "## 🔄 Validation failed — recovery attempt $((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}\n\n${reason}\n\nTransitioning back to judge for re-evaluation."
+    post_tracking_comment "## 🔄 Validation failed — recovery attempt $((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}
+
+${reason}
+
+Transitioning back to judge for re-evaluation."
     tg_notify "Validation recovery ($((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}) for #${TRACKING_NUM}: transitioning back to judge." "WARNING"
     return 0
   fi
@@ -1981,7 +2031,11 @@ mark_validation_failed() {
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
   set_tracking_phase_label "ai:validation-failed"
-  post_tracking_comment "## ❌ Runtime validation failed\n\n${reason}\n\nValidation recovery exhausted (${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Manual intervention required."
+  post_tracking_comment "## ❌ Runtime validation failed
+
+${reason}
+
+Validation recovery exhausted (${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Manual intervention required."
   tg_notify "Project #${TRACKING_NUM} validation failed after ${val_recovery_count} recovery attempt(s). Manual intervention required." "CRITICAL"
   tg_cleanup_msgs "${TRACKING_NUM}"
 }
@@ -3702,7 +3756,9 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       if [ "${LAST_VAL_CONCLUSION}" = "success" ]; then
         echo "Fallback: last validation run concluded success without ai:validated label. Applying label and marking complete."
         set_tracking_phase_label "ai:validated"
-        post_tracking_comment "## ℹ️ Validation completion detected via workflow run fallback\n\nThe \`ai:validated\` label was missing but the last validation workflow run concluded successfully. Applying label and completing."
+        post_tracking_comment "## ℹ️ Validation completion detected via workflow run fallback
+
+The \`ai:validated\` label was missing but the last validation workflow run concluded successfully. Applying label and completing."
         mark_validation_complete "${VALIDATION_CYCLE}"
         continue
       fi
@@ -3829,7 +3885,9 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         --repo "${GITHUB_REPOSITORY}" \
         --remove-label "ai:validation-failed" >/dev/null || true
       set_tracking_phase_label "ai:validating"
-      post_tracking_comment "## 🔁 Validation reset via /revalidate\n\nAll validation counters cleared. Re-dispatching validation (cycle 1)."
+      post_tracking_comment "## 🔁 Validation reset via /revalidate
+
+All validation counters cleared. Re-dispatching validation (cycle 1)."
       tg_notify "/revalidate: project #${TRACKING_NUM} reset from validation-failed. Dispatching validation cycle 1." "DEBUG"
       if ! dispatch_validation_if_needed 1; then
         mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after /revalidate reset. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
@@ -3861,7 +3919,13 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
          .recovery_count = 0' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
-      post_tracking_comment "## ▶️ Project resumed via /judge_resume\n\nJudge stall cycles reset: ${PREV_JUDGE_STALL} → 0\nRecovery count reset: ${PREV_RECOVERY} → 0\nStatus: failed → in_progress\n\nThe poller will resume processing on the next cycle."
+      post_tracking_comment "## ▶️ Project resumed via /judge_resume
+
+Judge stall cycles reset: ${PREV_JUDGE_STALL} → 0
+Recovery count reset: ${PREV_RECOVERY} → 0
+Status: failed → in_progress
+
+The poller will resume processing on the next cycle."
       tg_notify "/judge_resume: project #${TRACKING_NUM} resumed from failed state. Judge stall cycles ${PREV_JUDGE_STALL}→0, recovery ${PREV_RECOVERY}→0." "WARNING"
       # Fall through to normal processing below instead of continuing
       PROJECT_STATUS="in_progress"
@@ -4837,7 +4901,9 @@ sys.exit(1)
                   if [ -n "${ORCH_FOLLOWUP_TRACKING_NUM:-}" ]; then
                     TRACKING_NUM="${ORCH_FOLLOWUP_TRACKING_NUM}"
                   fi
-                  post_tracking_comment "## ⚠️ Follow-up PR blocked\n\n${FOLLOWUP_BLOCK_REASON}"
+                  post_tracking_comment "## ⚠️ Follow-up PR blocked
+
+${FOLLOWUP_BLOCK_REASON}"
                   tg_notify "${FOLLOWUP_BLOCK_REASON}" "WARNING"
                   TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
                 fi
@@ -4948,7 +5014,9 @@ ${RB_FIX_DESC}" || true
                       if [ -n "${ORCH_FOLLOWUP_TRACKING_NUM:-}" ]; then
                         TRACKING_NUM="${ORCH_FOLLOWUP_TRACKING_NUM}"
                       fi
-                      post_tracking_comment "## ⚠️ Follow-up PR blocked\n\n${FOLLOWUP_GUARD_REASON}"
+                      post_tracking_comment "## ⚠️ Follow-up PR blocked
+
+${FOLLOWUP_GUARD_REASON}"
                       tg_notify "${FOLLOWUP_GUARD_REASON}" "WARNING"
                       TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
                       FOLLOWUP_PR_URL=""
@@ -5685,7 +5753,11 @@ PRs to revert: ${REVERT_COUNT}"
         continue
       fi
 
-      post_tracking_comment "## ✅ Judge declared project complete — cycle $((JUDGE_CYCLE + 1))\n\n**Reason:** ${JUDGE_JUSTIFICATION}\n\nAll waves have merged and the judge is satisfied. Transitioning to runtime validation (cycle ${VALIDATION_CYCLE}) to confirm correctness before closing."
+      post_tracking_comment "## ✅ Judge declared project complete — cycle $((JUDGE_CYCLE + 1))
+
+**Reason:** ${JUDGE_JUSTIFICATION}
+
+All waves have merged and the judge is satisfied. Transitioning to runtime validation (cycle ${VALIDATION_CYCLE}) to confirm correctness before closing."
 
       jq --argjson cycle "${VALIDATION_CYCLE}" \
         '.status = "validating" |
