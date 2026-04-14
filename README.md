@@ -80,6 +80,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | No | `2` | orchestrate_poll | Maximum times the poller transitions a validation-failed project back to the judge for re-evaluation before marking it as terminally failed. Set to `0` to disable (immediate terminal failure on first validation failure, matching pre-recovery behavior). |
 | `CONFLICT_DISPATCH_COOLDOWN_SECS` | No | `900` | orchestrate_poll | Minimum seconds between consecutive review/autofix dispatches against the same orchestrator integration-branch final PR. Prevents the self-healing loop from re-dispatching the resolver every poll tick while a previous run is still in flight. |
 | `INTEGRATION_CONFLICT_MAX_RETRIES` | No | `3` | orchestrate_poll | Circuit-breaker budget for automated integration-branch conflict resolution. After this many consecutive unresolved ticks on a `main` → integration-branch sync, the orchestrator escalates to the judge with full PR context; if the judge escalation itself fails the project is marked terminally failed. |
+| `REVIEW_BLOCKED_AUTO_UNSTICK` | No | `true` | orchestrate_poll | Before invoking the review-blocked judge, the poller inspects each `ai:review-blocked` PR. If the PR is `mergeable=false` it dispatches `review_autofix.yml` (via `_dispatch_review_for_conflicts`) so the in-workflow Codex resolver gets a fresh shot at the conflict, and skips the judge for this tick. If the PR head commit was authored by an **external** identity (anything other than `codex`, `codex-bot`, `github-actions`, or `github-actions[bot]`), the poller also dispatches the review workflow AND clears `ai:review-blocked`, re-entering the normal phase loop — this bridges the GitHub platform rule that suppresses `pull_request.synchronize` events on commits pushed with the default `GITHUB_TOKEN` (Claude Code on the web, custom wrapper actions) and matches the "push a new commit to re-trigger the review workflow" contract printed in the workflow-failure comment. Set to `false` to disable both paths and force the judge-first flow. Dispatch is always gated by the existing `_dispatch_review_for_conflicts` cycle-local dedup and active-run detection, so repeat calls are cheap no-ops. |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
 | `ALERT_MSG_LEVEL` | No | `DEBUG` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status, update_workflows, test-and-mark-stable | Minimum Telegram alert level to send. Alerts below this threshold are suppressed. Valid values: `DEBUG`, `WARNING`, `ERROR`, `CRITICAL`. Each alert is prefixed with an icon and level (e.g. `🔍 DEBUG:`, `⚠️ WARNING:`, `❌ ERROR:`, `🚨 CRITICAL:`). New alerts default to `CRITICAL` until explicitly recategorised. |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Version/branch of the Serena MCP server |
@@ -274,6 +275,25 @@ jobs:
 > the caller holds the lock while the called job waits for it, and GitHub
 > Actions cancels the run. If you need to customize the concurrency group,
 > do so only inside the reusable workflow, not in the caller.
+
+> **Bootstrap fail-fast + resolver hallucination guard** — The
+> `review_autofix.yml` script-bootstrap loop classifies helpers as
+> `REQUIRED_BOOTSTRAP_SCRIPTS` (missing from both `${script_ref}` and
+> `main` is a hard error with an actionable `::error::` message) vs
+> `OPTIONAL_BOOTSTRAP_SCRIPTS` (missing emits a `::warning::` and
+> continues). Keep the optional list empty unless a genuinely optional
+> helper is added — this catches stale references introduced by
+> hallucinated `[ai-merge-resolve]` commits before they can cascade
+> into "unbound variable" errors in later cleanup steps. As a second
+> layer, the `Resolve merge conflicts with Codex` step captures the
+> set of unmerged paths from the merge replay into
+> `RESOLVER_ALLOWLIST_FILE` and — after Codex exec returns — rejects
+> the commit with a hard `::error::` if any `.github/workflows/*.y(a)ml`
+> file was touched outside that allowlist. This allowlist-enforcement
+> path currently runs on the workflow source repository path
+> (`IS_WORKFLOW_SOURCE_REPO=true`). Non-workflow out-of-allowlist edits
+> emit a warning only. Both guards are automatic and have no
+> configuration surface.
 
 **`.github/workflows/ai-issue-pr-status.yml`** — Syncs issue labels when PRs are merged/closed
 ```yaml
