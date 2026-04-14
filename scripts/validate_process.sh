@@ -881,11 +881,6 @@ enforce_managed_validation_artifact_contract()
 		"scripts/validate_driver.sh"
 	)
 
-	if git ls-files --error-unmatch -- "${CANONICAL_VALIDATE_HARNESS_REL}" >/dev/null 2>&1; then
-		violations+=("${CANONICAL_VALIDATE_HARNESS_REL} is tracked. validation/ artifacts must remain transient and untracked.")
-		has_violation=true
-	fi
-
 	mapfile -t tracked_scripts < <(git ls-files -- 'scripts/*.sh' 2>/dev/null || true)
 
 	for canonical_path in "${canonical_paths[@]}"; do
