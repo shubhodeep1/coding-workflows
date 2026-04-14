@@ -919,14 +919,15 @@ fi
 GENERATE_SUCCESS=false
 for attempt in 1 2; do
   echo "Validation harness ${HARNESS_MODE} attempt ${attempt}/2"
-  if cat "${GENERATE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${GENERATE_OUTPUT_FILE}" 2> >(tee -a "${GENERATE_LOG_FILE}" >&2); then
-    ensure_validate_wrapper
-    if [ -f validation/docker-compose.test.yml ] \
-      && find validation/tests -type f -name '*.sh' -print -quit >/dev/null 2>&1; then
-      GENERATE_SUCCESS=true
-      break
-    fi
-  fi
+	if cat "${GENERATE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${GENERATE_OUTPUT_FILE}" 2> >(tee -a "${GENERATE_LOG_FILE}" >&2); then
+		ensure_validate_wrapper
+		if [ -f validation/docker-compose.test.yml ] \
+			&& [ -d validation/tests ] \
+			&& find validation/tests -type f -name '*.sh' -print -quit | grep -q .; then
+			GENERATE_SUCCESS=true
+			break
+		fi
+	fi
   if [ "${attempt}" -lt 2 ]; then
     sleep $((attempt * 10))
   fi
