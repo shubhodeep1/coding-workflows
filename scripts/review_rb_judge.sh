@@ -293,17 +293,47 @@ case "${RB_ACTION}" in
         --add-label 'ai:ready-to-merge' || true
     done <<< "${ISSUE_NUMBERS}"
 
-    # Attempt merge
-    _pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
-    PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed|merged' || echo "")"
-    PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
+    # Attempt merge.
+    #
+    # GitHub's REST `pulls` API returns `mergeable` as one of three values:
+    #   - true   : merge is clean
+    #   - false  : real merge conflicts
+    #   - null   : GitHub has not finished computing mergeability yet
+    #              (typical immediately after a push). Mergeability is
+    #              computed asynchronously, so we must poll briefly before
+    #              treating an empty value as a hard failure — otherwise a
+    #              transient `null` is indistinguishable from a real conflict
+    #              in the log.
+    PR_STATE=""
+    PR_MERGEABLE=""
+    _mergeable_attempts="${PR_MERGEABLE_POLL_ATTEMPTS:-6}"
+    _mergeable_sleep="${PR_MERGEABLE_POLL_SLEEP:-5}"
+    _attempt=0
+    while [ "${_attempt}" -lt "${_mergeable_attempts}" ]; do
+      _pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+      PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed|merged' || echo "")"
+      PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
+      # Stop polling as soon as state is terminal or mergeability is known.
+      if [ "${PR_STATE}" != "open" ] || [ -n "${PR_MERGEABLE}" ]; then
+        break
+      fi
+      _attempt=$((_attempt + 1))
+      if [ "${_attempt}" -lt "${_mergeable_attempts}" ]; then
+        echo "PR #${PR_NUMBER} mergeable=null (GitHub still computing); retrying in ${_mergeable_sleep}s (${_attempt}/${_mergeable_attempts})."
+        sleep "${_mergeable_sleep}"
+      fi
+    done
+
     if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
       if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
         gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
           || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
       fi
+    elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
+      echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is."
+      echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=false, merge conflicts present."
     else
-      echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE}, cannot merge yet."
+      echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null}, cannot merge yet (mergeability still computing or PR not open)."
     fi
 
     echo "judge_handled=true" >> "$GITHUB_OUTPUT"
