@@ -1181,7 +1181,7 @@ evaluate_sync_superseded_by_main() {
 	pr_merged="$(_jq_field "${pr_json}" '.merged_at != null' 'true|false')"
 	if [ -z "${pr_state}" ] || [ -z "${pr_merged}" ]; then
 	  echo "  [superseded-check] Skipping PR #${pr_num}: unable to fetch state." >&2
-	  return 0
+	  continue
 	fi
 	if [ "${pr_state}" = "open" ] && [ "${pr_merged}" != "true" ]; then
 	  return 0
@@ -2694,12 +2694,15 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       pr_json="$(_fetch_pr_json "${target_pr}")"
       head_sha="$(_jq_field "${pr_json}" '.head.sha')"
       if [ -n "${head_sha}" ]; then
-        gh api "repos/${GITHUB_REPOSITORY}/pulls/${target_pr}/update-branch" \
+	gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${target_pr}/update-branch" \
           -X PUT -f expected_head_sha="${head_sha}" >/dev/null 2>&1 || true
       fi
       _dispatch_review_for_conflicts "${target_pr}" "${head_ref}" || dispatch_rc=$?
       if [ "${dispatch_rc}" -eq 1 ]; then
         return 1
+      fi
+      if [ "${dispatch_rc}" -eq 2 ]; then
+        return 0
       fi
       STALL_RECOVERY_SHOULD_INCREMENT="true"
       ;;

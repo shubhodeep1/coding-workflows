@@ -519,7 +519,7 @@ def detect_stalls(
 		# Determine recovery action
 		if recovery_count >= max_recoveries:
 			action = "skip"
-		elif enable_stall_judge and recovery_count >= stall_judge_trigger_count:
+		elif enable_stall_judge and stall_judge_trigger_count >= 1 and recovery_count >= stall_judge_trigger_count:
 			action = RUN_STALL_JUDGE_ACTION
 		else:
 			actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
