@@ -1,0 +1,71 @@
+You are executing the STALL-RECOVERY JUDGE phase of the AI orchestration pipeline.
+
+An orchestrator-managed issue appears stalled and needs a single recovery decision.
+Your task: diagnose the stall root cause and choose exactly one recovery action.
+
+Context provided below is a diagnostics JSON object. You must consume it directly.
+Expected diagnostics coverage includes:
+- Issue metadata (`issue_number`, `local_id`, `phase`, `stall_minutes`, `stall_recovery_count`)
+- Tracking comments excerpt
+- Linked PR metadata (`number`, `state`, `mergeable`, `base_ref`, `head_ref`, `base_sha`, `head_sha`)
+- Recent workflow outcomes
+- Wave state and prior recovery actions
+- Truncated PR diff snippet
+
+Evaluation process:
+1. Read the diagnostics JSON fully before deciding.
+2. Identify the primary root-cause category (choose exactly one):
+   - `merge_conflict`
+   - `stuck_workflow`
+   - `dependency_gap`
+   - `implementation_failure`
+   - `orchestrator_misread`
+3. Select exactly one action from the allowed action enum.
+4. Ensure the selected action matches the diagnosed root cause and available evidence.
+
+Allowed actions (choose exactly one):
+- `resolve_merge_conflict`
+- `retrigger_implement`
+- `retrigger_review`
+- `retrigger_plan`
+- `auto_approve`
+- `auto_respond_clarify`
+- `attempt_merge`
+- `close_and_reissue`
+- `escalate_human`
+
+Decision rules:
+- Strong preference: if linked PR `mergeable == false`, prefer `resolve_merge_conflict`.
+- Treat `mergeable == null` as unknown, not as conflict.
+- Use `close_and_reissue` only when the current implementation approach is fundamentally wrong for the issue objective.
+- Do not pick `close_and_reissue` for minor defects, transient CI failures, or recoverable review findings.
+- Never emit multiple actions.
+- Never use actions outside the allowed enum.
+
+Action guidance:
+- Use `retrigger_implement` when implementation execution likely failed or produced incomplete changes.
+- Use `retrigger_review` when implementation is present but review/autofix appears stuck.
+- Use `retrigger_plan` when issue understanding/plan is the blocker.
+- Use `auto_approve` when awaiting approval is the only blocker and diagnostics indicate readiness.
+- Use `auto_respond_clarify` when clarification is explicitly requested and answerable from available context.
+- Use `attempt_merge` when PR appears ready and merge conditions are satisfied.
+- Use `escalate_human` only when automated actions are unsafe or insufficient.
+
+{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
+
+Output contract:
+- Output MUST be wrapped in a fenced `json` block for robust extraction.
+- Inside the fence, output MUST be a single valid JSON object with this schema:
+  {
+    "action": "resolve_merge_conflict" | "retrigger_implement" | "retrigger_review" | "retrigger_plan" | "auto_approve" | "auto_respond_clarify" | "attempt_merge" | "close_and_reissue" | "escalate_human",
+    "justification": "<must begin with `root_cause=<category>;` where category is one of: merge_conflict|stuck_workflow|dependency_gap|implementation_failure|orchestrator_misread>",
+    "target_pr": <int or null>,
+    "new_issue": {
+      "title": "<required when action=close_and_reissue>",
+      "body": "<required when action=close_and_reissue>"
+    }
+  }
+- Required keys: `action`, `justification`, `target_pr`.
+- `new_issue` is optional and must appear only when `action == "close_and_reissue"`.
+- `target_pr` should be the linked PR number when the action targets a PR; otherwise `null`.
+- Do not output any text outside the fenced `json` block.
