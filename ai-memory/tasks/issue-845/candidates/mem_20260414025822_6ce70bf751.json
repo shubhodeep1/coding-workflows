@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for Item 18 (soft token-budget hint)\n\nClarification mapping\n- Q1 asked whether \u201cevery Codex invocation\u201d means repo-wide or scoped.\n- Interpreted answer: Q1: A.\n- Scope to execute: only the explicitly listed files, but cover all Codex prompt constructions inside them (including judge and validator paths in those files).\n\nConflict check (explicit)\n- The repo also has another judge prompt path in scripts/review_rb_judge.sh (outside the approved file list). It will remain unchanged under Q1: A scope.\n- A prior bot comment said scripts/ changes would be no-op in consumer repos; this issue targets the coding-workflows source repo and explicitly requires scripts/ edits, so this item proceeds in-repo.\n\n1. Files likely to change\n- .github/workflows/clarify.yml\n- .github/workflows/plan.yml\n- .github/workflows/implement.yml\n- .github/workflows/orchestrate.yml\n- .github/workflows/orchestrate_clarify_respond.yml\n- scripts/validate_process.sh\n- scripts/orchestrate_poll_process.sh\n- codex_system_instructions.md\n\n2. Functions/modules to implement\n- Add prompt-size token hint generation where prompts already emit TOOL_CALL_BUDGET.\n- Implementation pattern for each target path:\n1. Build prompt as today.\n2. Estimate prompt tokens with wc -c and integer division by 4.\n3. Resolve model context window from MODEL_EDITOR (use codex model catalog when available; otherwise safe fallback).\n4. Compute approximate remaining tokens.\n5. Emit TOKEN_BUDGET_HINT: ... adjacent to TOOL_CALL_BUDGET: ... in the prompt text.\n6. If any estimate input is missing/invalid, emit a safe fallback hint string and continue (no failure, no hard-stop logic).\n\n- Per-file application points:\n1. clarify.yml: Run Codex prompt assembly block.\n2. plan.yml: planning prompt assembly block.\n3. implement.yml: implementation prompt assembly block.\n4. orchestrate.yml: decomposer prompt build block.\n5. orchestrate_clarify_respond.yml: clarify-respond prompt build block.\n6. validate_process.sh: all validator prompt builders that already emit TOOL_CALL_BUDGET (discovery, harness implementation/fix, diagnosis).\n7. orchestrate_poll_process.sh: judge prompt builders (main judge + review-blocked judge).\n8. codex_system_instructions.md: documentation note that TOKEN_BUDGET_HINT is advisory/soft guidance only.\n\n3. Data structures affected\n- Prompt payload text format gains one new metadata line:\n  - TOKEN_BUDGET_HINT: <approx remaining context tokens or fallback text>\n- New transient shell variables for estimation (prompt bytes/tokens, model context, remaining tokens, fallback state).\n- No persistent schema/storage/index changes.\n\n4. API/interface changes\n- Prompt interface change only: prompts now include both TOOL_CALL_BUDGET and TOKEN_BUDGET_HINT lines.\n- No changes to existing workflow inputs, env var names, model selection behavior, or tool-call budget enforcement behavior.\n- No new hard enforcement mechanism introduced.\n\n5. Potential risks and edge cases\n- Model context window unavailable (missing catalog entry or unknown model slug).\n- Prompt size unreadable/non-numeric in shell arithmetic.\n- Estimated remaining tokens negative or zero for oversized prompts.\n- Multiple prompt-generation loops (validator/judge retries) must keep hint regeneration consistent per attempt.\n- Mitigation: fail-open hint computation with deterministic fallback text and never exit non-zero from hint logic.\n\n6. Testing considerations\n- Static checks:\n1. bash -n scripts/validate_process.sh\n2. bash -n scripts/orchestrate_poll_process.sh\n3. YAML validation/action lint for touched workflows.\n- Functional checks:\n1. Verify each targeted prompt path now contains both TOOL_CALL_BUDGET and TOKEN_BUDGET_HINT.\n2. Validate fallback behavior by simulating missing/invalid estimation data; workflow/script should continue normally.\n- Regression checks:\n1. Run existing smoke/E2E workflow path used by this repo to confirm no behavior regression.\n2. Confirm judge and validator calls still execute unchanged apart from added advisory metadata.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a5c64eb2ddac5f16842ba292ceccd55eb90fe911db8735b6065d5a1f2a622ce7",
+  "lineage": {
+    "issue_number": 845,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24378239055",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24378239055",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/845"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414025822_6ce70bf751",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 845,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24378239055"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #845",
+  "timestamps": {
+    "created_at": "2026-04-14T02:58:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
