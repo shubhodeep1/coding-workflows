@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` clarification questions were issued in the clarify phase.\n- Interpreted `/answer [auto-answered-by-clarify]` as \u201cscope is sufficiently specified; proceed with planning.\u201d\n\nImplementation plan for Item 8 (`.github/workflows/review_autofix.yml`):\n\n1. Files likely to change\n- `.github/workflows/review_autofix.yml` only.\n- Focus area: `Resolve merge conflicts with Codex` step, specifically the block immediately before the conflict-resolver prompt heredoc and the prompt body itself.\n\n2. Functions/modules to implement\n- Add a prompt-context assembly block before `Rules:` in the conflict-resolver heredoc that writes:\n- `=== PR INTENT ===`\n- `Title: <PR title>`\n- `Body: <PR body capped at 200 lines>`\n- `Linked issue: <linked issue body capped at 200 lines or none>`\n- Reuse `PR_META_FILE` for `title` and `body` first.\n- Add minimal linked-issue body fetch only if linked-issue body is not already present in metadata:\n- Resolve linked issue number from PR linkage (prefer GraphQL `closingIssuesReferences(first:1)`).\n- Fallback to existing issue-number extraction pattern from PR title/body if needed.\n- Fetch issue body via REST issue endpoint.\n- Keep fail-open behavior: on any failure or unresolved issue, use `none`.\n- Keep existing `codex exec --model ... --full-auto \"$(cat \"${CONFLICT_RESOLVER_PROMPT_FILE}\")\"` invocation shape unchanged.\n\n3. Data structures affected\n- `PR_META_FILE` usage is extended (read existing `title`/`body`, optionally read linked-issue fields if present in future metadata).\n- `CONFLICT_RESOLVER_PROMPT_FILE` schema changes by prepending a deterministic \u201cPR intent\u201d section.\n- New temporary shell variables for capped text and linked-issue content (no persistent schema migration).\n\n4. API/interface changes\n- No external workflow input/output or positional arg changes.\n- Internal prompt interface to the conflict resolver changes (more context, same command shape).\n- Minimal GitHub API usage added in resolver step when needed:\n- GraphQL: `pullRequest(number){ closingIssuesReferences(first:1){ nodes{ number } } }`\n- REST: `GET /repos/{owner}/{repo}/issues/{issue_number}` (body field)\n- Ensure resolver step has required auth env (`GH_TOKEN`) and repository context.\n\n5. Potential risks and edge cases\n- PR body or issue body empty/null: render as empty body section or `none` (for linked issue).\n- Multiple linked issues: choose first deterministically; document this in comments.\n- API/rate-limit/transient failures: must not fail step; degrade to `none`.\n- Very large markdown bodies: enforce 200-line cap to prevent prompt bloat.\n- Special characters/newlines in body text: preserve safely in heredoc output.\n- Preserve existing resolver constraints and no-network rule text while adding intent block.\n\n6. Testing considerations\n- Workflow syntax validation after edit.\n- Dry-run check of generated `CONFLICT_RESOLVER_PROMPT_FILE` content in CI logs/artifacts for:\n- intent block always present,\n- body capped to 200 lines,\n- linked issue shown as capped body or `none`.\n- Conflict-path integration check on a synthetic conflicted PR:\n- verify resolver still runs,\n- verify no positional-argument changes to `codex exec`,\n- verify fail-open when linked issue cannot be resolved.\n- Regression check: non-conflict runs and downstream labeling/merge logic remain unchanged.\n\nCodebase conflict detection:\n- No naming/path mismatch with the issue request.\n- Noted gap (expected): current `PR_META_FILE` contains PR title/body but no linked issue body, so minimal GH fetch is required to satisfy the new `Linked issue:` prompt field.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3597d33fe3af6fe54603f318c8629314a29b2fe68168b4a1c607173f6ed692f8",
+  "lineage": {
+    "issue_number": 841,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24375837646",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24375837646",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/841"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414012819_15e1b40724",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 841,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24375837646"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #841",
+  "timestamps": {
+    "created_at": "2026-04-14T01:28:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
