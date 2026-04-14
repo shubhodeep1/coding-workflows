@@ -112,6 +112,60 @@ PR_REVIEW_COMMENTS="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/
   | jq -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo "[]")"
 PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
 
+compute_rb_token_budget_hint() {
+  local prompt_file="$1"
+  local model_slug="$2"
+  local catalog_path model_meta prompt_bytes prompt_tokens context_window
+  local effective_percent_raw effective_context remaining_tokens
+
+  prompt_bytes="$(wc -c < "${prompt_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+  if ! [[ "${prompt_bytes}" =~ ^[0-9]+$ ]]; then
+    echo "advisory unavailable: unable to estimate prompt bytes"
+    return 0
+  fi
+  prompt_tokens=$(( (prompt_bytes + 3) / 4 ))
+
+  catalog_path="${SUPPORT_ROOT_DIR}/scripts/codex_model_catalog.json"
+  if [ ! -f "${catalog_path}" ]; then
+    echo "estimated_tokens=${prompt_tokens}; advisory only: model context metadata unavailable"
+    return 0
+  fi
+
+  model_meta="$(jq -c --arg slug "${model_slug}" '.models[]? | select(.slug == $slug)' "${catalog_path}" 2>/dev/null | head -n1 || true)"
+  if [ -z "${model_meta}" ]; then
+    echo "estimated_tokens=${prompt_tokens}; advisory only: model metadata not found for ${model_slug}"
+    return 0
+  fi
+
+  context_window="$(jq -r '.context_window // empty' <<< "${model_meta}" 2>/dev/null || true)"
+  if ! [[ "${context_window}" =~ ^[0-9]+$ ]] || [ "${context_window}" -le 0 ]; then
+    echo "estimated_tokens=${prompt_tokens}; advisory only: invalid context_window metadata"
+    return 0
+  fi
+
+  effective_context="${context_window}"
+  effective_percent_raw="$(jq -r 'if has("effective_context_window_percent") and .effective_context_window_percent != null then (.effective_context_window_percent|tostring) else "" end' <<< "${model_meta}" 2>/dev/null || true)"
+  if [ -n "${effective_percent_raw}" ]; then
+    if [[ "${effective_percent_raw}" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v p="${effective_percent_raw}" 'BEGIN { exit !(p > 0 && p <= 100) }'; then
+      effective_context="$(awk -v c="${context_window}" -v p="${effective_percent_raw}" 'BEGIN { printf "%d", (c * p / 100.0) + 0.5 }')"
+      if ! [[ "${effective_context}" =~ ^[0-9]+$ ]] || [ "${effective_context}" -le 0 ]; then
+        echo "estimated_tokens=${prompt_tokens}; advisory only: invalid effective context metadata"
+        return 0
+      fi
+    else
+      echo "estimated_tokens=${prompt_tokens}; advisory only: invalid effective_context_window_percent metadata"
+      return 0
+    fi
+  fi
+
+  remaining_tokens=$(( effective_context - prompt_tokens ))
+  if [ "${remaining_tokens}" -lt 0 ]; then
+    remaining_tokens=0
+  fi
+
+  echo "${remaining_tokens} (approx remaining context tokens; advisory only)"
+}
+
 # -----------------------------------------------------------
 # Build judge prompt
 # -----------------------------------------------------------
@@ -175,6 +229,22 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
     echo "approach is fundamentally wrong."
   fi
 } > "${RB_JUDGE_PROMPT}"
+
+RB_TOKEN_BUDGET_HINT="$(compute_rb_token_budget_hint "${RB_JUDGE_PROMPT}" "${MODEL_EDITOR}")"
+RB_JUDGE_PROMPT_TMP="${RB_JUDGE_PROMPT}.tmp"
+if awk -v hint="${RB_TOKEN_BUDGET_HINT}" '
+  {
+    print
+    if (!inserted && $0 ~ /^TOOL_CALL_BUDGET:/) {
+      print "TOKEN_BUDGET_HINT: " hint
+      inserted=1
+    }
+  }
+' "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_PROMPT_TMP}" && mv "${RB_JUDGE_PROMPT_TMP}" "${RB_JUDGE_PROMPT}"; then
+  :
+else
+  rm -f "${RB_JUDGE_PROMPT_TMP}"
+fi
 
 # -----------------------------------------------------------
 # Temporarily set judge reasoning effort in codex config
@@ -514,4 +584,3 @@ ${RB_FIX_DESC}"
     echo "::warning::Unknown review-blocked judge action: ${RB_ACTION} — falling back to manual intervention."
     ;;
 esac
-
