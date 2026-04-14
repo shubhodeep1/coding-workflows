@@ -3,6 +3,24 @@
 
 set -euo pipefail
 
+emit_early_init_failure_result()
+{
+	local exit_code="$?"
+
+	if [ "${exit_code}" -eq 0 ]; then
+		return 0
+	fi
+
+	if [ "${RESULT_EMITTED:-0}" = "1" ]; then
+		return 0
+	fi
+
+	RESULT_EMITTED=1
+	printf '%s\n' '{"result":"fail","phase":"preflight","total_tests":1,"passed_tests":0,"failed_tests":1,"failures":[{"test":"validate_driver_init","error":"validate driver failed during early initialization","log_tail":""}],"duration_seconds":0}'
+}
+
+trap emit_early_init_failure_result EXIT
+
 ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
 if [ -f "${ENV_FILE}" ]; then
 	set -a
@@ -126,9 +144,7 @@ emit_result()
 	RESULT_EMITTED=1
 
 	local duration
-	local failures_json
 	duration=$(( $(date +%s) - START_TS ))
-	failures_json="$(cat "${FAILURES_FILE}" 2>/dev/null || printf '[]')"
 
 	RESULT="${RESULT}" \
 	PHASE="${PHASE}" \
@@ -136,10 +152,19 @@ emit_result()
 	PASSED_TESTS="${PASSED_TESTS}" \
 	FAILED_TESTS="${FAILED_TESTS}" \
 	DURATION="${duration}" \
-	FAILURES_JSON="${failures_json}" \
+	FAILURES_FILE_PATH="${FAILURES_FILE}" \
 	python3 -c '
 import json
 import os
+
+failures = []
+failures_path = os.environ.get("FAILURES_FILE_PATH")
+if failures_path:
+    try:
+        with open(failures_path, "r", encoding="utf-8") as handle:
+            failures = json.load(handle)
+    except Exception:
+        failures = []
 
 print(
     json.dumps(
@@ -149,7 +174,7 @@ print(
             "total_tests": int(os.environ["TOTAL_TESTS"]),
             "passed_tests": int(os.environ["PASSED_TESTS"]),
             "failed_tests": int(os.environ["FAILED_TESTS"]),
-            "failures": json.loads(os.environ["FAILURES_JSON"]),
+            "failures": failures,
             "duration_seconds": int(os.environ["DURATION"]),
         }
     )
@@ -307,7 +332,7 @@ wait_for_health()
 
 		if [ "$(date +%s)" -ge "${deadline}" ]; then
 			capture_compose_logs
-			fail_fast "startup_health_timeout" "service did not become healthy within HEALTH_TIMEOUT seconds" "${COMPOSE_LOG}" "startup"
+			fail_fast "startup_health_timeout" "service did not become healthy within HEALTH_TIMEOUT seconds" "${COMPOSE_LOG}" "health"
 		fi
 
 		sleep "${HEALTH_POLL_INTERVAL}"
