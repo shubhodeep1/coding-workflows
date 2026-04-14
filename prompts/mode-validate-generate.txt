@@ -45,6 +45,10 @@ Docker build-context path rules (CRITICAL):
   This resolves to `validation/validation/Dockerfile.app` which does not exist.
 - After generating the compose file, mentally verify that `<resolved_context>/<dockerfile>` points to a real file.
 
+YAML indentation rule (CRITICAL):
+- `validation/docker-compose.test.yml` and any other generated `.yml`/`.yaml` file MUST use **2-space indentation**. YAML spec disallows TAB characters as indentation; `docker compose config` and every YAML parser will reject tab-indented YAML with an error like `found character that cannot start any token`. This is the ONE exception to the repo-wide "tabs for indentation" style rule.
+- Shell scripts (`.sh`), Dockerfiles, and Python may continue to use tabs per the repo convention. Only YAML files are spaces-only.
+
 Docker Compose healthcheck YAML rules (CRITICAL):
 - Every entry in a `healthcheck.test` list MUST be an explicitly quoted string.
 - YAML auto-casts bare values like `true`, `false`, `yes`, `no`, `null`, and bare numbers into non-string types. Docker Compose schema validation rejects these with: `services.<name>.healthcheck.test.N must be a string`.
