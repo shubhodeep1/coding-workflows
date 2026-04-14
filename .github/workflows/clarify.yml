@@ -288,6 +288,8 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Build context file
+        env:
+          RECLARIFY_COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
           {
@@ -297,6 +299,75 @@ jobs:
             # Comments are already in chronological order (direction=asc fetch).
             jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${ISSUE_CONTEXT_FILE}"
+
+          IS_RECLARIFY=false
+          if [ "${{ github.event_name }}" = "issue_comment" ] \
+            && printf '%s\n' "${RECLARIFY_COMMENT_BODY}" | grep -qiE '^[[:space:]]*/reclarify([[:space:]]|$)'; then
+            IS_RECLARIFY=true
+          fi
+
+          if [ "${IS_RECLARIFY}" = "true" ]; then
+            LATEST_RECLARIFY_INDEX="$(jq -r '
+              [
+                to_entries[]
+                | select((.value.body // "") | test("(?i)^\\s*/reclarify\\b"))
+                | .key
+              ]
+              | last // ""
+            ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
+
+            PRIOR_QUESTIONS=""
+            PRIOR_ANSWER_BODY=""
+
+            if [ -n "${LATEST_RECLARIFY_INDEX}" ] && [ "${LATEST_RECLARIFY_INDEX}" != "null" ]; then
+              PRIOR_ANSWER_INDEX="$(jq -r --argjson reclarify_idx "${LATEST_RECLARIFY_INDEX}" '
+                [
+                  to_entries[]
+                  | select(.key < $reclarify_idx)
+                  | select((.value.body // "") | test("(?i)^\\s*/answer\\b"))
+                  | .key
+                ]
+                | last // ""
+              ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
+
+              if [ -n "${PRIOR_ANSWER_INDEX}" ] && [ "${PRIOR_ANSWER_INDEX}" != "null" ]; then
+                PRIOR_ANSWER_RAW="$(jq -r --argjson answer_idx "${PRIOR_ANSWER_INDEX}" '
+                  .[$answer_idx].body // ""
+                ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
+
+                PRIOR_ANSWER_BODY="$(printf '%s' "${PRIOR_ANSWER_RAW}" | perl -0777 -pe 's/^\s*\/answer\b\s*//is' 2>/dev/null || true)"
+                if [ -z "${PRIOR_ANSWER_BODY}" ]; then
+                  PRIOR_ANSWER_BODY="(No content provided after /answer.)"
+                fi
+
+                PRIOR_QUESTIONS="$(jq -r --argjson answer_idx "${PRIOR_ANSWER_INDEX}" '
+                  [ range(0; $answer_idx) as $i | .[$i] ]
+                  | reverse
+                  | map(select(
+                      ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required|\\*\\*Q[0-9]+:|QUESTIONS:"; "i"))
+                    ))
+                  | if length > 0 then .[0].body // "" else "" end
+                ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
+
+                if [ -z "${PRIOR_QUESTIONS}" ]; then
+                  PRIOR_QUESTIONS="(Unable to parse prior clarification questions from comments.)"
+                fi
+              fi
+            fi
+
+            if [ -n "${PRIOR_QUESTIONS}" ] || [ -n "${PRIOR_ANSWER_BODY}" ]; then
+              {
+                echo
+                echo "=== PRIOR CLARIFICATION ROUND ==="
+                echo "Previous questions"
+                printf '%s\n\n' "${PRIOR_QUESTIONS}"
+                echo "User answers"
+                printf '%s\n\n' "${PRIOR_ANSWER_BODY}"
+                echo "Why these were insufficient"
+                echo "(Model should infer unresolved gaps from the issue context and prior round.)"
+              } >> "${ISSUE_CONTEXT_FILE}"
+            fi
+          fi
 
       - name: Create Codex config
         run: |
@@ -528,6 +599,8 @@ jobs:
           1. Determine if the issue is clear enough to implement.
           2. If clarification is required, ask concise clarification questions.
           3. Ask only essential questions needed for implementation.
+          3a. If the issue context includes "=== PRIOR CLARIFICATION ROUND ===", do not repeat already answered questions from that section.
+          3b. Ask only unresolved gaps that remain after considering prior questions and user answers.
           4. Use web search when needed to resolve unknowns before asking questions.
           5. If external APIs/services are likely required, review their official API docs and identify the expected endpoints and parameters so planning can include concrete call details for an offline editor.
           6. Use Serena MCP tools (get_symbols_overview, find_symbol) when available to explore
@@ -578,6 +651,53 @@ jobs:
           # all inlined so the model doesn't waste tool calls reading files.
           # The static prefix (pre_assembled_static.txt) is identical across all
           # runs, enabling LLM provider prompt-prefix caching.
+          resolve_model_context_window() {
+            local catalog_path="./scripts/codex_model_catalog.json"
+            local context_window=""
+            local effective_percent=""
+
+            if [ -f "${catalog_path}" ] && command -v jq >/dev/null 2>&1; then
+              context_window="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .context_window // empty' "${catalog_path}" | head -n1)"
+              effective_percent="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .effective_context_window_percent // empty' "${catalog_path}" | head -n1)"
+              if [[ "${context_window}" =~ ^[0-9]+$ ]] && [[ "${effective_percent}" =~ ^[0-9]+$ ]] && [ "${effective_percent}" -gt 0 ] && [ "${effective_percent}" -le 100 ]; then
+                context_window=$(( context_window * effective_percent / 100 ))
+              fi
+            fi
+
+            if [[ "${context_window}" =~ ^[0-9]+$ ]] && [ "${context_window}" -gt 0 ]; then
+              printf '%s\n' "${context_window}"
+            fi
+          }
+
+          build_token_budget_hint() {
+            local prompt_file="$1"
+            local prompt_bytes=""
+            local prompt_tokens=""
+            local model_context=""
+            local remaining_tokens=""
+
+            prompt_bytes="$(wc -c < "${prompt_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+            if ! [[ "${prompt_bytes}" =~ ^[0-9]+$ ]]; then
+              echo "unavailable (advisory estimate failed: prompt size unknown)"
+              return
+            fi
+
+            prompt_tokens=$(( (prompt_bytes + 3) / 4 ))
+            model_context="$(resolve_model_context_window || true)"
+            if ! [[ "${model_context}" =~ ^[0-9]+$ ]] || [ "${model_context}" -le 0 ]; then
+              echo "unavailable (advisory estimate failed: model context unknown)"
+              return
+            fi
+
+            remaining_tokens=$(( model_context - prompt_tokens ))
+            if [ "${remaining_tokens}" -lt 0 ]; then
+              remaining_tokens=0
+            fi
+
+            echo "${remaining_tokens} (approx remaining context tokens; advisory only)"
+          }
+
+          CODEX_PROMPT_ESTIMATE_FILE="${RUNTIME_DIR}/codex_prompt_estimate.txt"
           {
             cat ./pre_assembled_static.txt
             echo
@@ -585,12 +705,32 @@ jobs:
             echo
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo "TOKEN_BUDGET_HINT: estimating..."
+            echo
+            bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+            echo
+            echo "=== ISSUE CONTEXT ==="
+            cat "${ISSUE_CONTEXT_FILE}"
+          } > "${CODEX_PROMPT_ESTIMATE_FILE}"
+
+          TOKEN_BUDGET_HINT="$(build_token_budget_hint "${CODEX_PROMPT_ESTIMATE_FILE}")"
+
+          {
+            cat ./pre_assembled_static.txt
+            echo
+            cat "${RUNTIME_DIR}/memory_context.txt"
+            echo
+            # Inject the configurable tool call budget before the static heredoc
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo "TOKEN_BUDGET_HINT: ${TOKEN_BUDGET_HINT}"
             echo
             bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
             echo
             echo "=== ISSUE CONTEXT ==="
             cat "${ISSUE_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
+
+          rm -f "${CODEX_PROMPT_ESTIMATE_FILE}"
 
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
           max_attempts=3

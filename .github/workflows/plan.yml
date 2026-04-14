@@ -146,7 +146,7 @@ jobs:
           # Only fetch scripts actually used by the plan workflow.
           # git_ref_health_check.sh is only needed by implement/edit workflows.
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh extract_db_contracts.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -212,6 +212,7 @@ jobs:
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
             echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
+            echo "DB_CONTRACTS_RELEVANT_FILE=${RUNTIME_DIR}/db_contracts_relevant.txt"
             echo "PLANNING_CONTEXT_FILE=${RUNTIME_DIR}/planning_context.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
@@ -533,6 +534,31 @@ jobs:
           write_multiline_env "USER_ANSWERS" "${USER_ANSWERS}"
           write_multiline_env "CLARIFICATION_QUESTIONS" "${CLARIFICATION_QUESTIONS}"
 
+      - name: Extract relevant DB contracts
+        if: env.SKIP_PLAN != 'true'
+        run: |
+          set -euo pipefail
+
+          ISSUE_CONTEXT_FILE="${RUNTIME_DIR}/issue_body_db_context.txt"
+          ANSWERS_CONTEXT_FILE="${RUNTIME_DIR}/user_answers_db_context.txt"
+
+          printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_CONTEXT_FILE}"
+          printf '%s\n' "${USER_ANSWERS}" > "${ANSWERS_CONTEXT_FILE}"
+
+          if ! bash scripts/extract_db_contracts.sh "${DB_CONTRACTS_RELEVANT_FILE}" "${ISSUE_CONTEXT_FILE}" "${ANSWERS_CONTEXT_FILE}"; then
+            {
+              echo "=== DB CONTRACTS (relevant) ==="
+              echo "[marker] failed to extract DB contracts; continuing without snippets."
+            } > "${DB_CONTRACTS_RELEVANT_FILE}" || true
+          fi
+
+          if [ ! -s "${DB_CONTRACTS_RELEVANT_FILE}" ]; then
+            {
+              echo "=== DB CONTRACTS (relevant) ==="
+              echo "[marker] DB contract extraction produced no output."
+            } > "${DB_CONTRACTS_RELEVANT_FILE}" || true
+          fi
+
       - name: Build planning context
         if: env.SKIP_PLAN != 'true'
         run: |
@@ -544,6 +570,8 @@ jobs:
             printf '%s\n\n' "${CLARIFICATION_QUESTIONS}"
             echo "USER ANSWERS"
             printf '%s\n\n' "${USER_ANSWERS}"
+            cat "${DB_CONTRACTS_RELEVANT_FILE}"
+            echo
             echo "ALL COMMENTS"
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${PLANNING_CONTEXT_FILE}"
@@ -782,6 +810,53 @@ jobs:
           # all inlined so the model doesn't waste tool calls reading files.
           # The static prefix (pre_assembled_static.txt) is identical across all
           # runs, enabling LLM provider prompt-prefix caching.
+          resolve_model_context_window() {
+            local catalog_path="./scripts/codex_model_catalog.json"
+            local context_window=""
+            local effective_percent=""
+
+            if [ -f "${catalog_path}" ] && command -v jq >/dev/null 2>&1; then
+              context_window="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .context_window // empty' "${catalog_path}" | head -n1)"
+              effective_percent="$(jq -r --arg slug "${MODEL_EDITOR}" '.models[]? | select(.slug == $slug) | .effective_context_window_percent // empty' "${catalog_path}" | head -n1)"
+              if [[ "${context_window}" =~ ^[0-9]+$ ]] && [[ "${effective_percent}" =~ ^[0-9]+$ ]] && [ "${effective_percent}" -gt 0 ] && [ "${effective_percent}" -le 100 ]; then
+                context_window=$(( context_window * effective_percent / 100 ))
+              fi
+            fi
+
+            if [[ "${context_window}" =~ ^[0-9]+$ ]] && [ "${context_window}" -gt 0 ]; then
+              printf '%s\n' "${context_window}"
+            fi
+          }
+
+          build_token_budget_hint() {
+            local prompt_file="$1"
+            local prompt_bytes=""
+            local prompt_tokens=""
+            local model_context=""
+            local remaining_tokens=""
+
+            prompt_bytes="$(wc -c < "${prompt_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+            if ! [[ "${prompt_bytes}" =~ ^[0-9]+$ ]]; then
+              echo "unavailable (advisory estimate failed: prompt size unknown)"
+              return
+            fi
+
+            prompt_tokens=$(( (prompt_bytes + 3) / 4 ))
+            model_context="$(resolve_model_context_window || true)"
+            if ! [[ "${model_context}" =~ ^[0-9]+$ ]] || [ "${model_context}" -le 0 ]; then
+              echo "unavailable (advisory estimate failed: model context unknown)"
+              return
+            fi
+
+            remaining_tokens=$(( model_context - prompt_tokens ))
+            if [ "${remaining_tokens}" -lt 0 ]; then
+              remaining_tokens=0
+            fi
+
+            echo "${remaining_tokens} (approx remaining context tokens; advisory only)"
+          }
+
+          CODEX_PROMPT_ESTIMATE_FILE="${RUNTIME_DIR}/codex_prompt_estimate.txt"
           {
             cat ./pre_assembled_static.txt
             echo
@@ -789,12 +864,32 @@ jobs:
             echo
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo "TOKEN_BUDGET_HINT: estimating..."
+            echo
+            bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+            echo
+            echo "=== PLANNING CONTEXT ==="
+            cat "${PLANNING_CONTEXT_FILE}"
+          } > "${CODEX_PROMPT_ESTIMATE_FILE}"
+
+          TOKEN_BUDGET_HINT="$(build_token_budget_hint "${CODEX_PROMPT_ESTIMATE_FILE}")"
+
+          {
+            cat ./pre_assembled_static.txt
+            echo
+            cat "${RUNTIME_DIR}/memory_context.txt"
+            echo
+            # Inject the configurable tool call budget before the static heredoc
+            echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
+            echo "TOKEN_BUDGET_HINT: ${TOKEN_BUDGET_HINT}"
             echo
             bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
             echo
             echo "=== PLANNING CONTEXT ==="
             cat "${PLANNING_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
+
+          rm -f "${CODEX_PROMPT_ESTIMATE_FILE}"
 
           # Update progress comment to signal model invocation is starting
           if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
