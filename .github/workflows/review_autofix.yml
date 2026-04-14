@@ -62,6 +62,8 @@ env:
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'high' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+  REVIEW_REASONING_SCHEDULE: ${{ vars.REVIEW_REASONING_SCHEDULE || 'xhigh,high,medium' }}
+  REVIEW_AUTODOWNGRADE_DISABLED: ${{ vars.REVIEW_AUTODOWNGRADE_DISABLED || 'false' }}
 
 jobs:
   gate:
@@ -686,6 +688,7 @@ jobs:
 
           if [ "$IS_SMOKE" = "true" ]; then
             echo "🔬 Smoke test PR detected — switching to low reasoning effort and reduced reviewer set"
+            echo "REVIEW_SMOKE_OVERRIDE_ACTIVE=true" >> "$GITHUB_ENV"
             echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             # Use only 2 fast models for smoke tests
@@ -700,6 +703,7 @@ jobs:
               sed -i 's/model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
             fi
           else
+            echo "REVIEW_SMOKE_OVERRIDE_ACTIVE=false" >> "$GITHUB_ENV"
             echo "Standard PR — using default LLM settings"
           fi
 
@@ -808,6 +812,96 @@ jobs:
           done < <(git log --format='%s' 2>/dev/null || true)
           echo "Judge-fix commits in history: ${judge_fix_count}"
           echo "judge_fix_count=${judge_fix_count}" >> "$GITHUB_OUTPUT"
+
+      - name: Select reviewer reasoning effort for current cycle
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        run: |
+          set -euo pipefail
+
+          autofix_iteration="${{ steps.retrigger_guard.outputs.autofix_iteration }}"
+          if ! [[ "${autofix_iteration}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Invalid autofix iteration '${autofix_iteration}'. Falling back to 0."
+            autofix_iteration=0
+          fi
+          cycle_index=$((autofix_iteration + 1))
+
+          base_reviewer_reasoning="${REVIEWER_REASONING_EFFORT:-xhigh}"
+
+          smoke_override=false
+          case "${REVIEW_SMOKE_OVERRIDE_ACTIVE:-false}" in
+            true|TRUE|True|1|yes|YES|on|ON)
+              smoke_override=true
+              ;;
+          esac
+
+          kill_switch_enabled=false
+          case "${REVIEW_AUTODOWNGRADE_DISABLED:-false}" in
+            true|TRUE|True|1|yes|YES|on|ON)
+              kill_switch_enabled=true
+              ;;
+          esac
+
+          selected_reasoning="${base_reviewer_reasoning}"
+          schedule_source="fallback_default"
+          schedule_csv="${REVIEW_REASONING_SCHEDULE:-xhigh,high,medium}"
+
+          if [ "${smoke_override}" = "true" ]; then
+            selected_reasoning="low"
+            schedule_source="smoke_override"
+          elif [ "${kill_switch_enabled}" = "true" ]; then
+            selected_reasoning="${base_reviewer_reasoning}"
+            schedule_source="kill_switch_disabled_schedule"
+          else
+            IFS=',' read -r -a raw_schedule <<< "${schedule_csv}"
+            normalized_schedule=()
+            invalid_schedule_entries=()
+
+            for entry in "${raw_schedule[@]}"; do
+              normalized="$(echo "${entry}" | tr '[:upper:]' '[:lower:]' | xargs)"
+              if [ -z "${normalized}" ]; then
+                continue
+              fi
+
+              case "${normalized}" in
+                xhigh|high|medium|low)
+                  normalized_schedule+=("${normalized}")
+                  ;;
+                *)
+                  invalid_schedule_entries+=("${normalized}")
+                  ;;
+              esac
+            done
+
+            if [ "${#invalid_schedule_entries[@]}" -gt 0 ] || [ "${#normalized_schedule[@]}" -eq 0 ]; then
+              selected_reasoning="${base_reviewer_reasoning}"
+              schedule_source="fallback_default"
+              echo "::warning::Invalid REVIEW_REASONING_SCHEDULE='${schedule_csv}'. Falling back to REVIEWER_REASONING_EFFORT='${selected_reasoning}'."
+            else
+              schedule_index=${autofix_iteration}
+              if [ "${schedule_index}" -ge "${#normalized_schedule[@]}" ]; then
+                schedule_index=$((${#normalized_schedule[@]} - 1))
+              fi
+              selected_reasoning="${normalized_schedule[${schedule_index}]}"
+              schedule_source="schedule"
+            fi
+          fi
+
+          echo "REVIEWER_REASONING_EFFORT=${selected_reasoning}" >> "$GITHUB_ENV"
+
+          if [ -f "${HOME}/.codex/config.toml" ]; then
+            sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${selected_reasoning}\"/" "${HOME}/.codex/config.toml"
+          fi
+
+          reviewer_reasoning_selection_json="$(jq -cn \
+            --argjson cycle_index "${cycle_index}" \
+            --arg selected_reasoning_level "${selected_reasoning}" \
+            --arg schedule_source "${schedule_source}" \
+            --argjson kill_switch_enabled "${kill_switch_enabled}" \
+            --argjson smoke_override "${smoke_override}" \
+            --arg configured_schedule "${schedule_csv}" \
+            '{cycle_index:$cycle_index,selected_reasoning_level:$selected_reasoning_level,schedule_source:$schedule_source,kill_switch_enabled:$kill_switch_enabled,smoke_override:$smoke_override,configured_schedule:$configured_schedule}'
+          )"
+          echo "reviewer_reasoning_selection: ${reviewer_reasoning_selection_json}"
 
       - name: Generate diff context
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
@@ -1211,8 +1305,8 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
-          sed -i "s/model_reasoning_effort = \"${REVIEWER_REASONING_EFFORT}\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
-          echo "Updated reasoning effort from ${REVIEWER_REASONING_EFFORT} to ${EDITOR_REASONING_EFFORT} for editor phase"
+          sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
+          echo "Updated reasoning effort to ${EDITOR_REASONING_EFFORT} for editor phase"
 
       - name: Apply fixes with editor model
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
@@ -1978,6 +2072,23 @@ jobs:
           done
           rm -rf "${RESOLVE_STASH}"
 
+          # Enumerate the unmerged paths git is currently tracking so the
+          # resolver prompt can name every conflicted file explicitly.  Without
+          # this enumeration Codex tends to discover and fix only one file per
+          # invocation, leaving the rest of the conflicts to subsequent
+          # workflow runs.  Listing them up-front and requiring all of them be
+          # resolved in a single pass turns the resolver back into a one-shot
+          # operation.
+          CONFLICTED_FILES_RAW="$(git diff --name-only --diff-filter=U 2>/dev/null || true)"
+          if [ -n "${CONFLICTED_FILES_RAW}" ]; then
+            CONFLICTED_FILES_COUNT="$(printf '%s\n' "${CONFLICTED_FILES_RAW}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+            CONFLICTED_FILES_LIST="$(printf '%s\n' "${CONFLICTED_FILES_RAW}" | sed '/^$/d; s/^/          - /')"
+          else
+            CONFLICTED_FILES_COUNT="0"
+            CONFLICTED_FILES_LIST="          (git did not report any unmerged paths; scan the working tree for conflict markers and resolve every file that contains them)"
+          fi
+          echo "Conflict resolver: ${CONFLICTED_FILES_COUNT} unmerged path(s) to resolve in this run."
+
           cat > "${CONFLICT_RESOLVER_PROMPT_FILE}" <<__CONFLICT_RESOLVER_PROMPT__
           Repository task: Resolve merge conflicts.
 
@@ -1990,10 +2101,15 @@ jobs:
           other code
           [conflict-end] branch
 
+          Conflicted files reported by \`git diff --name-only --diff-filter=U\` (${CONFLICTED_FILES_COUNT} total):
+          ${CONFLICTED_FILES_LIST}
+
           Your task:
           Resolve merge conflicts safely.
 
           Rules:
+          - You MUST resolve EVERY conflicted file listed above in this single run. Do not stop after fixing only one file or a subset.
+          - Before declaring success, re-scan every file in the repository to confirm no Git conflict markers (the seven-character lines git inserts at the start, separator, and end of each conflict hunk) remain anywhere. If any remain, keep resolving until none are left.
           - Only resolve conflicts.
           - Do not introduce new functionality.
           - Do not refactor unrelated code.
@@ -2085,11 +2201,14 @@ jobs:
             git config user.email "codex@users.noreply.github.com"
             git rm -r --cached node_modules 2>/dev/null || true
             if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-              # On the workflow source repo, commit ONLY files Codex actually
-              # wrote during conflict resolution.  Auto-merged hunks are
-              # dropped — they will replay when the PR is really merged into
-              # BASE.  This avoids committing files the editor never touched
-              # just because git merge happened to auto-stage them.
+              # On the workflow source repo, identify the files Codex actually
+              # wrote during conflict resolution so we can surface them in
+              # the job log and (below) stage them on top of the live merge
+              # index.  Auto-merged files the editor did NOT touch stay in
+              # the index as git merged them — we deliberately do NOT strip
+              # them, because stripping them broke merge ancestry (see the
+              # comment block below the pre-snapshot diff for the full
+              # rationale).
               RESOLVER_TOUCHED_FILE="${RUNTIME_DIR}/codex_touched_resolver.txt"
               : > "${RESOLVER_TOUCHED_FILE}"
               if [ -f "${PRE_RESOLVER_STATE_FILE:-/nonexistent}" ]; then
@@ -2134,13 +2253,40 @@ jobs:
               touched_count="$(wc -l < "${RESOLVER_TOUCHED_FILE}" | tr -d '[:space:]')"
               echo "Resolver-touched files (${touched_count}):"
               sed 's/^/ - /' "${RESOLVER_TOUCHED_FILE}" || true
-              # Drop the merge state so the commit we're about to make is a
-              # regular commit containing ONLY the resolver's edits, not a
-              # merge commit that carries every auto-merged hunk.  The real
-              # merge-into-BASE will replay those hunks naturally later.
-              git read-tree HEAD
+              # Stage the editor's conflict resolutions on top of the
+              # existing merge index.  Crucially, we KEEP .git/MERGE_HEAD
+              # in place AND we do NOT reset the index to HEAD.  Both
+              # are required for correctness:
+              #
+              # 1. Keeping MERGE_HEAD makes `git commit` below produce a
+              #    real merge commit with two parents (HEAD and base).
+              #    Without the second parent, git's merge-base walker
+              #    rewinds to the original merge base on every subsequent
+              #    `git merge base` attempt and re-raises the identical
+              #    conflict — observed on PR #908, where the previous
+              #    single-parent resolve commit left the PR in
+              #    mergeable_state=dirty with the same conflict line.
+              #
+              # 2. NOT resetting the index preserves git merge's
+              #    auto-merged content for files the editor did not
+              #    touch.  An earlier attempt at this fix did `git
+              #    read-tree HEAD` to keep the commit's first-parent
+              #    diff minimal, but that silently reverted base-side
+              #    changes to auto-merged files: when the PR was
+              #    eventually merged into BASE, git saw PR HEAD's old
+              #    content as "theirs" against base's unchanged content
+              #    and applied the revert.  Keeping the merged index
+              #    lets base's changes flow through the merge commit
+              #    unchanged, so the eventual merge-to-BASE is a clean
+              #    fast-forward-equivalent.
+              #
+              # The previous per-file `git add`/`git rm` loop below still
+              # runs on top of the merge index: for conflicted paths
+              # whose conflict markers the editor removed, `git add`
+              # replaces the unmerged index entries with the editor's
+              # resolved content.  Auto-merged paths the editor did not
+              # touch stay in the index as git merged them.
               git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
-              rm -f .git/MERGE_HEAD .git/MERGE_MSG .git/MERGE_MODE .git/AUTO_MERGE 2>/dev/null || true
               while IFS= read -r touched_path; do
                 [ -z "${touched_path}" ] && continue
                 case "${touched_path}" in

@@ -141,7 +141,7 @@ jobs:
             done; return 1
           }
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
+          for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -259,6 +259,7 @@ jobs:
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
+            echo "THREAD_HISTORY_FILE=${RUNTIME_DIR}/thread_history.txt"
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue and tracking context
@@ -266,6 +267,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CLARIFICATION_COMMENT: ${{ github.event.comment.body }}
+          CLARIFICATION_COMMENT_ID: ${{ github.event.comment.id }}
+          CLARIFICATION_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          CLARIFICATION_COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
+          SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
+          SEMANTIC_CACHE_MAX_CANONICAL_CHARS: ${{ vars.SEMANTIC_CACHE_MAX_CANONICAL_CHARS || '50000' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -289,6 +295,87 @@ jobs:
           printf '%s' "${ISSUE_BODY}" > "${RUNTIME_DIR}/issue_body.txt"
           printf '%s' "${TRACKING_BODY}" > "${RUNTIME_DIR}/tracking_body.txt"
           printf '%s' "${CLARIFICATION_COMMENT}" > "${RUNTIME_DIR}/clarification_comment.txt"
+
+          if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
+            if ISSUE_COMMENTS_JSON="$(gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100")" \
+              && printf '%s' "${ISSUE_COMMENTS_JSON}" | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
+              if ! printf '%s' "${ISSUE_COMMENTS_JSON}" | jq -e --arg cid "${CLARIFICATION_COMMENT_ID}" 'add // [] | any((.id | tostring) == $cid)' >/dev/null 2>&1; then
+                printf '[%s] @%s:\n%s\n' "${CLARIFICATION_COMMENT_CREATED_AT}" "${CLARIFICATION_COMMENT_AUTHOR}" "${CLARIFICATION_COMMENT}" >> "${THREAD_HISTORY_FILE}"
+              fi
+            else
+              echo "::warning::Semantic cache thread-history fetch failed; forcing cache bypass for this run (fail-open)"
+              MAX_CHARS="${SEMANTIC_CACHE_MAX_CANONICAL_CHARS}"
+              if [[ "${MAX_CHARS}" =~ ^[0-9]+$ ]]; then
+                MAX_CHARS=$((10#${MAX_CHARS}))
+              else
+                MAX_CHARS=50000
+              fi
+              if [ "${MAX_CHARS}" -le 0 ]; then
+                MAX_CHARS=50000
+              fi
+              head -c "$((MAX_CHARS + 1))" /dev/zero | tr '\0' 'x' > "${THREAD_HISTORY_FILE}"
+            fi
+          else
+            : > "${THREAD_HISTORY_FILE}"
+          fi
+
+      - name: Install Redis Python client
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
+
+      - name: Restore semantic cache SQLite
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
+          key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-
+      - name: Semantic cache lookup
+        id: semantic_cache_lookup
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
+          SEMANTIC_CACHE_TTL_DAYS: ${{ vars.SEMANTIC_CACHE_TTL_DAYS || '14' }}
+          SEMANTIC_CACHE_SIMILARITY_THRESHOLD: ${{ vars.SEMANTIC_CACHE_SIMILARITY_THRESHOLD || '0.92' }}
+          SEMANTIC_CACHE_REDIS_URL: ${{ vars.SEMANTIC_CACHE_REDIS_URL || '' }}
+          SEMANTIC_CACHE_SQLITE_PATH: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
+          SEMANTIC_CACHE_EMBEDDING_MODEL: ${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}
+          SEMANTIC_CACHE_MAX_CANONICAL_CHARS: ${{ vars.SEMANTIC_CACHE_MAX_CANONICAL_CHARS || '50000' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          LOOKUP_JSON="${RUNTIME_DIR}/semantic_cache_lookup.json"
+          if python3 scripts/semantic_cache.py lookup \
+            --phase "orchestrate_clarify_respond" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \
+            --thread-history-file "${THREAD_HISTORY_FILE}" \
+            --output-file "${CODEX_OUTPUT_FILE}" > "${LOOKUP_JSON}"; then
+            :
+          else
+            echo "::warning::Semantic cache lookup command failed; continuing with live Codex run"
+            printf '{"ok":false,"hit":false,"error":"lookup_command_failed"}\n' > "${LOOKUP_JSON}"
+          fi
+
+          if jq -e '.ok == true and .hit == true' "${LOOKUP_JSON}" >/dev/null 2>&1; then
+            echo "cache_hit=true" >> "$GITHUB_OUTPUT"
+            SIMILARITY="$(jq -r '.similarity // ""' "${LOOKUP_JSON}")"
+            CACHED_AT="$(jq -r '.cached_at // ""' "${LOOKUP_JSON}")"
+            ORIGINAL_ISSUE_ID="$(jq -r '.original_issue_id // ""' "${LOOKUP_JSON}")"
+            AUDIT_JSON="$(jq -cn --arg phase "orchestrate_clarify_respond" --arg similarity "${SIMILARITY}" --arg cached_at "${CACHED_AT}" --arg original_issue_id "${ORIGINAL_ISSUE_ID}" '{event:"semantic_cache_hit",phase:$phase,similarity:($similarity|tonumber? // 0),cached_at:$cached_at,original_issue_id:$original_issue_id}')"
+            echo "::notice::${AUDIT_JSON}"
+          else
+            echo "cache_hit=false" >> "$GITHUB_OUTPUT"
+            if jq -e '.ok == false' "${LOOKUP_JSON}" >/dev/null 2>&1; then
+              echo "::warning::Semantic cache lookup fail-open: $(jq -r '.error // "unknown_error"' "${LOOKUP_JSON}")"
+            fi
+          fi
 
       - name: Create Codex config
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
@@ -396,7 +483,8 @@ jobs:
           fi
 
       - name: Build prompt and run Codex
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        id: run_codex
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY_RESPOND || '15' }}
@@ -449,6 +537,41 @@ jobs:
             fi
           done
 
+      - name: Semantic cache store
+        if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
+          SEMANTIC_CACHE_TTL_DAYS: ${{ vars.SEMANTIC_CACHE_TTL_DAYS || '14' }}
+          SEMANTIC_CACHE_SIMILARITY_THRESHOLD: ${{ vars.SEMANTIC_CACHE_SIMILARITY_THRESHOLD || '0.92' }}
+          SEMANTIC_CACHE_REDIS_URL: ${{ vars.SEMANTIC_CACHE_REDIS_URL || '' }}
+          SEMANTIC_CACHE_SQLITE_PATH: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
+          SEMANTIC_CACHE_EMBEDDING_MODEL: ${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}
+          SEMANTIC_CACHE_MAX_CANONICAL_CHARS: ${{ vars.SEMANTIC_CACHE_MAX_CANONICAL_CHARS || '50000' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          STORE_JSON="${RUNTIME_DIR}/semantic_cache_store.json"
+          if python3 scripts/semantic_cache.py store \
+            --phase "orchestrate_clarify_respond" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \
+            --thread-history-file "${THREAD_HISTORY_FILE}" \
+            --response-file "${CODEX_OUTPUT_FILE}" > "${STORE_JSON}"; then
+            if jq -e '.ok == false' "${STORE_JSON}" >/dev/null 2>&1; then
+              echo "::warning::Semantic cache store fail-open: $(jq -r '.error // "unknown_error"' "${STORE_JSON}")"
+            fi
+          else
+            echo "::warning::Semantic cache store command failed; continuing"
+          fi
+
+      - name: Save semantic cache SQLite
+        if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
+          key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Parse and post answer
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         env:

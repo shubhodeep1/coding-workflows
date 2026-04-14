@@ -22,16 +22,22 @@ Maximize token savings and workflow speed across all AI pipeline phases by:
 
 ### Gaps to Close
 
-| # | Gap | Where | Impact |
-|---|-----|-------|--------|
-| G1 | `mode-implement.txt` has no Serena guidance | `prompts/mode-implement.txt` | Guidance only exists inline in workflow YAML. If the prompt file is ever used standalone or by a different runner, Serena guidance is lost. Consolidating ensures consistency. |
-| G2 | `mode-plan.txt` has no Serena guidance | `prompts/mode-plan.txt` | Same as G1 — planning reads full files unnecessarily when prompt is used without the workflow's inline injection. |
-| G3 | `mode-orchestrate.txt` casually mentions Serena (line 31: "Inspect the repo structure via Serena or file reads") — not MANDATORY | `prompts/mode-orchestrate.txt` | Orchestrator decomposition may read full files instead of using `get_symbols_overview`, wasting tokens. |
-| G4 | `mode-clarify.txt` mentions Serena weakly (line 10: "Use Serena MCP tools or targeted file reads") — not MANDATORY | `prompts/mode-clarify.txt` | Clarify phase may over-read files. Low impact since clarify has a small tool budget (15), but still a free win. |
-| G5 | Serena guidance is duplicated: once in `codex_system_instructions.md`, once inline in each workflow YAML | Multiple files | Maintenance burden — updating Serena rules requires changes in 5+ places. A single canonical block would be better. |
-| G6 | No complementary MCP server for library/framework documentation | All phases | LLM sometimes hallucinates API signatures, causing retries and wasted tokens. |
-| G7 | No Git MCP server for on-demand diff/blame | Review phase | Raw `git diff` is bulk-injected upfront into reviewer context. On-demand access would let reviewers fetch only what they need. |
-| G8 | Prompt caching not investigated for OpenRouter | All phases | System instructions + Serena tool definitions are identical across calls — cacheable prefix could save 50-90% on repeated tokens. |
+| # | Gap | Status | Evidence |
+|---|-----|--------|----------|
+| G1 | `mode-implement.txt` Serena guidance inclusion | Closed | `prompts/mode-implement.txt` uses `{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}` include placeholder. |
+| G2 | `mode-plan.txt` Serena guidance inclusion | Closed | `prompts/mode-plan.txt` uses `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}` include placeholder. |
+| G3 | `mode-orchestrate.txt` Serena wording not mandatory | Closed | `prompts/mode-orchestrate.txt` references `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}` and says to inspect repo structure following SERENA MCP EFFICIENCY (MANDATORY). |
+| G4 | `mode-clarify.txt` Serena wording not mandatory | Closed | `prompts/mode-clarify.txt` references `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}` and explicitly requires SERENA MCP EFFICIENCY (MANDATORY). |
+| G5 | Canonical Serena guidance consolidation | Closed | Canonical content is centralized in `prompts/serena-efficiency-block.txt` (`[READ_ONLY]` and `[READ_WRITE]`) and consumed via placeholders by mode prompts. |
+| G6 | No complementary MCP server for library/framework documentation | Open | Context7 work tracked separately in this plan (Issue 5). |
+| G7 | No Git MCP server for on-demand diff/blame | Open | Git MCP work tracked separately in this plan (Issue 7). |
+| G8 | Prompt caching not investigated for OpenRouter | Open | Prompt-caching investigation tracked separately in this plan (Issue 6). |
+
+### G1-G5 Verification Notes (2026-04-14)
+
+- Render check passed for `prompts/mode-plan.txt`, `prompts/mode-implement.txt`, `prompts/mode-orchestrate.txt`, and `prompts/mode-clarify.txt` with `scripts/render_prompt.sh`; no unresolved `{{SERENA_EFFICIENCY_BLOCK_*}}` placeholders remained.
+- Shared read-only Serena block is byte-stable across rendered plan/orchestrate/clarify prompts (SHA-256: `b28c424a060077c0036e7ffad60d5e6a74387bf807f9d19604107c0d6391355a`).
+- Read-write Serena block for implement renders as expected and differs from read-only by design (SHA-256: `c134f1099f738ed36274d92264ec36f8eeca1803b69fca0e8ae17fc36bf3f1ad`).
 
 ## Implementation Plan
 

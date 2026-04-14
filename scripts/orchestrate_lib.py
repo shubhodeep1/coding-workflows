@@ -228,6 +228,14 @@ def build_tracking_state(
 		"final_merge_strategy": "squash",
 		"final_merge_pr": None,
 		"final_merge_status": "pending",
+		# Self-healing telemetry for main <-> integration branch divergence.
+		# Populated at runtime by the poller; initialised here so that state
+		# schema consumers can rely on their presence without migration logic.
+		"integration_sync_status": "clean",
+		"integration_sync_last_error": "",
+		"integration_conflict_dispatch_count": 0,
+		"integration_conflict_dispatch_ts": 0,
+		"integration_conflict_unresolved_ticks": 0,
 	}
 
 
@@ -774,6 +782,11 @@ def rebuild_tracking_state(
 		"final_merge_strategy": "squash",
 		"final_merge_pr": None,
 		"final_merge_status": "pending",
+		"integration_sync_status": "clean",
+		"integration_sync_last_error": "",
+		"integration_conflict_dispatch_count": 0,
+		"integration_conflict_dispatch_ts": 0,
+		"integration_conflict_unresolved_ticks": 0,
 		"tracking_issue": tracking_issue,
 		"state_rebuilt": True,
 	}

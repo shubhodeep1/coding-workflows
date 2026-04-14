@@ -163,26 +163,87 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
           THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || '' }}
+          BATCH_API_DISABLED: ${{ vars.BATCH_API_DISABLED || 'false' }}
+          BATCH_API_PROVIDER: ${{ vars.BATCH_API_PROVIDER || 'auto' }}
+          BATCH_API_POLL_TIMEOUT_HOURS: ${{ vars.BATCH_API_POLL_TIMEOUT_HOURS || '24' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
 
-          cmd=(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json)
+          BATCH_ARTIFACT_NAME="workflow-log-analysis-batch-state"
+          BATCH_STATE_FILE="workflow_log_analysis_batch_state.json"
+
+          if ARTIFACTS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100")"; then
+            :
+          else
+            ARTIFACTS_JSON='{}'
+          fi
+          if [ -n "${ARTIFACTS_JSON}" ]; then
+            ARTIFACT_ID="$(printf '%s' "${ARTIFACTS_JSON}" | jq -r --arg name "${BATCH_ARTIFACT_NAME}" --arg branch "${GITHUB_REF_NAME}" '.artifacts // [] | map(select(.name == $name and .expired == false and (((.workflow_run // {}) | .head_branch // "") == $branch))) | sort_by(.created_at) | last | .id // empty' 2>/dev/null || true)"
+            if [ -n "${ARTIFACT_ID}" ]; then
+              TMP_DIR="$(mktemp -d)"
+              if gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "${TMP_DIR}/batch-state.zip" 2>/dev/null; then
+                if unzip -oq "${TMP_DIR}/batch-state.zip" -d "${TMP_DIR}" >/dev/null 2>&1 && [ -f "${TMP_DIR}/${BATCH_STATE_FILE}" ]; then
+                  cp "${TMP_DIR}/${BATCH_STATE_FILE}" "${BATCH_STATE_FILE}"
+                  echo "INFO: {\"event\":\"batch_poll\",\"status\":\"state_loaded\",\"artifact_id\":${ARTIFACT_ID}}"
+                fi
+              fi
+              rm -rf "${TMP_DIR}"
+            fi
+          fi
+
+          cmd=(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --batch-state-file "${BATCH_STATE_FILE}")
           if [ -n "${THINKING_LEVEL_ANALYSIS}" ]; then
             cmd+=(--thinking-level "${THINKING_LEVEL_ANALYSIS}")
           fi
 
+          ANALYZE_EXIT=0
+          REPORT_FILE=""
+          set +e
           REPORT_FILE="$("${cmd[@]}")"
+          ANALYZE_EXIT=$?
+          set -e
 
-          if [ -z "${REPORT_FILE}" ] || [ ! -f "${REPORT_FILE}" ]; then
-            echo "::error::Analyzer did not produce a valid report file path."
-            exit 1
+          if [ "${ANALYZE_EXIT}" -eq 0 ]; then
+            if [ -z "${REPORT_FILE}" ] || [ ! -f "${REPORT_FILE}" ]; then
+              echo "::error::Analyzer did not produce a valid report file path."
+              exit 1
+            fi
+            echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
+            echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
+            if [ -f "${BATCH_STATE_FILE}" ]; then
+              echo "batch_state_file=${BATCH_STATE_FILE}" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
           fi
 
-          echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
+          if [ "${ANALYZE_EXIT}" -eq 3 ]; then
+            if [ ! -f "${BATCH_STATE_FILE}" ]; then
+              echo "::error::Analyzer exited pending but did not produce batch state file."
+              exit 1
+            fi
+            echo "analysis_status=pending" >> "$GITHUB_OUTPUT"
+            echo "batch_state_file=${BATCH_STATE_FILE}" >> "$GITHUB_OUTPUT"
+            echo "INFO: {\"event\":\"batch_poll\",\"status\":\"pending\"}"
+            exit 0
+          fi
+
+          echo "::error::Analyzer failed with exit code ${ANALYZE_EXIT}."
+          exit "${ANALYZE_EXIT}"
+
+      - name: Upload batch state artifact
+        if: steps.analyze.outputs.batch_state_file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-log-analysis-batch-state
+          path: ${{ steps.analyze.outputs.batch_state_file }}
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Commit and push report
         id: commit_report
+        if: steps.analyze.outputs.analysis_status == 'completed'
         run: |
           set -euo pipefail
 
@@ -227,17 +288,34 @@ jobs:
 
           source scripts/tg_helpers.sh
 
-          REPORT_FILE="${{ steps.analyze.outputs.report_file }}"
-          REPORT_URL="${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/${REPORT_FILE}"
+          ANALYSIS_STATUS="${{ steps.analyze.outputs.analysis_status || '' }}"
+          REPORT_FILE="${{ steps.analyze.outputs.report_file || '' }}"
+          REPORT_URL=""
+          if [ -n "${REPORT_FILE}" ]; then
+            REPORT_URL="${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/${REPORT_FILE}"
+          fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          SUMMARY_LINE="$(grep -m1 -E '^- |^[0-9]+\. ' "${REPORT_FILE}" || true)"
-          [ -n "${SUMMARY_LINE}" ] || SUMMARY_LINE="Analysis report generated."
+          if [ "${ANALYSIS_STATUS}" = "pending" ]; then
+            MSG="Workflow log analysis submitted async batch for ${{ github.repository }}"
+            MSG+=$'\n'
+            MSG+="Report: pending (deferred to future scheduled run)"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+          else
+            SUMMARY_LINE="Analysis report generated."
+            if [ -n "${REPORT_FILE}" ] && [ -f "${REPORT_FILE}" ]; then
+              SUMMARY_LINE="$(grep -m1 -E '^- |^[0-9]+\. ' "${REPORT_FILE}" || true)"
+              [ -n "${SUMMARY_LINE}" ] || SUMMARY_LINE="Analysis report generated."
+            fi
 
-          MSG="Workflow log analysis completed for ${{ github.repository }}"
-          MSG+=$'\n'
-          MSG+="Report: ${REPORT_URL}"
-          MSG+=$'\n'
-          MSG+="Summary: ${SUMMARY_LINE}"
-          MSG+=$'\n'
-          MSG+="Run: ${RUN_URL}"
+            MSG="Workflow log analysis completed for ${{ github.repository }}"
+            MSG+=$'\n'
+            if [ -n "${REPORT_URL}" ]; then
+              MSG+="Report: ${REPORT_URL}"
+              MSG+=$'\n'
+            fi
+            MSG+="Summary: ${SUMMARY_LINE}"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+          fi
           tg_send_msg "${MSG}" "DEBUG" >/dev/null
