@@ -535,6 +535,8 @@ ensure_label_exists() {
   if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
     _ENSURED_LABELS_CACHE["${label_name}"]=1
   fi
+
+  return 0
 }
 
 set_tracking_phase_label() {
