@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\n/answer\n\nANSWERS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The issue scope explicitly forbids model-routing redesign and emphasizes minimal changes with fail-open safety, which aligns with preserving `codex exec` flows and only adding explicit `cache_control` where direct OpenRouter calls already exist. This also matches the documented prompt-caching constraints in the repo docs.\nQ2: The acceptance criteria requires concrete cache-read evidence in `review_autofix`, so a deterministic telemetry-only verification path with two same-model consecutive calls best satisfies that without altering reviewer decision behavior. This preserves backward compatibility while making the check reliably testable.",
+  "fingerprint": "808947e7737f147e527ff37ba3419c38ede5e8c9a8da17753e12216df2c2ce40",
+  "lineage": {
+    "issue_number": 921,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24388089209",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24388089209",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/921"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20260414080717_cbc5a1f6f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 921,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24388089209"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #921",
+  "timestamps": {
+    "created_at": "2026-04-14T08:07:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
