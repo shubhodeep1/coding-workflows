@@ -147,12 +147,17 @@ def _load_runtime_config() -> RuntimeConfig:
 	redis_url = (os.getenv("SEMANTIC_CACHE_REDIS_URL") or "").strip()
 	sqlite_path = (os.getenv("SEMANTIC_CACHE_SQLITE_PATH") or DEFAULT_SQLITE_PATH).strip() or DEFAULT_SQLITE_PATH
 	openrouter_api_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-	# Redis key namespace: prefer explicit SEMANTIC_CACHE_REDIS_KEY_NAMESPACE; fall back to GITHUB_REPOSITORY lowercase with sanitization
-	redis_key_namespace = (os.getenv("SEMANTIC_CACHE_REDIS_KEY_NAMESPACE") or os.getenv("GITHUB_REPOSITORY") or "").strip().lower()
+	explicit_namespace = (os.getenv("SEMANTIC_CACHE_REDIS_KEY_NAMESPACE") or "").strip()
+	fallback_repository = (os.getenv("GITHUB_REPOSITORY") or "").strip()
+	# Redis key namespace: prefer explicit namespace; otherwise derive from repository and add a stable hash suffix.
+	redis_key_namespace = (explicit_namespace or fallback_repository).lower()
 	# Sanitize: replace invalid chars with underscore
 	if redis_key_namespace:
 		import re as _re
 		redis_key_namespace = _re.sub(r"[^a-z0-9_\-]", "_", redis_key_namespace)
+		if not explicit_namespace and fallback_repository:
+			repo_hash = hashlib.sha256(fallback_repository.lower().encode("utf-8")).hexdigest()[:8]
+			redis_key_namespace = f"{redis_key_namespace}_{repo_hash}"
 
 	return RuntimeConfig(
 		backend=backend,
@@ -240,6 +245,9 @@ class SQLiteVecBackend:
 			)
 		conn.execute(
 			"CREATE INDEX IF NOT EXISTS idx_semantic_cache_phase_expires ON semantic_cache_entries (phase, expires_at)"
+		)
+		conn.execute(
+			"CREATE INDEX IF NOT EXISTS idx_semantic_cache_embedding_model ON semantic_cache_entries (embedding_model)"
 		)
 
 	def lookup(
