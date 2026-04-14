@@ -1084,7 +1084,7 @@ jobs:
             [ -n "${normalized_path}" ] || continue
             protected_pathspec_excludes+=(":!${normalized_path}")
             protected_reset_targets+=("${normalized_path}")
-            escaped_path="$(printf '%s' "${normalized_path}" | sed -e 's/[][(){}.^$+*?|\\-]/\\\\&/g')"
+            escaped_path="$(printf '%s' "${normalized_path}" | sed -e 's/[][(){}.^$+*?|\\-]/\\&/g')"
             protected_regex_parts+=("${escaped_path}/")
           done
           if [ "${#protected_regex_parts[@]}" -gt 0 ]; then
