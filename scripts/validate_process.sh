@@ -626,16 +626,16 @@ if [ -f .ai/validate.yml ]; then
   cp .ai/validate.yml "${VALIDATE_HINTS_FILE}"
   HINTS_SOURCE="committed"
 else
-  {
-    cat "${STATIC_CONTEXT_FILE}"
-    echo
-    echo "TOOL_CALL_BUDGET: 15"
-    echo
-    echo "=== DISCOVERY TASK ==="
-    echo
-    bash scripts/render_prompt.sh prompts/mode-validate-discover.txt
-    echo
-    echo "=== PROJECT SPEC ==="
+{
+  cat "${STATIC_CONTEXT_FILE}"
+  echo
+  echo "=== DISCOVERY TASK ==="
+  echo
+  bash scripts/render_prompt.sh prompts/mode-validate-discover.txt
+  echo
+  echo "TOOL_CALL_BUDGET: 15"
+  echo
+  echo "=== PROJECT SPEC ==="
     cat "${PROJECT_SPEC_FILE}"
     echo
     echo "Output only YAML for .ai/validate.yml with no markdown fences or prose."
@@ -810,11 +810,11 @@ fi
 {
   cat "${STATIC_CONTEXT_FILE}"
   echo
-  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
-  echo
   echo "=== IMPLEMENTATION TASK ==="
   echo
   bash scripts/render_prompt.sh "${HARNESS_PROMPT_SOURCE}"
+  echo
+  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
   echo
   if [ -s "${PRIOR_FAILURE_CONTEXT_FILE}" ]; then
     echo "=== PRIOR VALIDATION FAILURES (DO NOT REPEAT) ==="
@@ -1212,11 +1212,11 @@ fi
 {
   cat "${STATIC_CONTEXT_FILE}"
   echo
-  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
-  echo
   echo "=== DIAGNOSIS TASK ==="
   echo
   bash scripts/render_prompt.sh prompts/mode-validate-diagnose.txt
+  echo
+  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
   echo
   echo "=== PROJECT SPEC ==="
   cat "${PROJECT_SPEC_FILE}"

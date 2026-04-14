@@ -344,6 +344,10 @@ prompt_tmp="$(mktemp)"
 {
   cat ./pre_assembled_static.txt
   echo
+  if [ -n "${TOOL_CALL_BUDGET_JUDGE:-}" ]; then
+    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
+    echo
+  fi
   echo "${PROMPT_ARTIFACT_PATH_HINT}"
   echo
   cat "${EDITOR_PROMPT_BODY_FILE}"
@@ -610,4 +614,3 @@ if [ -n "${final_editor_err}" ] && [ -s "${final_editor_err}" ]; then
   echo "Editor stderr from final attempt:"
   cat "${final_editor_err}"
 fi
-

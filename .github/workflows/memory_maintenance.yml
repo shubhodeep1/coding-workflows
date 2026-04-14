@@ -36,6 +36,9 @@ jobs:
       - name: Run memory compaction
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          BATCH_API_DISABLED: ${{ vars.BATCH_API_DISABLED || 'false' }}
+          BATCH_API_PROVIDER: ${{ vars.BATCH_API_PROVIDER || 'auto' }}
+          BATCH_API_POLL_TIMEOUT_HOURS: ${{ vars.BATCH_API_POLL_TIMEOUT_HOURS || '24' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -44,6 +47,8 @@ jobs:
           ARCHIVE_MONTH="$(date -d 'last month' '+%Y-%m' 2>/dev/null || date -v-1m '+%Y-%m')"
 
           echo "Running memory compaction for month: ${ARCHIVE_MONTH}"
+
+          echo "INFO: {\"event\":\"batch_noop\",\"workflow\":\"memory_maintenance\",\"reason\":\"no_llm_path\",\"batch_api_disabled\":\"${BATCH_API_DISABLED}\",\"provider_hint\":\"${BATCH_API_PROVIDER}\",\"poll_timeout_hours\":\"${BATCH_API_POLL_TIMEOUT_HOURS}\"}"
 
           python3 scripts/ai_memory.py compact \
             --month "${ARCHIVE_MONTH}" \
