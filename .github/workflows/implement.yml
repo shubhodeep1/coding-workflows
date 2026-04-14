@@ -1838,7 +1838,7 @@ jobs:
               cat "${RUNTIME_DIR}/existing_prs.txt" || true
               echo
             fi
-          } >> "${CAPTURE_FILE}"
+          } >> "${CAPTURE_FILE}" || true
 
           if [ -s "${CAPTURE_FILE}" ]; then
             echo "captured=true" >> "$GITHUB_OUTPUT"
