@@ -740,13 +740,18 @@ mark_integration_branch_missing_failed() {
 
 sync_rebuild_runbook_url() {
   local default_branch="$1"
+  local runbook_path="docs/orchestrator-integration-branch-rebuild-runbook.md"
   local url
-  url="$(_gh_url "blob/${default_branch}/docs/orchestrator-integration-branch-rebuild-runbook.md")"
-  if [ -n "${url}" ]; then
-    printf '%s' "${url}"
-    return 0
+
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/contents/${runbook_path}?ref=${default_branch}" >/dev/null 2>&1; then
+    url="$(_gh_url "blob/${default_branch}/${runbook_path}")"
+    if [ -n "${url}" ]; then
+      printf '%s' "${url}"
+      return 0
+    fi
   fi
-  printf '%s' "docs/orchestrator-integration-branch-rebuild-runbook.md"
+
+  printf '%s' "https://github.com/shubhodeep1/coding-workflows/blob/main/${runbook_path}"
 }
 
 resolve_branch_analysis_ref() {
@@ -833,6 +838,7 @@ evaluate_sync_superseded_by_main() {
   local pr_state
   local pr_merged
   local pr_files_json
+  local pr_files_count
   local path
   local default_ref
   local integration_ref
@@ -882,6 +888,11 @@ evaluate_sync_superseded_by_main() {
     fi
 
     pr_files_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}/files?per_page=100" --jq '[.[].filename] | unique' 2>/dev/null || echo '[]')"
+    pr_files_count="$(echo "${pr_files_json}" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null || echo 0)"
+    if [ "${pr_files_count}" -ge 100 ]; then
+      return 0
+    fi
+
     while IFS= read -r path; do
       [ -n "${path}" ] || continue
       if [ -z "${path_seen[${path}]+x}" ]; then
