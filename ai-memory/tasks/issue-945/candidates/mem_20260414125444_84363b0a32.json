@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` clarification questions were issued in this run.\n- `/answer [auto-answered-by-clarify]` is interpreted as: proceed with the issue scope as written, without expanding behavior.\n\nConflict detection:\n- The issue lists `scripts/orchestrate_lib.sh` as a possible change target, but that file does not exist. The shared logic is in `scripts/orchestrate_lib.py`; retry/backoff helpers are in `scripts/gh_helpers.sh`.\n- The failure mode appears to be timeout-by-runtime-budget (very slow completion), not a hard infinite loop in the test runner itself.\n\nObserved hotspot summary (from targeted timing):\n- `tests/test_orchestrate_poll_process.py` currently completes in ~706s (>540s timeout).\n- Slowest tests cluster around ~33s, ~64s, and ~95s each, consistent with repeated `gh_retry`/`gh_retry_to_file` exponential backoff sleeps.\n- Poller subprocess guardrails already exist (`POLLER_SUBPROCESS_TIMEOUT_SEC`, process-group kill), so the main gap is test-harness wait amplification.\n\nImplementation plan:\n\n1. Bound retry/backoff in poller test harness (primary fix, minimal risk)\n- File likely to change: `tests/test_orchestrate_poll_process.py`\n- Functions/modules: `_run_poller`, `test_truncated_comments_json_is_handled_gracefully` setup env block.\n- Change: inject test-only retry limits into env (at minimum `GH_RETRY_MAX_ATTEMPTS=1`, optionally configurable per helper call).\n- Goal: keep production script behavior untouched while removing long backoff sleeps during mocked-failure paths.\n\n2. Keep production behavior unchanged unless timing still exceeds budget\n- Files likely unchanged in primary pass: `scripts/orchestrate_poll_process.sh`\n- Conditional fallback file: `scripts/gh_helpers.sh`\n- Only if needed: add an opt-in backoff tuning env (defaulting to current behavior) so tests can force near-zero retry sleep without changing prod defaults.\n\n3. Preserve test semantics while speeding runtime\n- Do not remove poller-path assertions.\n- Keep API/label/state behavior checks intact; only alter waiting characteristics in test mode.\n\nData structures affected:\n- Test env dict constructed in `_run_poller` and truncated-comments test.\n- Optional internal helper signature extension (if used) for per-test env overrides.\n- No MongoDB collections/contracts/indexes affected.\n\nAPI/interface changes:\n- No external API changes expected.\n- Possible internal test-helper interface change only (optional parameter for env/retry override).\n\nRisks and edge cases:\n- Risk: over-aggressive retry reduction could hide retry-related behavior.\n- Mitigation: keep retry semantics in production unchanged; if needed, allow per-test override so specific tests can still exercise retries.\n- Risk: one or two tests may still be slow due to non-retry waits.\n- Mitigation: re-profile post-change and only then consider targeted secondary changes.\n\nTesting considerations:\n1. Run `python3 tests/test_orchestrate_poll_process.py` and verify completion well under 540s with full pass.\n2. Run `python3 tests/test_orchestrate_lib.py` to confirm adjacent orchestration logic remains green.\n3. Run validation custom tests from `.ai/validate.yml` (or existing equivalent script).\n4. Confirm `validation/logs/tests/03_existing_tests.log` ends with normal completion lines (no timeout entry).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "39fe298bb0a79a1176484faeca4bf839d10375aee4c860bd0bb7a6b2f3fa6cbc",
+  "lineage": {
+    "issue_number": 945,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24398472904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24398472904",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/945"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414125444_84363b0a32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 945,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24398472904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #945",
+  "timestamps": {
+    "created_at": "2026-04-14T12:54:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
