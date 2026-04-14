@@ -200,11 +200,23 @@ jobs:
             done; return 1
           }
           for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh; do
+            # Defensive: when neither fetch succeeds we MUST NOT abort the
+            # bootstrap with `set -e`.  A single missing helper script used
+            # to crash the whole job (PR #912 hallucination), which then
+            # cascaded into "unbound variable" failures across every later
+            # step.  Downgrade both fetch failures to warnings; downstream
+            # steps that actually need the missing file will fail with a
+            # specific error pointing at that file, not a stack of unbound
+            # variables.
             if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main"
+              if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
+                echo "::warning::${f} not found on main either; downstream steps that need it will fail with a specific error."
+                rm -f "${SUPPORT_SCRIPTS_DIR}/${f}"
+                continue
+              fi
             fi
             chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
           done
@@ -1761,11 +1773,19 @@ jobs:
           for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
+              # Defensive: warn-and-continue on double-fetch failure so a
+              # single missing helper doesn't crash the whole step (see
+              # PR #912 post-mortem). Downstream steps that actually need
+              # the missing file will fail with a specific error.
               if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
                 echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/scripts/${f}?ref=main"
+                if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
+                  "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
+                  echo "::warning::${f} not found on main either; downstream steps that need it will fail with a specific error."
+                  rm -f "${SUPPORT_SCRIPTS_DIR}/${f}"
+                  continue
+                fi
               fi
               chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
             fi
