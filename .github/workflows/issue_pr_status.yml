@@ -98,7 +98,7 @@ jobs:
 
           MEMORY_HELPERS_READY=1
           _fetched_scripts=()
-          for f in gh_helpers.sh ai_memory.py ai_memory_lib.py memory_helpers.sh; do
+          for f in gh_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py memory_helpers.sh; do
             if ! fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"; then
               MEMORY_HELPERS_READY=0
             fi

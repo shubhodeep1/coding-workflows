@@ -26,6 +26,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+try:
+    from openrouter_prompt_cache import add_ephemeral_cache_breakpoint, should_retry_without_breakpoint
+except ModuleNotFoundError:
+    from scripts.openrouter_prompt_cache import add_ephemeral_cache_breakpoint, should_retry_without_breakpoint
+
 _log = logging.getLogger(__name__)
 
 MEMORY_RECORD_SCHEMA_VERSION = "memory_record.v1"
@@ -876,12 +881,11 @@ def _extract_keywords_llm(
     truncated_body = body[:4000] if body else ""
     prompt = _KEYWORD_EXTRACT_PROMPT.format(title=title, body=truncated_body)
 
-    payload = json.dumps({
-        "model": resolved_model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.0,
-        "max_tokens": 300,
-    }).encode("utf-8")
+    base_messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    messages_with_breakpoint, breakpoint_enabled = add_ephemeral_cache_breakpoint(
+        base_messages,
+        model_id=resolved_model,
+    )
 
     headers = {
         "Content-Type": "application/json",
@@ -889,15 +893,40 @@ def _extract_keywords_llm(
     }
 
     for attempt in range(1, _KEYWORD_MAX_RETRIES + 1):
+        payload_messages: list[dict[str, Any]] = messages_with_breakpoint
+        had_cache_fallback_retry = False
         try:
-            req = urllib.request.Request(
-                f"{resolved_base_url}/chat/completions",
-                data=payload,
-                headers=headers,
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                resp_data = json.loads(resp.read().decode("utf-8"))
+            while True:
+                payload = json.dumps({
+                    "model": resolved_model,
+                    "messages": payload_messages,
+                    "temperature": 0.0,
+                    "max_tokens": 300,
+                }).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{resolved_base_url}/chat/completions",
+                    data=payload,
+                    headers=headers,
+                    method="POST",
+                )
+                try:
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        resp_data = json.loads(resp.read().decode("utf-8"))
+                    break
+                except urllib.error.HTTPError as exc:
+                    try:
+                        error_text = exc.read().decode("utf-8", errors="replace")
+                    except Exception:  # noqa: BLE001
+                        error_text = ""
+                    if (
+                        breakpoint_enabled
+                        and not had_cache_fallback_retry
+                        and should_retry_without_breakpoint(exc.code, error_text)
+                    ):
+                        had_cache_fallback_retry = True
+                        payload_messages = base_messages
+                        continue
+                    raise
             content = resp_data.get("choices", [{}])[0].get("message", {}).get("content", "")
             keywords = _parse_keyword_response(content)
             if keywords is not None:

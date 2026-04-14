@@ -59,6 +59,18 @@ Rules:
 - Keep normal Serena-first code navigation/editing workflow for repository semantics.
 - If Context7 is unavailable or errors, continue without it. Do not block implementation.
 
+## OpenRouter Prompt Cache Instrumentation
+
+- Default behavior uses `OPENROUTER_PROMPT_CACHE_DISABLED=false`.
+- Keep prompt assembly cache-friendly: stable static prefix first, dynamic issue/PR/runtime suffix second.
+- Add explicit `cache_control: { type: "ephemeral" }` only for direct OpenRouter HTTP calls that already exist.
+- Skip explicit cache breakpoint injection for Gemini-family model IDs.
+- Normalize usage telemetry into:
+  - `cache_creation_input_tokens`
+  - `cache_read_input_tokens`
+  - `prompt_tokens`, `completion_tokens`, `total_tokens`
+- Enforce fail-open behavior: if cache metadata is rejected or unavailable, continue without failing the workflow.
+
 ---
 
 ## 0. Prime Directive (NON-NEGOTIABLE)
@@ -139,6 +151,7 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
+- Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
 
 ---
 
@@ -250,11 +263,30 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
-## 13. Repository Hygiene
+## 13. Workflow Log Analysis Batch Operations
+
+- `workflow-log-analysis.yml` uses artifact-backed deferred polling with `workflow-log-analysis-batch-state` (`workflow_log_analysis_batch_state.json`).
+- Pending batch analyzer exits with code `3` to signal deferred completion; workflow must treat this as non-failure.
+- On unsupported provider/model, capability probe errors, poll timeout, or batch terminal errors, analyzer must emit structured `batch_fallback` warnings and run synchronous analysis.
+- `memory_maintenance.yml` currently has no LLM path; keep compaction behavior unchanged and emit `batch_noop` compatibility logging only.
+
+---
+
+## 14. Repository Hygiene
 
 - Never write into `.git/**` (no artifacts, caches, or bytecode).
 - Set `PYTHONDONTWRITEBYTECODE=1` for Python tooling on repo files.
 - Treat `__pycache__`/`*.pyc` under `.git/` as invalid state.
+
+---
+
+## 15. Semantic Cache Scope
+
+- Semantic cache integration is allowed only in `clarify` and `orchestrate_clarify_respond`.
+- Do NOT add semantic cache hooks to `implement`, `review_autofix`, `validate`, `plan`, or `orchestrate` unless explicitly approved.
+- Cache key basis must use issue body + full issue thread history.
+- Cache hit audit logs must include: `phase`, `similarity`, `cached_at`, `original_issue_id`.
+- Any semantic cache failure must fail open (warning + continue normal OpenRouter/Codex execution).
 
 ---
 
