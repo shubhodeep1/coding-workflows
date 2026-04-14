@@ -1129,7 +1129,7 @@ def test_sync_conflict_comment_includes_paths_and_runbook_link():
 	assert len(conflict_comments) == 1
 	assert "- `src/a.py`" in conflict_comments[0]
 	assert "- `src/b.py`" in conflict_comments[0]
-	assert "orchestrator-integration-branch-rebuild-runbook.md" in conflict_comments[0]
+	assert "docs/rollback-runbook.md" in conflict_comments[0]
 
 
 def test_sync_conflict_dedupe_skips_identical_warnings():

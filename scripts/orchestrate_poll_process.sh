@@ -1011,7 +1011,7 @@ ${reason}"
 sync_rebuild_runbook_url() {
   local default_branch="$1"
   local fallback_branch="${default_branch:-main}"
-  local runbook_path="docs/orchestrator-integration-branch-rebuild-runbook.md"
+  local runbook_path="docs/rollback-runbook.md"
   local url
 
   if gh_retry gh api "repos/${GITHUB_REPOSITORY}/contents/${runbook_path}?ref=${fallback_branch}" >/dev/null 2>&1; then
