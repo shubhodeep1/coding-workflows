@@ -1023,14 +1023,17 @@ Use this after manual intervention (e.g. fixing a problematic issue, merging a s
 
 | Variable | Default | Notes |
 |---|---|---|
+| `VALIDATE_ENV_FILE` | `validation/validate.env` | Optional override for the validation env file path loaded by the driver. |
 | `APP_SERVICE` | `app` | Compose service name used for container-state checks. |
 | `APP_URL` | `http://localhost:8080/health` | HTTP health endpoint; set empty to skip URL polling. |
 | `HEALTH_TIMEOUT` | `120` | Health deadline in seconds; non-positive values are reset to `120`. |
 | `HEALTH_POLL_INTERVAL` | `2` | Health poll interval in seconds; non-positive values are reset to `2`. |
 | `PHASE` | `runtime_validation` | Default phase used in result emission. |
 | `COMPOSE_FILE` | `validation/docker-compose.test.yml` | Compose file used by runtime validation. |
+| `COMPOSE_LOG` | `${LOG_DIR}/compose.log` | Compose log file path captured for diagnostics. |
 | `TEST_DIR` | `validation/tests` | Test script directory. |
 | `LOG_DIR` | `validation/logs` | Runtime log directory. |
+| `TAIL_LINES` | `30` | Number of log lines included in failure diagnostics. |
 | `CANARY_PATTERN` | `*canary*.sh` | Canary test filename pattern. |
 | `CANARY_REQUIRED` | `1` | Requires canary test before remaining tests. |
 | `VALIDATION_TEST_USERNAME` | `validation-user` | Synthetic validation credential default. |
