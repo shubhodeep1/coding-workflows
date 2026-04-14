@@ -775,7 +775,7 @@ jobs:
           leaked_paths="$(git ls-files -- "${protected_ls_targets[@]}" 2>/dev/null || true)"
           if [ -n "${leaked_paths}" ]; then
             leaked_count="$(printf '%s\n' "${leaked_paths}" | sed '/^$/d' | wc -l | tr -d ' ')"
-            echo "::warning::Consumer repo tracks ${leaked_count} workflow runtime/helper artifact(s) under protected paths from scripts/protected_paths.txt. These will be auto-unstaged before commit, but please remove them from the repo (git rm -r --cached + commit) to prevent repeated friction on every merge with the base branch."
+            echo "::warning::Consumer repo tracks ${leaked_count} workflow runtime/helper artifact(s) under protected paths from ${protected_paths_file}. These will be auto-unstaged before commit, but please remove them from the repo (git rm -r --cached + commit) to prevent repeated friction on every merge with the base branch."
             echo "Tracked protected paths found on ${TARGET_BRANCH:-HEAD}:"
             printf '%s\n' "${leaked_paths}" | sed '/^$/d; s/^/ - /'
           else
