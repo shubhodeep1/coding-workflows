@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/validate.\n.github/workflows/validate.yml\n/tmp/codex-pr-24387956088-1-13401/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\nscripts/validate_process.\nscripts/validate_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n/tmp/codex-pr-24387956088-1-13401/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**",
+  "fingerprint": "0f0b307fe952ae2255badf9a234954ec7f2956890d5ed6f5cad58aac9f00d168",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 908,
+    "run_id": "24387956088",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24387956088",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260414081731_1bcd41ff6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 908,
+    "run_id": "24387956088"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-14T08:17:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
