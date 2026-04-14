@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue `stall-judge-prompt-template`:\n\nClarification interpretation\n- No Q<ID> questions were issued in clarify phase.\n- `/answer [auto-answered-by-clarify]` means planning can proceed from the issue text directly.\n\nScope\n- Keep scope to `prompts/mode-judge-stall-recovery.txt` (new prompt file only).\n- No runtime script/workflow behavior changes are required in this issue.\n\n1. Files likely to change\n- `prompts/mode-judge-stall-recovery.txt` (new)\n\n2. Prompt/module to implement\n- Create a stall-recovery judge prompt that mirrors `prompts/mode-judge-review-blocked.txt` structure and tone:\n- Role/context header, task framing, decision process, strict rules, deterministic output contract.\n- Explicit \u201cconsume diagnostics JSON\u201d section listing required inputs:\n- issue metadata (`issue_number`, `local_id`, `phase`, `stall_minutes`, `stall_recovery_count`)\n- tracking comments excerpt\n- linked PR metadata (`state`, `mergeable`, refs, SHAs)\n- recent workflow outcomes\n- wave/prior recovery actions\n- truncated PR diff snippet\n- Root-cause classification requirement with explicit categories:\n- `merge_conflict`\n- `stuck_workflow`\n- `dependency_gap`\n- `implementation_failure`\n- `orchestrator_misread`\n- Force exactly one action from this enum only:\n- `resolve_merge_conflict`\n- `retrigger_implement`\n- `retrigger_review`\n- `retrigger_plan`\n- `auto_approve`\n- `auto_respond_clarify`\n- `attempt_merge`\n- `close_and_reissue`\n- `escalate_human`\n- Add explicit preference rule: if `mergeable == false`, prefer `resolve_merge_conflict`.\n- Constrain `close_and_reissue` to fundamentally wrong approach only.\n\n3. Data structures affected\n- Input contract (diagnostics JSON) consumed by the prompt instructions.\n- Output contract (strict JSON object) required from the judge:\n- `action` (enum, required)\n- `justification` (string, required)\n- `target_pr` (int or null, required)\n- `new_issue` (object, only for `close_and_reissue`, optional otherwise)\n\n4. API/interface changes\n- New prompt interface only; no code-path/API changes in this issue.\n- Prompt output format requirement: single JSON object wrapped in fenced ```json block for robust extraction.\n\n5. Risks and edge cases\n- Existing stall recovery in `scripts/orchestrate_poll_process.sh` is rule-based today and does not invoke a dedicated stall-recovery judge prompt, so this issue adds a template, not runtime behavior.\n- `mergeable` can be `null` in GitHub API; prompt should treat `false` specially but avoid over-triggering conflict flow on unknown.\n- Ensure prompt forbids actions outside enum and forbids multi-action outputs.\n- Ensure `new_issue` is only present when action is `close_and_reissue`.\n\n6. Testing/sanity checks\n- Manual content sanity check against issue requirements:\n- mirrored structure/tone\n- required diagnostics fields explicitly listed\n- root-cause categories present\n- action enum exact and exclusive\n- `mergeable == false` preference present\n- `close_and_reissue` restriction present\n- strict JSON schema and fenced output requirement present\n- Render check: `bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt` to confirm parser-friendly final text.\n- Repo CI prompt checks should continue passing (new prompt is non-empty and valid text format).\n\nConflict detection notes\n- No naming/path mismatch in the request.\n- Functional gap noted: there is currently no stall-recovery judge invocation path wired to consume this new prompt yet; this issue appears intentionally limited to introducing the prompt template.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1ff8446c4fb1d3de50fe56b7e031f88e9f3b13d8353948bc992fba6f2d08c186",
+  "lineage": {
+    "issue_number": 868,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24379221434",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24379221434",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/868"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260414032633_3e8f968052",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 868,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24379221434"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #868",
+  "timestamps": {
+    "created_at": "2026-04-14T03:26:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
