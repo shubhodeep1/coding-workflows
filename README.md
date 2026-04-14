@@ -56,6 +56,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. |
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
+| `REVIEW_REASONING_SCHEDULE` | No | `xhigh,high,medium` | review_autofix | Reviewer-only cycle schedule for autofix rounds (cycle 1 uses first entry, cycle 2 second, cycle 3+ last). Accepted values: `xhigh`, `high`, `medium`, `low` (comma-separated). |
+| `REVIEW_AUTODOWNGRADE_DISABLED` | No | `false` | review_autofix | Kill switch for reviewer cycle schedule. When `true`, reviewer reasoning stays fixed at `THINKING_LEVEL_REVIEWER`. |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | No | `true` | review_autofix | When true, non-orchestrator PRs that exhaust autofix iterations invoke a judge (LLM) to decide: merge as-is, push a fix commit, or close and reissue. Orchestrator-managed PRs are skipped (handled by the poller). PRs without linked issues use the PR title/body as requirement context. |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | No | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge in non-orchestrator PRs (`xhigh`, `high`, `medium`, `low`). |
 | `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | review_autofix, orchestrate_poll | Maximum judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). Used by both the review_autofix judge (counts `[judge-fix]` commits) and the orchestrator poller. |
@@ -89,7 +91,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `EDITOR_MAX_WALL` | No | `3300` | review_autofix, implement | Maximum wall-clock seconds per editor attempt. Budget-aware: auto-capped to remaining job time minus a 2-min buffer. |
 | `EDITOR_MIN_ATTEMPT_SECS` | No | `300` | review_autofix | Minimum remaining job budget (seconds) required to start an editor attempt. Prevents futile retries near the job deadline. |
 
-**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. **E2E smoke test override:** when an issue title contains `[E2E Smoke Test]`, all phases (clarify, plan, implement, review/edit) automatically switch to `low` reasoning effort to reduce cost and latency during release validation.
+**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. In `review_autofix`, reviewer effort also auto-schedules by autofix cycle via `REVIEW_REASONING_SCHEDULE` (default: cycle 1 `xhigh`, cycle 2 `high`, cycle 3+ `medium`) unless `REVIEW_AUTODOWNGRADE_DISABLED=true`. **E2E smoke test override has highest precedence:** when an issue title contains `[E2E Smoke Test]`, review/edit still force `low` reasoning regardless of schedule/kill-switch so release smoke runs stay cheap and fast.
 
 | Variable | Default | Used By | Description |
 |---|---|---|---|
@@ -594,6 +596,8 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ALLOW_WORKFLOW_EDITS` | `true` | Allow AI edits to workflow files and automatic wrapper updates |
 | `ENABLE_AUTO_MERGE` | `true` | Auto-merge PRs (squash) when review passes and checks are green |
 | `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before marking `ai:review-blocked` |
+| `REVIEW_REASONING_SCHEDULE` | `xhigh,high,medium` | Reviewer autofix-cycle reasoning schedule (`cycle1,cycle2,cycle3+`) |
+| `REVIEW_AUTODOWNGRADE_DISABLED` | `false` | Disable reviewer cycle schedule and keep fixed `THINKING_LEVEL_REVIEWER` |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | `true` | Enable review-blocked judge for non-orchestrator PRs |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | Reasoning effort for review-blocked judge |
 | `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum judge retries for review-blocked PRs (both review_autofix and orchestrate_poll) |
@@ -626,6 +630,8 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `THINKING_LEVEL_ANALYSIS` | `medium` | Reasoning effort for workflow log analysis report generation |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | Reasoning effort for reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | Reasoning effort for editor model (applying fixes) |
+| `REVIEW_REASONING_SCHEDULE` | `xhigh,high,medium` | Reviewer autofix-cycle schedule override (`xhigh|high|medium|low`, comma-separated) |
+| `REVIEW_AUTODOWNGRADE_DISABLED` | `false` | Reviewer schedule kill switch (`true` keeps fixed reviewer effort) |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
 | `TOOL_CALL_BUDGET_PLAN` | `40` | Tool call budget for planning |
 | `TOOL_CALL_BUDGET_IMPLEMENT` | `50` | Tool call budget for implementation |
