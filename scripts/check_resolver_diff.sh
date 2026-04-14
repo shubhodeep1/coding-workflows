@@ -87,7 +87,9 @@ echo "check_resolver_diff: touched=${touched_count} conflicted=${conflicted_coun
 out_of_conflict="$(comm -23 "${TOUCHED_SET}" "${CONFLICTED_SET}" || true)"
 if [ -n "${out_of_conflict}" ]; then
 	echo "::error::Conflict resolver edited files outside the conflicted set:" >&2
-	printf '  - %s\n' ${out_of_conflict} >&2
+	while IFS= read -r path; do
+		printf '  - %s\n' "${path}" >&2
+	done <<< "${out_of_conflict}"
 	echo "::error::This usually indicates a hallucinated merge resolution. Aborting." >&2
 	exit 1
 fi
