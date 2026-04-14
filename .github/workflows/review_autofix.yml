@@ -2260,7 +2260,7 @@ jobs:
               echo "Resolver-touched files (${touched_count}):"
               sed 's/^/ - /' "${RESOLVER_TOUCHED_FILE}" || true
 
-              # Allowlist validation (hallucination guard, inline):
+              # Allowlist validation (hallucination guard):
               # The conflict-resolver prompt explicitly forbids editing
               # files that don't contain conflict markers.  Compare the
               # files Codex actually touched against the unmerged-paths
@@ -2274,12 +2274,6 @@ jobs:
               # Non-workflow out-of-allowlist files emit a warning only,
               # since the merge-staged index may legitimately contain
               # auto-resolved files Codex lightly touched.
-              #
-              # This inline guard runs first as a fast, workflow-
-              # specific check; the broader check_resolver_diff.sh
-              # invariant check below then enforces the full
-              # touched ⊆ conflicted subset rule, syntax validation and
-              # workflow→script reference integrity.
               if [ -s "${RESOLVER_ALLOWLIST_FILE:-/nonexistent}" ] || [ -f "${RESOLVER_ALLOWLIST_FILE:-/nonexistent}" ]; then
                 WORKFLOW_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_workflow_violations.txt"
                 OTHER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_other_violations.txt"
@@ -2315,12 +2309,10 @@ jobs:
                   fi
                   echo "Workflow files touched by resolver but NOT in allowlist:"
                   sed 's/^/ - /' "${WORKFLOW_VIOLATIONS_FILE}" || true
-                  echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
-                  rm -f "${RESOLVER_TOUCHED_FILE}"
                   exit 1
                 fi
               else
-                echo "::warning::Resolver allowlist file missing; skipping inline hallucination guard. Falling through to check_resolver_diff.sh and existing commit-gate protections."
+                echo "::warning::Resolver allowlist file missing; skipping hallucination guard. Falling through to existing commit-gate protections."
               fi
 
               # Hard guardrail against hallucinated merge resolutions.

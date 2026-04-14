@@ -4215,7 +4215,7 @@ json.dump(result, sys.stdout)
         _rb_head_author_name=""
         _rb_head_author_email=""
         if [ -n "${RB_HEAD_SHA_PRECHECK}" ] && [ "${RB_HEAD_SHA_PRECHECK}" != "null" ]; then
-          _rb_head_commit_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${RB_HEAD_SHA_PRECHECK}" 2>/dev/null || echo "{}")"
+          _rb_head_commit_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${RB_HEAD_SHA_PRECHECK}" || echo "{}")"
           _rb_head_commit_lookup_ok="$(echo "${_rb_head_commit_json}" | jq -r 'if (.sha != null and .commit != null and .commit.author != null) then "true" else "false" end')"
           if [ "${_rb_head_commit_lookup_ok}" = "true" ]; then
             _rb_head_author_login="$(echo "${_rb_head_commit_json}" | jq -r '.author.login // ""')"
@@ -4225,7 +4225,7 @@ json.dump(result, sys.stdout)
             # confidently classified as internal automation.
             RB_HEAD_IS_EXTERNAL="true"
             case "${_rb_head_author_login}" in
-              codex-bot|github-actions|github-actions\[bot\]) RB_HEAD_IS_EXTERNAL="false" ;;
+              codex|codex-bot|github-actions|github-actions\[bot\]) RB_HEAD_IS_EXTERNAL="false" ;;
               "")
                 # Keep authenticated GitHub login authoritative. Only
                 # when login is missing do we use name/email bot hints.
@@ -4233,7 +4233,7 @@ json.dump(result, sys.stdout)
                   codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
                 esac
                 case "${_rb_head_author_email}" in
-                  codex@users.noreply.github.com|noreply@github.com|*@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
+                  codex@users.noreply.github.com|*+github-actions\[bot\]@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
                 esac
                 ;;
             esac
