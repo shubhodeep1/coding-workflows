@@ -838,7 +838,6 @@ evaluate_sync_superseded_by_main() {
   local pr_state
   local pr_merged
   local pr_files_json
-  local pr_files_count
   local path
   local default_ref
   local integration_ref
@@ -865,8 +864,8 @@ evaluate_sync_superseded_by_main() {
       2>/dev/null || true)"
     while IFS= read -r pr_num; do
       [[ "${pr_num}" =~ ^[0-9]+$ ]] || continue
-      if [ -z "${pr_seen[${pr_num}]+x}" ]; then
-        pr_seen[${pr_num}]=1
+      if [ -z "${pr_seen["${pr_num}"]+x}" ]; then
+        pr_seen["${pr_num}"]=1
         pr_numbers+=("${pr_num}")
       fi
     done <<< "${timeline_prs}"
@@ -887,16 +886,15 @@ evaluate_sync_superseded_by_main() {
       return 0
     fi
 
-    pr_files_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}/files?per_page=100" --jq '[.[].filename] | unique' 2>/dev/null || echo '[]')"
-    pr_files_count="$(echo "${pr_files_json}" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null || echo 0)"
-    if [ "${pr_files_count}" -ge 100 ]; then
+    if ! pr_files_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}/files?per_page=100" 2>/dev/null \
+      | jq -sc '[.[]? | .[]? | .filename] | unique' 2>/dev/null)"; then
       return 0
     fi
 
     while IFS= read -r path; do
       [ -n "${path}" ] || continue
-      if [ -z "${path_seen[${path}]+x}" ]; then
-        path_seen[${path}]=1
+      if [ -z "${path_seen["${path}"]+x}" ]; then
+        path_seen["${path}"]=1
         affected_paths+=("${path}")
       fi
     done < <(echo "${pr_files_json}" | jq -r '.[]?')
