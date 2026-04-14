@@ -75,9 +75,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          # Planning is read-only — shallow clone is sufficient and faster.
-          # Implementation workflows use fetch-depth: 0 for full history.
-          fetch-depth: 1
+          # Full history is required for recent target-file git log context.
+          fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
 
       - name: Configure git auth for memory helper clones

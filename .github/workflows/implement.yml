@@ -168,7 +168,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         uses: actions/checkout@v5
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
 
       - name: Configure git auth for memory helper clones
