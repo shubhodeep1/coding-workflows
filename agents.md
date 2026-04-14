@@ -139,6 +139,7 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
+- Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
 
 ---
 
@@ -250,7 +251,16 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
-## 13. Repository Hygiene
+## 13. Workflow Log Analysis Batch Operations
+
+- `workflow-log-analysis.yml` uses artifact-backed deferred polling with `workflow-log-analysis-batch-state` (`workflow_log_analysis_batch_state.json`).
+- Pending batch analyzer exits with code `3` to signal deferred completion; workflow must treat this as non-failure.
+- On unsupported provider/model, capability probe errors, poll timeout, or batch terminal errors, analyzer must emit structured `batch_fallback` warnings and run synchronous analysis.
+- `memory_maintenance.yml` currently has no LLM path; keep compaction behavior unchanged and emit `batch_noop` compatibility logging only.
+
+---
+
+## 14. Repository Hygiene
 
 - Never write into `.git/**` (no artifacts, caches, or bytecode).
 - Set `PYTHONDONTWRITEBYTECODE=1` for Python tooling on repo files.
