@@ -276,6 +276,20 @@ jobs:
                 "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
             fi
           fi
+          # Conflict resolver prompt template. Extracted from an inline heredoc
+          # in the "Prepare merge-conflict resolver prompt and pre-snapshot"
+          # step so that run: block stays under GitHub Actions' 21,000-char
+          # template-expression limit. Missing file is a hard error when the
+          # conflict resolver actually runs; fetched here so consumer repos
+          # that don't ship the file themselves still get it from stable/main.
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
+            if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/conflict-resolver.txt?ref=${script_ref}"; then
+              echo "::warning::conflict-resolver.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/conflict-resolver.txt?ref=main"
+            fi
+          fi
 
       - name: Validate PR number input
         run: |
@@ -1070,6 +1084,7 @@ jobs:
           check_soft_file "${SUPPORT_CODEX_INSTRUCTIONS_FILE}"
           check_soft_file "${SUPPORT_AGENTS_FILE}"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+          check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           check_soft_file "${LAST_RUN_DIFF_FILE}"
           check_soft_file "${LAST_RUN_CHANGED_FILES_FILE}"
@@ -1921,7 +1936,14 @@ jobs:
           fi
           rm -rf "${UNTRACKED_BACKUP}"
 
-      - name: Resolve merge conflicts with Codex
+      - name: Prepare merge-conflict resolver prompt and pre-snapshot
+        # Split from "Run Codex resolver, validate, stage, commit" below so
+        # that neither run: block exceeds GitHub Actions' 21,000-char
+        # template-expression limit. A single combined step used to weigh in
+        # at 24.6 KB and silently broke review_autofix.yml's parseability
+        # from internal-review.yml. Both halves share the identical if:
+        # condition so they short-circuit together.
+        #
         # Run conflict resolution even when max_iterations_reached — conflict
         # resolution is not an autofix iteration and should not be blocked by
         # the iteration cap.  Also runs when did_commit is true since the push
@@ -2010,81 +2032,24 @@ jobs:
           fi
           echo "Conflict resolver: ${CONFLICTED_FILES_COUNT} unmerged path(s) to resolve in this run."
 
-          cat > "${CONFLICT_RESOLVER_PROMPT_FILE}" <<__CONFLICT_RESOLVER_PROMPT__
-          Repository task: Resolve merge conflicts.
-
-          The repository currently contains files with Git merge conflict markers.
-
-          Conflict markers appear in this format:
-          [conflict-start] HEAD
-          code
-          [conflict-separator]
-          other code
-          [conflict-end] branch
-
-          Conflicted files reported by \`git diff --name-only --diff-filter=U\` (${CONFLICTED_FILES_COUNT} total):
-          ${CONFLICTED_FILES_LIST}
-
-          Your task:
-          Resolve merge conflicts safely.
-
-          Rules:
-          - You MUST resolve EVERY conflicted file listed above in this single run. Do not stop after fixing only one file or a subset.
-          - Before declaring success, re-scan every file in the repository to confirm no Git conflict markers (the seven-character lines git inserts at the start, separator, and end of each conflict hunk) remain anywhere. If any remain, keep resolving until none are left.
-          - Only resolve conflicts.
-          - Do not introduce new functionality.
-          - Do not refactor unrelated code.
-          - Do not modify files that do not contain conflict markers.
-          - Prefer preserving behavior from both sides when possible.
-          - If both sides are incompatible, choose the version consistent with surrounding code.
-          - Remove all conflict markers.
-          - Ensure the final code compiles logically.
-          - You may read repository files as needed.
-          - You may modify repository files directly.
-          - Do not generate patches.
-          - Do not generate scripts.
-          - Do not modify GitHub workflow files except when resolving merge conflicts.
-          - Do not access the network.
-
-          HARD CONSTRAINT — out-of-conflict edits are rejected:
-          Your edits will be diff-checked against the set of files that
-          actually had merge conflicts.  Any file you modify that did NOT
-          contain conflict markers will cause the run to abort with no
-          commit.  Do not "improve" surrounding code.  Do not rewrite
-          unrelated sections.  Do not add new helper scripts, env vars,
-          or workflow steps.  If you find yourself wanting to edit a
-          file that has no conflict markers, STOP and leave it alone.
-
-          HARD CONSTRAINT — no inventing files or commands:
-          Before you finalize, perform this self-check on every edit:
-          1. List every file path you reference in your edits (including
-             any path mentioned in a shell command, sourced script,
-             bootstrap fetch list, or workflow step you would add).
-          2. For each path, verify the file already exists in the
-             repository tree by reading it.
-          3. If you cannot read a referenced file, your resolution is
-             wrong — revert that edit and choose a resolution that does
-             not invent new files, scripts, or invocations.
-          The most common failure mode for this step is hallucinating a
-          plausible-looking helper script (e.g. build_repo_overview.sh,
-          protected_paths.txt) and wiring it into the bootstrap loop.
-          The downstream existence check will catch this and abort the
-          merge-resolve commit, wasting the entire review run.  Do not
-          do it.
-
-          Final output must be plain text.
-
-          Output sections:
-          Conflicts resolved:
-          - list files where conflicts were resolved
-
-          Self-check:
-          - confirm every edited file contained conflict markers
-          - confirm every file path referenced by your edits exists in the repository
-
-          Notes:
-          - brief explanation if any resolution required choosing one side
-          __CONFLICT_RESOLVER_PROMPT__
+          # Render the conflict resolver prompt from the template file under
+          # prompts/. The template body used to live inline as a heredoc in
+          # this run: block, but its size pushed the whole step past GitHub
+          # Actions' 21,000-char template-expression limit, which caused the
+          # entire review_autofix.yml to fail parsing from internal-review.yml
+          # (silent — no check_runs, no error in Actions UI). Keeping the
+          # prompt in a separate file under prompts/ lets it grow without
+          # ever re-approaching the limit.
+          PROMPT_TPL="${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+          if [ ! -f "${PROMPT_TPL}" ]; then
+            echo "::error::Conflict resolver prompt template missing: ${PROMPT_TPL}"
+            exit 1
+          fi
+          CONFLICTED_FILES_COUNT="${CONFLICTED_FILES_COUNT}" \
+            CONFLICTED_FILES_LIST="${CONFLICTED_FILES_LIST}" \
+            PROMPT_TPL="${PROMPT_TPL}" \
+            python3 -c 'import os,sys; tpl=open(os.environ["PROMPT_TPL"]).read(); sys.stdout.write(tpl.replace("{{CONFLICTED_FILES_COUNT}}",os.environ["CONFLICTED_FILES_COUNT"]).replace("{{CONFLICTED_FILES_LIST}}",os.environ["CONFLICTED_FILES_LIST"]))' \
+            > "${CONFLICT_RESOLVER_PROMPT_FILE}"
 
           # On the workflow source repo, snapshot the post-merge working-tree
           # state before Codex resolves conflicts.  The commit logic below
@@ -2131,6 +2096,23 @@ jobs:
             sort -u -o "${CONFLICTED_PATHS_FILE}" "${CONFLICTED_PATHS_FILE}"
             echo "Conflicted paths captured: $(wc -l < "${CONFLICTED_PATHS_FILE}") entries"
           fi
+
+      - name: Run Codex resolver, validate, stage, commit
+        # Second half of the split merge-conflict resolver step. Carries the
+        # identical if: condition as the prepare step above so the two halves
+        # short-circuit together — any change to one must be mirrored to the
+        # other. See the comment block on the prepare step for why the step
+        # was split.
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true'
+        run: |
+          set -euo pipefail
+
+          # Re-derive runtime paths set in the prepare step. Shell variables
+          # do not cross step boundaries; RUNTIME_DIR itself is in
+          # $GITHUB_ENV so it survives, and both paths are deterministic
+          # functions of RUNTIME_DIR.
+          PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
+          CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
 
           attempt=1
           while [ "${attempt}" -le 3 ]; do
