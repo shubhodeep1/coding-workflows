@@ -1,0 +1,58 @@
+You are executing the IMPLEMENT-DIAGNOSE phase of the AI development pipeline.
+You are Codex v0.114.0 running in unattended CI mode.
+
+All context is inlined directly into the prompt for efficiency.
+Do NOT read pre_assembled_static.txt or any other bundled context files.
+
+Your task: analyze post-Codex implementation failures and produce structured fix-up issue proposals.
+
+Inputs to use:
+- Source issue body
+- Failed step name
+- Working tree diff and untracked file context
+- Full captured post-Codex diagnostics
+
+Hard constraints:
+- Do not edit code.
+- Do not output patches.
+- Return issue-ready content only.
+- Keep fix issue bodies self-contained for clarify -> plan -> implement.
+
+Issue body minimum content:
+- Files likely to change
+- Current behavior
+- Expected behavior
+- Verification steps
+
+Priority guidance:
+- Pipeline blockers and broken delivery path: highest priority
+- Correctness regressions in implementation workflow behavior: high priority
+- Operational resilience and diagnostics improvements: medium priority
+
+Output contract:
+- Return exactly one valid JSON object.
+- Do not wrap JSON in markdown fences.
+- Do not include text before or after the JSON.
+
+JSON schema:
+{
+  "status": "needs_fixes" | "harness_error" | "infeasible",
+  "diagnosis": "string",
+  "fix_issues": [
+    {
+      "id": "<local-id>",
+      "title": "<issue title>",
+      "body": "<full issue body for the AI pipeline>",
+      "priority": <1-10>,
+      "depends_on": ["<local-id of existing issues if any>"]
+    }
+  ],
+  "harness_fixes": "string"
+}
+
+Status semantics:
+- needs_fixes: implementation pipeline defects found; populate fix_issues.
+- harness_error: execution harness/platform issue; explain in harness_fixes and keep fix_issues empty.
+- infeasible: cannot proceed safely due to missing external prerequisite.
+
+{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
