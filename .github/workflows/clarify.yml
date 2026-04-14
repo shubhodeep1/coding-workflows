@@ -225,6 +225,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
+          SEMANTIC_CACHE_MAX_CANONICAL_CHARS: ${{ vars.SEMANTIC_CACHE_MAX_CANONICAL_CHARS || '50000' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -235,8 +236,12 @@ jobs:
           if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
             if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
               | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
-              echo "::warning::Semantic cache thread-history fetch failed; continuing with empty thread history (fail-open)"
-              : > "${THREAD_HISTORY_FILE}"
+              echo "::warning::Semantic cache thread-history fetch failed; forcing cache bypass for this run (fail-open)"
+              MAX_CHARS="${SEMANTIC_CACHE_MAX_CANONICAL_CHARS}"
+              if ! [[ "${MAX_CHARS}" =~ ^[0-9]+$ ]] || [ "${MAX_CHARS}" -le 0 ]; then
+                MAX_CHARS=50000
+              fi
+              head -c "$((MAX_CHARS + 1))" /dev/zero | tr '\0' 'x' > "${THREAD_HISTORY_FILE}"
             fi
           else
             : > "${THREAD_HISTORY_FILE}"

@@ -266,7 +266,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CLARIFICATION_COMMENT: ${{ github.event.comment.body }}
+          CLARIFICATION_COMMENT_ID: ${{ github.event.comment.id }}
+          CLARIFICATION_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          CLARIFICATION_COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
+          SEMANTIC_CACHE_MAX_CANONICAL_CHARS: ${{ vars.SEMANTIC_CACHE_MAX_CANONICAL_CHARS || '50000' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -294,10 +298,16 @@ jobs:
           if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
             if ISSUE_COMMENTS_JSON="$(gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100")" \
               && printf '%s' "${ISSUE_COMMENTS_JSON}" | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
-              :
+              if ! printf '%s' "${ISSUE_COMMENTS_JSON}" | jq -e --arg cid "${CLARIFICATION_COMMENT_ID}" 'add // [] | any((.id | tostring) == $cid)' >/dev/null 2>&1; then
+                printf '[%s] @%s:\n%s\n' "${CLARIFICATION_COMMENT_CREATED_AT}" "${CLARIFICATION_COMMENT_AUTHOR}" "${CLARIFICATION_COMMENT}" >> "${THREAD_HISTORY_FILE}"
+              fi
             else
-              echo "::warning::Semantic cache thread-history fetch failed; continuing with empty thread history (fail-open)"
-              : > "${THREAD_HISTORY_FILE}"
+              echo "::warning::Semantic cache thread-history fetch failed; forcing cache bypass for this run (fail-open)"
+              MAX_CHARS="${SEMANTIC_CACHE_MAX_CANONICAL_CHARS}"
+              if ! [[ "${MAX_CHARS}" =~ ^[0-9]+$ ]] || [ "${MAX_CHARS}" -le 0 ]; then
+                MAX_CHARS=50000
+              fi
+              head -c "$((MAX_CHARS + 1))" /dev/zero | tr '\0' 'x' > "${THREAD_HISTORY_FILE}"
             fi
           else
             : > "${THREAD_HISTORY_FILE}"
