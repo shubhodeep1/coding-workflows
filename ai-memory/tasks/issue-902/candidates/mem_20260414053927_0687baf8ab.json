@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which exact script path should be treated as the canonical runtime driver for validate execution?**\nChoices:\n- **A** \u2014 Keep `scripts/validate_process.sh` as the canonical driver entrypoint; workflow executes this file directly. (RECOMMENDED)\n- **B** \u2014 Use a different/new driver file under `scripts/` as the canonical entrypoint; reply with its exact path in the same answer (e.g., `scripts/<name>.sh`).\n- **C** \u2014 Keep `scripts/validate_process.sh` as entrypoint, but require it to delegate to a second fetched driver file; reply with that exact delegated file path.\nReply: `Q1: A`\n**Q2: Should `validation/validate.sh` still be generated at runtime as a transient file, or removed from the flow entirely?**\nChoices:\n- **A** \u2014 Keep generating and using `validation/validate.sh` at runtime, but ensure it is always untracked/uncommitted. (RECOMMENDED)\n- **B** \u2014 Remove `validation/validate.sh` generation/execution entirely; fetched canonical driver runs validation directly.\n- **C** \u2014 Support both paths (generated script and direct driver) with conditional behavior.\nReply: `Q2: A`\n**Q3: For \u201creuse the exact existing script-distribution mechanism,\u201d which fetch helper pattern should validate follow when wiring the driver?**\nChoices:\n- **A** \u2014 Keep/extend the current validate pattern (`fetch_from_ref_or_local` in `validate.yml`) only. (RECOMMENDED)\n- **B** \u2014 Migrate validate to the `_gh_api_fetch`/retry bootstrap style used in clarify/plan/implement.\n- **C** \u2014 Use whichever pattern is already present in each workflow file touched, without normalizing patterns.\nReply: `Q3: A`",
+  "fingerprint": "1ddbf8de59576d7cca869ba232d0fb9ae896067f218c1394686ba2a297fdba96",
+  "lineage": {
+    "issue_number": 902,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24382862991",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24382862991",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260414053927_0687baf8ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 902,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24382862991"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #902 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-14T05:39:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
