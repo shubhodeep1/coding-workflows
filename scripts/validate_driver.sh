@@ -41,6 +41,10 @@ COMPOSE_LOG="${COMPOSE_LOG:-${LOG_DIR}/compose.log}"
 TAIL_LINES="${TAIL_LINES:-30}"
 CANARY_PATTERN="${CANARY_PATTERN:-*canary*.sh}"
 CANARY_REQUIRED="${CANARY_REQUIRED:-1}"
+# Helper/library scripts live alongside tests but are meant to be sourced,
+# not executed as TAP tests. Any basename matching HELPER_PATTERN is excluded
+# from test discovery. Default matches the `_lib_*.sh` / `_*.sh` convention.
+HELPER_PATTERN="${HELPER_PATTERN:-_*.sh}"
 
 VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-validation-user}"
 VALIDATION_TEST_PASSWORD="${VALIDATION_TEST_PASSWORD:-validation-password}"
@@ -341,11 +345,38 @@ wait_for_health()
 
 discover_tests()
 {
+	local candidate
+	local candidate_name
+	local all_candidates=()
+	local helper_files=()
+
 	if [ ! -d "${TEST_DIR}" ]; then
 		fail_fast "tests_missing" "test directory not found: ${TEST_DIR}" "${COMPOSE_LOG}" "tests"
 	fi
 
-	mapfile -t TEST_FILES < <(find "${TEST_DIR}" -maxdepth 1 -type f -name '*.sh' | sort)
+	mapfile -t all_candidates < <(find "${TEST_DIR}" -maxdepth 1 -type f -name '*.sh' | sort)
+
+	TEST_FILES=()
+	for candidate in "${all_candidates[@]}"; do
+		candidate_name="$(basename "${candidate}")"
+		# Exclude helper/library scripts (e.g. `_lib_*.sh`) from test
+		# discovery. They are sourced by real tests and produce no TAP
+		# output when executed directly, which would otherwise be
+		# misreported as "test produced no TAP output" failures.
+		if [[ "${candidate_name}" == ${HELPER_PATTERN} ]]; then
+			helper_files+=("${candidate}")
+			continue
+		fi
+		TEST_FILES+=("${candidate}")
+	done
+
+	if [ "${#helper_files[@]}" -gt 0 ]; then
+		{
+			echo "validate_driver: excluded ${#helper_files[@]} helper script(s) from test discovery (HELPER_PATTERN='${HELPER_PATTERN}'):"
+			printf '  - %s\n' "${helper_files[@]}"
+		} >&2
+	fi
+
 	if [ "${#TEST_FILES[@]}" -eq 0 ]; then
 		fail_fast "tests_missing" "no test scripts found under ${TEST_DIR}" "${COMPOSE_LOG}" "tests"
 	fi
