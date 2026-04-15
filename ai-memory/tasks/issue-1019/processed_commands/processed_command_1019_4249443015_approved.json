@@ -5,13 +5,28 @@
   "entry_id": "processed_command_1019_4249443015_approved",
   "issue_number": 1019,
   "metadata": {
+    "branch": "ai/issue-1019",
+    "changed_files": [
+      ".github/ai/label_contract.v1.json",
+      ".github/workflows/implement.yml",
+      "README.md",
+      "scripts/label_helpers.sh",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_implement_post_codex_recovery.py",
+      "tests/test_orchestrate_poll_process.py"
+    ],
+    "issue_number": 1019,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1019",
+    "pr_number": 1034,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1034",
+    "run_attempt": "1",
+    "run_id": "24437849958",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24437849958"
   },
   "run_attempt": 1,
   "run_id": "24437849958",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-15T05:21:37Z",
+  "status": "completed",
+  "timestamp": "2026-04-15T05:43:59Z",
   "workflow": "implement"
 }
