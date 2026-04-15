@@ -152,6 +152,7 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
+- Clarify orchestrator override: `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` (default `high`) applies only when clarify LLM runs for `ai:orchestrator-managed` issues via forced human `/reclarify`; non-forced orchestrator-managed clarify runs skip Codex and auto-post `/answer [auto-answered-by-orchestrator]`.
 - Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
 - GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
 
