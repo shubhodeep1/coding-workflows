@@ -1454,7 +1454,22 @@ invoke_judge_for_integration_conflict() {
 
   local pr_diff
   local pr_files
-  pr_diff="$(gh_retry gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}" 2>/dev/null | head -c 120000 || true)"
+  # Fetch the full diff to a tempfile via gh_retry_to_file, then
+  # truncate locally.  Piping `gh_retry gh pr diff ... | head -c N`
+  # races SIGPIPE: once `head` closes the read end at the byte
+  # limit, `gh pr diff` exits non-zero, and gh_retry treats that as
+  # a transient failure and retries with exponential backoff (~31 s
+  # total) — wasting time and possibly ending up with empty output.
+  # Truncation after a successful retry-to-file is byte-identical
+  # and has no pipeline feedback.
+  local _pr_diff_file
+  _pr_diff_file="$(mktemp "${TMPDIR:-/tmp}/integration_pr_diff.XXXXXX")"
+  if gh_retry_to_file "${_pr_diff_file}" gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}" 2>/dev/null; then
+    pr_diff="$(head -c 120000 "${_pr_diff_file}" 2>/dev/null || true)"
+  else
+    pr_diff=""
+  fi
+  rm -f "${_pr_diff_file}"
   pr_files="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}/files" --jq '[.[] | {filename, status, additions, deletions}]' 2>/dev/null || echo "[]")"
   local retries
   retries="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
@@ -5921,13 +5936,31 @@ sys.exit(1)
               if [ -n "$(git status --porcelain)" ]; then
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
+                # `git add -u` with only negative pathspecs exits non-zero
+                # on newer git versions (observed with 2.53) when the index
+                # is empty — e.g. test sandboxes whose base commit tracks
+                # no files — because git implicitly appends `.` as a
+                # positive pathspec and then errors on every pathspec that
+                # did not match. Under `set -euo pipefail` that aborts the
+                # whole poll run. Guard on a non-empty index so production
+                # checkouts still run the update and empty sandboxes
+                # silently fall through to the untracked-file add below.
+                _HAS_TRACKED_FILES=false
+                if [ -n "$(git ls-files | head -c1 2>/dev/null || true)" ]; then
+                  _HAS_TRACKED_FILES=true
+                fi
                 if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-                  git add -u -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  if [ "${_HAS_TRACKED_FILES}" = "true" ]; then
+                    git add -u -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  fi
                   git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
                 else
-                  git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  if [ "${_HAS_TRACKED_FILES}" = "true" ]; then
+                    git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  fi
                   git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
                 fi
+                unset _HAS_TRACKED_FILES
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
                 if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
@@ -6538,8 +6571,19 @@ Manual intervention required." >/dev/null
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
       || echo "")"
     if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
-      PR_DIFF="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
-        -H 'Accept: application/vnd.github.diff' 2>/dev/null | head -500 || echo "(diff unavailable)")"
+      # Fetch the full diff to a tempfile via gh_retry_to_file and
+      # truncate locally.  Piping `gh_retry gh api ... | head -500`
+      # races SIGPIPE (once `head` stops reading, `gh api` exits
+      # non-zero, gh_retry classifies that as transient and retries).
+      # Retry-to-file + local truncation avoids the feedback loop.
+      _pr_diff_file="$(mktemp "${TMPDIR:-/tmp}/judge_pr_diff.XXXXXX")"
+      if gh_retry_to_file "${_pr_diff_file}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
+        -H 'Accept: application/vnd.github.diff' 2>/dev/null; then
+        PR_DIFF="$(head -n 500 "${_pr_diff_file}" 2>/dev/null || echo "(diff unavailable)")"
+      else
+        PR_DIFF="(diff unavailable)"
+      fi
+      rm -f "${_pr_diff_file}"
       _issue_status="$(jq -r --arg num "${inum}" --argjson wi "${WAVE_IDX}" \
         '.waves[$wi].issues[] | select((.github_issue | tostring) == $num) | .status // ""' \
         "${STATE_FILE}" 2>/dev/null | head -n1)"
