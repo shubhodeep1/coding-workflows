@@ -30,7 +30,7 @@ def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	wf = _read(PLAN_WF)
 
 	assert "- name: Parse planning output" in wf
-	assert "if (/^\\s*BLOCKED:\\s*(.+\\S)\\s*$/i)" in wf
+	assert "if (/^\\s*BLOCKED:\\s*(.*\\S)\\s*$/i)" in wf
 	assert "echo \"blocked=true\" >> \"$GITHUB_OUTPUT\"" in wf
 	assert "- name: Handle blocked planning output" in wf
 	assert "steps.parse_plan.outputs.blocked == 'true'" in wf
@@ -57,7 +57,7 @@ def test_clarify_workflow_detects_and_escalates_blocked_output() -> None:
 	wf = _read(CLARIFY_WF)
 
 	assert "- name: Parse Codex output" in wf
-	assert "if (/^\\s*BLOCKED:\\s*(.+\\S)\\s*$/i)" in wf
+	assert "if (/^\\s*BLOCKED:\\s*(.*\\S)\\s*$/i)" in wf
 	assert "echo \"blocked=true\" >> \"$GITHUB_OUTPUT\"" in wf
 	assert "- name: Handle blocked clarification output" in wf
 	assert "steps.parse_codex.outputs.blocked == 'true'" in wf

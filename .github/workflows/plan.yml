@@ -993,7 +993,7 @@ jobs:
           BLOCKED_REASON="$(perl -ne '
             if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
             next if $in_code;
-            if (/^\s*BLOCKED:\s*(.+\S)\s*$/i) { print $1; exit; }
+            if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { print $1; exit; }
           ' "${CODEX_OUTPUT_FILE}")"
 
           if [ -n "${BLOCKED_REASON}" ]; then
