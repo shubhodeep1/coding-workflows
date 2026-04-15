@@ -157,9 +157,9 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Post-Codex in-place repair retries: `MAX_POST_CODEX_REPAIR_ATTEMPTS` (default `1`) is currently reserved and not consumed on this branch; layered recovery still goes straight from syntax/step capture to diagnose/fix-up fallback.
 - GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
 
-## 18. Post-Codex Recovery Docs Sync
+## 4a. Post-Codex Recovery Docs Sync
 
-- Recovery order for implementation failures must stay documented as: (1) syntax/step failure capture, (2) in-place repair attempt layer (if implemented), (3) #829 diagnose/fix-up fallback, (4) poller handling of `ai:implementation-failed` reissue/closure.
+- Recovery order for implementation failures must stay documented as: (1) syntax/step failure capture, (2) in-place repair attempt layer (if implemented), (3) #829 diagnose/fix-up fallback, (4) poller handling of `ai:implementation-failed` reissue/closure (capped by `MAX_IMPL_NOOP_REISSUES`).
 - Current branch reality: step (2) is not implemented yet (no consumer for `MAX_POST_CODEX_REPAIR_ATTEMPTS`), so docs must explicitly mark the variable as reserved/ignored and keep fallback behavior as active compatibility path.
 - Implement diagnose fix-up issues use metadata type `implement-fix-up (post-codex-validation)` and enter pipeline via `ai:clarification`; there is no separate `ai:implement-fix-up` label currently.
 - `fix_issues[].depends_on` is additive metadata from diagnose output; `implement.yml` maps local IDs to created issue numbers via dependency-note comments. Poller state updates for implementation-failed reissues are additive (`waves[].issues[].github_issue`, `issue_number_map`) and backward-compatible with older state missing `impl_noop_count` (treated as `0`).
