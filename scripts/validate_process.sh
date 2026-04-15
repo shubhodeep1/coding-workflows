@@ -1665,65 +1665,60 @@ case "${DIAG_STATUS}" in
       exit 0
     fi
 
-    local_to_issue_map='{}'
-    for idx in $(seq 0 $((FIX_COUNT - 1))); do
-      FIX_ID="$(jq -r ".fix_issues[${idx}].id // \"validation-fix-$((idx + 1))\"" "${DIAGNOSE_RESULT_FILE}")"
-      FIX_TITLE="$(jq -r ".fix_issues[${idx}].title // \"Validation fix-up $((idx + 1))\"" "${DIAGNOSE_RESULT_FILE}")"
-      FIX_BODY_BASE="$(jq -r ".fix_issues[${idx}].body // \"No body provided\"" "${DIAGNOSE_RESULT_FILE}" | sed 's/\\n/\n/g')"
-      FIX_PRIORITY="$(jq -r ".fix_issues[${idx}].priority // 5" "${DIAGNOSE_RESULT_FILE}")"
+    # Consolidate every diagnosed root cause into a SINGLE GitHub
+    # issue. Previously each fix_issues[] entry became its own issue
+    # and ran the full clarify -> plan -> implement -> review -> merge
+    # pipeline, multiplying token cost by N. The diagnose prompt
+    # contract (fix_issues[]) is intentionally unchanged; the
+    # collapse happens here at issue-creation time.
+    SORTED_FIXES_FILE="${RUNTIME_DIR}/diagnose_fixes_sorted.json"
+    jq '.fix_issues | sort_by(.priority // 5)' "${DIAGNOSE_RESULT_FILE}" > "${SORTED_FIXES_FILE}"
 
-      FIX_BODY_FULL="${FIX_BODY_BASE}
+    TOP_PRIORITY="$(jq -r '[.[] | (.priority // 5)] | min // 5' "${SORTED_FIXES_FILE}")"
+    if ! [[ "${TOP_PRIORITY}" =~ ^[0-9]+$ ]]; then
+      TOP_PRIORITY=5
+    fi
 
----
-**Orchestrator metadata** (do not edit)
-- Tracking issue: #${TRACKING_ISSUE_RAW}
-- Integration branch: ${INTEGRATION_BRANCH}
-- Local ID: \`${FIX_ID}\`
-- Type: validation-fix-up (cycle ${VALIDATION_CYCLE})
-- Priority: ${FIX_PRIORITY}
-- Managed by: AI Orchestrator"
+    CONSOLIDATED_LOCAL_ID="validation-fix-cycle-${VALIDATION_CYCLE}"
+    CONSOLIDATED_TITLE="Validation fix-ups (cycle ${VALIDATION_CYCLE}): ${FIX_COUNT} root cause(s)"
 
-      if ! is_tracking_run; then
-        continue
+    CONSOLIDATED_BODY_FILE="${RUNTIME_DIR}/consolidated_fix_body.md"
+    {
+      printf '## Diagnosis\n\n%s\n\n' "${DIAG_TEXT}"
+      if [ "${FIX_COUNT}" -gt 1 ]; then
+        printf '_The %s root causes below are listed in priority order (lowest priority number = highest urgency). Apply them in the order shown._\n\n' "${FIX_COUNT}"
       fi
-
-      FIX_URL="$(gh_retry gh issue create \
-        --repo "${GITHUB_REPOSITORY}" \
-        --title "${FIX_TITLE}" \
-        --body "${FIX_BODY_FULL}")"
-      FIX_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$' || true)"
-      if [ -n "${FIX_NUM}" ]; then
-        CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${FIX_NUM}" '. + [$num]')"
-        local_to_issue_map="$(echo "${local_to_issue_map}" | jq --arg id "${FIX_ID}" --argjson num "${FIX_NUM}" '. + {($id): $num}')"
-      fi
-    done
-
-    for idx in $(seq 0 $((FIX_COUNT - 1))); do
-      FIX_ID="$(jq -r ".fix_issues[${idx}].id // \"validation-fix-$((idx + 1))\"" "${DIAGNOSE_RESULT_FILE}")"
-      FIX_NUM="$(echo "${local_to_issue_map}" | jq -r --arg id "${FIX_ID}" '.[$id] // empty')"
-      [ -n "${FIX_NUM}" ] || continue
-
-      DEP_SUMMARY=""
-      while IFS= read -r dep_id; do
-        [ -n "${dep_id}" ] || continue
-        DEP_NUM="$(echo "${local_to_issue_map}" | jq -r --arg dep_id "${dep_id}" '.[$dep_id] // empty')"
-        if [ -n "${DEP_NUM}" ]; then
-          DEP_SUMMARY+="- #${DEP_NUM} (from ${dep_id})\n"
-        fi
-      done < <(jq -r ".fix_issues[${idx}].depends_on[]?" "${DIAGNOSE_RESULT_FILE}")
-
-      if [ -n "${DEP_SUMMARY}" ]; then
-        gh_retry gh issue comment "${FIX_NUM}" \
-          --repo "${GITHUB_REPOSITORY}" \
-          --body "## Dependency Notes\n\nThis fix-up should be applied after:\n${DEP_SUMMARY}" >/dev/null || true
-      fi
-    done
+      printf -- '---\n\n'
+      for idx in $(seq 0 $((FIX_COUNT - 1))); do
+        FIX_TITLE_N="$(jq -r ".[${idx}].title // \"Validation fix-up $((idx + 1))\"" "${SORTED_FIXES_FILE}")"
+        FIX_BODY_N="$(jq -r ".[${idx}].body // \"No body provided\"" "${SORTED_FIXES_FILE}" | sed 's/\\n/\n/g')"
+        FIX_PRIORITY_N="$(jq -r ".[${idx}].priority // 5" "${SORTED_FIXES_FILE}")"
+        printf '## Fix %s: %s\n\n_Priority: %s_\n\n%s\n\n' "$((idx + 1))" "${FIX_TITLE_N}" "${FIX_PRIORITY_N}" "${FIX_BODY_N}"
+      done
+      printf -- '---\n'
+      printf '**Orchestrator metadata** (do not edit)\n'
+      printf -- '- Tracking issue: #%s\n' "${TRACKING_ISSUE_RAW}"
+      printf -- '- Integration branch: %s\n' "${INTEGRATION_BRANCH}"
+      printf -- '- Local ID: `%s`\n' "${CONSOLIDATED_LOCAL_ID}"
+      printf -- '- Type: validation-fix-up (cycle %s, consolidated %s root cause(s))\n' "${VALIDATION_CYCLE}" "${FIX_COUNT}"
+      printf -- '- Priority: %s\n' "${TOP_PRIORITY}"
+      printf -- '- Managed by: AI Orchestrator\n'
+    } > "${CONSOLIDATED_BODY_FILE}"
 
     if ! is_tracking_run; then
-      failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). Tracking issue is not set, so fix-up issues were not created."
+      failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). Tracking issue is not set, so the consolidated fix-up issue was not created."
       write_result_files "fail" "Validation needs fixes" "${failure_summary}"
       tg_notify "Validation for ${GITHUB_REPOSITORY} reported fixable failures, but TRACKING_ISSUE is not set." "WARNING"
       exit 0
+    fi
+
+    FIX_URL="$(gh_retry gh issue create \
+      --repo "${GITHUB_REPOSITORY}" \
+      --title "${CONSOLIDATED_TITLE}" \
+      --body-file "${CONSOLIDATED_BODY_FILE}")"
+    FIX_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$' || true)"
+    if [ -n "${FIX_NUM}" ]; then
+      CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${FIX_NUM}" '. + [$num]')"
     fi
 
     issue_list_md="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq -r '.[] | "- #\(.)"')"
@@ -1731,12 +1726,12 @@ case "${DIAG_STATUS}" in
       issue_list_md='- (no issue numbers captured)'
     fi
 
-    post_tracking_comment "## 🧪 Runtime validation found fixable issues\n\n${DIAG_TEXT}\n\nCreated fix-up issues:\n${issue_list_md}"
+    post_tracking_comment "## 🧪 Runtime validation found fixable issues\n\n${DIAG_TEXT}\n\nConsolidated ${FIX_COUNT} root cause(s) into a single fix-up issue:\n${issue_list_md}"
     set_tracking_phase_label "ai:validation-fixing"
 
-    failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). Fix-up issues were created."
+    failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). A single consolidated fix-up issue was created for ${FIX_COUNT} root cause(s)."
     write_result_files "fail" "Validation needs fixes" "${failure_summary}"
-    tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes (${FIX_COUNT} issue(s) created)." "WARNING"
+    tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes (${FIX_COUNT} root cause(s) consolidated into 1 issue)." "WARNING"
     ;;
 
   harness_error)
