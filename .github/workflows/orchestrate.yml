@@ -612,27 +612,15 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           TITLE="$(jq -r '.issues[0].title' "${DECOMPOSITION_FILE}")"
           BODY="$(jq -r '.issues[0].body' "${DECOMPOSITION_FILE}" | sed 's/\\n/\n/g')"
-          LOCAL_ID="$(jq -r '.issues[0].id' "${DECOMPOSITION_FILE}")"
-          PRIORITY="$(jq -r '.issues[0].priority' "${DECOMPOSITION_FILE}")"
-
-          FULL_BODY="$(cat <<EOF
-          ${BODY}
-
-          ---
-          **Orchestrator metadata** (do not edit)
-          - Local ID: \`${LOCAL_ID}\`
-          - Priority: ${PRIORITY}
-          - Managed by: AI Orchestrator
-          EOF
-          )"
 
           ISSUE_URL="$(gh_retry gh issue create \
             --repo "${{ github.repository }}" \
             --title "${TITLE}" \
-            --body "${FULL_BODY}" \
+            --body "${BODY}" \
             --label "ai:clarification" \
             --label "ai:orchestrator-managed" \
             --label "ai:orchestrator-validate-required")"
