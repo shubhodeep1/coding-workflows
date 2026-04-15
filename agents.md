@@ -369,6 +369,17 @@ If you need a new data shape that truly cannot be satisfied by any existing call
   fix to the `@stable` channel for consumer repos — it is not on the
   critical path for recovering this repo's own runtime.
 
+## 19. Workflow Checkout Integration-Ref Contract
+
+- Orchestrator-managed issue-phase workflows that checkout repository state from issue/issue_comment context (`.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/orchestrate_clarify_respond.yml`, `.github/workflows/implement.yml`) plus validation runs keyed by `inputs.tracking_issue` (`.github/workflows/validate.yml`) MUST resolve integration branch metadata before `actions/checkout@v5`.
+- Required checkout wiring in those workflows:
+  - pre-checkout step `- name: Resolve integration ref` with `id: refctx`
+  - checkout ref binding: `ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}`
+  - post-checkout logging of resolved ref + `git rev-parse HEAD` + `git symbolic-ref --short HEAD` (with detached fallback)
+- Resolver behavior must fail open: missing metadata, invalid format, missing branch, or GH API failure must emit warning/notice and leave `steps.refctx.outputs.ref` empty (checkout falls back to default branch).
+- `orchestrate_poll.yml` is an explicit exception: one run can process multiple tracking issues, so a single integration ref cannot be chosen safely for a shared checkout.
+- Regression guard: `tests/test_workflow_checkout_integration_ref_audit.py` scans all `.github/workflows/*.yml` checkout@v5 usages and fails unless each file is either in the required-resolver set above or in an explicit allow-list with rationale.
+
 ---
 
 ## FINAL REMINDER
