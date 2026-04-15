@@ -338,6 +338,13 @@ else
   ENABLE_STANDALONE_STALL_RECOVERY="false"
 fi
 
+ENABLE_CLEAN_WAVE_JUDGE_SKIP="${ENABLE_CLEAN_WAVE_JUDGE_SKIP:-true}"
+if is_truthy "${ENABLE_CLEAN_WAVE_JUDGE_SKIP}"; then
+  ENABLE_CLEAN_WAVE_JUDGE_SKIP="true"
+else
+  ENABLE_CLEAN_WAVE_JUDGE_SKIP="false"
+fi
+
 ENABLE_CLOSE_MERGED_ISSUES="${ENABLE_CLOSE_MERGED_ISSUES:-true}"
 if is_truthy "${ENABLE_CLOSE_MERGED_ISSUES}"; then
   ENABLE_CLOSE_MERGED_ISSUES="true"
@@ -6121,6 +6128,23 @@ with open('${STATE_FILE}', 'w') as f:
     echo "Wave ${CURRENT_WAVE} stuck — invoking judge to define missing issues or decide next action..."
   else
     echo "Wave ${CURRENT_WAVE} complete!"
+  fi
+
+  PENDING_ISSUE_DEFS_COUNT="$(jq '.pending_issue_defs | length' "${STATE_FILE}")"
+  if [ "${WAVE_COMPLETE}" = "true" ] \
+    && [ "${ANY_FAILED}" = "false" ] \
+    && [ "${PROJECT_COMPLETE}" = "false" ] \
+    && [ "${INVOKE_JUDGE_FOR_STUCK}" = "false" ] \
+    && [ "${PENDING_ISSUE_DEFS_COUNT}" -eq 0 ] \
+    && [ "${ENABLE_CLEAN_WAVE_JUDGE_SKIP}" = "true" ]; then
+    NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
+    if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
+      echo "Clean-wave advance: skipping judge for wave ${CURRENT_WAVE} (no failures, no pending issue defs, project incomplete)."
+      jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1" \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment
+      continue
+    fi
   fi
 
   # ---------------------------------------------------------------
