@@ -8,6 +8,12 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 ## [Unreleased]
 
 ### Changed
+- Completed H1 migration for remaining workflow surfaces by replacing
+  support-file GitHub Contents API fetch loops in `validate.yml` and
+  `issue_pr_status.yml` with checkout-based staged support transport,
+  preserving existing gate behavior and `${SCRIPT_REF} -> main` fallback.
+- Extended staged AI memory schema list placeholders to include two
+  future cache schema entries (TODO markers for H5/H6 filename finalization).
 - Reduced default reasoning effort where deep reasoning is unnecessary:
   - `THINKING_LEVEL_CLARIFY_RESPOND`: `medium` -> `low`
   - `THINKING_LEVEL_VALIDATE`: `xhigh` -> `high`
