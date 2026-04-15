@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/implement.yml\n.github/workflows/implement.yml\nscripts/validate_changed_files_syntax.sh\nscripts/validate_changed_files_syntax.sh\n\nLow confidence files (mentioned by 1 reviewer):\ntests/test_implement_post_codex_recovery.py",
+  "fingerprint": "a4b108228822e42c6a0227a2bb7ef57964c679e7dcae28845ed7c5f7483726ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1053,
+    "run_id": "24454974467",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24454974467",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415132638_55a76bcefb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1053,
+    "run_id": "24454974467"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T13:26:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
