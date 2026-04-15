@@ -3047,7 +3047,7 @@ invoke_stall_judge() {
   effective_action="${judge_action}"
   if [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ] && [ "${effective_action}" = "escalate_human" ]; then
     effective_action="${fallback_action}"
-    judge_effective_note="\n**Effective action:** ${effective_action} (human terminalization disabled)"
+    judge_effective_note="**Effective action:** ${effective_action} (human terminalization disabled)"
     echo "::warning::Stall judge returned escalate_human for issue #${issue_num} while ENABLE_STALL_HUMAN_TERMINALIZATION is disabled; using ${effective_action}."
   fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
@@ -3077,7 +3077,7 @@ ${diagnostics}
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${judge_comment}" >/dev/null 2>&1 || true
   fi
-  tg_notify "Stall judge evaluated issue #${issue_num}: ${judge_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+  tg_notify "Stall judge evaluated issue #${issue_num}: ${effective_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
 
   case "${effective_action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human)
