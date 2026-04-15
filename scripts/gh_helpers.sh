@@ -83,6 +83,154 @@ _gh_rate_limit_wait()
 }
 
 # ---------------------------------------------------------------
+# _gh_ratelimit_tg_alert — Telegram admin alert when a GitHub
+# API rate limit is hit in any workflow or script.
+#
+# Throttled to at most one message per
+# TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS (default 3600 s = 1 h).
+#
+# State persistence: a Telegram pinned message in the admin chat
+# carries an embedded marker `<!-- gh_rl_ts:EPOCH -->`.  The
+# function reads the pinned message via `getChat`, suppresses the
+# alert if the marker is within the cooldown window, otherwise
+# sends a new message and re-pins it (unpinning the stale pin
+# best-effort).  This deliberately avoids any GitHub API call so
+# the throttle still works while the GitHub API itself is the
+# resource being limited.
+#
+# Fail-closed semantics (Q8=B): on any read/pin error the
+# function returns without sending — if pinning fails AFTER the
+# message is sent, the sent message is deleted so the invariant
+# "≤ 1 alert per cooldown window" is preserved even under
+# transient Telegram failures.
+#
+# Env (all optional, function no-ops when creds are missing):
+#   TG_BOT_SECRET, TG_ADMIN_CHAT_ID (fallback TG_CHAT_ID)
+#   TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS (default 3600)
+#   GITHUB_WORKFLOW, GITHUB_SERVER_URL, GITHUB_REPOSITORY,
+#   GITHUB_RUN_ID — used to build a descriptive message.
+#
+# Emits: best-effort ::warning:: log lines on persistence failure.
+# Returns: always 0 — never block a rate-limit retry path.
+# ---------------------------------------------------------------
+_gh_ratelimit_tg_alert()
+{
+	# Resolve chat id; no-op without creds.
+	local _chat_id="${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}"
+	if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${_chat_id}" ]; then
+		return 0
+	fi
+
+	# jq is required for the Telegram state dance; skip silently
+	# if not installed (all repo runners already have it).
+	if ! command -v jq >/dev/null 2>&1; then
+		return 0
+	fi
+
+	# Cooldown window (seconds). Reject non-numeric values, fall
+	# back to 3600.
+	local _cooldown="${TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS:-3600}"
+	case "${_cooldown}" in
+		''|*[!0-9]*) _cooldown=3600 ;;
+	esac
+
+	local _tg_base="https://api.telegram.org/bot${TG_BOT_SECRET}"
+
+	# --- Read current pinned message state (fail-closed on error) ---
+	local _get_chat_resp
+	_get_chat_resp=$(curl -sS --max-time 10 -X POST \
+		"${_tg_base}/getChat" \
+		-d "chat_id=${_chat_id}" 2>/dev/null) || return 0
+	[ -n "${_get_chat_resp}" ] || return 0
+	if ! printf '%s' "${_get_chat_resp}" | jq -e '.ok == true' >/dev/null 2>&1; then
+		return 0
+	fi
+
+	local _pinned_text _prev_pin_id _last_epoch _now
+	_pinned_text=$(printf '%s' "${_get_chat_resp}" \
+		| jq -r '.result.pinned_message.text // ""' 2>/dev/null) || return 0
+	_prev_pin_id=$(printf '%s' "${_get_chat_resp}" \
+		| jq -r '.result.pinned_message.message_id // ""' 2>/dev/null) || return 0
+
+	_last_epoch=$(printf '%s' "${_pinned_text}" \
+		| sed -n 's/.*<!-- gh_rl_ts:\([0-9]\{1,\}\) -->.*/\1/p' | head -1)
+
+	_now=$(date +%s)
+	if [ -n "${_last_epoch}" ] && [ "${_last_epoch}" -gt 0 ] 2>/dev/null; then
+		local _age=$(( _now - _last_epoch ))
+		if [ "${_age}" -ge 0 ] && [ "${_age}" -lt "${_cooldown}" ]; then
+			# Within cooldown — suppress.
+			return 0
+		fi
+	fi
+
+	# --- Build message body ---
+	local _workflow="${GITHUB_WORKFLOW:-unknown}"
+	local _repo="${GITHUB_REPOSITORY:-unknown}"
+	local _run_url=""
+	if [ -n "${GITHUB_SERVER_URL:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
+		_run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+	fi
+	local _body
+	_body="⚠️ WARNING: GitHub API rate limit hit — workflow=${_workflow} repo=${_repo}"
+	if [ -n "${_run_url}" ]; then
+		_body="${_body} run=${_run_url}"
+	fi
+	# Embed dedup marker on a new line (sticky inside pinned text).
+	_body="${_body}
+<!-- gh_rl_ts:${_now} -->"
+
+	# --- Send the alert message ---
+	local _send_resp _new_msg_id
+	_send_resp=$(curl -sS --max-time 10 -X POST \
+		"${_tg_base}/sendMessage" \
+		-d "chat_id=${_chat_id}" \
+		-d "disable_web_page_preview=true" \
+		--data-urlencode "text=${_body}" 2>/dev/null) || return 0
+	[ -n "${_send_resp}" ] || return 0
+	if ! printf '%s' "${_send_resp}" | jq -e '.ok == true' >/dev/null 2>&1; then
+		return 0
+	fi
+	_new_msg_id=$(printf '%s' "${_send_resp}" \
+		| jq -r '.result.message_id // ""' 2>/dev/null)
+	[ -n "${_new_msg_id}" ] || return 0
+
+	# --- Pin new message (persists state). Fail-closed: on pin
+	# failure, delete the message we just sent so the cooldown
+	# invariant is preserved. ---
+	local _pin_resp _pin_ok=0
+	_pin_resp=$(curl -sS --max-time 10 -X POST \
+		"${_tg_base}/pinChatMessage" \
+		-d "chat_id=${_chat_id}" \
+		-d "message_id=${_new_msg_id}" \
+		-d "disable_notification=true" 2>/dev/null) || _pin_resp=""
+
+	if [ -n "${_pin_resp}" ] && printf '%s' "${_pin_resp}" | jq -e '.ok == true' >/dev/null 2>&1; then
+		_pin_ok=1
+	fi
+
+	if [ "${_pin_ok}" -ne 1 ]; then
+		echo "::warning::_gh_ratelimit_tg_alert: failed to pin new alert message (fail-closed); rolling back sent message" >&2
+		curl -sS --max-time 10 -X POST \
+			"${_tg_base}/deleteMessage" \
+			-d "chat_id=${_chat_id}" \
+			-d "message_id=${_new_msg_id}" >/dev/null 2>&1 || true
+		return 0
+	fi
+
+	# --- Best-effort unpin the previous stale pin so the admin
+	# chat keeps a single sticky alert. ---
+	if [ -n "${_prev_pin_id}" ] && [ "${_prev_pin_id}" != "${_new_msg_id}" ]; then
+		curl -sS --max-time 10 -X POST \
+			"${_tg_base}/unpinChatMessage" \
+			-d "chat_id=${_chat_id}" \
+			-d "message_id=${_prev_pin_id}" >/dev/null 2>&1 || true
+	fi
+
+	return 0
+}
+
+# ---------------------------------------------------------------
 # gh_retry — Execute a gh CLI command with automatic retry.
 #
 # Rate-limit errors  → wait until X-RateLimit-Reset, retry (up to max_attempts).
@@ -113,6 +261,7 @@ gh_retry()
 
 		if _is_gh_rate_limit "${stderr_content}"; then
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+			_gh_ratelimit_tg_alert
 			_gh_rate_limit_wait
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
@@ -165,6 +314,7 @@ gh_retry_to_file()
 
 		if _is_gh_rate_limit "${stderr_content}"; then
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+			_gh_ratelimit_tg_alert
 			_gh_rate_limit_wait
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
@@ -263,6 +413,7 @@ gh_api_json_to_file()
 
 			if _is_gh_rate_limit "${stderr_content}"; then
 				echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+				_gh_ratelimit_tg_alert
 				_gh_rate_limit_wait
 			else
 				local wait_secs=$(( 2 ** (attempt - 1) ))
@@ -331,6 +482,7 @@ curl_gh_api()
 
 		if [ "${http_code}" = "429" ] || { [ "${http_code}" = "403" ] && _is_gh_rate_limit "${body_content}"; }; then
 			echo "::warning::GitHub API rate limit (HTTP ${http_code}, attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+			_gh_ratelimit_tg_alert
 			local _reset_ts
 			_reset_ts=$(_parse_reset_header "${header_file}")
 			_sleep_until_reset "${_reset_ts}"
