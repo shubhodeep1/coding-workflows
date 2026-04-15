@@ -31,7 +31,21 @@ fi
 
 COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
 APP_SERVICE="${APP_SERVICE:-app}"
-APP_URL="${APP_URL:-http://localhost:8080/health}"
+# Track whether the consumer explicitly configured APP_URL (via environment or
+# validation/validate.env) before applying the fallback default. When APP_URL
+# is not explicit, wait_for_health skips the host-side HTTP probe and relies
+# solely on Docker container state (Running + Health in {healthy,none}). This
+# prevents library-type consumers with no real HTTP service from timing out
+# on a stale default probe URL while the container is otherwise healthy.
+# Use the non-`:-` form so an explicitly empty APP_URL (`APP_URL=`) is
+# preserved as the consumer's "disable probe" signal rather than being
+# overwritten by the fallback default.
+if [ -n "${APP_URL+x}" ]; then
+	APP_URL_EXPLICIT=1
+else
+	APP_URL_EXPLICIT=0
+fi
+APP_URL="${APP_URL-http://localhost:8080/health}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 HEALTH_POLL_INTERVAL="${HEALTH_POLL_INTERVAL:-2}"
 PHASE="${PHASE:-runtime_validation}"
@@ -284,7 +298,7 @@ run_preflight_checks()
 		fail_fast "preflight_compose_config" "docker compose configuration is invalid" "${COMPOSE_LOG}" "preflight"
 	fi
 
-	if [ -n "${APP_URL}" ] && ! command -v curl >/dev/null 2>&1; then
+	if [ "${APP_URL_EXPLICIT}" = "1" ] && [ -n "${APP_URL}" ] && ! command -v curl >/dev/null 2>&1; then
 		fail_fast "preflight_curl" "curl is required for APP_URL health checks" "${COMPOSE_LOG}" "preflight"
 	fi
 }
@@ -323,7 +337,7 @@ wait_for_health()
 			fi
 		fi
 
-		if [ -n "${APP_URL}" ]; then
+		if [ "${APP_URL_EXPLICIT}" = "1" ] && [ -n "${APP_URL}" ]; then
 			url_ready=0
 			if curl -fsS --max-time 2 "${APP_URL}" >/dev/null 2>&1; then
 				url_ready=1
