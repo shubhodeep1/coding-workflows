@@ -3,8 +3,13 @@
 # set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
 name: AI Review
 on:
+  # ready_for_review is included so that converting a draft PR to a
+  # non-draft re-fires the review gate. This is the unlock path for
+  # automated validation-prompt self-heal PRs (see README.md section
+  # "Validation self-healing"), which are opened as drafts to bypass
+  # auto-review/automerge until a human reviews them.
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:

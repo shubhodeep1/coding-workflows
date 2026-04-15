@@ -292,6 +292,7 @@ def _run_poller(
 	codex_json: dict | None = None,
 	fail_validation_dispatch: bool = False,
 	prs: list[dict] | None = None,
+	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
 	blocked_check_shas: list[str] | None = None,
@@ -304,6 +305,11 @@ def _run_poller(
 	review_dispatch_fail_for_prs: list[int] | None = None,
 	active_autofix_runs: list[dict] | None = None,
 	mock_stall_judge_json: dict | None = None,
+	fail_issue_comment_get_after: dict[int, int] | None = None,
+	fail_branch_ref_after: dict[str, int] | None = None,
+	fail_branch_ref_not_found_after: dict[str, int] | None = None,
+	codex_touch_file: str | None = None,
+	mock_git_push_success: bool = False,
 	enable_stall_judge: str = "true",
 	stall_judge_trigger_count: str = "2",
 ) -> dict:
@@ -314,6 +320,7 @@ def _run_poller(
 		issue_labels = {10: ["ai:merged"]}
 	gql_labels = gql_labels or {}
 	prs = prs or []
+	pr_api_sequence = pr_api_sequence or {}
 	existing_branches = existing_branches or ["main"]
 	blocked_check_shas = blocked_check_shas or []
 	validation_workflow_runs = validation_workflow_runs or []
@@ -325,6 +332,9 @@ def _run_poller(
 	review_dispatch_fail_for_prs = review_dispatch_fail_for_prs or []
 	active_autofix_runs = active_autofix_runs or []
 	mock_stall_judge_json = mock_stall_judge_json or {}
+	fail_issue_comment_get_after = fail_issue_comment_get_after or {}
+	fail_branch_ref_after = fail_branch_ref_after or {}
+	fail_branch_ref_not_found_after = fail_branch_ref_not_found_after or {}
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -379,6 +389,7 @@ def _run_poller(
 			"fail_validation_dispatch": fail_validation_dispatch,
 			"default_branch": "main",
 			"prs": prs,
+			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
 			"existing_branches": existing_branches,
 			"update_branch_calls": [],
 			"update_branch_fail_for_prs": [int(x) for x in update_branch_fail_for_prs],
@@ -391,6 +402,9 @@ def _run_poller(
 			"issue_linked_prs": {str(k): int(v) for k, v in issue_linked_prs.items()},
 			"merge_tree_conflict_paths": list(merge_tree_conflict_paths),
 			"timeline_fail_for_issues": [int(x) for x in timeline_fail_for_issues],
+			"fail_issue_comment_get_after": {str(k): int(v) for k, v in fail_issue_comment_get_after.items()},
+			"fail_branch_ref_after": {str(k): int(v) for k, v in fail_branch_ref_after.items()},
+			"fail_branch_ref_not_found_after": {str(k): int(v) for k, v in fail_branch_ref_not_found_after.items()},
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -714,7 +728,17 @@ if args[0] == 'api':
 
 	m = re.search(r'/issues/(\d+)/comments(?:\?per_page=100)?$', path)
 	if m and method == 'GET' and not fields:
+		num = m.group(1)
+		fail_after = store.get('fail_issue_comment_get_after', {}).get(num)
+		if fail_after is not None:
+			calls = store.setdefault('issue_comment_get_calls', {})
+			calls[num] = int(calls.get(num, 0)) + 1
+			if calls[num] > int(fail_after):
+				save()
+				print('forced comments API failure', file=sys.stderr)
+				sys.exit(1)
 		issue = get_issue(m.group(1))
+		save()
 		print(json.dumps(issue['comments']))
 		sys.exit(0)
 
@@ -800,11 +824,26 @@ if args[0] == 'api':
 
 	if m:
 		pr_num = int(m.group(1))
+		pr_get_calls = store.setdefault('pr_get_calls', {})
+		pr_get_calls[str(pr_num)] = int(pr_get_calls.get(str(pr_num), 0)) + 1
 		pr = None
-		for item in store.get('prs', []):
-			if item.get('number') == pr_num:
-				pr = item
-				break
+		seq_map = store.get('pr_api_sequence', {})
+		seq_key = str(pr_num)
+		seq = seq_map.get(seq_key)
+		if isinstance(seq, list) and seq:
+			idx_map = store.setdefault('pr_api_sequence_index', {})
+			idx = int(idx_map.get(seq_key, 0))
+			if idx >= len(seq):
+				idx = len(seq) - 1
+			pr = dict(seq[idx])
+			if idx < len(seq) - 1:
+				idx_map[seq_key] = idx + 1
+			save()
+		else:
+			for item in store.get('prs', []):
+				if item.get('number') == pr_num:
+					pr = item
+					break
 		if pr is None:
 			print('{}')
 			sys.exit(0)
@@ -842,6 +881,11 @@ if args[0] == 'api':
 				'mergeable_state': pr.get('mergeable_state', ''),
 				'merged': pr.get('merged', False),
 				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
+				'title': pr.get('title', ''),
+				'body': pr.get('body', ''),
+				'base': {
+					'ref': pr.get('baseRefName', ''),
+				},
 				'head': {
 					'sha': pr.get('headSha', f'mocksha{pr_num}'),
 					'ref': pr.get('headRefFromApi', pr.get('headRefName', '')),
@@ -870,6 +914,23 @@ if args[0] == 'api':
 		encoded_branch = m.group(1)
 		from urllib.parse import unquote
 		branch = unquote(encoded_branch)
+		calls = store.setdefault('branch_ref_calls', {})
+		calls[branch] = int(calls.get(branch, 0)) + 1
+		fail_after = store.get('fail_branch_ref_after', {}).get(branch)
+		if fail_after is not None:
+			if calls[branch] > int(fail_after):
+				save()
+				print('forced branch ref API failure', file=sys.stderr)
+				sys.exit(1)
+		missing_after = store.get('fail_branch_ref_not_found_after', {}).get(branch)
+		if missing_after is not None:
+			if calls[branch] > int(missing_after):
+				nf_calls = store.setdefault('branch_ref_not_found_calls', {})
+				nf_calls[branch] = int(nf_calls.get(branch, 0)) + 1
+				save()
+				print('not found', file=sys.stderr)
+				sys.exit(1)
+		save()
 		if branch in store.get('existing_branches', ['main']):
 			print(json.dumps({'ref': f'refs/heads/{branch}', 'object': {'sha': 'mocksha'}}))
 			sys.exit(0)
@@ -969,6 +1030,9 @@ if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and 
 	print('f' * 40)
 	sys.exit(0)
 
+if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCESS', '') == 'true':
+	sys.exit(0)
+
 proc = subprocess.run([real_git, *args])
 sys.exit(proc.returncode)
 ''',
@@ -990,6 +1054,10 @@ except Exception:
 
 output = os.environ.get('MOCK_CODEX_JSON', '{}')
 parsed = json.loads(output)
+touch_file = os.environ.get('MOCK_CODEX_TOUCH_FILE', '')
+if touch_file:
+	with open(touch_file, 'a', encoding='utf-8') as fh:
+		fh.write("mock change\\n")
 print(json.dumps(parsed))
 """,
 		)
@@ -1024,11 +1092,17 @@ print(json.dumps(parsed))
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
+				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			}
 		)
 		if mock_stall_judge_json:
 			env["MOCK_STALL_JUDGE_JSON"] = json.dumps(mock_stall_judge_json)
+		if codex_touch_file:
+			touch_path = Path(codex_touch_file)
+			if not touch_path.is_absolute():
+				touch_path = runtime_dir / touch_path
+			env["MOCK_CODEX_TOUCH_FILE"] = str(touch_path)
 
 		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],
@@ -1194,6 +1268,343 @@ def test_missing_integration_branch_marks_failed():
 	assert result["latest_state"]["status"] == "failed"
 	assert result["latest_state"]["final_merge_status"] == "failed"
 	assert "final_merge_error" in result["latest_state"]
+
+
+def test_review_blocked_merged_followup_retargets_to_integration_branch():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		pr_api_sequence={
+			901: [
+				{
+					"number": 901,
+					"state": "open",
+					"merged": False,
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+				{
+					"number": 901,
+					"state": "open",
+					"merged": False,
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+				{
+					"number": 901,
+					"state": "closed",
+					"merged": True,
+					"merged_at": "2026-04-15T00:00:00Z",
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+			]
+		},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-04-15T00:00:00Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"title": "Test PR",
+				"body": "Body",
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		codex_json={
+			"action": "fix",
+			"justification": "apply fixes",
+			"fix_description": "patched",
+			"remaining_issues_summary": "none",
+		},
+		codex_touch_file="sandbox_fix.txt",
+		mock_git_push_success=True,
+	)
+
+
+	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
+	assert any(pr.get("baseRefName") == "orchestrator/project-192" for pr in followup_prs)
+	assert not any(
+		pr.get("headRefName", "").startswith("fix/10-followup-") and pr.get("baseRefName") == "main"
+		for pr in followup_prs
+	)
+
+
+def test_review_blocked_merged_followup_refuses_default_base_when_active_integration_branch_unavailable():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		pr_api_sequence={
+			901: [
+				{
+					"number": 901,
+					"state": "open",
+					"merged": False,
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+				{
+					"number": 901,
+					"state": "open",
+					"merged": False,
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+				{
+					"number": 901,
+					"state": "closed",
+					"merged": True,
+					"merged_at": "2026-04-15T00:00:00Z",
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+			]
+		},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-04-15T00:00:00Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"title": "Test PR",
+				"body": "Body",
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		fail_branch_ref_not_found_after={"orchestrator/project-192": 1},
+		codex_json={
+			"action": "fix",
+			"justification": "apply fixes",
+			"fix_description": "patched",
+			"remaining_issues_summary": "none",
+		},
+		codex_touch_file="sandbox_fix.txt",
+		mock_git_push_success=True,
+	)
+
+
+	assert len(result["prs"]) == 1
+	assert "Aborting follow-up PR creation to avoid targeting main" in (result["stdout"] + result["stderr"])
+
+
+def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_context():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		pr_api_sequence={
+			901: [
+				{
+					"number": 901,
+					"state": "open",
+					"merged": False,
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+				{
+					"number": 901,
+					"state": "open",
+					"merged": False,
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+				{
+					"number": 901,
+					"state": "closed",
+					"merged": True,
+					"merged_at": "2026-04-15T00:00:00Z",
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+			]
+		},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-04-15T00:00:00Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"title": "Test PR",
+				"body": "Body",
+			},
+		],
+		existing_branches=["main"],
+		codex_json={
+			"action": "fix",
+			"justification": "apply fixes",
+			"fix_description": "patched",
+			"remaining_issues_summary": "none",
+		},
+		codex_touch_file="sandbox_fix.txt",
+		mock_git_push_success=True,
+	)
+
+
+	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
+	assert any(pr.get("baseRefName") == "main" for pr in followup_prs)
+
+
+def test_review_blocked_followup_refusal_increments_retry_counter():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		pr_api_sequence={
+			901: [
+				{
+					"number": 901,
+					"state": "open",
+					"merged": False,
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+				{
+					"number": 901,
+					"state": "open",
+					"merged": False,
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+				{
+					"number": 901,
+					"state": "closed",
+					"merged": True,
+					"merged_at": "2026-04-15T00:00:00Z",
+					"baseRefName": "main",
+					"headRefName": "ai/issue-10",
+					"headRefFromApi": "ai/issue-10",
+					"mergeable": True,
+					"mergeable_state": "clean",
+					"title": "Test PR",
+					"body": "Body",
+				},
+			]
+		},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-04-15T00:00:00Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"title": "Test PR",
+				"body": "Body",
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		fail_branch_ref_not_found_after={"orchestrator/project-192": 1},
+		codex_json={
+			"action": "fix",
+			"justification": "apply fixes",
+			"fix_description": "patched",
+			"remaining_issues_summary": "none",
+		},
+		codex_touch_file="sandbox_fix.txt",
+		mock_git_push_success=True,
+	)
+
+
+	assert len(result["prs"]) == 1
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
 def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
@@ -1726,6 +2137,27 @@ def test_validation_fixing_redispatches_when_fix_issues_merged():
 	assert result["latest_state"]["validation_cycle"] == 2
 	assert result["latest_state"]["validation_active_fix_issues"] == []
 	assert len(result["validation_dispatches"]) == 1
+
+
+def test_review_blocked_merged_fix_followup_retargets_base_to_integration_branch():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "resolve_active_orchestrator_context_for_issue \"${rb_issue}\" \"${TRACKING_NUM:-}\"" in script
+	assert "BASE_REF=\"${ORCH_FOLLOWUP_INTEGRATION_BRANCH}\"" in script
+	assert "Retargeting base to ${BASE_REF}." in script
+
+
+def test_review_blocked_merged_fix_followup_refuses_when_integration_branch_invalid():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "RB_FOLLOWUP_REFUSED=\"true\"" in script
+	assert "integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}." in script
+	assert "Refused merged follow-up PR creation for review-blocked issue #${rb_issue}" in script
+
+
+def test_review_blocked_merged_fix_followup_keeps_default_base_without_integration_context():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert ": \"${BASE_REF:=${DEFAULT_BRANCH:-main}}\"" in script
+	assert "if [ \"${RB_INTEGRATION_BRANCH_VALID}\" = \"true\" ]" in script
+	assert "&& { [ \"${BASE_REF}\" = \"${DEFAULT_BRANCH:-main}\" ] || [ \"${BASE_REF}\" = \"main\" ]; }; then" in script
 
 
 def test_validation_fixing_backfills_ai_merged_from_linked_merged_pr_evidence():
