@@ -97,7 +97,10 @@ jobs:
               pr_merged="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.merged // false' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "false")"
             fi
 
-            if [ "${pr_state}" = "closed" ]; then
+            if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
+              SHOULD_RUN="false"
+              echo "::warning::Unable to determine PR state for #${PR_NUMBER}; skipping review run."
+            elif [ "${pr_state}" = "closed" ]; then
               SHOULD_RUN="false"
               if [ "${pr_merged}" = "true" ]; then
                 POST_MERGE_DISPATCH="true"
@@ -148,6 +151,7 @@ jobs:
             echo "Found linked issues via PR body/title fallback: ${issue_numbers}"
           fi
 
+          validation_dispatched="false"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
 
@@ -157,13 +161,18 @@ jobs:
               continue
             fi
 
-            echo "Dispatching standalone validation for linked issue #${issue_number} (tracking_issue=0)."
-            if gh workflow run "ai-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0"; then
-              if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:orchestrator-validate-required'; then
-                echo "::warning::Standalone validation dispatched for issue #${issue_number}, but failed to remove ai:orchestrator-validate-required."
+            if [ "${validation_dispatched}" = "false" ]; then
+              echo "Dispatching standalone validation for linked issue #${issue_number} (tracking_issue=0)."
+              if gh workflow run "ai-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0" || gh workflow run "internal-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0"; then
+                validation_dispatched="true"
+              else
+                echo "::warning::Failed to dispatch ai-validate.yml/internal-validate.yml for issue #${issue_number}; continuing without failing workflow."
+                continue
               fi
-            else
-              echo "::warning::Failed to dispatch ai-validate.yml for issue #${issue_number}; continuing without failing workflow."
+            fi
+
+            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:orchestrator-validate-required'; then
+              echo "::warning::Standalone validation dispatched for issue #${issue_number}, but failed to remove ai:orchestrator-validate-required."
             fi
           done <<< "${issue_numbers}"
 
