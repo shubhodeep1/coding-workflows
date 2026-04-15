@@ -1043,6 +1043,7 @@ jobs:
       - name: Attempt post-Codex syntax repair
         if: env.SKIP_IMPLEMENT != 'true' && steps.validate_syntax_changed_files.outcome == 'failure'
         id: post_codex_syntax_repair
+        continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
