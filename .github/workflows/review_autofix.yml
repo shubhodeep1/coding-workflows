@@ -2875,8 +2875,54 @@ jobs:
 
           git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
           echo "Pushing pending commits to ${TARGET_BRANCH}..."
-          git push origin "HEAD:${TARGET_BRANCH}"
-          echo "Push complete."
+
+          # Retry non-fast-forward rejections with fetch+rebase.  A concurrent
+          # push to ${TARGET_BRANCH} (another workflow run, a human push, a
+          # sibling autofix job) during this ~30-minute job would otherwise
+          # cause an unrecoverable `! [rejected] (fetch first)` failure and
+          # lose the deferred autofix / [ai-merge-resolve] commit.  We rebase
+          # our local commits on top of the advanced remote tip and retry up
+          # to 3 times with exponential backoff.  If the rebase itself would
+          # introduce new conflicts, we abort the rebase and fail loudly —
+          # we must never silently resurrect conflict markers that the
+          # resolver just cleared, and we must never clobber someone else's
+          # commits (no --force / --force-with-lease on this path).
+          max_push_attempts=3
+          push_attempt=1
+          push_backoff=2
+          push_stderr_file="$(mktemp)"
+          trap 'rm -f "${push_stderr_file}"' EXIT
+          while :; do
+            push_exit=0
+            git push origin "HEAD:${TARGET_BRANCH}" 2>"${push_stderr_file}" || push_exit=$?
+            cat "${push_stderr_file}" >&2
+            if [ "${push_exit}" -eq 0 ]; then
+              echo "Push complete."
+              break
+            fi
+            if ! grep -qE '\[rejected\].*\(fetch first\)|non-fast-forward' "${push_stderr_file}"; then
+              echo "::error::git push failed (exit ${push_exit}) for a reason other than non-fast-forward; not retrying."
+              exit "${push_exit}"
+            fi
+            if [ "${push_attempt}" -ge "${max_push_attempts}" ]; then
+              echo "::error::git push still rejected as non-fast-forward after ${max_push_attempts} attempts; giving up."
+              exit 1
+            fi
+            echo "::warning::git push rejected as non-fast-forward (attempt ${push_attempt}/${max_push_attempts}); fetching ${TARGET_BRANCH} and rebasing before retry in ${push_backoff}s."
+            sleep "${push_backoff}"
+            push_backoff=$((push_backoff * 2))
+            push_attempt=$((push_attempt + 1))
+            if ! git fetch origin "${TARGET_BRANCH}"; then
+              echo "::error::git fetch origin ${TARGET_BRANCH} failed during push-retry; giving up to avoid pushing a stale tree."
+              exit 1
+            fi
+            if ! git rebase "origin/${TARGET_BRANCH}"; then
+              echo "::error::git rebase onto origin/${TARGET_BRANCH} failed — rebase would introduce new conflicts. Aborting rebase and failing the job; refusing to silently resurrect conflict markers."
+              git rebase --abort || true
+              exit 1
+            fi
+            : > "${push_stderr_file}"
+          done
 
       - name: Re-trigger review via workflow_dispatch
         # The push above fires a pull_request synchronize event, but GitHub
