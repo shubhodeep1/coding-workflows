@@ -577,6 +577,16 @@ jobs:
             --color "f9d0c4" \
             --description "AI clarification required before planning" \
             2>/dev/null || true
+          gh_retry gh label create "ai:orchestrator-managed" \
+            --repo "${{ github.repository }}" \
+            --color "bfdadc" \
+            --description "Issue is managed by the AI orchestrator" \
+            2>/dev/null || true
+          gh_retry gh label create "ai:orchestrator-validate-required" \
+            --repo "${{ github.repository }}" \
+            --color "c5def5" \
+            --description "Orchestrator issue requires validate phase before completion" \
+            2>/dev/null || true
 
       - name: Create tracking issue
         id: tracking_issue
@@ -711,7 +721,8 @@ jobs:
               --repo "${{ github.repository }}" \
               --title "${TITLE}" \
               --body "${FULL_BODY}" \
-              --label "ai:clarification")"
+              --label "ai:clarification" \
+              --label "ai:orchestrator-managed")"
 
             ISSUE_NUM="$(echo "${ISSUE_URL}" | grep -oE '[0-9]+$')"
             ISSUE_MAP["${LOCAL_ID}"]="${ISSUE_NUM}"

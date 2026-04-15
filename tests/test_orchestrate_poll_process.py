@@ -652,6 +652,7 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'close':
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
 	title = ''
 	body = ''
+	labels = []
 	i = 2
 	while i < len(args):
 		if args[i] == '--title' and i + 1 < len(args):
@@ -662,11 +663,15 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
 			body = args[i + 1]
 			i += 2
 			continue
+		if args[i] == '--label' and i + 1 < len(args):
+			labels.append(args[i + 1])
+			i += 2
+			continue
 		i += 1
 	next_num = store.get('next_issue_number', 900)
 	store['next_issue_number'] = next_num + 1
-	store['issues'][str(next_num)] = {'labels': [], 'comments': [], 'body': body, 'closed': False, 'title': title}
-	store.setdefault('created_issues', []).append({'number': next_num, 'title': title})
+	store['issues'][str(next_num)] = {'labels': labels, 'comments': [], 'body': body, 'closed': False, 'title': title}
+	store.setdefault('created_issues', []).append({'number': next_num, 'title': title, 'labels': labels})
 	save()
 	print(f'https://github.com/owner/repo/issues/{next_num}')
 	sys.exit(0)
@@ -2263,6 +2268,19 @@ def test_in_progress_judge_recreates_closed_fixup_id_stays_on_current_wave():
 	wave1 = {i["id"]: i for i in ls["waves"][0]["issues"]}
 	assert wave1["fixup-1"]["status"] == "pending", f"Expected recreated fixup-1 status=pending, got {wave1['fixup-1']['status']}"
 	assert str(wave1["fixup-1"]["github_issue"]) != "35", f"Expected fixup-1 github_issue to be replaced, got {wave1['fixup-1']['github_issue']}"
+	created_issue = next((item for item in result.get("created_issues", []) if item.get("number") == 900), None)
+	assert created_issue is not None, f"Expected created issue #900 in mock store, got {result.get('created_issues', [])}"
+	assert "ai:clarification" in created_issue.get("labels", [])
+	assert "ai:orchestrator-managed" in created_issue.get("labels", [])
+
+
+def test_standalone_close_and_reissue_keeps_clarification_only_label():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	anchor = "This issue was re-created by standalone stall recovery."
+	assert anchor in script, "Could not locate standalone close_and_reissue guidance block"
+	window = script[script.index(anchor):script.index(anchor) + 1200]
+	assert '--label "ai:clarification"' in window
+	assert '--label "ai:orchestrator-managed"' not in window
 
 
 # ---------------------------------------------------------------------------
