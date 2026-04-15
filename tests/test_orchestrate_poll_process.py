@@ -1728,6 +1728,27 @@ def test_validation_fixing_redispatches_when_fix_issues_merged():
 	assert len(result["validation_dispatches"]) == 1
 
 
+def test_review_blocked_merged_fix_followup_retargets_base_to_integration_branch():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "resolve_active_orchestrator_context_for_issue \"${rb_issue}\" \"${TRACKING_NUM:-}\"" in script
+	assert "BASE_REF=\"${ORCH_FOLLOWUP_INTEGRATION_BRANCH}\"" in script
+	assert "Retargeting base to ${BASE_REF}." in script
+
+
+def test_review_blocked_merged_fix_followup_refuses_when_integration_branch_invalid():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "RB_FOLLOWUP_REFUSED=\"true\"" in script
+	assert "integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}." in script
+	assert "Refused merged follow-up PR creation for review-blocked issue #${rb_issue}" in script
+
+
+def test_review_blocked_merged_fix_followup_keeps_default_base_without_integration_context():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert ": \"${BASE_REF:=${DEFAULT_BRANCH:-main}}\"" in script
+	assert "if [ \"${RB_INTEGRATION_BRANCH_VALID}\" = \"true\" ]" in script
+	assert "&& { [ \"${BASE_REF}\" = \"${DEFAULT_BRANCH:-main}\" ] || [ \"${BASE_REF}\" = \"main\" ]; }; then" in script
+
+
 def test_validation_fixing_backfills_ai_merged_from_linked_merged_pr_evidence():
 	state = _base_state(status="validation-fixing")
 	state["validation_cycle"] = 1

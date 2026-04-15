@@ -3977,6 +3977,7 @@ fi
 # ---------------------------------------------------------------
 TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
+FEATURE_SWEEP_DONE="false"
 
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
@@ -4912,45 +4913,48 @@ json.dump(result, sys.stdout)
   #
   # This pass is bounded per poll tick via --limit 100 and does not
   # dispatch review workflows; it only attempts update-branch.
-  echo "  [feature-sweep] Scanning open ai/issue-* PRs for base-branch drift..."
-  _FEATURE_SWEEP_JSON="$(gh pr list \
-    --repo "${GITHUB_REPOSITORY}" \
-    --state open \
-    --json number,headRefName,baseRefName,mergeable,mergeStateStatus \
-    --limit 100 2>/dev/null || echo "[]")"
-  if [ -n "${_FEATURE_SWEEP_JSON}" ] && [ "${_FEATURE_SWEEP_JSON}" != "[]" ]; then
-    echo "${_FEATURE_SWEEP_JSON}" | jq -c '.[]' | while read -r _fs_pr; do
-      _fs_num="$(echo "${_fs_pr}" | jq -r '.number // empty')"
-      _fs_head="$(echo "${_fs_pr}" | jq -r '.headRefName // empty')"
-      _fs_state="$(echo "${_fs_pr}" | jq -r '.mergeStateStatus // empty' | tr '[:upper:]' '[:lower:]')"
-      _fs_mergeable="$(echo "${_fs_pr}" | jq -r '.mergeable // empty' | tr '[:upper:]' '[:lower:]')"
-      [[ "${_fs_num}" =~ ^[0-9]+$ ]] || continue
-      case "${_fs_head}" in
-        ai/issue-*) ;;
-        *) continue ;;
-      esac
-      # Skip dirty PRs — those go through the proper conflict loop
-      # above so the resolver workflow can be dispatched.
-      if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "false" ] || [ "${_fs_mergeable}" = "conflicting" ]; then
-        continue
-      fi
-      # Only act on PRs that are actually behind base.
-      if [ "${_fs_state}" != "behind" ]; then
-        continue
-      fi
-      _fs_head_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}" --jq '.head.sha' 2>/dev/null || echo "")"
-      if [ -z "${_fs_head_sha}" ]; then
-        echo "  [feature-sweep] PR #${_fs_num}: cannot resolve head sha; skipping."
-        continue
-      fi
-      echo "  [feature-sweep] PR #${_fs_num} (${_fs_head}) is behind base; calling update-branch..."
-      if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}/update-branch" \
-        -X PUT -f expected_head_sha="${_fs_head_sha}" >/dev/null 2>&1; then
-        echo "  [feature-sweep] PR #${_fs_num} fast-forwarded."
-      else
-        echo "  [feature-sweep] PR #${_fs_num}: update-branch failed (likely real conflict). The in-progress conflict loop will handle it on the next tick."
-      fi
-    done
+  if [ "${FEATURE_SWEEP_DONE}" != "true" ]; then
+    echo "  [feature-sweep] Scanning open ai/issue-* PRs for base-branch drift..."
+    _FEATURE_SWEEP_JSON="$(gh pr list \
+      --repo "${GITHUB_REPOSITORY}" \
+      --state open \
+      --json number,headRefName,baseRefName,mergeable,mergeStateStatus \
+      --limit 100 2>/dev/null || echo "[]")"
+    if [ -n "${_FEATURE_SWEEP_JSON}" ] && [ "${_FEATURE_SWEEP_JSON}" != "[]" ]; then
+      echo "${_FEATURE_SWEEP_JSON}" | jq -c '.[]' | while read -r _fs_pr; do
+        _fs_num="$(echo "${_fs_pr}" | jq -r '.number // empty')"
+        _fs_head="$(echo "${_fs_pr}" | jq -r '.headRefName // empty')"
+        _fs_state="$(echo "${_fs_pr}" | jq -r '.mergeStateStatus // empty' | tr '[:upper:]' '[:lower:]')"
+        _fs_mergeable="$(echo "${_fs_pr}" | jq -r '.mergeable // empty' | tr '[:upper:]' '[:lower:]')"
+        [[ "${_fs_num}" =~ ^[0-9]+$ ]] || continue
+        case "${_fs_head}" in
+          ai/issue-*) ;;
+          *) continue ;;
+        esac
+        # Skip dirty PRs — those go through the proper conflict loop
+        # above so the resolver workflow can be dispatched.
+        if [ "${_fs_state}" = "dirty" ] || [ "${_fs_mergeable}" = "conflicting" ] || [ "${_fs_mergeable}" = "false" ]; then
+          continue
+        fi
+        # Only act on PRs that are actually behind base.
+        if [ "${_fs_state}" != "behind" ]; then
+          continue
+        fi
+        _fs_head_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}" --jq '.head.sha' 2>/dev/null || echo "")"
+        if [ -z "${_fs_head_sha}" ]; then
+          echo "  [feature-sweep] PR #${_fs_num}: cannot resolve head sha; skipping."
+          continue
+        fi
+        echo "  [feature-sweep] PR #${_fs_num} (${_fs_head}) is behind base; calling update-branch..."
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${_fs_num}/update-branch" \
+          -X PUT -f expected_head_sha="${_fs_head_sha}" >/dev/null 2>&1; then
+          echo "  [feature-sweep] PR #${_fs_num} fast-forwarded."
+        else
+          echo "  [feature-sweep] PR #${_fs_num}: update-branch failed (likely real conflict). The in-progress conflict loop will handle it on the next tick."
+        fi
+      done
+    fi
+    FEATURE_SWEEP_DONE="true"
   fi
 
   # ---------------------------------------------------------------
@@ -5009,6 +5013,13 @@ json.dump(result, sys.stdout)
       fi
       echo "  Linked PR: #${RB_PR}"
 
+      RB_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+      [ "${RB_INTEGRATION_BRANCH}" = "null" ] && RB_INTEGRATION_BRANCH=""
+      RB_INTEGRATION_BRANCH_VALID="false"
+      if [ -n "${RB_INTEGRATION_BRANCH}" ] && integration_branch_exists "${RB_INTEGRATION_BRANCH}"; then
+        RB_INTEGRATION_BRANCH_VALID="true"
+      fi
+
       # Guard: check PR state before invoking the judge
       # Fetch PR JSON once — reused for state/merged checks and PR_META below.
       _rb_pr_json="$(_fetch_pr_json "${RB_PR}")"
@@ -5026,7 +5037,13 @@ json.dump(result, sys.stdout)
         continue
       elif [ "${RB_PR_MERGED}" = "true" ]; then
         # PR was merged — judge should still run; fixes will go into a follow-up PR
-        echo "  PR #${RB_PR} is already merged. Judge fixes will target a follow-up PR against ${DEFAULT_BRANCH:-main}."
+        if [ "${RB_INTEGRATION_BRANCH_VALID}" = "true" ]; then
+          echo "  PR #${RB_PR} is already merged. Judge fixes will target a follow-up PR against ${RB_INTEGRATION_BRANCH}."
+        elif [ -n "${RB_INTEGRATION_BRANCH}" ]; then
+          echo "::warning::PR #${RB_PR} is already merged and integration branch context '${RB_INTEGRATION_BRANCH}' is invalid. Follow-up PR creation will be refused unless safely retargeted."
+        else
+          echo "  PR #${RB_PR} is already merged. Judge fixes will target a follow-up PR against ${DEFAULT_BRANCH:-main}."
+        fi
       fi
 
       # ------------------------------------------------------------------
@@ -5421,6 +5438,7 @@ sys.exit(1)
             HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
             BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
             : "${BASE_REF:=${DEFAULT_BRANCH:-main}}"
+            RB_FOLLOWUP_REFUSED="false"
 
             ORCH_FOLLOWUP_OWNED="false"
             ORCH_FOLLOWUP_TRACKING_NUM=""
@@ -5441,6 +5459,7 @@ sys.exit(1)
                   echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
                 else
                   FOLLOWUP_PR_BLOCKED="true"
+                  RB_FOLLOWUP_REFUSED="true"
                   FOLLOWUP_BLOCK_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}), but integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}."
                   echo "::warning::${FOLLOWUP_BLOCK_REASON}"
                   ORIGINAL_TRACKING_NUM="${TRACKING_NUM:-}"
@@ -5454,6 +5473,10 @@ ${FOLLOWUP_BLOCK_REASON}"
                   TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
                 fi
               fi
+            fi
+
+            if [ "${RB_FOLLOWUP_REFUSED}" = "true" ]; then
+              REVIEW_BLOCKED_STATE_CHANGED=true
             fi
 
             if [ "${RB_TARGET_MERGED}" = "true" ] && [ "${FOLLOWUP_PR_BLOCKED}" != "true" ]; then
@@ -5475,7 +5498,7 @@ ${FOLLOWUP_BLOCK_REASON}"
               # Skip to retry counter via nested-fi + fi
             fi
 
-            if { [ "${RB_TARGET_MERGED}" = "true" ] && [ "${FOLLOWUP_PR_BLOCKED}" != "true" ]; } || { [ "${RB_TARGET_MERGED}" != "true" ] && [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; }; then
+            if [ "${RB_FOLLOWUP_REFUSED}" != "true" ] && { { [ "${RB_TARGET_MERGED}" = "true" ] && [ "${FOLLOWUP_PR_BLOCKED}" != "true" ]; } || { [ "${RB_TARGET_MERGED}" != "true" ] && [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; }; }; then
               # Re-run the judge in editing mode on the target branch
               RB_FIX_PROMPT_FILE="${RUNTIME_DIR}/rb_fix_prompt_${rb_issue}.txt"
               RB_FIX_OUTPUT_FILE="${RUNTIME_DIR}/rb_fix_output_${rb_issue}.txt"
@@ -5528,7 +5551,7 @@ ${FOLLOWUP_BLOCK_REASON}"
                   rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py \
                     scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
                     scripts/codex_model_catalog.json
-                  rm -rf .serena
+                  rm -rf .serena prompts
                   rm -f .github/ai/orchestrate_schema.v1.json
                   ;;
               esac
@@ -5562,7 +5585,13 @@ ${RB_FIX_DESC}" || true
 
                 if [ "${RB_TARGET_MERGED}" = "true" ]; then
                   # Push follow-up branch and create a new PR
-                  if git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
+                  if [ "${RB_INTEGRATION_BRANCH_VALID}" = "true" ] \
+                    && { [ "${BASE_REF}" = "${DEFAULT_BRANCH:-main}" ] || [ "${BASE_REF}" = "main" ]; }; then
+                    echo "::warning::Refusing follow-up PR creation for merged PR #${RB_PR}: integration branch '${RB_INTEGRATION_BRANCH}' is active but computed base is '${BASE_REF}'."
+                    tg_notify "Refused merged follow-up PR creation for review-blocked issue #${rb_issue} (PR #${RB_PR}): integration branch '${RB_INTEGRATION_BRANCH}' is active but computed base was '${BASE_REF}'."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+                    RB_FOLLOWUP_REFUSED="true"
+                    REVIEW_BLOCKED_STATE_CHANGED=true
+                  elif git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
 
                     if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ] && [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
@@ -5585,6 +5614,8 @@ ${FOLLOWUP_GUARD_REASON}"
                       tg_notify "${FOLLOWUP_GUARD_REASON}" "WARNING"
                       TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
                       FOLLOWUP_PR_URL=""
+                      RB_FOLLOWUP_REFUSED="true"
+                      REVIEW_BLOCKED_STATE_CHANGED=true
                     else
                       FOLLOWUP_PR_URL="$(gh pr create \
                       --repo "${GITHUB_REPOSITORY}" \
@@ -5660,7 +5691,8 @@ ${RB_FIX_DESC}
               git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
             fi
 
-            # Increment retry counter
+            # Increment retry counter for every handling pass so refused follow-ups
+            # do not re-trigger indefinitely without reaching a final decision.
             jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
             REVIEW_BLOCKED_STATE_CHANGED=true
