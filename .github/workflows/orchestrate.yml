@@ -749,7 +749,7 @@ jobs:
             fi
 
             TITLE="$(jq -r ".issues[${idx}].title" "${DECOMPOSITION_FILE}")"
-            BODY="$(jq -r ".issues[${idx}].body" "${DECOMPOSITION_FILE}" | sed 's/\\n/\n/g')"
+            BODY="$(jq -r ".issues[${idx}].body" "${DECOMPOSITION_FILE}")"
             PRIORITY="$(jq -r ".issues[${idx}].priority" "${DECOMPOSITION_FILE}")"
 
             # Append orchestrator metadata to body
