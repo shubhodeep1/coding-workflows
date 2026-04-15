@@ -108,6 +108,7 @@ jobs:
           integration_branch_ref="$(printf '%s' "${integration_branch}" | jq -sRr @uri)"
           if gh api "repos/${{ github.repository }}/git/ref/heads/${integration_branch_ref}" >/dev/null 2>&1; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+            echo "integration_branch_meta=${integration_branch}" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::Integration branch from metadata does not exist: ${integration_branch}"
             echo "ref=" >> "$GITHUB_OUTPUT"
@@ -674,19 +675,20 @@ jobs:
         if: env.SKIP_PLAN != 'true'
         env:
           RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          INTEGRATION_BRANCH_META: ${{ steps.refctx.outputs.integration_branch_meta }}
         run: |
           set -euo pipefail
 
           HEAD_SHA="$(git rev-parse HEAD)"
-          HEAD_BRANCH="${RESOLVED_REF}"
-          if [ -z "${HEAD_BRANCH}" ]; then
-            HEAD_BRANCH="$(git symbolic-ref --short -q HEAD || true)"
-            if [ -z "${HEAD_BRANCH}" ]; then
-              HEAD_BRANCH="<detached-head>"
-            fi
+          HEAD_SYMBOLIC_BRANCH="$(git symbolic-ref --short -q HEAD || true)"
+          if [ -z "${HEAD_SYMBOLIC_BRANCH}" ]; then
+            HEAD_SYMBOLIC_BRANCH="<detached-head>"
           fi
 
-          INTEGRATION_BRANCH_META="$(printf '%s\n' "${ISSUE_BODY}" | python3 -c 'import re, sys; body = sys.stdin.read(); pattern = re.compile(r"^\\s*(?:-\\s*)?(?:\\*\\*Integration branch:\\*\\*|Integration branch:)\\s*`?\\s*([^`\\n]+?)\\s*`?\\s*$", re.MULTILINE); match = pattern.search(body); print(match.group(1).strip() if match else "")')"
+          HEAD_BRANCH="${RESOLVED_REF}"
+          if [ -z "${HEAD_BRANCH}" ]; then
+            HEAD_BRANCH="${HEAD_SYMBOLIC_BRANCH}"
+          fi
 
           REF_MISMATCH="unknown"
           if [ -n "${INTEGRATION_BRANCH_META}" ]; then
@@ -700,6 +702,7 @@ jobs:
           {
             echo "PLANNING_REF_HEAD_SHA=${HEAD_SHA}"
             echo "PLANNING_REF_HEAD_BRANCH=${HEAD_BRANCH}"
+            echo "PLANNING_REF_SYMBOLIC_BRANCH=${HEAD_SYMBOLIC_BRANCH}"
             echo "PLANNING_REF_INTEGRATION_BRANCH_META=${INTEGRATION_BRANCH_META}"
             echo "PLANNING_REF_MISMATCH=${REF_MISMATCH}"
           } >> "$GITHUB_ENV"
@@ -717,7 +720,8 @@ jobs:
             printf '%s\n\n' "${USER_ANSWERS}"
             echo "PLANNING REF CONTEXT"
             printf 'git rev-parse HEAD: %s\n' "${PLANNING_REF_HEAD_SHA}"
-            printf 'git symbolic-ref --short -q HEAD: %s\n' "${PLANNING_REF_HEAD_BRANCH}"
+            printf 'Resolved checkout ref: %s\n' "${PLANNING_REF_HEAD_BRANCH}"
+            printf 'git symbolic-ref --short -q HEAD: %s\n' "${PLANNING_REF_SYMBOLIC_BRANCH}"
             printf 'Integration branch metadata: %s\n' "${PLANNING_REF_INTEGRATION_BRANCH_META}"
             printf 'Integration branch mismatch: %s\n\n' "${PLANNING_REF_MISMATCH}"
             echo "ALL COMMENTS"

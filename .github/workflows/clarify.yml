@@ -961,6 +961,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           source scripts/label_helpers.sh
           source scripts/tg_helpers.sh
 
