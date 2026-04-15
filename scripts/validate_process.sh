@@ -2030,10 +2030,15 @@ case "${DIAG_STATUS}" in
       exit 0
     fi
 
+    ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
+
 	FIX_URL_OUTPUT="$(gh_retry gh issue create \
 	  --repo "${GITHUB_REPOSITORY}" \
 	  --title "${CONSOLIDATED_TITLE}" \
-	  --body-file "${CONSOLIDATED_BODY_FILE}")"
+	  --body-file "${CONSOLIDATED_BODY_FILE}" \
+	  --label "ai:clarification" \
+	  --label "ai:orchestrator-managed")"
 	FIX_URL="$(printf '%s\n' "${FIX_URL_OUTPUT}" | grep -oE 'https://[^ ]+/issues/[0-9]+/?([?#][^ ]*)?' | tail -n 1 || true)"
 	FIX_NUM="$(basename "${FIX_URL%%[?#]*}")"
 	if ! [[ "${FIX_NUM}" =~ ^[0-9]+$ ]]; then
