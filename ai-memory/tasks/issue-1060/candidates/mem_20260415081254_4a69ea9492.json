@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- Clarify phase produced no Q-IDs and auto-posted `/answer [auto-answered-by-clarify]`, so there are no unresolved decisions to map; planning can proceed with the issue requirements as written.\n\nConflict check:\n- No factual conflict found. The referenced merged-follow-up branch prep path exists in `scripts/orchestrate_poll_process.sh` (the `git fetch ... refs/heads/${BASE_REF}` + checkout sequence in the \u201cPR already merged\u201d flow).\n\nImplementation plan\n\n1. Files likely to change\n- `tests/test_orchestrate_poll_process.py` (test harness only; no production script changes planned).\n\n2. Functions/modules to implement or update\n- `_run_poller` (embedded mock `git` shim body):\n  - Add deterministic handling for `git fetch --no-tags origin refs/heads/<branch>:refs/remotes/origin/<branch>`.\n  - When `<branch>` is listed in `store[\"existing_branches\"]`, emulate successful fetch by creating/updating `refs/remotes/origin/<branch>` in the sandbox repo to a valid commit (e.g., current `HEAD`), then return success.\n  - When not listed, return failure (preserve branch-unavailable behavior).\n  - Keep existing special handling (`merge-tree`, mocked push success) unchanged.\n- Keep `_make_poller_sandbox` and production `scripts/orchestrate_poll_process.sh` behavior unchanged unless harness-only fix proves insufficient.\n\n3. Data structures affected\n- Harness runtime store (`gh_store.json`) semantics for:\n  - `existing_branches` (already present): now also drives deterministic mock git fetch success/failure.\n- Optional (only if needed for debugging assertions): add non-functional tracing key like `mock_git_fetch_calls` in store.\n\n4. API/interface changes\n- No production API/interface changes.\n- No test-call signature changes required (`_run_poller(... existing_branches=...)` already exists and will remain the control surface).\n\n5. Risks and edge cases\n- Branch names include slashes (e.g., `orchestrator/project-192`): fetch refspec parser must handle full branch names safely.\n- Over-broad fetch mocking could hide real failures; scope emulation strictly to the exact fetch refspec used by poller branch prep.\n- Must not interfere with `fail_branch_ref_not_found_after` behavior, which operates via mocked `gh api` branch-ref checks and is needed for refusal-path tests.\n\n6. Testing considerations\n- Run targeted regressions together:\n  - `tests/test_orchestrate_poll_process.py::test_review_blocked_merged_followup_retargets_to_integration_branch`\n  - `tests/test_orchestrate_poll_process.py::test_review_blocked_merged_followup_keeps_default_base_when_no_integration_context`\n  - `tests/test_orchestrate_poll_process.py::test_review_blocked_merged_followup_refuses_default_base_when_active_integration_branch_unavailable`\n  - `tests/test_orchestrate_poll_process.py::test_review_blocked_followup_refusal_increments_retry_counter`\n- Run related sync/superseded dedupe regressions called out in the issue.\n- Final validation pass: run the broader `tests/test_orchestrate_poll_process.py` suite to ensure harness change does not regress unrelated poller behavior.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e357a28696d15ab74d04e42a23596ec4ea2a139b7b52870ba78730fe70e290dd",
+  "lineage": {
+    "issue_number": 1060,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24443565544",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24443565544",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1060"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415081254_4a69ea9492",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1060,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24443565544"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1060",
+  "timestamps": {
+    "created_at": "2026-04-15T08:12:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
