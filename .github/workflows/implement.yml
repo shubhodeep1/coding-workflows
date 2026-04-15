@@ -1065,11 +1065,16 @@ jobs:
           fi
 
           max_attempts_raw="${MAX_POST_CODEX_REPAIR_ATTEMPTS:-1}"
-          if ! [[ "${max_attempts_raw}" =~ ^[0-9]+$ ]] || [ "${max_attempts_raw}" -lt 1 ]; then
+          if ! [[ "${max_attempts_raw}" =~ ^[0-9]+$ ]] || [ "${max_attempts_raw}" -lt 0 ]; then
             echo "::warning::Invalid MAX_POST_CODEX_REPAIR_ATTEMPTS='${max_attempts_raw}'. Falling back to 1."
             max_attempts=1
           else
             max_attempts="${max_attempts_raw}"
+          fi
+
+          if [ "${max_attempts}" -eq 0 ]; then
+            echo "MAX_POST_CODEX_REPAIR_ATTEMPTS=0; skipping post-Codex repair attempts."
+            exit 0
           fi
 
           : > "${INITIAL_CHANGED_FILE}"
