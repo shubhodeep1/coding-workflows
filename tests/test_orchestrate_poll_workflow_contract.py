@@ -19,3 +19,12 @@ def test_stall_control_env_defaults_are_declared() -> None:
 	assert "STALL_JUDGE_TRIGGER_COUNT: ${{ vars.STALL_JUDGE_TRIGGER_COUNT || '2' }}" in wf
 	assert "ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}" in wf
 	assert "ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}" in wf
+
+
+def main() -> int:
+	test_stall_control_env_defaults_are_declared()
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

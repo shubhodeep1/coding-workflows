@@ -3409,6 +3409,16 @@ PY
       action="run_stall_judge"
     else
       action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+      if [ "${action}" = "escalate_human" ] && [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ]; then
+        local fallback_count=$((recovery_count - 1))
+        if [ "${fallback_count}" -lt 0 ]; then
+          fallback_count=0
+        fi
+        action="$(recovery_action_for_phase "${phase}" "${fallback_count}")"
+        if [ "${action}" = "escalate_human" ]; then
+          action="retrigger_pipeline"
+        fi
+      fi
     fi
     echo "  [standalone-stall] Issue #${issue_num} stuck in '${phase}' for ${elapsed_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
 
