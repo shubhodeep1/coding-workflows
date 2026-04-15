@@ -331,13 +331,6 @@ else
   ENABLE_STALL_JUDGE="false"
 fi
 
-ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
-if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
-  ENABLE_STALL_HUMAN_TERMINALIZATION="true"
-else
-  ENABLE_STALL_HUMAN_TERMINALIZATION="false"
-fi
-
 ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
 if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
   ENABLE_STANDALONE_STALL_RECOVERY="true"
@@ -5915,14 +5908,20 @@ sys.exit(1)
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
                 if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-                  git add -u -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts'
-                  git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+                  # Use a single add call so empty/minimal repos do not fail on
+                  # exclude-only pathspecs (e.g. ':!node_modules').
+                  git add -A -- . ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts'
                 else
-                  git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
-                  git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+                  # Keep workflow-edit guard exclusions while avoiding brittle
+                  # tracked/untracked split staging pathspec failures.
+                  git add -A -- . ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
                 fi
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
+                if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/)'; then
+                  echo "Error: scripts/, prompts/, or .github/ai is staged while ALLOW_WORKFLOW_EDITS=false"
+                  exit 1
+                fi
                 if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
                   echo "Error: .github/prompts or .github/scripts is staged"
                   exit 1

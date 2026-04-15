@@ -445,7 +445,6 @@ def resolve_stall_recovery_action(
 		if prior_non_human:
 			return prior_non_human
 		return fallback_action
-
 	return action
 
 
