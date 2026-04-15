@@ -1119,6 +1119,12 @@ for path in sorted(root.rglob("*.sh")):
         if close_match is None:
             continue
         body = rest[: close_match.start()]
+        # match.end() lands ON the trailing newline of the opener line, so
+        # body always starts with a single '\n' that is NOT a real empty
+        # source line — it's the opener's own line terminator. Strip it so
+        # ast.parse line numbers count from the first real Python source
+        # line; absolute_line below then resolves to the correct file line
+        # via `opener_line + exc.lineno`.
         if body.startswith('\n'):
             body = body[1:]
         if strip_tabs:
@@ -1127,9 +1133,10 @@ for path in sorted(root.rglob("*.sh")):
             ast.parse(body)
         except SyntaxError as exc:
             opener_line = text[: match.start()].count('\n') + 1
+            absolute_line = opener_line + (exc.lineno or 1)
             errors.append(
-                f"{path}:{opener_line}: embedded Python heredoc <<{delim}>>: "
-                f"SyntaxError: {exc.msg} (body line {exc.lineno}, offset {exc.offset})"
+                f"{path}:{absolute_line}: embedded Python heredoc <<{delim}>>: "
+                f"SyntaxError: {exc.msg} (offset {exc.offset})"
             )
 
 if errors:

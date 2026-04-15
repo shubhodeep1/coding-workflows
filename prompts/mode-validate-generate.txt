@@ -540,15 +540,19 @@ CRITICAL — inline Python inside generated validation/tests/*.sh scripts:
   them under `validation/tests/_lib/` so the existing `find validation -type f -name '*.sh'`
   pre-flight sweep skips them and the lexical `NN_*.sh` runner does not
   execute them as tests.
-- Preferred pattern B — single-layer quoted heredoc (no `/bin/sh -c` wrap):
-    python3 - <<'PY'
-    import pathlib
-    text = pathlib.Path("scripts/foo.py").read_text(encoding="utf-8")
-    joined = ", ".join(["subprocess", "zipfile"])
-    if any(m not in text for m in ["subprocess", "zipfile"]):
-        raise SystemExit(f"missing markers: {joined}")
-    print("ok")
-    PY
+- Preferred pattern B — single-layer quoted heredoc (no `/bin/sh -c` wrap).
+  POSIX requires the closing heredoc delimiter to start at column 0 (or, with
+  `<<-`, after only TAB indentation), so the example below is shown
+  unindented; do NOT visually-indent the `python3 - <<'PY'` / `PY` pair to
+  match a surrounding bullet:
+python3 - <<'PY'
+import pathlib
+text = pathlib.Path("scripts/foo.py").read_text(encoding="utf-8")
+joined = ", ".join(["subprocess", "zipfile"])
+if any(m not in text for m in ["subprocess", "zipfile"]):
+    raise SystemExit(f"missing markers: {joined}")
+print("ok")
+PY
   Use this ONLY when the check runs on the runner itself (not inside a
   container). Note that the heredoc delimiter is single-quoted (`<<'PY'`)
   so the body is taken literally and never expanded by the outer shell.
