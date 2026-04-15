@@ -1626,7 +1626,10 @@ jobs:
           else
             script_ref="stable"
           fi
-          health_script="$(mktemp -t git_ref_health_check.XXXXXX.sh)"
+          if ! health_script="$(mktemp -t git_ref_health_check.XXXXXX.sh)"; then
+            echo "::error::failed to create temporary file for git_ref_health_check.sh"
+            exit 1
+          fi
           # Ensure the temp file is always cleaned up even if `gh api`,
           # `chmod`, or the script itself fails under `set -euo pipefail`.
           trap 'rm -f "${health_script}"' EXIT
