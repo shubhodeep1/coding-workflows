@@ -5,13 +5,36 @@
   "entry_id": "processed_command_1107_4254328898_approved",
   "issue_number": 1107,
   "metadata": {
+    "branch": "ai/issue-1107",
+    "changed_files": [
+      ".github/ai/label_contract.v1.json",
+      ".github/workflows/ci.yml",
+      ".github/workflows/implement.yml",
+      ".github/workflows/orchestrate_poll.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "README.md",
+      "agents.md",
+      "prompts/mode-implement-repair-syntax.txt",
+      "prompts/mode-implement-repair.txt",
+      "scripts/label_helpers.sh",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/validate_changed_files_syntax.sh",
+      "tests/test_implement_post_codex_recovery.py",
+      "tests/test_orchestrate_poll_process.py",
+      "tests/test_orchestrate_poll_workflow_contract.py"
+    ],
+    "issue_number": 1107,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1107",
+    "pr_number": 1110,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1110",
+    "run_attempt": "1",
+    "run_id": "24470091555",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24470091555"
   },
   "run_attempt": 1,
   "run_id": "24470091555",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-15T18:02:31Z",
+  "status": "completed",
+  "timestamp": "2026-04-15T18:10:10Z",
   "workflow": "implement"
 }
