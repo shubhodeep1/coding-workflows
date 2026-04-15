@@ -439,7 +439,6 @@ VALID_STALL_RECOVERY_ACTIONS: set[str] = {
 	)
 	for action in actions
 }
-VALID_STALL_RECOVERY_ACTIONS.add("skip")
 
 
 def _coerce_bool(value: Any) -> bool:
