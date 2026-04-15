@@ -1308,8 +1308,8 @@ jobs:
           if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then
             is_self_repo="true"
           fi
-          add_u_excludes=(':!node_modules' ':!.codex-workflow-src')
-          add_o_excludes=(':!node_modules' ':!.serena' ':!.github/ai' ':!.codex-workflow-src')
+          add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
+          add_o_excludes=(':!node_modules' ':!.serena' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
           if [ "${is_self_repo}" = "false" ]; then
             add_u_excludes+=(':!scripts' ':!.github/prompts' ':!.github/scripts')
             add_o_excludes+=(':!scripts' ':!prompts' ':!.github/prompts' ':!.github/scripts')
@@ -2199,6 +2199,9 @@ jobs:
             fi
 
             src=".codex-workflow-src/${remote_path}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${remote_path}" ]; then
+              src=".codex-workflow-src-main/${remote_path}"
+            fi
             if [ ! -f "${src}" ]; then
               return 1
             fi
