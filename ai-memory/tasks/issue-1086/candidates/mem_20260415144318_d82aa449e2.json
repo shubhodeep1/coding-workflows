@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nInterpreted clarification context\n- No `Q<ID>` questions were issued in clarification.\n- Parsed answer: `/answer [auto-answered-by-clarify]` means planning can proceed with current issue scope.\n\nConflict check (issue vs current branch)\n- The issue requires tests for `check-vs-gate` split, repair-step invocation, `MAX_POST_CODEX_REPAIR_ATTEMPTS`, and scope-guard behaviors, but those identifiers/flows are not present yet in current `.github/workflows/implement.yml` and test suite.\n- The issue also requires blocker-linked reissue behavior in the poller; current `scripts/orchestrate_poll_process.sh` has implementation-failed reissue logic, but no explicit blocker-link metadata/reissue-deferral hooks matching that requirement.\n- This is consistent with listed dependencies (`repair-prompt-and-validator-split`, `fixup-orchestrator-integration`, `implement-repair-step`, `reissue-dependency-gate`) likely not fully landed on this branch yet. Plan below assumes those dependency changes are present when implementation begins.\n\nImplementation plan\n\n1) Files likely to change\n- `tests/test_implement_post_codex_recovery.py`\n- `tests/test_orchestrate_poll_process.py`\n- Potentially `.github/workflows/ci.yml` only if new test files are created (avoid by extending existing test files).\n\n2) Functions/modules to implement (test-side)\n- Extend implement-workflow test harness in `tests/test_implement_post_codex_recovery.py`:\n  - Reuse representative pattern: `test_diagnose_prompt_contract_round_trip_and_fixup_metadata` + `_run_diagnose_step`.\n  - Add/extend GH mock capture (likely `_install_mock_gh`) so created issue labels and reissue metadata can be asserted.\n  - Add additive tests for:\n    - check-vs-gate split semantics,\n    - repair invocation conditions,\n    - retry-cap behavior for `MAX_POST_CODEX_REPAIR_ATTEMPTS`,\n    - scope-guard allow-list enforcement,\n    - scope-guard violation rollback,\n    - repair success continuing to commit path,\n    - repair failure falling through to existing #829 diagnose/fix-up lane.\n- Extend poller tests in `tests/test_orchestrate_poll_process.py`:\n  - Reuse representative harness: `_run_poller` + existing `validation-fixing`/reissue tests.\n  - Add additive tests for:\n    - fix-up labels on created post-Codex fix-up issues,\n    - state-file metadata injection for blocker linkage,\n    - reissue deferral while blockers remain open,\n    - unblocking then reissue continuation,\n    - reissue message selection by failure class.\n\n3) Data structures affected\n- Test mock GH state payloads (`created_issues`, issue labels/comments, issue bodies).\n- Orchestrator state assertions (`issue_number_map`, `pending_issue_defs`, wave issue status, plus new blocker-link metadata fields introduced by dependency PRs).\n- Implement diagnose/result contract assertions (existing `status/diagnosis/fix_issues/harness_fixes`, plus any new repair-specific fields if introduced by dependencies).\n\n4) API/interface changes\n- No production external API change expected.\n- Test harness interface changes only (optional params/recording fields in helpers like `_run_diagnose_step` and `_run_poller` fixtures) to assert new behavior deterministically.\n- Env-var behavior assertions for `MAX_POST_CODEX_REPAIR_ATTEMPTS` (default and override behavior).\n\n5) Risks and edge cases\n- Dependency drift risk: tests will fail noisily if required repair/reissue code paths are absent or renamed.\n- Fragile string-matching risk for workflow step names; prefer behavior assertions via harness execution where possible.\n- Regression risk to existing #829 fallback path; keep prior tests untouched and add only additive scenarios.\n- Poller state-transition flakiness risk; keep deterministic mocked store/state and avoid wall-clock-dependent assertions.\n\n6) Testing considerations\n- Preserve and run all existing post-Codex regression tests in `tests/test_implement_post_codex_recovery.py`.\n- Run full poller unit file to ensure no regression in unrelated orchestrator flows:\n  - `python3 tests/test_orchestrate_poll_process.py`\n- Run implement recovery unit file:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py`\n- Acceptance gate: new tests cover both success and fail/fall-through branches, and existing #829 tests remain passing.\n\nExecution checklist (mapped to issue scope)\n- [ ] Add implement tests for check-vs-gate split semantics.\n- [ ] Add implement tests for repair invocation conditions.\n- [ ] Add implement tests for `MAX_POST_CODEX_REPAIR_ATTEMPTS` retry cap.\n- [ ] Add implement tests for scope-guard allow-list enforcement.\n- [ ] Add implement tests for scope-guard violation rollback.\n- [ ] Add implement tests for repair-success continuation to commit path.\n- [ ] Add implement tests for repair-failure fall-through to #829 diagnose/fix-up path.\n- [ ] Add poller tests for fix-up labels on created post-Codex fix-up issues.\n- [ ] Add poller tests for state-file blocker-link metadata injection.\n- [ ] Add poller tests for reissue deferral while blockers are open.\n- [ ] Add poller tests for unblocking and reissue continuation.\n- [ ] Add poller tests for failure-class-based reissue message selection.\n- [ ] Re-run existing #829 tests and confirm no regressions.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e7d2e05a0823ca189ede4d0a7a7e40ab75e421a1babcc85cfb6fc280d4fba963",
+  "lineage": {
+    "issue_number": 1086,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24460574053",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24460574053",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1086"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415144318_d82aa449e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1086,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24460574053"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1086",
+  "timestamps": {
+    "created_at": "2026-04-15T14:43:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
