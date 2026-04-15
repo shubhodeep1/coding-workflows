@@ -45,6 +45,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
+          # ALLOWLIST(checkout-integration-ref-audit): orchestrate bootstrap
+          # has no tracking-issue integration metadata before checkout.
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 

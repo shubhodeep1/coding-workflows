@@ -169,12 +169,66 @@ jobs:
           echo "Existing PR already present for this issue; exiting safely."
           exit 0
 
+      - name: Resolve integration ref
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: refctx
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          issue_number="${ISSUE_NUMBER:-}"
+          if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
+            echo "::notice::No issue number available for integration ref resolution; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! issue_body="$(gh api "repos/${{ github.repository }}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null)"; then
+            echo "::warning::Failed to read issue body for integration ref resolution; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          integration_branch="$(printf '%s\n' "${issue_body}" | sed -nE 's/^- Integration branch:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p; s/^\*\*Integration branch:\*\*[[:space:]]*`([^`]+)`[[:space:]]*$/\1/p' | head -n1 | tr -d '\r')"
+          if [ -z "${integration_branch}" ]; then
+            echo "::notice::No integration branch metadata found; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! printf '%s' "${integration_branch}" | grep -Eq '^orchestrator/project-[0-9]+$'; then
+            echo "::warning::Ignoring integration branch with invalid format: ${integration_branch}"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          integration_branch_ref="$(printf '%s' "${integration_branch}" | jq -sRr @uri)"
+          if gh api "repos/${{ github.repository }}/git/ref/heads/${integration_branch_ref}" >/dev/null 2>&1; then
+            echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Integration branch from metadata does not exist: ${integration_branch}"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
         if: env.SKIP_IMPLEMENT != 'true'
         uses: actions/checkout@v5
         with:
+          ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+
+      - name: Log checkout ref
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          echo "Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "HEAD commit: $(git rev-parse HEAD)"
+          if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
+            echo "HEAD branch: ${branch_name}"
+          else
+            echo "HEAD branch: DETACHED"
+          fi
 
       - name: Configure git auth for memory helper clones
         if: env.SKIP_IMPLEMENT != 'true'
@@ -461,24 +515,7 @@ jobs:
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
-          PR_BASE_BRANCH="${{ github.event.repository.default_branch }}"
-          INTEGRATION_BRANCH_RAW="$(printf '%s\n' "${ISSUE_BODY}" | awk '
-            /^\*\*Orchestrator metadata\*\* \(do not edit\)$/ { in_meta = 1; next }
-            in_meta && /^- Integration branch: / { sub(/^- Integration branch: /, ""); print; exit }
-          ' | tr -d '\r')"
-
-          if [ -n "${INTEGRATION_BRANCH_RAW}" ]; then
-            if printf '%s' "${INTEGRATION_BRANCH_RAW}" | grep -Eq '^orchestrator/project-[0-9]+$'; then
-              INTEGRATION_BRANCH_REF="$(printf '%s' "${INTEGRATION_BRANCH_RAW}" | jq -sRr @uri)"
-              if gh_retry gh api "repos/${{ github.repository }}/git/ref/heads/${INTEGRATION_BRANCH_REF}" >/dev/null 2>&1; then
-                PR_BASE_BRANCH="${INTEGRATION_BRANCH_RAW}"
-              else
-                echo "::warning::Ignoring integration branch from metadata because it does not exist: ${INTEGRATION_BRANCH_RAW}"
-              fi
-            else
-              echo "::warning::Ignoring integration branch from metadata because format is invalid: ${INTEGRATION_BRANCH_RAW}"
-            fi
-          fi
+          PR_BASE_BRANCH="${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
 
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
 
