@@ -76,6 +76,14 @@
     "ai:orchestrator-tracking": {
       "color": "a2eeef",
       "description": "Orchestrator project tracking issue"
+    },
+    "ai:orchestrator-managed": {
+      "color": "bfdadc",
+      "description": "Issue is managed by the AI orchestrator"
+    },
+    "ai:orchestrator-validate-required": {
+      "color": "c5def5",
+      "description": "Orchestrator issue requires validate phase before completion"
     }
   },
   "phase_groups": [

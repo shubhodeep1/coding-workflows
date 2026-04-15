@@ -152,6 +152,7 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
+- Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
 
 ---
 
