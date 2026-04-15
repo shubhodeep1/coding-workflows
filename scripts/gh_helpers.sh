@@ -235,8 +235,20 @@ _gh_ratelimit_tg_alert()
 	fi
 
 	# --- Best-effort unpin the previous stale pin so the admin
-	# chat keeps a single sticky alert. ---
-	if [ -n "${_prev_pin_id}" ] && [ "${_prev_pin_id}" != "${_new_msg_id}" ]; then
+	# chat keeps a single sticky rate-limit alert.
+	#
+	# IMPORTANT: only unpin when the previous pinned message was
+	# itself one of OUR rate-limit alerts. `_last_epoch` is
+	# extracted from the `<!-- gh_rl_ts:EPOCH -->` marker in the
+	# previous pin's text, so a non-empty value proves the previous
+	# pin carried the marker. If an operator has pinned an
+	# unrelated important message (ops notice, runbook, etc.),
+	# leave it alone — the new rate-limit pin will still be the
+	# most-recent pin returned by `getChat` for cooldown reads,
+	# which is all we need. ---
+	if [ -n "${_last_epoch}" ] \
+		&& [ -n "${_prev_pin_id}" ] \
+		&& [ "${_prev_pin_id}" != "${_new_msg_id}" ]; then
 		curl -sS --max-time 10 -X POST \
 			"${_tg_base}/unpinChatMessage" \
 			-d "chat_id=${_chat_id}" \

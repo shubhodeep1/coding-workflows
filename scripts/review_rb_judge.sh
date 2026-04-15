@@ -28,18 +28,27 @@ else
     chmod +x "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
   else
     # Last-resort inline fallback if fetch fails.
+    #
+    # NOTE: `gh label create` is intentionally NOT wrapped with
+    # `gh_retry` here — a "label already exists" (422) is a
+    # non-transient error, and `gh_retry` would add ~31 s of
+    # exponential backoff before the trailing `|| true` takes
+    # effect. Same rationale as `ensure_label_exists` in
+    # `scripts/orchestrate_poll_process.sh`. Rate-limit alerts
+    # still fire through every other `gh_retry`-wrapped call
+    # elsewhere in this script.
     ensure_label_exists() {
       local label_name="$1"
       local repo="$2"
       case "${label_name}" in
         ai:ready-to-merge)
-          gh_retry gh label create "${label_name}" --repo "${repo}" --color "0e8a16" --description "PR review complete and ready to merge" 2>/dev/null || true
+          gh label create "${label_name}" --repo "${repo}" --color "0e8a16" --description "PR review complete and ready to merge" 2>/dev/null || true
           ;;
         ai:closed)
-          gh_retry gh label create "${label_name}" --repo "${repo}" --color "6a737d" --description "Linked PR closed without merge" 2>/dev/null || true
+          gh label create "${label_name}" --repo "${repo}" --color "6a737d" --description "Linked PR closed without merge" 2>/dev/null || true
           ;;
         *)
-          gh_retry gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
+          gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
           ;;
       esac
     }
