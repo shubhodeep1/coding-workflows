@@ -347,7 +347,8 @@ jobs:
           _fetched_scripts=()
           for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
             if ! _resolve_dir_file "scripts/${f}" "scripts" "${f}"; then
-              echo "::warning::${f} not found on ${script_ref} or main"
+              echo "::error::Required support script '${f}' not found on ${script_ref} or main"
+              exit 1
             fi
             chmod +x "scripts/${f}"
             _fetched_scripts+=("${f}")
