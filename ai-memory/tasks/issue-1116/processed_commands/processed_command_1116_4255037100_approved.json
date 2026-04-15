@@ -5,13 +5,27 @@
   "entry_id": "processed_command_1116_4255037100_approved",
   "issue_number": 1116,
   "metadata": {
+    "branch": "ai/issue-1116",
+    "changed_files": [
+      ".github/workflows/clarify.yml",
+      ".github/workflows/plan.yml",
+      "README.md",
+      "prompts/mode-clarify.txt",
+      "prompts/mode-plan.txt",
+      "tests/test_plan_clarify_blocked_output.py"
+    ],
+    "issue_number": 1116,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1116",
+    "pr_number": 1119,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1119",
+    "run_attempt": "1",
+    "run_id": "24475213097",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24475213097"
   },
   "run_attempt": 1,
   "run_id": "24475213097",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-15T19:55:55Z",
+  "status": "completed",
+  "timestamp": "2026-04-15T20:11:53Z",
   "workflow": "implement"
 }
