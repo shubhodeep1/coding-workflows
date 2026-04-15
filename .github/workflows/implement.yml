@@ -223,6 +223,20 @@ jobs:
           # ALWAYS fetch canonical scripts from coding-workflows, even if the
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
+          #
+          # NOTE: Fetched scripts/* and prompts/* files are intentionally
+          # NOT added to FETCHED_MANIFEST.  Post-commit steps (Push branch,
+          # Capture post-Codex validation errors, Diagnose post-Codex
+          # failure, Post AI issue summary, etc.) source
+          # scripts/gh_helpers.sh to get the real rate-limit-aware
+          # gh_retry; if the manifest cleanup at commit time deletes the
+          # file, those `source` calls silently fall back to a no-op stub
+          # and the next gh API call dies on a 403/429 with no retry/wait
+          # (this caused the implement.yml Push branch failure analysed in
+          # the analyze-job-logs run).  These files are still kept out of
+          # consumer commits via the `:!scripts` / `:!prompts` pathspecs
+          # in the commit step and the `scripts/.gitignore` generated
+          # below, so persisting them for the lifetime of the job is safe.
           mkdir -p scripts
           # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
           _rl_wait() {
@@ -249,13 +263,99 @@ jobs:
               else return 1; fi
             done; return 1
           }
+          # Batch-fetch helper: pulls scripts/ and prompts/ trees from
+          # both ${script_ref} and main in a single GraphQL request so
+          # individual file resolution below can be served from an
+          # in-memory cache instead of issuing one REST call per file
+          # (and a second REST call per file when the ${script_ref} →
+          # main fallback fires). Collapses ~13 script + 2 prompt REST
+          # fetches into a single GraphQL call in the typical case.
+          # See review_autofix.yml for the rationale and full design.
+          _wf_owner="${wf_source%%/*}"
+          _wf_name="${wf_source##*/}"
+          _gh_batch_fetch_trees() {
+            local query
+            query="query {
+              repository(owner: \"${_wf_owner}\", name: \"${_wf_name}\") {
+                stable_scripts: object(expression: \"${script_ref}:scripts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                main_scripts: object(expression: \"main:scripts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                stable_prompts: object(expression: \"${script_ref}:prompts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                main_prompts: object(expression: \"main:prompts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+              }
+            }"
+            local attempt=1
+            local response
+            while [ "${attempt}" -le 5 ]; do
+              if response="$(gh api graphql -f query="${query}" 2>/tmp/_gh_rl_err)"; then
+                if printf '%s' "${response}" | jq -e '.data.repository' >/dev/null 2>&1; then
+                  printf '%s' "${response}"
+                  return 0
+                fi
+                return 1
+              fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::GraphQL batch fetch rate-limited (attempt ${attempt}/5), waiting…" >&2
+                _rl_wait; attempt=$((attempt + 1))
+              else
+                return 1
+              fi
+            done
+            return 1
+          }
+          _BATCH_TREES_JSON=""
+          _BATCH_TREES_TRIED="false"
+          _ensure_batch_trees() {
+            if [ "${_BATCH_TREES_TRIED}" = "true" ]; then
+              [ -n "${_BATCH_TREES_JSON}" ]
+              return $?
+            fi
+            _BATCH_TREES_TRIED="true"
+            if _BATCH_TREES_JSON="$(_gh_batch_fetch_trees)"; then
+              return 0
+            fi
+            _BATCH_TREES_JSON=""
+            return 1
+          }
+          # Resolve a directory file: try the batch (${script_ref}
+          # entries first, main entries as fallback), then fall back
+          # to per-file REST fetches if the batch was unavailable or
+          # did not contain the file.
+          # Args: <outpath> <category=scripts|prompts> <filename>
+          _resolve_dir_file() {
+            local outpath="$1"
+            local category="$2"
+            local fname="$3"
+            local stable_section="stable_${category}"
+            local main_section="main_${category}"
+            local _tmp section
+            if _ensure_batch_trees; then
+              _tmp="${outpath}.batch_tmp"
+              for section in "${stable_section}" "${main_section}"; do
+                : > "${_tmp}"
+                printf '%s' "${_BATCH_TREES_JSON}" | jq -j --arg section "${section}" --arg name "${fname}" '
+                  .data.repository[$section].entries[]?
+                  | select(.name == $name and .type == "blob" and .object.isBinary != true and .object.text != null)
+                  | .object.text
+                ' > "${_tmp}" 2>/dev/null || true
+                if [ -s "${_tmp}" ]; then
+                  mv "${_tmp}" "${outpath}"
+                  return 0
+                fi
+              done
+              rm -f "${_tmp}"
+            fi
+            if _gh_api_fetch "${outpath}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${category}/${fname}?ref=${script_ref}"; then
+              return 0
+            fi
+            _gh_api_fetch "${outpath}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${category}/${fname}?ref=main"
+          }
           _fetched_scripts=()
           for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
-            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
-              echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main"
+            if ! _resolve_dir_file "scripts/${f}" "scripts" "${f}"; then
+              echo "::error::Required support script '${f}' not found on ${script_ref} or main"
+              exit 1
             fi
             case "${f}" in
               *.sh|*.py)
@@ -263,9 +363,8 @@ jobs:
                 ;;
             esac
             _fetched_scripts+=("${f}")
-            if [ "${is_self_repo}" = "false" ]; then
-              echo "scripts/${f}" >> "${FETCHED_MANIFEST}"
-            fi
+            # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
+            # see the persistence note above the loop.
           done
           # Block fetched scripts from being committed in consumer repos.
           if [ "${is_self_repo}" = "false" ]; then
@@ -312,26 +411,21 @@ jobs:
 
           mkdir -p prompts
           if [ ! -f prompts/serena-efficiency-block.txt ]; then
-            if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
-              echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            if ! _resolve_dir_file "prompts/serena-efficiency-block.txt" "prompts" "serena-efficiency-block.txt"; then
+              echo "::warning::serena-efficiency-block.txt not found on ${script_ref} or main"
             fi
-            if [ "${is_self_repo}" = "false" ]; then
-              echo "prompts/serena-efficiency-block.txt" >> "${FETCHED_MANIFEST}"
-            fi
+            # Intentionally NOT adding to FETCHED_MANIFEST — the
+            # `:!prompts` exclusion in the commit step keeps this file
+            # out of consumer commits, and the ensure_diagnose_asset()
+            # helper in the post-Codex diagnose step needs it to still
+            # be on disk after the manifest cleanup.
           fi
           if [ ! -f prompts/mode-implement-diagnose.txt ]; then
-            if ! _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=${script_ref}"; then
-              echo "::warning::mode-implement-diagnose.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=main"
+            if ! _resolve_dir_file "prompts/mode-implement-diagnose.txt" "prompts" "mode-implement-diagnose.txt"; then
+              echo "::warning::mode-implement-diagnose.txt not found on ${script_ref} or main"
             fi
-            if [ "${is_self_repo}" = "false" ]; then
-              echo "prompts/mode-implement-diagnose.txt" >> "${FETCHED_MANIFEST}"
-            fi
+            # Intentionally NOT adding to FETCHED_MANIFEST — same
+            # rationale as serena-efficiency-block.txt above.
           fi
           if [ ! -f prompts/mode-implement-repair.txt ]; then
             if ! _gh_api_fetch "prompts/mode-implement-repair.txt" api -H 'Accept: application/vnd.github.raw+json' \
@@ -447,7 +541,20 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           source scripts/label_helpers.sh
-          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          # Reuse the issue snapshot fetched in "Fetch issue metadata"
+          # rather than re-hitting the API.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it
+          # (partial write, truncated download, etc.) — under
+          # `set -euo pipefail` an unsuppressed jq failure would kill
+          # the whole step instead of degrading safely (Copilot review
+          # on PR #1044).
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          fi
           # Refuse redispatch of any issue that previously tripped the
           # destructive-commit guard (P2/P3), regardless of phase label.
           # A destructive rejection latches this label onto the issue; a
@@ -1073,8 +1180,8 @@ jobs:
           fi
 
           if [ "${max_attempts}" -eq 0 ]; then
-            echo "MAX_POST_CODEX_REPAIR_ATTEMPTS=0; skipping post-Codex repair attempts."
-            exit 0
+            echo "::notice::MAX_POST_CODEX_REPAIR_ATTEMPTS=0; skipping in-job post-Codex syntax repair attempts."
+            exit 1
           fi
 
           : > "${INITIAL_CHANGED_FILE}"
@@ -1675,7 +1782,10 @@ jobs:
           else
             script_ref="stable"
           fi
-          health_script="$(mktemp -t git_ref_health_check.XXXXXX.sh)"
+          if ! health_script="$(mktemp -t git_ref_health_check.XXXXXX.sh)"; then
+            echo "::error::failed to create temporary file for git_ref_health_check.sh"
+            exit 1
+          fi
           # Ensure the temp file is always cleaned up even if `gh api`,
           # `chmod`, or the script itself fails under `set -euo pipefail`.
           trap 'rm -f "${health_script}"' EXIT
@@ -2220,7 +2330,19 @@ jobs:
 
           echo "handled=false" >> "$GITHUB_OUTPUT"
 
-          ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+          # Reuse the cached issue snapshot when available — see the
+          # "Fetch issue metadata" step.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it
+          # (partial write, truncated download, etc.); the API path
+          # itself falls back to '[]' so the failure path still
+          # degrades safely.
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+          fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementation-failed") != null' >/dev/null 2>&1; then
             echo "Issue #${ISSUE_NUMBER} already has ai:implementation-failed label; skipping post-Codex diagnosis."
             echo "handled=true" >> "$GITHUB_OUTPUT"
@@ -2289,7 +2411,17 @@ jobs:
 
           if [ -z "${ISSUE_BODY_FILE:-}" ] || [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
             ISSUE_BODY_FILE="${RUNTIME_DIR}/issue_body_from_api.txt"
-            gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+            # Prefer the cached issue snapshot from "Fetch issue
+            # metadata" before re-hitting the API.  jq failure (e.g.
+            # truncated/partial file) falls through to the API path
+            # rather than killing the step under set -euo pipefail.
+            : > "${ISSUE_BODY_FILE}"
+            if [ -s "${ISSUE_META_FILE:-}" ]; then
+              jq -er '.body // ""' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null || : > "${ISSUE_BODY_FILE}"
+            fi
+            if [ ! -s "${ISSUE_BODY_FILE}" ]; then
+              gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+            fi
           fi
 
           TRACKING_ISSUE_NUM="$(sed -nE 's/.*Tracking issue:[[:space:]]*#([0-9]+).*/\1/p' "${ISSUE_BODY_FILE}" | head -n1 | tr -d '\r')"
@@ -2676,7 +2808,16 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
-          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          # Reuse the cached issue snapshot when available — see the
+          # "Fetch issue metadata" step.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it.
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
             gh_retry gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
               --color "fbca04" --description "Awaiting human approval to implement" \
