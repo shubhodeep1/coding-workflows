@@ -287,6 +287,7 @@ def _run_poller(
 	tracking_labels: list[str] | None = None,
 	tracking_comments: list[str] | None = None,
 	issue_labels: dict[int, list[str]] | None = None,
+	issue_comments: dict[int, list[str]] | None = None,
 	issue_bodies: dict[int, str] | None = None,
 	gql_mode: str = "full",
 	gql_labels: dict[int, list[str]] | None = None,
@@ -301,7 +302,6 @@ def _run_poller(
 	issue_closed: dict[int, bool] | None = None,
 	issue_linked_prs: dict[int, int] | None = None,
 	merge_tree_conflict_paths: list[str] | None = None,
-	issue_comments: dict[int, list[str]] | None = None,
 	timeline_fail_for_issues: list[int] | None = None,
 	update_branch_fail_for_prs: list[int] | None = None,
 	review_dispatch_fail_for_prs: list[int] | None = None,
@@ -323,6 +323,7 @@ def _run_poller(
 	tracking_comments = tracking_comments or []
 	if issue_labels is None:
 		issue_labels = {10: ["ai:merged"]}
+	issue_comments = issue_comments or {}
 	issue_bodies = issue_bodies or {}
 	gql_labels = gql_labels or {}
 	prs = prs or []
@@ -375,21 +376,23 @@ def _run_poller(
 				"closed": False,
 			}
 		}
+		next_comment_id = 2 + len(tracking_comments)
 		for inum, labels in issue_labels.items():
-			seed_comments = [
-				{"id": idx + 10_000, "body": body}
-				for idx, body in enumerate(issue_comments.get(inum, []))
-			]
+			raw_comments = issue_comments.get(inum, [])
+			issue_comment_entries = []
+			for comment_body in raw_comments:
+				issue_comment_entries.append({"id": next_comment_id, "body": comment_body})
+				next_comment_id += 1
 			issues[str(inum)] = {
 				"labels": list(labels),
-				"comments": seed_comments,
+				"comments": issue_comment_entries,
 				"body": issue_bodies.get(inum, f"Issue {inum}"),
 				"closed": bool(issue_closed.get(inum, False)),
 			}
 
 		store = {
 			"issues": issues,
-			"next_comment_id": 2 + len(tracking_comments),
+			"next_comment_id": next_comment_id,
 			"validation_dispatches": [],
 			"review_dispatches": [],
 			"closed_issues": [],
@@ -744,7 +747,7 @@ if args[0] == 'api':
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
 
-	m = re.search(r'/issues/(\d+)/comments(?:\?per_page=100)?$', path)
+	m = re.search(r'/issues/(\d+)/comments(?:\?.*)?$', path)
 	if m and method == 'GET' and not fields:
 		num = m.group(1)
 		fail_after = store.get('fail_issue_comment_get_after', {}).get(num)
