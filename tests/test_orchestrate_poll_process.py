@@ -738,6 +738,7 @@ if args[0] == 'api':
 				print('forced comments API failure', file=sys.stderr)
 				sys.exit(1)
 		issue = get_issue(m.group(1))
+		save()
 		print(json.dumps(issue['comments']))
 		sys.exit(0)
 
@@ -1032,9 +1033,6 @@ if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and 
 if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCESS', '') == 'true':
 	sys.exit(0)
 
-if len(args) >= 1 and args[0] == 'add' and os.environ.get('MOCK_GIT_ADD_SUCCESS', '') == 'true':
-	sys.exit(0)
-
 proc = subprocess.run([real_git, *args])
 sys.exit(proc.returncode)
 ''',
@@ -1095,14 +1093,16 @@ print(json.dumps(parsed))
 				"REAL_GIT_BIN": real_git,
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
-				"MOCK_GIT_ADD_SUCCESS": "true" if mock_git_push_success else "false",
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			}
 		)
 		if mock_stall_judge_json:
 			env["MOCK_STALL_JUDGE_JSON"] = json.dumps(mock_stall_judge_json)
 		if codex_touch_file:
-			env["MOCK_CODEX_TOUCH_FILE"] = codex_touch_file
+			touch_path = Path(codex_touch_file)
+			if not touch_path.is_absolute():
+				touch_path = runtime_dir / touch_path
+			env["MOCK_CODEX_TOUCH_FILE"] = str(touch_path)
 
 		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],
