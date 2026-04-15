@@ -372,47 +372,8 @@ DEFAULT_PHASE_STALL_THRESHOLDS: dict[str, int] = {
 }
 
 RUN_STALL_JUDGE_ACTION = "run_stall_judge"
-DEFAULT_STALL_RECOVERY_FALLBACK_ACTION = "retrigger_pipeline"
 
 STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
-	"no_labels": [
-		"retrigger_pipeline",
-		"retrigger_pipeline",
-		"close_and_reissue",
-	],
-	"ai:clarification": [
-		"auto_respond_clarify",
-		"auto_respond_clarify",
-		"close_and_reissue",
-	],
-	"ai:planning": [
-		"retrigger_plan",
-		"retrigger_plan",
-		"close_and_reissue",
-	],
-	"ai:awaiting-approval": [
-		"auto_approve",
-		"auto_approve",
-		"auto_approve",
-	],
-	"ai:implementing": [
-		"retrigger_implement",
-		"retrigger_implement",
-		"close_and_reissue",
-	],
-	"ai:done": [
-		"retrigger_review",
-		"retrigger_review",
-		"close_and_reissue",
-	],
-	"ai:ready-to-merge": [
-		"attempt_merge",
-		"attempt_merge",
-		"attempt_merge",
-	],
-}
-
-STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION: dict[str, list[str]] = {
 	"no_labels": [
 		"retrigger_pipeline",
 		"retrigger_pipeline",
@@ -452,146 +413,80 @@ STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION: dict[str, list[str]] = {
 
 VALID_STALL_RECOVERY_ACTIONS: set[str] = {
 	action
-	for actions in (
-		list(STALL_RECOVERY_ACTIONS.values()) +
-		list(STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION.values())
-	)
-	for action in actions
+	for ladder in STALL_RECOVERY_ACTIONS.values()
+	for action in ladder
 }
+VALID_STALL_RECOVERY_ACTIONS.update({
+	"close_and_reissue",
+	"resolve_merge_conflict",
+})
 
 
-def _coerce_bool(value: Any) -> bool:
-	if isinstance(value, bool):
-		return value
-	if value is None:
-		return False
-	return str(value).strip().lower() in {"1", "true", "yes", "on"}
+def _nearest_non_human_stall_action(actions: list[str], start_idx: int) -> str | None:
+	"""Return the nearest prior non-human action, if any."""
+	if not actions:
+		return None
+	start = min(start_idx, len(actions) - 1)
+	for idx in range(start, -1, -1):
+		action = actions[idx]
+		if isinstance(action, str) and action and action != "escalate_human":
+			return action
+	return None
 
 
 def resolve_stall_recovery_action(
 	phase: str,
 	recovery_count: int,
-	max_recoveries: int,
-	allow_human_terminalization: bool = False,
-	judged_action: str | None = None,
+	max_recoveries: int = 5,
+	enable_stall_human_terminalization: bool = False,
+	actions_by_phase: dict[str, list[str]] | None = None,
+	fallback_action: str = "retrigger_pipeline",
 ) -> str:
-	"""Resolve the effective stall recovery action for the given issue phase.
-
-	When *judged_action* is provided, only supported actions are accepted;
-	unsupported/malformed values fail-open to the declarative ladder outcome.
-	"""
-	try:
-		recovery_count = int(recovery_count)
-	except (TypeError, ValueError):
-		recovery_count = 0
-	if recovery_count < 0:
-		recovery_count = 0
-
+	"""Resolve the declarative stall recovery action for a phase/recovery count."""
 	if recovery_count >= max_recoveries:
 		return "skip"
 
-	default_actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
-	actions = default_actions
-	if allow_human_terminalization:
-		actions = STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION.get(phase, default_actions)
-
-	action_idx = min(recovery_count, len(actions) - 1)
-	fallback_action = actions[action_idx]
-
-	if judged_action is None:
+	recovery_idx = max(recovery_count, 0)
+	ladders = actions_by_phase if actions_by_phase is not None else STALL_RECOVERY_ACTIONS
+	actions = ladders.get(phase, [fallback_action])
+	if not isinstance(actions, list) or not actions:
 		return fallback_action
 
-	candidate = str(judged_action).strip()
-	if not candidate:
+	action_idx = min(recovery_idx, len(actions) - 1)
+	action = actions[action_idx]
+	if not isinstance(action, str) or not action:
 		return fallback_action
-	if candidate == "escalate_human" and not allow_human_terminalization:
+
+	if action == "escalate_human" and not enable_stall_human_terminalization:
+		prior_non_human = _nearest_non_human_stall_action(actions, action_idx - 1)
+		if prior_non_human:
+			return prior_non_human
 		return fallback_action
-	if candidate in VALID_STALL_RECOVERY_ACTIONS or candidate == "resolve_merge_conflict":
-		return candidate
-	return fallback_action
-
-
-def _parse_cli_bool(value: Any, default: bool) -> bool:
-	"""Parse string/bool CLI flag values with a deterministic default."""
-	if isinstance(value, bool):
-		return value
-	if value is None:
-		return default
-	return str(value).strip().lower() == "true"
-
-
-def resolve_declarative_stall_recovery_action(
-	phase: str,
-	recovery_count: int,
-	allow_human_terminalization: bool = False,
-) -> str:
-	"""Resolve deterministic declarative stall action for a phase/count.
-
-	When *allow_human_terminalization* is false, the resolver enforces
-	legacy autonomous behavior by replacing terminal ``escalate_human``
-	actions with the nearest prior non-human ladder action.
-
-	If the phase ladder is malformed (e.g. all entries are
-	``escalate_human``), fail open to a safe declarative fallback.
-	"""
-	actions_source = (
-		STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION
-		if allow_human_terminalization
-		else STALL_RECOVERY_ACTIONS
-	)
-	actions = actions_source.get(phase, [DEFAULT_STALL_RECOVERY_FALLBACK_ACTION])
-	if not actions:
-		return DEFAULT_STALL_RECOVERY_FALLBACK_ACTION
-
-	action_idx = min(max(int(recovery_count), 0), len(actions) - 1)
-	selected_action = actions[action_idx]
-	if allow_human_terminalization or selected_action != "escalate_human":
-		return selected_action
-
-	for idx in range(action_idx, -1, -1):
-		candidate = actions[idx]
-		if candidate != "escalate_human":
-			return candidate
-
-	return DEFAULT_STALL_RECOVERY_FALLBACK_ACTION
+	return action
 
 
 def resolve_effective_stall_recovery_action(
 	phase: str,
 	recovery_count: int,
-	allow_human_terminalization: bool = False,
-	judged_action: str | None = None,
-	allowed_judged_actions: set[str] | None = None,
+	candidate_action: str | None,
+	max_recoveries: int = 5,
+	enable_stall_human_terminalization: bool = False,
 ) -> str:
-	"""Resolve final stall action, fail-opening invalid judge output.
-
-	If *judged_action* is invalid, missing, or blocked by terminalization
-	policy, returns the declarative fallback action for the same
-	phase/recovery count.
-	"""
-	fallback_action = resolve_declarative_stall_recovery_action(
-		phase=phase,
-		recovery_count=recovery_count,
-		allow_human_terminalization=allow_human_terminalization,
+	"""Normalize a candidate action (e.g. stall judge output) into a safe action."""
+	fallback_action = resolve_stall_recovery_action(
+		phase,
+		recovery_count,
+		max_recoveries=max_recoveries,
+		enable_stall_human_terminalization=enable_stall_human_terminalization,
 	)
 
-	if judged_action is None:
+	if not isinstance(candidate_action, str) or not candidate_action:
 		return fallback_action
-
-	action = str(judged_action).strip()
-	if not action:
+	if candidate_action not in VALID_STALL_RECOVERY_ACTIONS:
 		return fallback_action
-	if allowed_judged_actions is None:
-		allowed_judged_actions = {
-			"retrigger_pipeline", "auto_respond_clarify", "retrigger_plan", "auto_approve",
-			"retrigger_implement", "retrigger_review", "attempt_merge", "close_and_reissue",
-			"escalate_human", "resolve_merge_conflict",
-		}
-	if action not in allowed_judged_actions:
+	if candidate_action == "escalate_human" and not enable_stall_human_terminalization:
 		return fallback_action
-	if action == "escalate_human" and not allow_human_terminalization:
-		return fallback_action
-	return action
+	return candidate_action
 
 
 def determine_phase(labels: list[str]) -> str:
@@ -664,7 +559,7 @@ def detect_stalls(
 	phase_thresholds: dict[str, int] | None = None,
 	stall_judge_trigger_count: int = 2,
 	enable_stall_judge: bool = True,
-	allow_human_terminalization: bool = False,
+	enable_stall_human_terminalization: bool = False,
 ) -> list[dict[str, Any]]:
 	"""Detect stalled issues in the current wave.
 
@@ -680,10 +575,6 @@ def detect_stalls(
 	When *enable_stall_judge* is true and *stall_judge_trigger_count* is
 	reached (but still below *max_recoveries*), recovery action is
 	overridden to RUN_STALL_JUDGE_ACTION for non-dedicated phases.
-
-	When *allow_human_terminalization* is false, declarative ladder
-	recovery never emits ``escalate_human`` and instead falls back to the
-	last non-human ladder action.
 
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
@@ -732,13 +623,12 @@ def detect_stalls(
 		if elapsed < threshold_secs:
 			continue
 
-		recovery_count_raw = issue.get("stall_recovery_count", 0)
+		raw_recovery_count = issue.get("stall_recovery_count", 0)
 		try:
-			recovery_count = int(recovery_count_raw)
+			recovery_count = int(raw_recovery_count or 0)
 		except (TypeError, ValueError):
 			recovery_count = 0
-		if recovery_count < 0:
-			recovery_count = 0
+		recovery_count = max(0, recovery_count)
 
 		# Determine recovery action
 		if recovery_count >= max_recoveries:
@@ -747,10 +637,10 @@ def detect_stalls(
 			action = RUN_STALL_JUDGE_ACTION
 		else:
 			action = resolve_stall_recovery_action(
-				phase=phase,
-				recovery_count=recovery_count,
+				phase,
+				recovery_count,
 				max_recoveries=max_recoveries,
-				allow_human_terminalization=allow_human_terminalization,
+				enable_stall_human_terminalization=enable_stall_human_terminalization,
 			)
 
 		stalled.append({
@@ -824,7 +714,13 @@ def increment_stall_recovery(
 	now_ts = int(time.time())
 	for issue in waves[current_wave_idx]["issues"]:
 		if issue.get("id") == issue_id:
-			issue["stall_recovery_count"] = issue.get("stall_recovery_count", 0) + 1
+			raw_recovery_count = issue.get("stall_recovery_count", 0)
+			try:
+				recovery_count = int(raw_recovery_count or 0)
+			except (TypeError, ValueError):
+				print(f"::warning::Malformed stall_recovery_count for issue {issue.get('id')}; resetting to 0", file=sys.stderr)
+				recovery_count = 0
+			issue["stall_recovery_count"] = max(0, recovery_count) + 1
 			issue["status_since_ts"] = now_ts
 			break
 
@@ -1369,11 +1265,16 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 	stall_judge_trigger_count = int(getattr(args, "stall_judge_trigger_count", 2))
 	if stall_judge_trigger_count < 1:
 		raise OrchestrateError(f"stall_judge_trigger_count must be a positive integer, got {stall_judge_trigger_count!r}")
-	enable_stall_judge = _parse_cli_bool(getattr(args, "enable_stall_judge", "true"), default=True)
-	allow_human_terminalization = _parse_cli_bool(
-		getattr(args, "allow_human_terminalization", "false"),
-		default=False,
-	)
+	enable_stall_judge_raw = getattr(args, "enable_stall_judge", "true")
+	if isinstance(enable_stall_judge_raw, bool):
+		enable_stall_judge = enable_stall_judge_raw
+	else:
+		enable_stall_judge = str(enable_stall_judge_raw).lower() == "true"
+	enable_stall_human_terminalization_raw = getattr(args, "enable_stall_human_terminalization", "false")
+	if isinstance(enable_stall_human_terminalization_raw, bool):
+		enable_stall_human_terminalization = enable_stall_human_terminalization_raw
+	else:
+		enable_stall_human_terminalization = str(enable_stall_human_terminalization_raw).lower() == "true"
 
 	phase_thresholds: dict[str, int] | None = None
 	if args.phase_thresholds_json:
@@ -1386,7 +1287,7 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 		phase_thresholds=phase_thresholds,
 		stall_judge_trigger_count=stall_judge_trigger_count,
 		enable_stall_judge=enable_stall_judge,
-		allow_human_terminalization=allow_human_terminalization,
+		enable_stall_human_terminalization=enable_stall_human_terminalization,
 	)
 	_print_json({"ok": True, "stalls": stalls, "count": len(stalls)})
 	return 0
@@ -1466,7 +1367,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
 	p_stalls.add_argument("--stall-judge-trigger-count", default="2", help="Recovery-count threshold to switch stall recovery to run_stall_judge")
 	p_stalls.add_argument("--enable-stall-judge", default="true", choices=("true", "false"), help="Enable/disable stall judge escalation action")
-	p_stalls.add_argument("--allow-human-terminalization", default="false", choices=("true", "false"), help="Allow/deny terminal escalate_human actions in declarative/judged stall recovery")
+	p_stalls.add_argument("--enable-stall-human-terminalization", default="false", choices=("true", "false"), help="Allow terminal escalate_human actions in the stall recovery ladder")
 	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
 	p_stalls.set_defaults(func=cmd_check_stalls)
 
