@@ -114,6 +114,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | Variable | Default | Used By | Description |
 |---|---|---|---|
 | `THINKING_LEVEL_CLARIFY` | `medium` | clarify | Reasoning effort for the clarification phase |
+| `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `high` | clarify | Reasoning effort used only when clarify runs Codex for `ai:orchestrator-managed` issues on forced human `/reclarify` |
 | `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
 | `THINKING_LEVEL_IMPLEMENT` | `high` | implement | Reasoning effort for the implementation phase |
 | `THINKING_LEVEL_ANALYSIS` | `medium` | workflow-log-analysis | Reasoning effort for the workflow log analysis report generation. |
@@ -726,6 +727,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `AI_MEMORY_KEYWORD_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL for keyword model |
 | `AI_MEMORY_TOKEN_BUDGET_<ROLE>` | _(from profile)_ | Per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`) |
 | `THINKING_LEVEL_CLARIFY` | `medium` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
+| `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `high` | Clarify-only override for forced human `/reclarify` on `ai:orchestrator-managed` issues (normal clarify path auto-posts `/answer [auto-answered-by-orchestrator]` without Codex) |
 | `THINKING_LEVEL_PLAN` | `xhigh` | Reasoning effort for planning |
 | `THINKING_LEVEL_IMPLEMENT` | `high` | Reasoning effort for implementation |
 | `THINKING_LEVEL_ANALYSIS` | `medium` | Reasoning effort for workflow log analysis report generation |
@@ -966,7 +968,7 @@ Telegram notifications fall into three categories based on their lifecycle:
 
 **Phase-tracked alerts (deleted when the phase completes):**
 For non-orchestrator issues, human-intervention alerts are cleaned up automatically when the next phase begins:
-- **Clarification required** — sent by `clarify.yml` and `plan.yml` for non-orchestrator issues only, deleted when `plan.yml` runs (stored as `<!-- tg_phase:clarify:id -->`). Orchestrator-managed issues skip this alert since clarifications are auto-answered by `orchestrate_clarify_respond.yml`.
+- **Clarification required** — sent by `clarify.yml` and `plan.yml` for non-orchestrator issues only, deleted when `plan.yml` runs (stored as `<!-- tg_phase:clarify:id -->`). Orchestrator-managed issues skip this alert because clarify uses a label-based fast path (`ai:orchestrator-managed`) that auto-posts `/answer [auto-answered-by-orchestrator]` unless a human forces `/reclarify`.
 - **Plan awaiting approval** — sent by `plan.yml` (when `AUTO_IMPLEMENT_ON_CLEAR_PLAN` is not true), deleted when `implement.yml` runs (stored as `<!-- tg_phase:plan:id -->`)
 
 **General tracked alerts (deleted at terminal state):**
