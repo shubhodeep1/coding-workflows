@@ -92,7 +92,10 @@ jobs:
           if [ "${EVENT_NAME}" = "workflow_call" ]; then
             pr_state=""
             pr_merged="false"
-            if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+              SHOULD_RUN="false"
+              echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
+            else
               pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
               pr_merged="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.merged // false' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "false")"
             fi
