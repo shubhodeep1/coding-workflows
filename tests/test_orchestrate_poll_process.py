@@ -747,7 +747,7 @@ if args[0] == 'api':
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
 
-	m = re.search(r'/issues/(\d+)/comments(?:\?per_page=100)?$', path)
+	m = re.search(r'/issues/(\d+)/comments(?:\?.*)?$', path)
 	if m and method == 'GET' and not fields:
 		num = m.group(1)
 		fail_after = store.get('fail_issue_comment_get_after', {}).get(num)

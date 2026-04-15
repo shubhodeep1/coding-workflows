@@ -605,7 +605,12 @@ def detect_stalls(
 		if elapsed < threshold_secs:
 			continue
 
-		recovery_count = int(issue.get("stall_recovery_count", 0) or 0)
+		raw_recovery_count = issue.get("stall_recovery_count", 0)
+		try:
+			recovery_count = int(raw_recovery_count or 0)
+		except (TypeError, ValueError):
+			recovery_count = 0
+		recovery_count = max(0, recovery_count)
 
 		# Determine recovery action
 		if recovery_count >= max_recoveries:
