@@ -547,6 +547,10 @@ def detect_stalls(
 	reached (but still below *max_recoveries*), recovery action is
 	overridden to RUN_STALL_JUDGE_ACTION for non-dedicated phases.
 
+	When *allow_human_terminalization* is false, declarative ladder
+	recovery never emits ``escalate_human`` and instead falls back to the
+	last non-human ladder action.
+
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
 		stall_duration_minutes, stall_recovery_count
@@ -1188,9 +1192,9 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls.add_argument("--threshold-minutes", required=True, help="Fallback stall threshold in minutes (used when a phase has no specific override)")
 	p_stalls.add_argument("--phase-thresholds-json", default=None, help='Optional JSON: {"ai:clarification": 60, "ai:implementing": 120, ...}. Per-phase overrides.')
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
-	p_stalls.add_argument("--allow-human-terminalization", default="false", help="When true, allow opt-in terminal human escalation actions from the recovery ladder")
 	p_stalls.add_argument("--stall-judge-trigger-count", default="2", help="Recovery-count threshold to switch stall recovery to run_stall_judge")
 	p_stalls.add_argument("--enable-stall-judge", default="true", choices=("true", "false"), help="Enable/disable stall judge escalation action")
+	p_stalls.add_argument("--allow-human-terminalization", default="false", choices=("true", "false"), help="Allow declarative stall ladder to terminalize at escalate_human")
 	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
 	p_stalls.set_defaults(func=cmd_check_stalls)
 
