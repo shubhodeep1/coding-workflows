@@ -615,7 +615,7 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           TITLE="$(jq -r '.issues[0].title' "${DECOMPOSITION_FILE}")"
-          BODY="$(jq -r '.issues[0].body' "${DECOMPOSITION_FILE}" | sed 's/\\n/\n/g')"
+          BODY="$(jq -r '.issues[0].body' "${DECOMPOSITION_FILE}")"
 
           ISSUE_URL="$(gh_retry gh issue create \
             --repo "${{ github.repository }}" \
