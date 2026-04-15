@@ -672,13 +672,18 @@ jobs:
 
       - name: Capture planning ref context
         if: env.SKIP_PLAN != 'true'
+        env:
+          RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
           set -euo pipefail
 
           HEAD_SHA="$(git rev-parse HEAD)"
-          HEAD_BRANCH="$(git symbolic-ref --short -q HEAD || true)"
+          HEAD_BRANCH="${RESOLVED_REF}"
           if [ -z "${HEAD_BRANCH}" ]; then
-            HEAD_BRANCH="<detached-head>"
+            HEAD_BRANCH="$(git symbolic-ref --short -q HEAD || true)"
+            if [ -z "${HEAD_BRANCH}" ]; then
+              HEAD_BRANCH="<detached-head>"
+            fi
           fi
 
           INTEGRATION_BRANCH_META="$(printf '%s\n' "${ISSUE_BODY}" | python3 -c 'import re, sys; body = sys.stdin.read(); pattern = re.compile(r"^\\s*(?:-\\s*)?(?:\\*\\*Integration branch:\\*\\*|Integration branch:)\\s*`?\\s*([^`\\n]+?)\\s*`?\\s*$", re.MULTILINE); match = pattern.search(body); print(match.group(1).strip() if match else "")')"
