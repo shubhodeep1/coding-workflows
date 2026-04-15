@@ -2232,6 +2232,21 @@ jobs:
               --add-label 'ai:implementation-failed' >/dev/null 2>&1 || true
           }
 
+          ensure_implement_fixup_labels() {
+            if [ -f scripts/label_helpers.sh ]; then
+              source scripts/label_helpers.sh
+              ensure_label_exists "ai:clarification" "${{ github.repository }}"
+              ensure_label_exists "ai:implement-fix-up" "${{ github.repository }}"
+            else
+              gh_retry gh label create "ai:clarification" --repo "${{ github.repository }}" \
+                --color "f9d0c4" --description "AI clarification required before planning" \
+                2>/dev/null || true
+              gh_retry gh label create "ai:implement-fix-up" --repo "${{ github.repository }}" \
+                --color "d4c5f9" --description "Implement-phase post-Codex fix-up issue" \
+                2>/dev/null || true
+            fi
+          }
+
           FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
             --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' || true)"
           if [ -z "${FAILED_STEP_NAME}" ] && [ "${{ job.status }}" = "cancelled" ]; then
@@ -2514,6 +2529,7 @@ jobs:
 
               CREATED_FIX_ISSUES_JSON='[]'
               local_to_issue_map='{}'
+              ensure_implement_fixup_labels
 
               for idx in $(seq 0 $((FIX_COUNT - 1))); do
                 FIX_ID="$(jq -r ".fix_issues[${idx}].id // \"implement-fix-$((idx + 1))\"" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
@@ -2538,7 +2554,9 @@ jobs:
                 if FIX_URL="$(gh_retry gh issue create \
                   --repo "${{ github.repository }}" \
                   --title "${FIX_TITLE}" \
-                  --body "${FIX_BODY_FULL}" 2>"${CREATE_ERR_FILE}")"; then
+                  --body "${FIX_BODY_FULL}" \
+                  --label "ai:clarification" \
+                  --label "ai:implement-fix-up" 2>"${CREATE_ERR_FILE}")"; then
                   FIX_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$' || true)"
                   if [ -n "${FIX_NUM}" ]; then
                     CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${FIX_NUM}" '. + [$num]')"
@@ -2580,8 +2598,17 @@ jobs:
                 issue_list_md="- (no issue numbers captured; issue creation failed)"
               fi
 
+              BLOCKER_METADATA_JSON="$(jq -cn \
+                --argjson fixups "${CREATED_FIX_ISSUES_JSON}" \
+                --arg source_issue "${ISSUE_NUMBER}" \
+                '{
+                  fixup_issue_numbers: ($fixups | if type == "array" then map(select(type == "number")) | unique else [] end),
+                  blocks_source_issue: ($source_issue | tonumber?)
+                }')"
+              BLOCKER_METADATA_BLOCK="$(printf '<!-- IMPLEMENT_FIXUP_BLOCKERS_V1\n%s\nIMPLEMENT_FIXUP_BLOCKERS_V1 -->' "${BLOCKER_METADATA_JSON}")"
+
               gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-                -f body="## Post-Codex validation diagnosed follow-up fixes\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nCreated fix-up issues:\n${issue_list_md}" >/dev/null || true
+                -f body="## Post-Codex validation diagnosed follow-up fixes\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nCreated fix-up issues:\n${issue_list_md}\n\n${BLOCKER_METADATA_BLOCK}" >/dev/null || true
 
               ensure_implementation_failed_label
               ;;
