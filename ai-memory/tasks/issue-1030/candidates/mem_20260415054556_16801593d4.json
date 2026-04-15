@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No clarification QIDs were issued in this run.\n- `/answer [auto-answered-by-clarify]` indicates clarification was not required, so planning can proceed.\n\nImplementation checklist:\n- [ ] Replace brittle review-blocked fix staging logic so it never aborts on exclude-only/invalid pathspec combinations.\n- [ ] Preserve existing staging safety constraints (`ALLOW_WORKFLOW_EDITS` behavior and forbidden `.github/prompts|.github/scripts` guard).\n- [ ] Add/adjust regression tests for merged review-blocked follow-up flows (default base and integration-branch base retargeting).\n- [ ] Verify no pathspec errors appear and both follow-up scenarios complete.\n\nFiles likely to change:\n1. `scripts/orchestrate_poll_process.sh`\n2. `tests/test_orchestrate_poll_process.py` (if current tests do not already cover this exact staging failure mode)\n\nFunctions/modules to implement or update:\n1. Review-blocked judge `action=fix` commit/staging block in `scripts/orchestrate_poll_process.sh` (around current `git add -u ...` / `git ls-files --others ...` sequence).\n2. Optionally extract a small local helper in the same script for \u201csafe staging with exclusions\u201d to keep behavior centralized and avoid repeating pathspec handling.\n3. Test harness cases in `tests/test_orchestrate_poll_process.py` for merged follow-up branch creation with:\n1. default base when no orchestrator integration context exists\n2. retargeted base when orchestrator integration context exists\n\nData structures affected:\n1. No schema/DB contract changes.\n2. No orchestrator state schema change expected (`orchestrate_state.v1` remains unchanged).\n3. Test fixture store objects for mocked PR creation may gain stricter assertions on created PR `baseRefName` and absence of pathspec stderr.\n\nAPI/interface changes:\n1. No external API contract changes.\n2. No new env vars expected.\n3. Internal behavior change only: staging step becomes fail-open for non-actionable pathspec cases, while still fail-closed for protected-file staging guard.\n\nPotential risks and edge cases:\n1. Over-broad fail-open could hide real git errors; keep suppression narrowly scoped to known pathspec-mismatch cases.\n2. Must keep `ALLOW_WORKFLOW_EDITS=false` exclusions effective (do not accidentally stage `scripts`, `prompts`, `.github/ai`, `.github/prompts`, `.github/scripts`).\n3. Empty/minimal repos with no tracked files must not abort.\n4. Follow-up PR base-selection logic must stay unchanged except for staging robustness.\n\nTesting considerations:\n1. Run targeted suite: `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py`\n2. Ensure both merged follow-up scenarios pass:\n1. default-base path\n2. integration-branch retarget path\n3. Confirm no `pathspec ... did not match any file(s) known to git` output in failing path.\n4. Re-run validation-equivalent stage script for regression confirmation: `validation/logs/06_existing_test_suite_execution.sh`\n5. If available, run full runtime validation pass to confirm end-to-end green.\n\nConflict notes (important):\n1. The issue references failing tests named `test_review_blocked_merged_followup_keeps_default_base_when_no_integration_context` and `test_review_blocked_merged_followup_retargets_to_integration_branch`, but those exact names are not present in the current `tests/test_orchestrate_poll_process.py` snapshot. This suggests test-name drift across revisions; implementation should target behavior, not exact historical names.\n2. The issue log mentions `pathspec '.' did not match...`, while the current script block primarily uses exclude pathspecs. This indicates the failing run may be from a nearby but not identical revision; root cause remains in fragile staging pathspec handling.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "eac50e83e7c73efba9d633e1e609d2b4418d25f3d9dd9a88b645b349f48ff147",
+  "lineage": {
+    "issue_number": 1030,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24438370443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24438370443",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1030"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415054556_16801593d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1030,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24438370443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1030",
+  "timestamps": {
+    "created_at": "2026-04-15T05:45:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
