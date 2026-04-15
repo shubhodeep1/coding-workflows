@@ -2610,8 +2610,14 @@ jobs:
                 }')"
               BLOCKER_METADATA_BLOCK="$(printf '<!-- IMPLEMENT_FIXUP_BLOCKERS_V1\n%s\nIMPLEMENT_FIXUP_BLOCKERS_V1 -->' "${BLOCKER_METADATA_JSON}")"
 
+              SUMMARY_COMMENT_BODY="$(printf '## Post-Codex validation diagnosed follow-up fixes\n\n%s\n\nFailed step: %s\n\nCreated fix-up issues:\n%s\n\n%s\n' \
+                "${DIAG_TEXT}" \
+                "${FAILED_STEP_NAME}" \
+                "${issue_list_md}" \
+                "${BLOCKER_METADATA_BLOCK}")"
+
               gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-                -f body="## Post-Codex validation diagnosed follow-up fixes\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nCreated fix-up issues:\n${issue_list_md}\n\n${BLOCKER_METADATA_BLOCK}" >/dev/null || true
+                -f body="${SUMMARY_COMMENT_BODY}" >/dev/null || true
 
               ensure_implementation_failed_label
               ;;
