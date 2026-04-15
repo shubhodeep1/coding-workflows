@@ -514,10 +514,10 @@ def list_processed_command_entries(
     processed_dir = memory_root / "tasks" / f"issue-{int(issue_number)}" / "processed_commands"
     entries: list[dict[str, Any]] = []
     for entry_path in _iter_json_files(processed_dir):
-        payload = _load_json(entry_path)
         try:
+            payload = _load_json(entry_path)
             validate_processed_command_entry(payload, memory_root)
-        except MemoryValidationError as exc:
+        except (MemoryValidationError, OSError, ValueError) as exc:
             _log.warning("Skipping invalid processed command entry %s: %s", entry_path, exc)
             continue
         if command and str(payload.get("command") or "").strip().lower() != command.strip().lower():
