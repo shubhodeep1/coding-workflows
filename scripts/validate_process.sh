@@ -1693,7 +1693,12 @@ case "${DIAG_STATUS}" in
         FIX_TITLE_N="$(jq -r ".[${idx}].title // \"Validation fix-up $((idx + 1))\"" "${SORTED_FIXES_FILE}")"
         FIX_BODY_N="$(jq -r ".[${idx}].body // \"No body provided\"" "${SORTED_FIXES_FILE}" | sed 's/\\n/\n/g')"
         FIX_PRIORITY_N="$(jq -r ".[${idx}].priority // 5" "${SORTED_FIXES_FILE}")"
-        printf '## Fix %s: %s\n\n_Priority: %s_\n\n%s\n\n' "$((idx + 1))" "${FIX_TITLE_N}" "${FIX_PRIORITY_N}" "${FIX_BODY_N}"
+        FIX_DEPENDS_ON_N="$(jq -r ".[${idx}].depends_on // empty | if type == \"array\" then map(tostring) | join(\", \") else tostring end" "${SORTED_FIXES_FILE}")"
+        printf '## Fix %s: %s\n\n_Priority: %s_\n\n' "$((idx + 1))" "${FIX_TITLE_N}" "${FIX_PRIORITY_N}"
+        if [ -n "${FIX_DEPENDS_ON_N}" ]; then
+          printf '_Depends on: %s_\n\n' "${FIX_DEPENDS_ON_N}"
+        fi
+        printf '%s\n\n' "${FIX_BODY_N}"
       done
       printf -- '---\n'
       printf '**Orchestrator metadata** (do not edit)\n'
