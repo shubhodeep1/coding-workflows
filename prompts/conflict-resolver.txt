@@ -2,12 +2,15 @@ Repository task: Resolve merge conflicts.
 
 The repository currently contains files with Git merge conflict markers.
 
-Conflict markers appear in this format:
-[conflict-start] HEAD
-code
-[conflict-separator]
-other code
-[conflict-end] branch
+A Git merge conflict marker block is the standard output `git merge` writes
+into a conflicted file: a start line consisting of seven less-than characters
+followed by a space and the name HEAD, then the lines from HEAD, then a
+separator line consisting of seven equals characters, then the lines from the
+other branch, then an end line consisting of seven greater-than characters
+followed by a space and the name of the other branch. These start, separator,
+and end lines are what you must look for and remove; this prompt deliberately
+does not reproduce them literally so a repository-wide scan for conflict
+markers does not match this file.
 
 Conflicted files reported by `git diff --name-only --diff-filter=U` ({{CONFLICTED_FILES_COUNT}} total):
 {{CONFLICTED_FILES_LIST}}
