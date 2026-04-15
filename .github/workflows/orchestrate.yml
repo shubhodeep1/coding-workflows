@@ -733,7 +733,7 @@ jobs:
             2>/dev/null || true
 
       - name: Create standalone issue (single-issue short-circuit)
-        if: steps.decomposition_mode.outputs.single_issue_mode == 'true'
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true' && steps.decomposition_mode.outputs.single_issue_mode == 'true'
         id: single_issue
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
