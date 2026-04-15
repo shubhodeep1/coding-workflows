@@ -661,13 +661,22 @@ validation_fix_issue_has_merged_pr_evidence() {
 
 backfill_validation_fix_issue_merged_label() {
   local issue_num="$1"
+  # Optional second arg: cached labels JSON (e.g. '["ai:closed",...]')
+  # already fetched by the caller.  When provided, skips the per-call
+  # `get_issue_labels_json` round-trip.  When empty/omitted the helper
+  # falls back to fetching itself, preserving the original contract.
+  local cached_labels="${2:-}"
   local fix_labels
   local edit_args=()
   local _label_err_file
 
   ensure_label_exists "ai:merged"
 
-  fix_labels="$(get_issue_labels_json "${issue_num}")"
+  if [ -n "${cached_labels}" ]; then
+    fix_labels="${cached_labels}"
+  else
+    fix_labels="$(get_issue_labels_json "${issue_num}")"
+  fi
   if has_label "${fix_labels}" "ai:merged"; then
     return 0
   fi
@@ -4175,9 +4184,21 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
+    _project_status_before_sync="${PROJECT_STATUS}"
     sync_validation_fix_issues_from_comments "${COMMENTS}"
     PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
-    TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+    # Only re-fetch tracking labels when the sync actually changed
+    # the orchestrator status — sync_validation_fix_issues_from_comments
+    # only mutates labels on the tracking issue (via
+    # set_tracking_phase_label) when it transitions the project to
+    # validation-fixing, which always shows up as a status change in
+    # STATE_FILE.  When status is unchanged the previously fetched
+    # TRACKING_LABELS is still authoritative and re-fetching is a
+    # wasted GitHub API call.
+    if [ "${PROJECT_STATUS}" != "${_project_status_before_sync}" ]; then
+      TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+    fi
+    unset _project_status_before_sync
   fi
 
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
@@ -4259,7 +4280,10 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
       else
         if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
           echo "Validation fix-up issue #${fix_num}: merged PR detected; backfilling ai:merged."
-          if backfill_validation_fix_issue_merged_label "${fix_num}"; then
+          # Pass the labels we already fetched at the top of this
+          # iteration so backfill skips its internal
+          # get_issue_labels_json round-trip.
+          if backfill_validation_fix_issue_merged_label "${fix_num}" "${FIX_LABELS}"; then
             echo "Validation fix-up issue #${fix_num}: ai:merged label backfilled."
           else
             echo "::warning::Validation fix-up issue #${fix_num}: merged PR detected but ai:merged backfill failed." >&2
