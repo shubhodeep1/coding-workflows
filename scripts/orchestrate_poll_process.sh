@@ -3677,13 +3677,39 @@ PY
     fi
 
     # ---- Merged-PR guard: don't fire early-phase actions on issues whose
-    # linked PR is already merged.  Relies on the linked_pr payload the
-    # batched GraphQL prefetch already put in _candidate_details_json
-    # (0 additional API calls) and fails open on missing data.
+    # linked PR is already merged.  Primary path consumes the linked_pr
+    # payload the batched GraphQL prefetch already put in
+    # _candidate_details_json (0 additional API calls).  On cache miss
+    # (batch failure, partial response, issue not in the cache) it falls
+    # back to a per-issue REST probe — timeline + PR payload — so a
+    # GraphQL/prefetch hiccup cannot silently regress the merged-PR
+    # guard back into the /reclarify loop from GH issue #1074.  Mirrors
+    # the REST-fallback merged handling added to the orchestrator-managed
+    # path in recover_stalled_issue.  Fails open if both cache and REST
+    # are empty — the stall action then runs as before.
     case "${action}" in
       retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement)
         local _std_linked_json
         _std_linked_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // null' 2>/dev/null || echo "null")"
+        # Cache miss — REST fallback (timeline → PR payload → merged_at).
+        # Two extra API calls per cache-miss issue, bounded by the
+        # rarity of prefetch failures.  Gated on the guard flag so
+        # disabling it still gives full opt-out.
+        if { [ -z "${_std_linked_json}" ] || [ "${_std_linked_json}" = "null" ]; } && [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ]; then
+          local _std_lpr_num _std_lpr_json _std_lpr_merged
+          _std_lpr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+            --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+            2>/dev/null || echo "")"
+          if [[ "${_std_lpr_num}" =~ ^[0-9]+$ ]]; then
+            _std_lpr_json="$(_fetch_pr_json "${_std_lpr_num}")"
+            _std_lpr_merged="$(_jq_field "${_std_lpr_json}" '.merged_at != null' 'true|false')"
+            if [ "${_std_lpr_merged}" = "true" ]; then
+              # Synthesise the same shape the cache would have produced
+              # so _check_merged_pr_guard can consume it uniformly.
+              _std_linked_json="$(jq -cn --argjson n "${_std_lpr_num}" '{number: $n, state: "MERGED", merged: true}' 2>/dev/null || echo "null")"
+            fi
+          fi
+        fi
         if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
           echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
           _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
