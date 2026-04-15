@@ -317,6 +317,13 @@ if ! [[ "${MAX_STALL_RECOVERIES_PER_ISSUE}" =~ ^[0-9]+$ ]] || [ "${MAX_STALL_REC
   MAX_STALL_RECOVERIES_PER_ISSUE="5"
 fi
 
+ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
+if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
+  ENABLE_STALL_HUMAN_TERMINALIZATION="true"
+else
+  ENABLE_STALL_HUMAN_TERMINALIZATION="false"
+fi
+
 # Stall judge trigger configuration
 STALL_JUDGE_TRIGGER_COUNT="${STALL_JUDGE_TRIGGER_COUNT:-2}"
 if ! [[ "${STALL_JUDGE_TRIGGER_COUNT}" =~ ^[0-9]+$ ]] || [ "${STALL_JUDGE_TRIGGER_COUNT}" -lt 1 ]; then
@@ -2459,16 +2466,21 @@ recovery_action_for_phase() {
   fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "${MAX_STALL_RECOVERIES_PER_ISSUE}" "${ENABLE_STALL_HUMAN_TERMINALIZATION}" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
-from orchestrate_lib import STALL_RECOVERY_ACTIONS
+from orchestrate_lib import resolve_stall_recovery_action
 
 phase = sys.argv[1]
 recovery_count = int(sys.argv[2])
-actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
-idx = min(recovery_count, len(actions) - 1)
-print(actions[idx])
+max_recoveries = int(sys.argv[3])
+allow_human_terminalization = sys.argv[4].strip().lower() in {"1", "true", "yes", "on"}
+print(resolve_stall_recovery_action(
+    phase=phase,
+    recovery_count=recovery_count,
+    max_recoveries=max_recoveries,
+    allow_human_terminalization=allow_human_terminalization,
+))
 PY
 )"
   if [ -z "${action}" ]; then
@@ -3659,10 +3671,10 @@ state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
 )"
-		  write_standalone_state_json "${issue_num}" "${failed_reissue_state}" "${state_comment_id}"
-		fi
-		took_action="true"
-		;;
+			  write_standalone_state_json "${issue_num}" "${failed_reissue_state}" "${state_comment_id}"
+			fi
+			took_action="true"
+			;;
       skip)
         close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${recovery_count})."
         ensure_label_exists "ai:closed"
@@ -5958,6 +5970,7 @@ fi
       --labels-json "${LABELS_JSON}"
       --threshold-minutes "${STALL_THRESHOLD_MINUTES}"
       --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}"
+      --allow-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
       --stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}"
       --enable-stall-judge "${ENABLE_STALL_JUDGE}"
       --allow-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
