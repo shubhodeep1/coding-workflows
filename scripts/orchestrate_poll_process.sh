@@ -317,13 +317,6 @@ if ! [[ "${MAX_STALL_RECOVERIES_PER_ISSUE}" =~ ^[0-9]+$ ]] || [ "${MAX_STALL_REC
   MAX_STALL_RECOVERIES_PER_ISSUE="5"
 fi
 
-ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
-if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
-  ENABLE_STALL_HUMAN_TERMINALIZATION="true"
-else
-  ENABLE_STALL_HUMAN_TERMINALIZATION="false"
-fi
-
 # Stall judge trigger configuration
 STALL_JUDGE_TRIGGER_COUNT="${STALL_JUDGE_TRIGGER_COUNT:-2}"
 if ! [[ "${STALL_JUDGE_TRIGGER_COUNT}" =~ ^[0-9]+$ ]] || [ "${STALL_JUDGE_TRIGGER_COUNT}" -lt 1 ]; then
@@ -336,6 +329,13 @@ if is_truthy "${ENABLE_STALL_JUDGE}"; then
   ENABLE_STALL_JUDGE="true"
 else
   ENABLE_STALL_JUDGE="false"
+fi
+
+ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
+if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
+  ENABLE_STALL_HUMAN_TERMINALIZATION="true"
+else
+  ENABLE_STALL_HUMAN_TERMINALIZATION="false"
 fi
 
 ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
@@ -2520,14 +2520,13 @@ recovery_action_for_phase() {
   local recovery_count="$2"
 
   [[ "${recovery_count}" =~ ^[0-9]+$ ]] || recovery_count="0"
-
   if [ "${recovery_count}" -ge "${MAX_STALL_RECOVERIES_PER_ISSUE}" ]; then
     echo "skip"
     return
   fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "${MAX_STALL_RECOVERIES_PER_ISSUE}" "${ENABLE_STALL_HUMAN_TERMINALIZATION}" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
 from orchestrate_lib import resolve_stall_recovery_action
@@ -2535,15 +2534,15 @@ from orchestrate_lib import resolve_stall_recovery_action
 phase = sys.argv[1]
 recovery_count = int(sys.argv[2])
 max_recoveries = int(sys.argv[3])
-allow_human_terminalization = sys.argv[4].strip().lower() in {"1", "true", "yes", "on"}
+enable_human_terminalization = sys.argv[4].lower() == "true"
 print(resolve_stall_recovery_action(
-    phase=phase,
-    recovery_count=recovery_count,
+    phase,
+    recovery_count,
     max_recoveries=max_recoveries,
-    allow_human_terminalization=allow_human_terminalization,
+    enable_stall_human_terminalization=enable_human_terminalization,
 ))
 PY
-)"
+)" || true
   if [ -z "${action}" ]; then
     echo "retrigger_pipeline"
   else
@@ -2551,28 +2550,37 @@ PY
   fi
 }
 
-non_human_recovery_action_for_phase() {
+normalize_stall_recovery_action() {
   local phase="$1"
   local recovery_count="$2"
+  local candidate_action="${3:-}"
+
   local action
+  action="$(python3 - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" <<'PY'
+import sys
+sys.path.insert(0, 'scripts')
+from orchestrate_lib import resolve_effective_stall_recovery_action
 
-  action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
-  if [ "${action}" != "escalate_human" ]; then
+phase = sys.argv[1]
+recovery_count = int(sys.argv[2])
+candidate_action = sys.argv[3]
+max_recoveries = int(sys.argv[4])
+enable_human_terminalization = sys.argv[5].lower() == "true"
+print(resolve_effective_stall_recovery_action(
+    phase,
+    recovery_count,
+    candidate_action,
+    max_recoveries=max_recoveries,
+    enable_stall_human_terminalization=enable_human_terminalization,
+))
+PY
+)" || true
+
+  if [ -z "${action}" ]; then
+    echo "retrigger_pipeline"
+  else
     echo "${action}"
-    return
   fi
-
-  local idx="${recovery_count}"
-  while [ "${idx}" -gt 0 ]; do
-    idx=$((idx - 1))
-    action="$(recovery_action_for_phase "${phase}" "${idx}")"
-    if [ "${action}" != "escalate_human" ]; then
-      echo "${action}"
-      return
-    fi
-  done
-
-  echo "retrigger_pipeline"
 }
 
 stall_recovery_action_is_terminal() {
@@ -2941,9 +2949,6 @@ invoke_stall_judge() {
 
   local fallback_action
   fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
-  if [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ] && [ "${fallback_action}" = "escalate_human" ]; then
-    fallback_action="$(non_human_recovery_action_for_phase "${phase}" "${recovery_count}")"
-  fi
 
   local comments_issue_num="${issue_num}"
   if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
@@ -3125,17 +3130,11 @@ invoke_stall_judge() {
   fi
 
   local judge_action
-  local effective_action
   local judge_justification
-  local judge_effective_note=""
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
-  effective_action="${judge_action}"
-  if [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ] && [ "${effective_action}" = "escalate_human" ]; then
-    effective_action="${fallback_action}"
-    judge_effective_note="**Effective action:** ${effective_action} (human terminalization disabled)"
-    echo "::warning::Stall judge returned escalate_human for issue #${issue_num} while ENABLE_STALL_HUMAN_TERMINALIZATION is disabled; using ${effective_action}."
-  fi
+  local effective_action
+  effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
     STALL_JUDGE_TARGET_PR="${target_pr}"
@@ -3148,9 +3147,9 @@ invoke_stall_judge() {
   local judge_comment
   judge_comment="## 🧑‍⚖️ Stall Judge — Issue #${issue_num} attempt $((recovery_count + 1))
 
-**Decision:** ${judge_action}
+**Decision (judge):** ${judge_action}
+**Decision (effective):** ${effective_action}
 **Justification:** ${judge_justification}
-${judge_effective_note}
 
 **Diagnostics snapshot:**
 
@@ -3163,14 +3162,14 @@ ${diagnostics}
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${judge_comment}" >/dev/null 2>&1 || true
   fi
-  local tg_action_summary="${effective_action}"
-  if [ "${judge_action}" != "${effective_action}" ]; then
-    tg_action_summary="judge=${judge_action}, effective=${effective_action}"
+  tg_notify "Stall judge evaluated issue #${issue_num}: judged=${judge_action}, effective=${effective_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+
+  if [ "${effective_action}" != "${judge_action}" ]; then
+    echo "::notice::Stall judge action '${judge_action}' normalized to '${effective_action}' for issue #${issue_num}."
   fi
-  tg_notify "Stall judge evaluated issue #${issue_num}: ${tg_action_summary}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
 
   case "${effective_action}" in
-    retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human)
+    retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human|skip)
       execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
       return $?
       ;;
@@ -3193,7 +3192,7 @@ ${diagnostics}
       return 0
       ;;
     *)
-      echo "::warning::Unknown stall judge action '${judge_action}' for issue #${issue_num}; falling back to ${fallback_action}."
+      echo "::warning::Unknown effective stall action '${effective_action}' for issue #${issue_num}; falling back to ${fallback_action}."
       execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
       return $?
       ;;
@@ -3765,10 +3764,10 @@ state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
 )"
-			  write_standalone_state_json "${issue_num}" "${failed_reissue_state}" "${state_comment_id}"
-			fi
-			took_action="true"
-			;;
+		  write_standalone_state_json "${issue_num}" "${failed_reissue_state}" "${state_comment_id}"
+		fi
+		took_action="true"
+		;;
       skip)
         close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${recovery_count})."
         ensure_label_exists "ai:closed"
@@ -3996,7 +3995,6 @@ recover_stalled_issue() {
         if [ "${_lpr_state}" = "open" ]; then
           echo "STALL_SKIP issue=${issue_num} reason=open_linked_pr pr=${_lpr_num} phase=${phase} action=${action}"
           add_healing_note "Issue #${issue_num}: skipped early-phase stall recovery '${action}' (phase=${phase}) — open linked PR #${_lpr_num} already exists"
-          STALL_HEALING_CHANGED=true
           tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because open linked PR #${_lpr_num} already exists."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
           return 1  # Signal: no action taken (caller should not increment counter)
         fi
@@ -5947,19 +5945,6 @@ sys.exit(1)
               if [ -n "$(git status --porcelain)" ]; then
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
-                # `git add -u` with only negative pathspecs exits non-zero
-                # on newer git versions (observed with 2.53) when the index
-                # is empty — e.g. test sandboxes whose base commit tracks
-                # no files — because git implicitly appends `.` as a
-                # positive pathspec and then errors on every pathspec that
-                # did not match. Under `set -euo pipefail` that aborts the
-                # whole poll run. Guard on a non-empty index so production
-                # checkouts still run the update and empty sandboxes
-                # silently fall through to the untracked-file add below.
-                _HAS_TRACKED_FILES=false
-                if [ -n "$(git ls-files | head -c1 2>/dev/null || true)" ]; then
-                  _HAS_TRACKED_FILES=true
-                fi
                 if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
                   # Use a single add call so empty/minimal repos do not fail on
                   # exclude-only pathspecs (e.g. ':!node_modules').
@@ -5967,13 +5952,12 @@ sys.exit(1)
                 else
                   # Keep workflow-edit guard exclusions while avoiding brittle
                   # tracked/untracked split staging pathspec failures.
-                  git add -A -- . ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  git add -A -- . ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.github/workflows' ':!.serena' ':!.github/prompts' ':!.github/scripts'
                 fi
-                unset _HAS_TRACKED_FILES
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
-                if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/)'; then
-                  echo "Error: scripts/, prompts/, or .github/ai is staged while ALLOW_WORKFLOW_EDITS=false"
+                if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then
+                  echo "Error: scripts/, prompts/, .github/ai/, or .github/workflows is staged while ALLOW_WORKFLOW_EDITS=false"
                   exit 1
                 fi
                 if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
@@ -6386,9 +6370,9 @@ fi
       --labels-json "${LABELS_JSON}"
       --threshold-minutes "${STALL_THRESHOLD_MINUTES}"
       --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}"
-      --allow-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
       --stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}"
       --enable-stall-judge "${ENABLE_STALL_JUDGE}"
+      --enable-stall-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
     )
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
