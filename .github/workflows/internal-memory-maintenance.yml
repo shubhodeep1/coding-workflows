@@ -9,5 +9,5 @@ permissions:
 
 jobs:
   maintenance:
-    uses: ./.github/workflows/memory_maintenance.yml
+    uses: shubhodeep1/coding-workflows/.github/workflows/memory_maintenance.yml@main
     secrets: inherit
