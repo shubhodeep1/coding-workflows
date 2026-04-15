@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nClarification mapping\n- Clarify phase auto-posted `/answer [auto-answered-by-clarify]`; interpreted as \u201cno additional constraints, proceed with docs-sync scope.\u201d\n\nConflict detection (explicit)\n- The issue references `STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION` in `scripts/orchestrate_lib.py`, but that symbol is not present in the current repository snapshot.\n- Current source-of-truth behavior is in `STALL_RECOVERY_ACTIONS`/`detect_stalls` plus poller fallback logic; plan includes a verification step so README reflects the finalized merged behavior exactly.\n\n1. Files likely to change\n- [README.md](README.md) (stall recovery narrative around line ~859 and both env-var tables around lines ~76 and ~655).\n\n2. Functions/modules to use as source of truth\n- [orchestrate_lib.py](scripts/orchestrate_lib.py): `STALL_RECOVERY_ACTIONS`, `detect_stalls`.\n- [orchestrate_poll_process.sh](scripts/orchestrate_poll_process.sh): `recovery_action_for_phase`, stall-judge execution and fail-open fallback paths.\n\n3. Data structures/semantics to document\n- Phase-keyed recovery ladder (`STALL_RECOVERY_ACTIONS`) and `stall_recovery_count` clamping behavior.\n- Judge override conditions (`ENABLE_STALL_JUDGE`, `STALL_JUDGE_TRIGGER_COUNT`, `MAX_STALL_RECOVERIES_PER_ISSUE`).\n- Fail-open semantics: if stall judge fails/parse fails/returns unsupported action, fallback to declarative ladder action for the same phase/count.\n- Human terminalization behavior only if present in merged code; otherwise document actual default behavior with no optional-mode claim.\n\n4. API/interface changes\n- No runtime API/schema/env var additions.\n- Documentation-only interface updates:\n  - Rewrite stall section to remove ambiguous \u201cevery ladder ends in `escalate_human`\u201d wording unless strictly true.\n  - Keep row descriptions consistent across both README variable tables for stall-recovery variables.\n\n5. Risks and edge cases\n- Behavior drift if linked issue lands additional changes while docs are being edited.\n- Ambiguity around `escalate_human` default vs optional mode.\n- Contradictions between narrative section and variable tables.\n\n6. Testing/validation considerations\n- Code-to-doc consistency pass:\n  - Validate documented ladder actions against source constants/selection logic.\n  - Validate judge override and fail-open fallback wording against poller logic.\n- README consistency pass:\n  - Ensure both tables use aligned descriptions for stall recovery controls.\n  - Ensure no contradictory `escalate_human` statements remain.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ccdee40a6cebbb2903c4dca9185a2b3e5fcf5a51da3a54e6e627bf1360053ea0",
+  "lineage": {
+    "issue_number": 988,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24431984860",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24431984860",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/988"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415014514_c885f38cb9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 988,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24431984860"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #988",
+  "timestamps": {
+    "created_at": "2026-04-15T01:45:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
