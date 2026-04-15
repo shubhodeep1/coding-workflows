@@ -89,6 +89,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `REVIEW_BLOCKED_AUTO_UNSTICK` | No | `true` | orchestrate_poll | Before invoking the review-blocked judge, the poller inspects each `ai:review-blocked` PR. If the PR is `mergeable=false` it dispatches `review_autofix.yml` (via `_dispatch_review_for_conflicts`) so the in-workflow Codex resolver gets a fresh shot at the conflict, and skips the judge for this tick. If the PR head commit was authored by an **external** identity (anything other than `codex`, `codex-bot`, `github-actions`, or `github-actions[bot]`), the poller also dispatches the review workflow AND clears `ai:review-blocked`, re-entering the normal phase loop — this bridges the GitHub platform rule that suppresses `pull_request.synchronize` events on commits pushed with the default `GITHUB_TOKEN` (Claude Code on the web, custom wrapper actions) and matches the "push a new commit to re-trigger the review workflow" contract printed in the workflow-failure comment. Set to `false` to disable both paths and force the judge-first flow. Dispatch is always gated by the existing `_dispatch_review_for_conflicts` cycle-local dedup and active-run detection, so repeat calls are cheap no-ops. |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
 | `ALERT_MSG_LEVEL` | No | `DEBUG` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status, update_workflows, test-and-mark-stable | Minimum Telegram alert level to send. Alerts below this threshold are suppressed. Valid values: `DEBUG`, `WARNING`, `ERROR`, `CRITICAL`. Each alert is prefixed with an icon and level (e.g. `🔍 DEBUG:`, `⚠️ WARNING:`, `❌ ERROR:`, `🚨 CRITICAL:`). New alerts default to `CRITICAL` until explicitly recategorised. |
+| `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` | No | `3600` | all (any workflow or script that sources `scripts/gh_helpers.sh`) | Minimum seconds between consecutive admin Telegram alerts when a GitHub API rate limit is hit. The alert (`⚠️ WARNING: GitHub API rate limit hit …`) is fired from inside the rate-limit branch of `gh_retry` / `gh_retry_to_file` / `gh_api_json_to_file` / `curl_gh_api`, and is throttled globally via a Telegram pinned message in the admin chat (marker `<!-- gh_rl_ts:EPOCH -->`). This deliberately avoids any GitHub API call for dedup state so the throttle keeps working while the GitHub API itself is the resource being limited. Fail-closed: on Telegram pin failure the sent message is rolled back so the "≤ 1 alert per window" invariant holds. Set to `0` has no suppression effect (any non-numeric or empty value is coerced to `3600`). No-op when `TG_BOT_SECRET` / `TG_ADMIN_CHAT_ID` are unset. |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Version/branch of the Serena MCP server |
 | `SERENA_LANGUAGES` | No | `""` (empty) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Languages for Serena symbol analysis |
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Disable the Serena MCP server |
@@ -975,6 +976,28 @@ For non-orchestrator issues, human-intervention alerts are cleaned up automatica
 - No additional configuration is needed — cleanup is enabled automatically when `TG_BOT_SECRET` and `TG_ADMIN_CHAT_ID` are set.
 
 **Note:** Messages older than 48 hours cannot be deleted by the Telegram Bot API. For long-running orchestrated projects, intermediate messages sent more than 48 hours before completion will remain in the chat.
+
+### GitHub API rate-limit admin alert
+
+Any workflow or script that routes GitHub API calls through `scripts/gh_helpers.sh` (`gh_retry`, `gh_retry_to_file`, `gh_api_json_to_file`, `curl_gh_api`) will fire a single admin Telegram alert the first time a rate limit is detected in a cooldown window. The alert body is of the form:
+
+```
+⚠️ WARNING: GitHub API rate limit hit — workflow=<name> repo=<owner/repo> run=<runs-url>
+```
+
+**Throttling:** alerts are globally throttled to at most one per `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600` s = 1 h) across **all** workflow runs. The cooldown state is kept in a Telegram **pinned message** in the admin chat via an embedded marker `<!-- gh_rl_ts:EPOCH -->`, read with `getChat`. This deliberately avoids any GitHub API call for dedup state so the throttle still works while the GitHub API itself is the resource being limited. Previous pinned alerts are unpinned best-effort after a new alert is pinned.
+
+**Fail-closed semantics:** if `pinChatMessage` fails after the alert was sent, the sent message is rolled back via `deleteMessage` so the "≤ 1 alert per cooldown window" invariant is preserved even under transient Telegram failures.
+
+**Requirements:**
+- `TG_BOT_SECRET` and `TG_ADMIN_CHAT_ID` must be set.
+- The bot must have permission to pin / unpin / delete messages in the target chat.
+- `jq` must be available (already a baseline on all repo runners).
+- The caller script must source `scripts/gh_helpers.sh`. All four `review_*.sh` helpers and `orchestrate_poll_process.sh` route GitHub API calls through `gh_retry` / `curl_gh_api` and therefore participate in the alert.
+
+**Interaction with `ALERT_MSG_LEVEL`:** the rate-limit alert is emitted at `WARNING` level and honours the global `ALERT_MSG_LEVEL` threshold the same way `scripts/tg_helpers.sh::tg_send_msg` does. If an operator configures `ALERT_MSG_LEVEL=ERROR` or `ALERT_MSG_LEVEL=CRITICAL`, the rate-limit alert is suppressed entirely (no send, no pin update, no cooldown advance). The cooldown state is only touched when the alert would actually fire, so tightening `ALERT_MSG_LEVEL` does not strand a stale pinned marker.
+
+**Disabling:** unset `TG_BOT_SECRET` or `TG_ADMIN_CHAT_ID` — the helper no-ops silently. You can also set `ALERT_MSG_LEVEL=ERROR` (or higher) to suppress the rate-limit alert while keeping other ERROR/CRITICAL Telegram notifications. There is no way to disable the feature per-caller; if you need to skip alerting for a specific bootstrap probe (e.g. a `gh api /labels/<name>` existence check where 404 is the expected normal case), call `gh` directly instead of via `gh_retry`. See `ensure_label_exists` in `scripts/orchestrate_poll_process.sh` for an example.
 
 ## Runtime Validation Phase
 
