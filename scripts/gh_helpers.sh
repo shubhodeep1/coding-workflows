@@ -649,8 +649,8 @@ _gh_issue_timeline_with_cross_refs_rest()
 #   `.source.issue.lookup_failed`
 #
 # Maintainer fixture capture (manual, replace OWNER/REPO/ISSUE):
-# - REST:    gh api --paginate "repos/OWNER/REPO/issues/ISSUE/timeline" | jq -s 'add // []' > scripts/fixtures/issue-timeline/rest_timeline_fixture.json
-# - GraphQL helper output: gh_issue_timeline_with_cross_refs OWNER REPO ISSUE > scripts/fixtures/issue-timeline/graphql_timeline_fixture.json
+# - REST helper output (legacy enriched shape): . scripts/gh_helpers.sh && _gh_issue_timeline_with_cross_refs_rest OWNER REPO ISSUE > scripts/fixtures/issue-timeline/rest_timeline_fixture.json
+# - GraphQL helper output (GraphQL-first, fail-open to REST): . scripts/gh_helpers.sh && gh_issue_timeline_with_cross_refs OWNER REPO ISSUE > scripts/fixtures/issue-timeline/graphql_timeline_fixture.json
 gh_issue_timeline_with_cross_refs()
 {
 	local owner="$1"
