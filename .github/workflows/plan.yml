@@ -1065,7 +1065,7 @@ jobs:
             if ($in && /^\s{0,3}#{1,6}\s+\S/) { $in = 0; }
             print if $in;
           ' "${CODEX_OUTPUT_FILE}" > "${FILES_SECTION_FILE}"
-          EXCLUDED_RE='`(scripts/|\.github/prompts/|\.github/scripts/)'
+          EXCLUDED_RE='`?(scripts/|\.github/prompts/|\.github/scripts/)'
           if [ -s "${FILES_SECTION_FILE}" ] && grep -nE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}" >/dev/null; then
             echo "::error::Plan's 'Files likely to change' section lists template-owned paths (scripts/, .github/prompts/, .github/scripts/) which are excluded from Codex commits in implement.yml. Changes to those paths belong in the coding-workflows repository."
             echo "Offending lines (from Files section):"
