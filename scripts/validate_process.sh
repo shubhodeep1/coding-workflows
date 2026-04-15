@@ -1721,9 +1721,9 @@ case "${DIAG_STATUS}" in
 	  --repo "${GITHUB_REPOSITORY}" \
 	  --title "${CONSOLIDATED_TITLE}" \
 	  --body-file "${CONSOLIDATED_BODY_FILE}")"
-	FIX_URL="$(printf '%s\n' "${FIX_URL_OUTPUT}" | grep -oE 'https://github\.com/[^/]+/[^/]+/issues/[0-9]+' | tail -n 1 || true)"
-	FIX_NUM="$(printf '%s' "${FIX_URL}" | sed -nE 's#^https://github\.com/[^/]+/[^/]+/issues/([0-9]+)$#\1#p')"
-	if [ -z "${FIX_NUM}" ]; then
+	FIX_URL="$(printf '%s\n' "${FIX_URL_OUTPUT}" | grep -oE 'https://[^ ]+/issues/[0-9]+/?([?#][^ ]*)?' | tail -n 1 || true)"
+	FIX_NUM="$(basename "${FIX_URL%%[?#]*}")"
+	if ! [[ "${FIX_NUM}" =~ ^[0-9]+$ ]]; then
 	  failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s), but creating the consolidated fix-up issue failed."
 	  post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
 	  set_tracking_phase_label "ai:validation-failed"
