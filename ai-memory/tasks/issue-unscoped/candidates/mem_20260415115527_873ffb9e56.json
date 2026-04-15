@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/implement.yml\n.github/workflows/review_autofix.yml\nscripts/validate_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/ai/label_contract.v1.json\n.github/workflows/implement.yml,\n.github/workflows/orchestrate_clarify_respond.yml\n.github/workflows/test-and-mark-stable.yml\n/tmp/codex-pr-24452445838-1-16146/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\n/tmp/codex-pr-24452445838-1-16146/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\nscripts/orchestrate_poll_process.sh\nscripts/validate_driver.sh\nscripts/validate_driver.sh\nscripts/validate_driver.sh,\nscripts/validate_process.sh,",
+  "fingerprint": "3e1adf203f6d3043f24c2729da933427a4f40ba74d167edc0f44324683a4e6f3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1051,
+    "run_id": "24452445838",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24452445838",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415115527_873ffb9e56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1051,
+    "run_id": "24452445838"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T11:55:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
