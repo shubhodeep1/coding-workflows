@@ -5,13 +5,24 @@
   "entry_id": "processed_command_1042_4250129208_approved",
   "issue_number": 1042,
   "metadata": {
+    "branch": "ai/issue-1042",
+    "changed_files": [
+      "README.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_orchestrate_poll_process.py"
+    ],
+    "issue_number": 1042,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1042",
+    "pr_number": 1055,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1055",
+    "run_attempt": "1",
+    "run_id": "24442331635",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24442331635"
   },
   "run_attempt": 1,
   "run_id": "24442331635",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-15T07:37:30Z",
+  "status": "completed",
+  "timestamp": "2026-04-15T07:56:58Z",
   "workflow": "implement"
 }
