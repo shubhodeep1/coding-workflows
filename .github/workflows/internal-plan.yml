@@ -13,5 +13,5 @@ jobs:
     if: >-
       github.event.issue.pull_request == null &&
       startsWith(github.event.comment.body, '/answer')
-    uses: ./.github/workflows/plan.yml
+    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@main
     secrets: inherit

@@ -303,6 +303,45 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
+## 17. Internal Wrapper Pin Policy
+
+- The `.github/workflows/internal-*.yml` wrappers in this repo MUST pin
+  `uses:` to `shubhodeep1/coding-workflows/.github/workflows/<wf>.yml@main`.
+  Do NOT revert them to local refs (`./.github/workflows/<wf>.yml`) and do
+  NOT flip them to `@stable`. The `@main` pin is required for two reasons:
+  (a) it makes orchestrator runs immune to stale reusable-workflow copies
+  on feature branches (which previously caused hangs that were hard to
+  fix mid-run), and (b) it still lets `test-and-mark-stable.yml`'s E2E
+  smoke test validate main HEAD — because `issues:[opened]` events fire
+  the default-branch wrapper, which then fetches the reusable body from
+  `@main` (= main HEAD = the candidate about to be tagged).
+- Consumer templates under `workflow-templates/ai-*.yml` MUST stay pinned
+  to `@stable`. Do not unify the two pin targets.
+- `ai-update-workflows.yml` must NOT be installed into `.github/workflows/`
+  in this repo. The self-updater in `update_workflows.yml` copies files
+  from `workflow-templates/*.yml` into `.github/workflows/` keyed by exact
+  filename, so the current `internal-*.yml` filenames are not directly
+  overwritten. The hazard is different: on first run the self-updater
+  would **create** new `ai-*.yml` wrappers pinned `@stable` (because
+  those filenames are absent today), which would then auto-fire on the
+  same issue/PR events as the `internal-*.yml` wrappers and cause
+  duplicate runs and racing state writes. Keeping the self-updater
+  uninstalled prevents that creation path entirely. Do not rename
+  `internal-*.yml` to `ai-*.yml` without first removing this risk.
+- PR-time dogfood gate: `ci.yml` runs `yamllint` and `actionlint` across
+  `.github/workflows/*.yml` and `workflow-templates/*.yml` on
+  `pull_request` against `main`. Any change that breaks YAML or GitHub
+  Actions schema must be caught here before landing on `main`, because a
+  broken merge to `main` immediately breaks all in-flight orchestrator
+  runs (accepted trade-off for fast recovery).
+- Recovery procedure for a broken `main` reusable: push the fix directly
+  to `main` (or merge a hotfix PR). The next wrapper invocation picks it
+  up immediately. Only run `test-and-mark-stable.yml` when promoting the
+  fix to the `@stable` channel for consumer repos — it is not on the
+  critical path for recovering this repo's own runtime.
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**

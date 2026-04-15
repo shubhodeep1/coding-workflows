@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   poll:
-    uses: ./.github/workflows/orchestrate_poll.yml
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@main
     with:
       caller_workflow: internal-orchestrate-poll.yml
     secrets: inherit
