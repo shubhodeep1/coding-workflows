@@ -6276,8 +6276,8 @@ ${RB_FIX_DESC}
       IF_DEFER_REASON="unable to fetch issue comments for post-codex blocker detection"
     fi
 
-    IF_POST_CODEX_ANY_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | test("^## Post-Codex validation"))] | .[0] // empty' 2>/dev/null || true)"
-    IF_POST_CODEX_FIX_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | startswith("## Post-Codex validation diagnosed follow-up fixes"))] | .[0] // empty' 2>/dev/null || true)"
+    IF_POST_CODEX_ANY_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | test("^## Post-Codex validation"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty' 2>/dev/null || true)"
+    IF_POST_CODEX_FIX_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | startswith("## Post-Codex validation diagnosed follow-up fixes"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty' 2>/dev/null || true)"
 
     IF_PARSED_BLOCKERS_JSON='[]'
     IF_PARSED_BLOCKER_COUNT=0
