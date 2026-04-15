@@ -434,10 +434,21 @@ jobs:
 
           MARKER_FOUND="false"
           MARKER_SAMPLE=""
-          if printf '%s\n' "${PROJECT_DESCRIPTION}" | grep -Eiq "${SHORTCIRCUIT_REGEX}"; then
-            MARKER_FOUND="true"
-            MARKER_SAMPLE="$(printf '%s\n' "${PROJECT_DESCRIPTION}" | grep -Eio "${SHORTCIRCUIT_REGEX}" | head -n 1 | tr '\n' ' ' | sed -E 's/[[:space:]]+$//')"
-          fi
+          eval "$(
+            PROJECT_DESCRIPTION="${PROJECT_DESCRIPTION}" SHORTCIRCUIT_REGEX="${SHORTCIRCUIT_REGEX}" python3 - <<'PY'
+            import os
+            import re
+            import shlex
+
+            description = os.environ.get("PROJECT_DESCRIPTION", "")
+            pattern = os.environ.get("SHORTCIRCUIT_REGEX", "")
+            match = re.search(pattern, description, re.IGNORECASE)
+            marker_found = "true" if match else "false"
+            marker_sample = match.group(0).rstrip() if match else ""
+            print(f"MARKER_FOUND={shlex.quote(marker_found)}")
+            print(f"MARKER_SAMPLE={shlex.quote(marker_sample)}")
+            PY
+          )"
 
           SHORT_CIRCUIT="false"
           REASON="decomposer-path"
@@ -494,12 +505,18 @@ jobs:
           fi
           ISSUE_TITLE="${ISSUE_TITLE:0:200}"
 
-          PLAIN_ISSUE_URL="$(gh_retry gh issue create \
+          PLAIN_ISSUE_CREATE_OUTPUT="$(gh_retry gh issue create \
             --repo "${{ github.repository }}" \
             --title "${ISSUE_TITLE}" \
             --body-file "${PROJECT_CONTEXT_FILE}")"
 
-          PLAIN_ISSUE_NUMBER="$(echo "${PLAIN_ISSUE_URL}" | grep -oE '[0-9]+$')"
+          PLAIN_ISSUE_URL="$(printf '%s\n' "${PLAIN_ISSUE_CREATE_OUTPUT}" | grep -Eo 'https://[^[:space:]]+/issues/[0-9]+' | tail -n 1 || true)"
+          if [ -z "${PLAIN_ISSUE_URL}" ]; then
+            echo "::error::Unable to parse issue URL from gh issue create output"
+            printf '%s\n' "${PLAIN_ISSUE_CREATE_OUTPUT}"
+            exit 1
+          fi
+          PLAIN_ISSUE_NUMBER="${PLAIN_ISSUE_URL##*/}"
           echo "Created plain issue #${PLAIN_ISSUE_NUMBER} via short-circuit path (${SHORT_CIRCUIT_REASON}): ${PLAIN_ISSUE_URL}"
 
           {
