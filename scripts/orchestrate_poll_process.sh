@@ -713,13 +713,22 @@ validation_fix_issue_has_merged_pr_evidence() {
 
 backfill_validation_fix_issue_merged_label() {
   local issue_num="$1"
+  # Optional second arg: cached labels JSON (e.g. '["ai:closed",...]')
+  # already fetched by the caller.  When provided, skips the per-call
+  # `get_issue_labels_json` round-trip.  When empty/omitted the helper
+  # falls back to fetching itself, preserving the original contract.
+  local cached_labels="${2:-}"
   local fix_labels
   local edit_args=()
   local _label_err_file
 
   ensure_label_exists "ai:merged"
 
-  fix_labels="$(get_issue_labels_json "${issue_num}")"
+  if [ -n "${cached_labels}" ]; then
+    fix_labels="${cached_labels}"
+  else
+    fix_labels="$(get_issue_labels_json "${issue_num}")"
+  fi
   if has_label "${fix_labels}" "ai:merged"; then
     return 0
   fi
@@ -1454,13 +1463,15 @@ invoke_judge_for_integration_conflict() {
   # with exponential backoff. Capture first, truncate second.
   local _pr_diff_tmp
   _pr_diff_tmp="$(mktemp)"
-  if gh_retry_to_file "${_pr_diff_tmp}" gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}" 2>/dev/null; then
-    pr_diff="$(head -c 120000 "${_pr_diff_tmp}")"
+  if gh_retry_to_file "${_pr_diff_tmp}" gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}"; then
+    pr_diff="$(head -c 120000 "${_pr_diff_tmp}" 2>/dev/null || true)"
   else
+    echo "::warning::Failed to fetch PR #${final_pr} diff for integration-conflict judge; continuing with empty pr_diff." >&2
     pr_diff=""
   fi
   rm -f "${_pr_diff_tmp}"
-  pr_files="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}/files" --jq '[.[] | {filename, status, additions, deletions}]' 2>/dev/null || echo "[]")"
+  pr_files="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}/files" --jq '[.[] | {filename, status, additions, deletions}]' || echo "[]")"
+  [ -n "${pr_files}" ] || pr_files='[]'
   local retries
   retries="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
 
@@ -2030,20 +2041,31 @@ has_active_validation_run() {
   local wf_name="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
   local active_count
 
-  # _safe_gh_jq (via gh_retry) suppresses stdout on failure so the
-  # `|| echo '0'` fallback yields a clean numeric value even when
-  # gh api fails — preventing the error JSON body from being
-  # concatenated with '0' and breaking the `-gt` comparison below.
-  active_count="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
-    --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo '0')"
+  # Single-attempt probe (no gh_retry): the primary wf_name is almost
+  # always absent in this repo — the default `ai-validate.yml` does
+  # not exist here (only `validate.yml` / `internal-validate.yml`
+  # ship in-tree) — so wrapping with gh_retry would burn ~31 s of
+  # exponential backoff on a 404 every single poll cycle before
+  # falling through to the internal-validate fallback path below.
+  # _safe_gh_jq captures stdout to a tempfile and emits empty on
+  # non-2xx, so the `|| echo '0'` fallback stays clean.  Rate-limit
+  # (403/429) during this probe degrades to a one-cycle miss, which
+  # is acceptable because the poll cycle retries on the next tick
+  # and the actual dispatch/mutation calls still go through
+  # gh_retry.  (Copilot review on PR #1044.)
+  active_count="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
+    --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
   if [ "${active_count}" -gt 0 ]; then
     return 0
   fi
 
-  # Fallback: check internal-validate.yml if primary name differs
+  # Fallback: check internal-validate.yml if primary name differs.
+  # Same single-attempt rationale — on this repo the fallback is the
+  # one that actually resolves, so we want it to fire fast without
+  # retry backoff on the preceding 404.
   if [ "${wf_name}" != "internal-validate.yml" ]; then
-    active_count="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
-      --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo '0')"
+    active_count="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
+      --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
     if [ "${active_count}" -gt 0 ]; then
       return 0
     fi
@@ -2061,16 +2083,22 @@ get_last_validation_run_conclusion() {
   local last_dispatch_ts
   last_dispatch_ts="$(jq -r '.validation_last_dispatch_ts // 0' "${STATE_FILE}")"
 
-  # _safe_gh_jq (via gh_retry) guarantees empty stdout on failure so
-  # the `|| echo '[]'` fallback stays valid JSON.
+  # Single-attempt probe (no gh_retry): same 404-hot-loop concern as
+  # has_active_validation_run above — the default wf_name
+  # (`ai-validate.yml`) is absent in this repo, so gh_retry would
+  # burn ~31 s per poll cycle before the internal-validate fallback.
+  # See has_active_validation_run for the full rationale.
+  # (Copilot review on PR #1044.)
   local runs_json
-  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?status=completed&per_page=5" \
-    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+  runs_json="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?status=completed&per_page=5" \
+    --jq '.workflow_runs' || echo '[]')"
+  [ -n "${runs_json}" ] || runs_json='[]'
 
   # Fallback to internal-validate.yml if no completed runs found
   if [ "$(echo "${runs_json}" | jq 'length')" -eq 0 ] && [ "${wf_name}" != "internal-validate.yml" ]; then
-    runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?status=completed&per_page=5" \
-      --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+    runs_json="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?status=completed&per_page=5" \
+      --jq '.workflow_runs' || echo '[]')"
+    [ -n "${runs_json}" ] || runs_json='[]'
   fi
 
   # Select the most recent run created after our last dispatch timestamp
@@ -2292,10 +2320,12 @@ build_active_issue_set() {
   # _safe_gh_jq guarantees empty stdout on failure → fallback is valid JSON.
   local runs_json
   runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
-    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+    --jq '.workflow_runs' || echo '[]')"
+  [ -n "${runs_json}" ] || runs_json='[]'
   local queued_json
   queued_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
-    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+    --jq '.workflow_runs' || echo '[]')"
+  [ -n "${queued_json}" ] || queued_json='[]'
 
   # Merge both lists
   local all_runs
@@ -2368,7 +2398,8 @@ cancel_zombie_runs_for_issue() {
   # _safe_gh_jq guarantees empty stdout on failure → fallback stays valid.
   local runs_json
   runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
-    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+    --jq '.workflow_runs' || echo '[]')"
+  [ -n "${runs_json}" ] || runs_json='[]'
 
   local zombie_run_ids
   zombie_run_ids="$(echo "${runs_json}" | jq -r --argjson now "${now_epoch}" --argjson threshold "${stall_secs}" --arg issue "${issue_num}" '
@@ -2757,8 +2788,10 @@ STALL_EOF
       # swap the label back to ai:awaiting-approval BEFORE posting
       # /approved; otherwise the re-triggered workflow will no-op and the
       # stall recovery loops forever.
-      gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
-        --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
+      if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+        echo "::warning::Failed to swap ai:implementing → ai:awaiting-approval for issue #${issue_num}; /approved retrigger may no-op if label state is unchanged."
+      fi
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
 /approved
@@ -4203,7 +4236,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # initial state comment.  Recover by parsing the tracking body
     # and searching for child issues that reference this tracker.
     # ---------------------------------------------------------------
-    TRACKING_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
+    TRACKING_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
     if [ -z "${TRACKING_BODY}" ]; then
       echo "::warning::Could not fetch body for tracking issue #${TRACKING_NUM}, skipping."
       continue
@@ -4308,9 +4341,31 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
+    # `sync_validation_fix_issues_from_comments` has three exit paths:
+    #   (A) early return when no new fix comment is present — no state
+    #       or label mutation;
+    #   (B) new-fix-comment path — bumps `validation_last_fix_comment_id`
+    #       and calls `set_tracking_phase_label "ai:validation-fixing"`,
+    #       which removes other phase labels via the label contract;
+    #   (C) extractable-count == 0 path — calls `mark_validation_failed`
+    #       which mutates labels AND transitions status (in_progress or
+    #       failed) without touching `validation_last_fix_comment_id`.
+    #
+    # The previously-fetched TRACKING_LABELS is only stale on (B) and
+    # (C).  Detect (B) via the marker delta and (C) via any status
+    # change, then re-fetch.  Path (A) leaves both unchanged so the
+    # re-fetch is skipped — preserves the optimization without the
+    # correctness gap flagged in the Copilot review on PR #1044.
+    _project_status_before_sync="${PROJECT_STATUS}"
+    _last_fix_comment_id_before="$(jq -r '.validation_last_fix_comment_id // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
     sync_validation_fix_issues_from_comments "${COMMENTS}"
     PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
-    TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+    _last_fix_comment_id_after="$(jq -r '.validation_last_fix_comment_id // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    if [ "${_last_fix_comment_id_after}" != "${_last_fix_comment_id_before}" ] \
+      || [ "${PROJECT_STATUS}" != "${_project_status_before_sync}" ]; then
+      TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+    fi
+    unset _project_status_before_sync _last_fix_comment_id_before _last_fix_comment_id_after
   fi
 
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
@@ -4415,7 +4470,10 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
           FIX_EVIDENCE_STATUS=0
           echo "Validation fix-up issue #${fix_num}: closed with merged PR evidence; backfilling ai:merged."
-          if backfill_validation_fix_issue_merged_label "${fix_num}"; then
+          # Pass the labels we already fetched at the top of this
+          # iteration so backfill skips its internal
+          # get_issue_labels_json round-trip.
+          if backfill_validation_fix_issue_merged_label "${fix_num}" "${FIX_LABELS}"; then
             echo "Validation fix-up issue #${fix_num}: ai:merged label backfilled."
           else
             echo "::warning::Validation fix-up issue #${fix_num}: merged PR detected but ai:merged backfill failed." >&2
@@ -4617,7 +4675,7 @@ The poller will resume processing on the next cycle."
       for pw_inum in ${PRIOR_NON_TERMINAL}; do
         [ -n "${pw_inum}" ] && [ "${pw_inum}" != "null" ] || continue
         echo "  [backward-scan] Prior wave $((prior_idx + 1)) issue #${pw_inum} is non-terminal. Checking labels..."
-        PW_LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" --jq '[.[].name]' || echo '[]')"
+        PW_LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" --jq '[.[].name]' || echo '[]')"
         [ -n "${PW_LABELS}" ] || PW_LABELS='[]'
         PW_LOCAL_ID="$(jq -r --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
           '.waves[$wi].issues[] | select((.github_issue | tostring) == $inum) | .id' "${STATE_FILE}" | head -n 1)"
@@ -4902,7 +4960,7 @@ json.dump(result, sys.stdout)
     LABELS_JSON="{"
     first=true
     for inum in "${_gql_issue_nums[@]}"; do
-      LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
+      LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
       if [ "${first}" = true ]; then
         first=false
       else
@@ -5395,7 +5453,7 @@ json.dump(result, sys.stdout)
       PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" \
         | jq -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo "[]")"
       PR_META="$(echo "${_rb_pr_json}" | jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
-      ISSUE_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' || echo "")"
+      ISSUE_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' || echo "")"
 
       # Determine if this is a final decision (retries exhausted) or a fix attempt
       IS_FINAL="false"
@@ -5491,11 +5549,11 @@ json.dump(result, sys.stdout)
               BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
               echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
             elif [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
-              # Integration branch NAME is present in the orchestrator state
-              # but the branch itself is not reachable (deleted externally or
-              # transient API failure). Block the follow-up PR — creating it
-              # against the default branch would bypass the integration-branch
-              # safety check (see PR #1016).
+              # Integration branch name is present in orchestrator state but
+              # the branch itself is not reachable (deleted/renamed externally
+              # or transient API/mock lookup failure). Block the follow-up PR
+              # to avoid accidentally targeting the default branch and bypassing
+              # integration-branch safety checks.
               FOLLOWUP_PR_BLOCKED="true"
               FOLLOWUP_BLOCK_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}), but integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}."
               echo "::warning::${FOLLOWUP_BLOCK_REASON}"
@@ -5509,15 +5567,11 @@ ${FOLLOWUP_BLOCK_REASON}"
               tg_notify "${FOLLOWUP_BLOCK_REASON}" "WARNING"
               TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
             else
-              # No integration branch context at all — the orchestrator state
-              # does not track this work under an integration branch. Keep the
-              # default base (${BASE_REF} was initialised from PR_META at the
-              # top of this block, which falls back to ${DEFAULT_BRANCH:-main}).
-              # This path is exercised when a review-blocked merged PR is
-              # orchestrator-managed but the project was never set up with an
-              # integration branch (e.g. single-wave project) — the follow-up
-              # still needs to land against whatever the original PR targeted.
-              echo "  Follow-up PR for issue #${rb_issue}: orchestrator state has no integration branch context; keeping default base '${BASE_REF}'."
+              # Tracking issue exists but no integration branch is configured.
+              # Keep the default base inherited from PR metadata (falling back
+              # to ${DEFAULT_BRANCH:-main}) so follow-up work still targets
+              # the original PR base when no integration-branch context exists.
+              echo "  Follow-up PR for issue #${rb_issue}: orchestrator-managed without integration branch context; keeping default base '${BASE_REF}'."
             fi
           fi
 
@@ -5556,11 +5610,19 @@ ${FOLLOWUP_BLOCK_REASON}"
             if [ -n "${_rb_co_src}" ] \
               && git checkout -B "${FOLLOWUP_BRANCH}" "${_rb_co_src}" 2>/dev/null; then
               RB_COMBINED_MODE="true"
-              # Reflect the *actual* checkout source in the judge prompt
+              # Reflect the actual checkout source in the judge prompt
               # context. When the HEAD fallback fires, the follow-up branch
-              # is NOT based on ${BASE_REF}; saying otherwise misleads the
+              # is not based on ${BASE_REF}; saying otherwise misleads the
               # judge into applying fixes on a wrong base.
               RB_COMBINED_BRANCH_INFO="You are on a follow-up branch (${FOLLOWUP_BRANCH}) based on ${_rb_co_src_desc}. The original PR #${RB_PR} was already merged. If you choose action=\"fix\", apply ONLY the fixes identified during review — do not re-apply the original PR's changes."
+            elif git checkout -B "${FOLLOWUP_BRANCH}" 2>/dev/null; then
+              # Fallback: if checkout with the computed source ref fails,
+              # keep the follow-up path alive by branching from local HEAD.
+              # The follow-up PR still targets ${BASE_REF}; only local start
+              # point may differ from the ideal fetched/local base ref.
+              echo "::warning::Could not check out ${_rb_co_src_desc} for ${FOLLOWUP_BRANCH}; creating follow-up branch from current HEAD."
+              RB_COMBINED_MODE="true"
+              RB_COMBINED_BRANCH_INFO="You are on a follow-up branch (${FOLLOWUP_BRANCH}) derived from the local checkout (checkout of ${_rb_co_src_desc} failed). The original PR #${RB_PR} was already merged. If you choose action=\"fix\", apply ONLY the fixes identified during review — do not re-apply the original PR's changes."
             else
               echo "::warning::Could not prepare follow-up branch ${FOLLOWUP_BRANCH} for issue #${rb_issue}; combined-mode fix not possible."
             fi
@@ -5571,6 +5633,14 @@ ${FOLLOWUP_BLOCK_REASON}"
             && git checkout -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}" 2>/dev/null; then
             RB_COMBINED_MODE="true"
             RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF})."
+          elif git checkout -B "${HEAD_REF}" 2>/dev/null; then
+            # Fallback: same rationale as the merged-PR fallback above —
+            # keep the combined-mode fix path alive when the initial fetch
+            # can't reach origin, at the cost of starting the branch from
+            # the local HEAD instead of origin/${HEAD_REF}.
+            echo "::warning::git fetch for ${HEAD_REF} failed; reusing local HEAD as PR branch base."
+            RB_COMBINED_MODE="true"
+            RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF}), derived from the local checkout (a fresh fetch of ${HEAD_REF} failed)."
           else
             echo "::warning::Could not check out PR branch ${HEAD_REF} for issue #${rb_issue}; combined-mode fix not possible."
           fi
@@ -6182,7 +6252,7 @@ ${RB_FIX_DESC}
           continue
         fi
         # Re-read labels since we may have changed them
-        LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
+        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
         if [ "${first}" = true ]; then
           first=false
         else
@@ -6199,7 +6269,7 @@ ${RB_FIX_DESC}
         if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then
           continue
         fi
-        LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
+        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
         [ -z "${LABELS}" ] && LABELS='[]'
         LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}')"
       done
@@ -6253,8 +6323,8 @@ ${RB_FIX_DESC}
     bump_impl_noop_count "${IF_LOCAL_ID}"
 
     # Read the original issue to preserve its content
-    IF_TITLE="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
-    IF_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
+    IF_TITLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
+    IF_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
 
     # Close the failed issue
     ensure_label_exists "ai:closed"
@@ -6314,7 +6384,7 @@ if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
   for rnum in ${REISSUED_NUMS}; do
     if [ -z "${rnum}" ] || [ "${rnum}" = "null" ]; then continue; fi
     if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then continue; fi
-    LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
+    LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
     [ -z "${LABELS}" ] && LABELS='[]'
     LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}')"
   done
@@ -6466,7 +6536,7 @@ with open('${STATE_FILE}', 'w') as f:
     NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
     if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
       echo "Clean-wave advance: skipping judge for wave ${CURRENT_WAVE} (no failures, project incomplete)."
-      jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1" \
+      jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1 | .judge_stall_cycles = 0" \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
       continue
@@ -6575,9 +6645,10 @@ Manual intervention required." >/dev/null
       # transient failure and retries with exponential backoff.
       _pr_diff_tmp="$(mktemp)"
       if gh_retry_to_file "${_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
-        -H 'Accept: application/vnd.github.diff' 2>/dev/null; then
-        PR_DIFF="$(head -500 "${_pr_diff_tmp}")"
+        -H 'Accept: application/vnd.github.diff'; then
+        PR_DIFF="$(head -n 500 "${_pr_diff_tmp}" 2>/dev/null || echo "(diff unavailable)")"
       else
+        echo "::warning::Failed to fetch PR #${PR_NUM} diff for judge context (issue #${inum}); falling back to '(diff unavailable)'." >&2
         PR_DIFF="(diff unavailable)"
       fi
       rm -f "${_pr_diff_tmp}"
@@ -6918,7 +6989,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 **Reason:** ${JUDGE_JUSTIFICATION}" >/dev/null 2>&1 || {
               # If API-based revert fails, create a revert via git
               echo "  API revert failed; creating revert commit..."
-              MERGE_SHA="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${PR_TO_REVERT}" --jq '.merge_commit_sha' || echo "")"
+              MERGE_SHA="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${PR_TO_REVERT}" --jq '.merge_commit_sha' || echo "")"
               if [ -n "${MERGE_SHA}" ] && [ "${MERGE_SHA}" != "null" ]; then
                 REVERT_BRANCH="revert-${PR_TO_REVERT}-$(date +%s)"
                 git checkout -b "${REVERT_BRANCH}" "${DEFAULT_BRANCH}"
@@ -7158,7 +7229,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
         done
 
         # Clean wave advance: does not consume stall budget.
-        jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1" \
+        jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1 | .judge_stall_cycles = 0" \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
         WAVE_COMMENT="## Wave ${NEXT_WAVE} Dispatched
@@ -7245,7 +7316,8 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	# Check mergeable state via REST API (dirty == merge conflicts)
 	# _safe_gh_jq → clean empty stdout on failure so the `|| echo '{}'`
 	# fallback stays valid JSON for the downstream jq reads.
-	S_PR_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" 2>/dev/null || echo '{}')"
+	S_PR_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" || echo '{}')"
+	[ -n "${S_PR_JSON}" ] || S_PR_JSON='{}'
 	S_STATE="$(echo "${S_PR_JSON}" | jq -r '.state // ""')"
 	if [ "${S_STATE}" != "open" ]; then
 		continue
