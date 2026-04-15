@@ -2550,6 +2550,40 @@ def test_no_labels_open_issue_uses_bounded_recovery_policy():
 	assert issue_entry["status"] == "in_progress"
 
 
+def test_no_labels_with_open_linked_pr_skips_retrigger_pipeline():
+	# Regression for #923: when an orchestrator-managed issue ends up with
+	# empty labels but already has an open linked PR, the stall detector must
+	# NOT fire /reclarify (retrigger_pipeline) — that action assumes the
+	# issue never entered the pipeline, which is incorrect here.
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		issue_linked_prs={10: 930},
+		prs=[{
+			"number": 930,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert not any("/reclarify" in body for body in issue_comments)
+	assert not any("/answer" in body for body in issue_comments)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	# Counter must NOT increment when the guard skips the action.
+	assert issue_entry["stall_recovery_count"] == 0
+	assert issue_entry["status"] == "in_progress"
+
+
 def test_managed_stall_recovery_skips_needs_human_phase():
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "in_progress"
