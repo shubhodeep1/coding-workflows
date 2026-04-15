@@ -1069,6 +1069,103 @@ PY
 		return 1
 	fi
 
+	# Embedded-Python syntax check for generated harness scripts.
+	#
+	# `bash -n` above validates shell syntax only; it cannot see inside a
+	# heredoc body. Codex occasionally emits `python3 - <<'PY' ... PY`
+	# blocks whose Python source has a SyntaxError (typically malformed
+	# f-strings or stray quoting) that only surfaces at runtime, producing
+	# a `harness_error` diagnose outcome. Statically ast-parse every
+	# QUOTED python3 heredoc body under validation/ so the preflight self-
+	# heal path (phase tag "preflight") can intercept the failure with an
+	# actionable fix pointer instead of burning a validation cycle. Only
+	# quoted delimiters (`<<'PY'`, `<<"PY"`) are checked: unquoted
+	# delimiters allow shell variable expansion, so the static body is not
+	# the source Python actually sees.
+	if ! python3 - >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY2'
+import ast
+import pathlib
+import re
+import sys
+
+HEREDOC_PATTERN = re.compile(
+    # Skip lines whose first non-whitespace character is `#` (commented-out
+    # examples) so we never ast-parse a documented example block. Keep
+    # `python3` matchable anywhere on the line (mid-pipeline, after
+    # `docker compose exec -T svc`, inside `$(...)`, etc.) — anchoring on
+    # `^[ \t]*python3` would miss every legitimate generated invocation.
+    r'^(?![ \t]*#).*\bpython3\b[^\n<]*<<\s*(-)?\s*[\'"](\w+)[\'"][^\n]*$',
+    re.MULTILINE,
+)
+
+errors = []
+root = pathlib.Path("validation")
+if not root.is_dir():
+    print("validation/ directory missing; embedded Python check skipped.")
+    sys.exit(0)
+
+for path in sorted(root.rglob("*.sh")):
+    if "logs" in path.parts:
+        continue
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        errors.append(f"{path}: cannot read: {exc}")
+        continue
+    for match in HEREDOC_PATTERN.finditer(text):
+        strip_tabs = bool(match.group(1))
+        delim = match.group(2)
+        rest = text[match.end():]
+        close_re = re.compile(
+            r'^' + (r'\t*' if strip_tabs else r'') + re.escape(delim) + r'\s*$',
+            re.MULTILINE,
+        )
+        close_match = close_re.search(rest)
+        if close_match is None:
+            continue
+        body = rest[: close_match.start()]
+        # match.end() lands ON the trailing newline of the opener line, so
+        # body always starts with a single '\n' that is NOT a real empty
+        # source line — it's the opener's own line terminator. Strip it so
+        # ast.parse line numbers count from the first real Python source
+        # line; absolute_line below then resolves to the correct file line
+        # via `opener_line + exc.lineno`.
+        if body.startswith('\n'):
+            body = body[1:]
+        if strip_tabs:
+            body = '\n'.join(line.lstrip('\t') for line in body.splitlines())
+        try:
+            ast.parse(body)
+        except SyntaxError as exc:
+            opener_line = text[: match.start()].count('\n') + 1
+            absolute_line = opener_line + (exc.lineno or 1)
+            offset_suffix = "" if exc.offset is None else f" (offset {exc.offset})"
+            errors.append(
+                f"{path}:{absolute_line}: embedded Python heredoc <<{delim}>>: "
+                f"SyntaxError: {exc.msg}{offset_suffix}"
+            )
+
+if errors:
+    print("Embedded Python syntax errors in generated harness scripts:")
+    for err in errors:
+        print(f"  {err}")
+    print(
+        "Prompt guidance: mode-validate-generate.txt forbids nested heredoc "
+        "inline Python. Rewrite as a sidecar .py file under validation/tests/_lib/ "
+        "and invoke via `python3 validation/tests/_lib/<name>.py`, or run a "
+        "single-layer quoted heredoc directly as `python3 - <<'PY' ... PY` "
+        "with no `/bin/sh -c` / `bash -lc` wrapper."
+    )
+    sys.exit(1)
+
+print("Embedded Python heredoc syntax checks passed.")
+PY2
+	then
+		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "embedded Python syntax check failed in validation/**/*.sh"
+		return 1
+	fi
+
 	PRE_FLIGHT_STATUS="pass"
 	return 0
 }
