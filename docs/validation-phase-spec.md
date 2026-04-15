@@ -34,7 +34,7 @@ Only things that can run without real external API credentials. All testing uses
 
 9. **Database migration verification.** If the project uses a migration framework, apply all migrations to a fresh empty database, then verify the resulting schema matches expectations (tables exist, columns exist, indexes exist). Catches migration ordering bugs and schema conflicts.
 
-10. **Graceful shutdown.** Send SIGTERM to the running process, verify it exits cleanly within 10 seconds without orphaned connections or error logs. Catches missing signal handlers that cause data loss or zombie processes in production.
+10. **Graceful shutdown.** Send SIGTERM to the running process, verify it exits cleanly within 10 seconds without orphaned connections or error logs. Exit `137` is non-graceful (forced SIGKILL) and must be fixed via PID 1 signal-forwarding (exec-form `CMD`/`ENTRYPOINT`, optionally `init: true`), not accepted in assertions. Catches missing signal handlers that cause data loss or zombie processes in production.
 
 11. **Error response format.** Send deliberately malformed requests (missing required fields, wrong types, invalid JSON). Verify the app returns structured error responses (JSON with error message), not raw stack traces or HTML error pages. Catches missing input validation and error handling middleware.
 

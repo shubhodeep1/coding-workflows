@@ -68,6 +68,13 @@ CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
 - For `eth_blockNumber` probes, parse `.result` the same way (it is a hex string like `"0x0"`).
 - When fixing a canary script that fails with `Cannot index object with number`, locate every `jq '.[N]'` call on an RPC response and replace with `.result`-based parsing above.
 
+CRITICAL — Dockerfile PID 1 signal handling (prevents exit 137 in graceful_shutdown):
+- If graceful shutdown fails with exit code `137`, stop-timeout escalation, or logs showing the app still serving requests until forced kill, treat that as a PID 1 signal-forwarding bug in the harness/container setup.
+- Root-cause fix first: ensure `validation/Dockerfile*` uses exec-form (JSON array) `CMD` / `ENTRYPOINT` so PID 1 is the real app process and receives SIGTERM directly.
+- If exec-form alone is insufficient for wrapper-based runtimes, add `init: true` in `validation/docker-compose.test.yml` (or equivalent `tini` entrypoint) so SIGTERM is forwarded and child reaping is deterministic.
+- Do NOT "fix" this by relaxing assertions to accept exit code 137. Exit 137 can indicate OOM/SIGKILL and is non-graceful for this harness.
+- Keep the graceful accept set unchanged: `0`, `143`, or wrapper exit `1` with a compose-log SIGTERM marker.
+
 CRITICAL — graceful shutdown container resolution:
 - After `docker compose stop <service>`, the container moves to `exited` state.
 - `docker compose ps -q <service>` only returns RUNNING containers and will return empty after stop.
