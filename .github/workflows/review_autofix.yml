@@ -2096,6 +2096,26 @@ jobs:
           git config user.name  "codex-bot"        2>/dev/null || true
           git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
 
+          # Start this step from a clean tracked-file state.  The "Detect
+          # merge conflicts" step's conflict branch only runs `git merge
+          # --abort`; it does NOT `git reset --hard HEAD`, so stale
+          # working-tree modifications from an earlier autofix iteration
+          # (e.g. to scripts/label_helpers.sh) can linger into this step.
+          # When they do, the `git merge --no-commit --no-ff` replay below
+          # fails before entering merge state with "Your local changes to
+          # the following files would be overwritten by merge", the `|| true`
+          # swallows the failure, and `git diff --name-only --diff-filter=U`
+          # returns zero paths — fooling the downstream resolver into
+          # running Codex against an empty conflict set and producing
+          # hallucinated edits.  Reset symmetrically with the no-conflict
+          # cleanup in the detect step.  Only tracked files are affected;
+          # the untracked workflow-fetched dirs handled by RESOLVE_STASH
+          # below are untouched by reset.
+          if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+            git merge --abort 2>/dev/null || true
+          fi
+          git reset --hard HEAD 2>/dev/null || true
+
           # Move workflow-fetched untracked dirs out of the way so they don't
           # collide with files from origin/BASE_BRANCH during the merge.
           # First, explicitly remove known CI-generated files that may be
@@ -2138,7 +2158,19 @@ jobs:
           # "Untracked working tree file … would be overwritten by merge."
           git clean -ffdx 2>/dev/null || true
 
-          git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
+          # Capture the merge exit code explicitly rather than swallowing
+          # it with `|| true`.  We must distinguish:
+          #   exit 0   — merge succeeded (base advanced, no conflicts left)
+          #              or already-up-to-date
+          #   exit 1   — merge produced content conflicts (expected path)
+          #   exit 128 — merge aborted before entering merge state (dirty
+          #              tree, missing ref, corrupt index, etc.) — SHOULD
+          #              be impossible because we reset the tracked-file
+          #              state at the top of this step, but if it ever
+          #              happens we must surface it instead of silently
+          #              running Codex against an empty conflict set.
+          _merge_exit=0
+          git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || _merge_exit=$?
 
           # Capture the set of actually-unmerged paths produced by this
           # merge replay.  This is the authoritative allowlist the Codex
@@ -2152,9 +2184,57 @@ jobs:
           RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
           git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
           _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
-          echo "Resolver allowlist (unmerged paths at merge replay): ${_resolver_allowlist_count} entries"
+          echo "Resolver allowlist (unmerged paths at merge replay): ${_resolver_allowlist_count} entries (git merge exit=${_merge_exit})"
           if [ "${_resolver_allowlist_count}" -gt 0 ]; then
             sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
+          fi
+
+          # When the allowlist is empty there is nothing for Codex to
+          # resolve.  Running Codex against an empty conflict set is how
+          # past runs have produced hallucinated edits to placeholder
+          # markers inside prompts/conflict-resolver.txt — the only file
+          # in the tree whose content resembles conflict markers.  Two
+          # sub-cases, distinguished by the merge exit code:
+          #
+          #   1. _merge_exit == 0: the merge either succeeded cleanly
+          #      (base advanced and the conflict was resolved upstream
+          #      between the detect step and this step, or the merge
+          #      auto-resolved the textual conflict) or reported
+          #      "Already up-to-date".  In both cases there is nothing
+          #      real to resolve, even if MERGE_HEAD is still present
+          #      because --no-commit left the merge state around.  Abort
+          #      the in-progress merge to clear MERGE_HEAD, restore the
+          #      stashed workflow dirs so later steps still have their
+          #      environment, clear MERGE_CONFLICT so the second half of
+          #      this split step (and downstream gates keyed off it)
+          #      treat the conflict as no longer present, and exit 0.
+          #
+          #   2. _merge_exit != 0: the merge failed for a non-conflict
+          #      reason — dirty tree, missing ref, corrupt index, etc.
+          #      We must NOT clear MERGE_CONFLICT here: that would let
+          #      the workflow silently continue as if the conflict were
+          #      resolved.  Fail loudly with an error annotation and
+          #      dump diagnostics so the root cause is visible.
+          if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+            if [ "${_merge_exit}" -eq 0 ]; then
+              echo "::warning::Merge replay produced no unmerged paths (git merge exit=0) — skipping Codex resolver (nothing to resolve)."
+              if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+                git merge --abort 2>/dev/null || true
+              fi
+              for d in scripts .serena prompts ai-memory; do
+                if [ -d "${RESOLVE_STASH}/${d}" ]; then
+                  cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
+                fi
+              done
+              rm -rf "${RESOLVE_STASH}"
+              git reset --hard HEAD 2>/dev/null || true
+              echo "MERGE_CONFLICT=false" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "::error::Merge replay failed with exit ${_merge_exit} before producing any unmerged paths. The clean-tree reset at the top of this step did not yield a tree git could merge — investigate. Diagnostics:"
+            git status --porcelain 2>/dev/null || true
+            git ls-files --others --exclude-standard 2>/dev/null | head -20 || true
+            exit 1
           fi
 
           # Defensive: `git merge --no-commit` auto-stages merged hunks (and
@@ -2792,11 +2872,86 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          export LANG=C
 
           git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
           echo "Pushing pending commits to ${TARGET_BRANCH}..."
-          git push origin "HEAD:${TARGET_BRANCH}"
-          echo "Push complete."
+
+          # Retry non-fast-forward rejections with fetch+merge.  A concurrent
+          # push to ${TARGET_BRANCH} (another workflow run, a human push, a
+          # sibling autofix job) during this ~30-minute job would otherwise
+          # cause an unrecoverable `! [rejected] (fetch first)` failure and
+          # lose the deferred autofix / [ai-merge-resolve] commit.  We merge
+          # the advanced remote tip into our local HEAD and retry up to 3
+          # times with exponential backoff.
+          #
+          # Why `git merge` and NOT `git rebase` here: the conflict-resolver
+          # step above (see the "NOTE: git is intentionally left in merge
+          # state" block around the `git commit -m "[ai-merge-resolve]…"`
+          # call) deliberately creates the ai-merge-resolve commit as a
+          # real two-parent merge commit.  That second parent is load-
+          # bearing — without it, git's merge-base walker rewinds to the
+          # original merge base on every subsequent `git merge` attempt
+          # and re-raises the identical conflict (observed on PR #908,
+          # which left the PR in mergeable_state=dirty).  A plain
+          # `git rebase` would flatten that merge commit into a single-
+          # parent commit and resurrect the exact bug PR #908 was designed
+          # to fix.  `git rebase --rebase-merges` would rewrite the merge
+          # commit SHA too.  `git merge` preserves the existing commit
+          # exactly and simply adds another merge commit on top when
+          # origin has genuinely advanced — never rewriting history and
+          # never clobbering other pushers' commits (no --force / no
+          # --force-with-lease on this path).  If the merge itself would
+          # introduce new conflicts we abort the merge and fail loudly —
+          # we must never silently resurrect conflict markers that the
+          # resolver just cleared.
+          max_push_attempts=3
+          push_attempt=1
+          push_backoff=2
+          push_stderr_file="$(mktemp)"
+          trap 'rm -f "${push_stderr_file}"' EXIT
+          while :; do
+            push_exit=0
+            # Capture BOTH stdout and stderr: `git push` normally emits
+            # rejection details on stderr, but remote helpers and some
+            # git versions can surface `! [rejected]` / `non-fast-forward`
+            # on stdout, which would cause stderr-only classification to
+            # mis-route a retryable failure to the hard-fail branch.
+            git push origin "HEAD:${TARGET_BRANCH}" >"${push_stderr_file}" 2>&1 || push_exit=$?
+            cat "${push_stderr_file}" >&2
+            if [ "${push_exit}" -eq 0 ]; then
+              echo "Push complete."
+              break
+            fi
+            if ! grep -qE '\[rejected\].*\((fetch first|non-fast-forward)\)' "${push_stderr_file}"; then
+              echo "::error::git push failed (exit ${push_exit}) for a reason other than [rejected] (fetch first/non-fast-forward); not retrying."
+              exit "${push_exit}"
+            fi
+            if [ "${push_attempt}" -ge "${max_push_attempts}" ]; then
+              echo "::error::git push still rejected as non-fast-forward after ${max_push_attempts} attempts; giving up."
+              exit 1
+            fi
+            echo "::warning::git push rejected as non-fast-forward (attempt ${push_attempt}/${max_push_attempts}); fetching ${TARGET_BRANCH} and merging before retry in ${push_backoff}s."
+            sleep "${push_backoff}"
+            push_backoff=$((push_backoff * 2))
+            push_attempt=$((push_attempt + 1))
+            fetch_attempt=1
+            while ! git fetch origin "${TARGET_BRANCH}"; do
+              if [ "${fetch_attempt}" -ge 2 ]; then
+                echo "::error::git fetch origin ${TARGET_BRANCH} failed twice during push-retry; giving up to avoid pushing a stale tree."
+                exit 1
+              fi
+              echo "::warning::git fetch origin ${TARGET_BRANCH} failed during push-retry (attempt ${fetch_attempt}/2); retrying in 2s."
+              fetch_attempt=$((fetch_attempt + 1))
+              sleep 2
+            done
+            if ! git merge --no-edit --no-ff "origin/${TARGET_BRANCH}"; then
+              echo "::error::git merge origin/${TARGET_BRANCH} failed — merge would introduce new conflicts. Aborting merge and failing the job; refusing to silently resurrect conflict markers."
+              git merge --abort || true
+              exit 1
+            fi
+            : > "${push_stderr_file}"
+          done
 
       - name: Re-trigger review via workflow_dispatch
         # The push above fires a pull_request synchronize event, but GitHub
