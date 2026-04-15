@@ -338,13 +338,6 @@ else
   ENABLE_STALL_JUDGE="false"
 fi
 
-ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
-if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
-  ENABLE_STALL_HUMAN_TERMINALIZATION="true"
-else
-  ENABLE_STALL_HUMAN_TERMINALIZATION="false"
-fi
-
 ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
 if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
   ENABLE_STANDALONE_STALL_RECOVERY="true"
@@ -2845,16 +2838,6 @@ invoke_stall_judge() {
 
   local fallback_action
   fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
-  if [ "${fallback_action}" = "escalate_human" ] && [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ]; then
-    local fallback_count=$((recovery_count - 1))
-    if [ "${fallback_count}" -lt 0 ]; then
-      fallback_count=0
-    fi
-    fallback_action="$(recovery_action_for_phase "${phase}" "${fallback_count}")"
-    if [ "${fallback_action}" = "escalate_human" ]; then
-      fallback_action="retrigger_pipeline"
-    fi
-  fi
 
   local comments_issue_num="${issue_num}"
   if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
@@ -3037,6 +3020,10 @@ invoke_stall_judge() {
   local judge_justification
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
+  if [ "${judge_action}" = "escalate_human" ] && [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ]; then
+    echo "::warning::Stall judge returned escalate_human while ENABLE_STALL_HUMAN_TERMINALIZATION=false; falling back to ${fallback_action}."
+    judge_action="${fallback_action}"
+  fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
     STALL_JUDGE_TARGET_PR="${target_pr}"
@@ -3421,16 +3408,6 @@ PY
       action="run_stall_judge"
     else
       action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
-      if [ "${action}" = "escalate_human" ] && [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ]; then
-        local fallback_count=$((recovery_count - 1))
-        if [ "${fallback_count}" -lt 0 ]; then
-          fallback_count=0
-        fi
-        action="$(recovery_action_for_phase "${phase}" "${fallback_count}")"
-        if [ "${action}" = "escalate_human" ]; then
-          action="retrigger_pipeline"
-        fi
-      fi
     fi
     echo "  [standalone-stall] Issue #${issue_num} stuck in '${phase}' for ${elapsed_minutes}m (attempt $((recovery_count + 1))). Action: ${action}"
 

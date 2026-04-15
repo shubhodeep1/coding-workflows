@@ -934,6 +934,26 @@ def test_resolve_stall_recovery_action_allows_opt_in_human_terminalization():
 	assert action == "escalate_human"
 
 
+def test_resolve_stall_recovery_action_allows_opt_in_human_terminalization_for_ready_to_merge():
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		phase="ai:ready-to-merge",
+		recovery_count=2,
+		max_recoveries=5,
+		allow_human_terminalization=True,
+	)
+	assert action == "escalate_human"
+
+
+def test_resolve_stall_recovery_action_clamps_negative_recovery_count():
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		phase="ai:planning",
+		recovery_count=-4,
+		max_recoveries=5,
+		allow_human_terminalization=False,
+	)
+	assert action == "retrigger_plan"
+
+
 def test_resolve_stall_recovery_action_fail_open_invalid_judged_action_uses_fallback():
 	action = orchestrate_lib.resolve_stall_recovery_action(
 		phase="ai:done",
