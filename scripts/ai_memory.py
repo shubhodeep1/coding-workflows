@@ -17,9 +17,12 @@ from ai_memory_lib import (
     MemoryValidationError,
     claim_processed_command,
     compact_memory,
+    compute_normalized_sha256,
     complete_processed_command,
+    evaluate_clarify_loop_guard,
     finalize_task_lineage,
     get_processed_command_entry,
+    list_processed_command_entries,
     parse_bool,
     persist_memory_operation,
     promote_candidates,
@@ -465,6 +468,142 @@ def cmd_processed_command_check(args: argparse.Namespace) -> int:
             shutil.rmtree(branch_dir, ignore_errors=True)
 
 
+def cmd_processed_command_list(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "entries": [], "count": 0})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+        entries = list_processed_command_entries(
+            memory_root,
+            issue_number=_require_positive_int(args.issue_number, "issue_number"),
+            command=args.command,
+            workflow=args.workflow,
+            status=args.status,
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "entries": entries,
+                "count": len(entries),
+            }
+        )
+        return 0
+    except MemoryGitError as exc:
+        error_text = str(exc)
+        lowered = error_text.lower()
+        is_missing_branch = (
+            ("remote branch" in lowered and ("not found" in lowered or "does not exist" in lowered))
+            or "could not find remote ref" in lowered
+            or "couldn't find remote ref" in lowered
+            or "remote ref does not exist" in lowered
+        )
+        if is_missing_branch:
+            _print_json({"ok": True, "enabled": False, "entries": [], "count": 0, "warning": error_text})
+            return 0
+        print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
+        _print_json({"ok": False, "enabled": True, "entries": [], "count": 0, "error": error_text})
+        return 2
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    clarify_hash = compute_normalized_sha256(_require_nonempty(args.clarify_hash, "clarify_hash"))
+    max_cycles = _require_positive_int(args.max_cycles, "max_cycles")
+
+    if not args.enabled:
+        result = evaluate_clarify_loop_guard([], clarify_hash=clarify_hash, max_cycles=max_cycles)
+        _print_json(
+            {
+                "ok": True,
+                "enabled": False,
+                "clarify_hash": clarify_hash,
+                "result": result,
+            }
+        )
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+        entries = list_processed_command_entries(
+            memory_root,
+            issue_number=_require_positive_int(args.issue_number, "issue_number"),
+            command="answer",
+            workflow="orchestrate_clarify_respond",
+        )
+        result = evaluate_clarify_loop_guard(
+            entries,
+            clarify_hash=clarify_hash,
+            max_cycles=max_cycles,
+            current_comment_id=_safe_int(args.current_comment_id),
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "clarify_hash": clarify_hash,
+                "result": result,
+                "entries_considered": len(entries),
+            }
+        )
+        return 0
+    except MemoryGitError as exc:
+        error_text = str(exc)
+        lowered = error_text.lower()
+        is_missing_branch = (
+            ("remote branch" in lowered and ("not found" in lowered or "does not exist" in lowered))
+            or "could not find remote ref" in lowered
+            or "couldn't find remote ref" in lowered
+            or "remote ref does not exist" in lowered
+        )
+        if is_missing_branch:
+            result = evaluate_clarify_loop_guard([], clarify_hash=clarify_hash, max_cycles=max_cycles)
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": False,
+                    "clarify_hash": clarify_hash,
+                    "result": result,
+                    "warning": error_text,
+                }
+            )
+            return 0
+        print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
+        _print_json(
+            {
+                "ok": False,
+                "enabled": True,
+                "clarify_hash": clarify_hash,
+                "result": {},
+                "error": error_text,
+            }
+        )
+        return 2
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
 def cmd_processed_command_claim(args: argparse.Namespace) -> int:
     args = _read_env_defaults(args)
     if not args.enabled:
@@ -679,6 +818,22 @@ def build_parser() -> argparse.ArgumentParser:
     processed_check.add_argument("--comment-id", required=True)
     processed_check.add_argument("--command", required=True)
     processed_check.set_defaults(func=cmd_processed_command_check)
+
+    processed_list = subparsers.add_parser("processed-command-list", help="List processed command entries")
+    _add_shared_args(processed_list)
+    processed_list.add_argument("--issue-number", required=True)
+    processed_list.add_argument("--command", default=None)
+    processed_list.add_argument("--workflow", default=None)
+    processed_list.add_argument("--status", default=None)
+    processed_list.set_defaults(func=cmd_processed_command_list)
+
+    loop_guard = subparsers.add_parser("clarify-loop-guard", help="Evaluate clarify loop guard from processed command history")
+    _add_shared_args(loop_guard)
+    loop_guard.add_argument("--issue-number", required=True)
+    loop_guard.add_argument("--clarify-hash", required=True)
+    loop_guard.add_argument("--max-cycles", required=True)
+    loop_guard.add_argument("--current-comment-id", default=None)
+    loop_guard.set_defaults(func=cmd_clarify_loop_guard)
 
     processed_claim = subparsers.add_parser("processed-command-claim", help="Claim processed command entry")
     _add_shared_args(processed_claim)

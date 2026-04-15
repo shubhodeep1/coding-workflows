@@ -49,6 +49,10 @@
       "color": "e11d48",
       "description": "Escalated for human intervention; autonomous stall recovery is paused"
     },
+    "ai:blocked": {
+      "color": "b60205",
+      "description": "Orchestrator auto-answer loop blocked pending human intervention"
+    },
     "ai:merged": {
       "color": "5319e7",
       "description": "Linked PR merged"
@@ -99,6 +103,7 @@
         "ai:done",
         "ai:ready-to-merge",
         "ai:needs-human",
+        "ai:blocked",
         "ai:review-blocked",
         "ai:implementation-failed",
         "ai:merged",
