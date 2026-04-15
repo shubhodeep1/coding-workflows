@@ -714,13 +714,16 @@ def _gh_api_json(endpoint: str) -> dict[str, Any]:
 	if token and not env.get("GITHUB_TOKEN"):
 		env["GITHUB_TOKEN"] = token
 
-	proc = subprocess.run(
-		["gh", "api", endpoint],
-		check=False,
-		capture_output=True,
-		text=True,
-		env=env,
-	)
+	try:
+		proc = subprocess.run(
+			["gh", "api", endpoint],
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+	except OSError as exc:
+		raise OrchestrateError(f"gh api failed for {endpoint}: {exc}") from exc
 	if proc.returncode != 0:
 		error_text = (proc.stderr or proc.stdout).strip()
 		raise OrchestrateError(f"gh api failed for {endpoint}: {error_text}")
@@ -742,13 +745,16 @@ def _gh_ref_exists(repo: str, ref_name: str) -> bool:
 	if token and not env.get("GITHUB_TOKEN"):
 		env["GITHUB_TOKEN"] = token
 
-	proc = subprocess.run(
-		["gh", "api", endpoint],
-		check=False,
-		capture_output=True,
-		text=True,
-		env=env,
-	)
+	try:
+		proc = subprocess.run(
+			["gh", "api", endpoint],
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+	except OSError as exc:
+		raise OrchestrateError(f"gh api failed while checking branch ref {ref_name!r}: {exc}") from exc
 	if proc.returncode == 0:
 		return True
 
