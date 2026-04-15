@@ -6327,7 +6327,7 @@ with open('${STATE_FILE}', 'w') as f:
     NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
     if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
       echo "Clean-wave advance: skipping judge for wave ${CURRENT_WAVE} (no failures, project incomplete)."
-      jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1" \
+      jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1 | .judge_stall_cycles = 0" \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
       continue
@@ -7008,7 +7008,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
         done
 
         # Clean wave advance: does not consume stall budget.
-        jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1" \
+        jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1 | .judge_stall_cycles = 0" \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
         WAVE_COMMENT="## Wave ${NEXT_WAVE} Dispatched
