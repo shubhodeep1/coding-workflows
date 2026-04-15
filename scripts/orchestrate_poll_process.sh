@@ -5257,10 +5257,18 @@ json.dump(result, sys.stdout)
         # late to correct the branch-prep decision. Keep _rb_pr_json in
         # sync so downstream consumers (e.g. RB_PR_MERGEABLE_STATE) see
         # the same snapshot.
+        _rb_prev_pr_state="${RB_PR_STATE:-}"
+        _rb_prev_pr_merged="${RB_PR_MERGED:-false}"
         _rb_pr_json="$(_fetch_pr_json "${RB_PR}")"
         RB_PR_STATE="$(_jq_field "${_rb_pr_json}" '.state' 'open|closed|merged')"
         RB_PR_MERGED="$(_jq_field "${_rb_pr_json}" '.merged_at != null' 'true|false')"
         [ -n "${RB_PR_MERGED}" ] || RB_PR_MERGED="false"
+        if [ "${_rb_pr_json}" = "{}" ] && [ "${_rb_prev_pr_merged}" = "true" ]; then
+          echo "::warning::[review-blocked] PR #${RB_PR} state refresh failed during branch prep; preserving earlier merged state to avoid misrouting follow-up preparation."
+          RB_PR_STATE="${_rb_prev_pr_state}"
+          RB_PR_MERGED="${_rb_prev_pr_merged}"
+        fi
+        unset _rb_prev_pr_state _rb_prev_pr_merged
 
         if [ "${RB_PR_MERGED}" = "true" ]; then
           RB_TARGET_MERGED="true"
