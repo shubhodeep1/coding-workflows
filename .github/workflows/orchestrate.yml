@@ -33,6 +33,7 @@ jobs:
       cancel-in-progress: false
     env:
       ORCHESTRATE_POLL_INTERVAL: ${{ vars.ORCHESTRATE_POLL_INTERVAL || '5' }}
+      ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS: ${{ vars.ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS || '1200' }}
 
     steps:
       - name: Log trigger context
@@ -407,7 +408,112 @@ jobs:
           STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
           echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
 
+      - name: Evaluate pre-LLM short-circuit
+        id: evaluate_short_circuit
+        env:
+          PROJECT_DESCRIPTION: ${{ inputs.project_description }}
+        run: |
+          set -euo pipefail
+
+          PROJECT_CONTEXT_FILE="${RUNTIME_DIR}/project_description.txt"
+          printf '%s\n' "${PROJECT_DESCRIPTION}" > "${PROJECT_CONTEXT_FILE}"
+
+          SHORTCIRCUIT_REGEX='step\s*\d|phase\s*\d|wave\s*\d|\bthen\b|\bafter\b|and\s+then|multi[- ]?step'
+          DESCRIPTION_LENGTH="$(python3 -c 'import os; print(len(os.environ.get("PROJECT_DESCRIPTION", "")))')"
+
+          MAX_CHARS_RAW="${ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS:-1200}"
+          if ! [[ "${MAX_CHARS_RAW}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS is non-numeric ('${MAX_CHARS_RAW}'); falling back to 1200"
+            MAX_CHARS=1200
+          elif [ "${MAX_CHARS_RAW}" -lt 1 ]; then
+            echo "::warning::ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS must be >= 1 ('${MAX_CHARS_RAW}'); falling back to 1200"
+            MAX_CHARS=1200
+          else
+            MAX_CHARS="${MAX_CHARS_RAW}"
+          fi
+
+          MARKER_FOUND="false"
+          MARKER_SAMPLE=""
+          if printf '%s\n' "${PROJECT_DESCRIPTION}" | grep -Eiq "${SHORTCIRCUIT_REGEX}"; then
+            MARKER_FOUND="true"
+            MARKER_SAMPLE="$(printf '%s\n' "${PROJECT_DESCRIPTION}" | grep -Eio "${SHORTCIRCUIT_REGEX}" | head -n 1 | tr '\n' ' ' | sed -E 's/[[:space:]]+$//')"
+          fi
+
+          SHORT_CIRCUIT="false"
+          REASON="decomposer-path"
+          if [ "${DESCRIPTION_LENGTH}" -le "${MAX_CHARS}" ] && [ "${MARKER_FOUND}" != "true" ]; then
+            SHORT_CIRCUIT="true"
+            REASON="short-description-no-multi-step-markers"
+          elif [ "${DESCRIPTION_LENGTH}" -gt "${MAX_CHARS}" ] && [ "${MARKER_FOUND}" = "true" ]; then
+            REASON="description-too-long-and-multi-step-marker-detected"
+          elif [ "${DESCRIPTION_LENGTH}" -gt "${MAX_CHARS}" ]; then
+            REASON="description-too-long"
+          else
+            REASON="multi-step-marker-detected"
+          fi
+
+          echo "Short-circuit evaluation: short_circuit=${SHORT_CIRCUIT}, reason=${REASON}, description_length=${DESCRIPTION_LENGTH}, max_chars=${MAX_CHARS}, marker_found=${MARKER_FOUND}, marker_sample=${MARKER_SAMPLE:-none}"
+
+          {
+            echo "short_circuit=${SHORT_CIRCUIT}"
+            echo "short_circuit_reason=${REASON}"
+            echo "short_circuit_length=${DESCRIPTION_LENGTH}"
+            echo "short_circuit_max_chars=${MAX_CHARS}"
+            echo "short_circuit_marker_found=${MARKER_FOUND}"
+            echo "short_circuit_marker_sample=${MARKER_SAMPLE}"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "ORCHESTRATE_SHORT_CIRCUIT=${SHORT_CIRCUIT}"
+            echo "ORCHESTRATE_SHORT_CIRCUIT_REASON=${REASON}"
+            echo "ORCHESTRATE_SHORT_CIRCUIT_LENGTH=${DESCRIPTION_LENGTH}"
+            echo "ORCHESTRATE_SHORT_CIRCUIT_MARKER_FOUND=${MARKER_FOUND}"
+            echo "ORCHESTRATE_SHORT_CIRCUIT_MARKER_SAMPLE=${MARKER_SAMPLE}"
+          } >> "$GITHUB_ENV"
+
+      - name: Create plain issue from project description (short-circuit)
+        id: short_circuit_issue
+        if: steps.evaluate_short_circuit.outputs.short_circuit == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PROJECT_DESCRIPTION: ${{ inputs.project_description }}
+          SHORT_CIRCUIT_REASON: ${{ steps.evaluate_short_circuit.outputs.short_circuit_reason }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          PROJECT_CONTEXT_FILE="${RUNTIME_DIR}/project_description.txt"
+          if [ ! -f "${PROJECT_CONTEXT_FILE}" ]; then
+            printf '%s\n' "${PROJECT_DESCRIPTION}" > "${PROJECT_CONTEXT_FILE}"
+          fi
+
+          ISSUE_TITLE="$(awk '{ line=$0; gsub(/\r/, "", line); sub(/^[[:space:]]+/, "", line); sub(/[[:space:]]+$/, "", line); if (length(line) > 0) { print line; exit } }' "${PROJECT_CONTEXT_FILE}")"
+          if [ -z "${ISSUE_TITLE}" ]; then
+            ISSUE_TITLE="Orchestration request"
+          fi
+          ISSUE_TITLE="${ISSUE_TITLE:0:200}"
+
+          PLAIN_ISSUE_URL="$(gh_retry gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "${ISSUE_TITLE}" \
+            --body-file "${PROJECT_CONTEXT_FILE}")"
+
+          PLAIN_ISSUE_NUMBER="$(echo "${PLAIN_ISSUE_URL}" | grep -oE '[0-9]+$')"
+          echo "Created plain issue #${PLAIN_ISSUE_NUMBER} via short-circuit path (${SHORT_CIRCUIT_REASON}): ${PLAIN_ISSUE_URL}"
+
+          {
+            echo "plain_issue_number=${PLAIN_ISSUE_NUMBER}"
+            echo "plain_issue_url=${PLAIN_ISSUE_URL}"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "PLAIN_ISSUE_NUMBER=${PLAIN_ISSUE_NUMBER}"
+            echo "PLAIN_ISSUE_URL=${PLAIN_ISSUE_URL}"
+          } >> "$GITHUB_ENV"
+
       - name: Retrieve memory context
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -436,6 +542,7 @@ jobs:
             --issue-body-file "${PROJECT_CONTEXT_FILE}"
 
       - name: Build Codex prompt
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         env:
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_ORCHESTRATE || '40' }}
           PROJECT_DESCRIPTION: ${{ inputs.project_description }}
@@ -471,6 +578,7 @@ jobs:
           echo "Prompt built: $(wc -l < "${CODEX_PROMPT_FILE}") lines, $(wc -c < "${CODEX_PROMPT_FILE}") bytes"
 
       - name: Run Codex (decomposer)
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
@@ -500,6 +608,7 @@ jobs:
           done
 
       - name: Extract and validate decomposition JSON
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         run: |
           set -euo pipefail
 
@@ -555,6 +664,7 @@ jobs:
           python3 scripts/orchestrate_lib.py compute-waves --input-file "${DECOMPOSITION_FILE}"
 
       - name: Ensure orchestrator labels exist
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -589,6 +699,7 @@ jobs:
             2>/dev/null || true
 
       - name: Create tracking issue
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         id: tracking_issue
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -618,6 +729,7 @@ jobs:
           echo "TRACKING_ISSUE_NUMBER=${TRACKING_ISSUE_NUMBER}" >> "$GITHUB_ENV"
 
       - name: Create integration branch
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         id: integration_branch
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -658,6 +770,7 @@ jobs:
           echo "INTEGRATION_BRANCH=${INTEGRATION_BRANCH}" >> "$GITHUB_ENV"
 
       - name: Create Wave 1 issues only
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         id: create_issues
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -745,6 +858,7 @@ jobs:
           echo "Issue map (Wave 1 only): $(cat "${RUNTIME_DIR}/issue_map.json")"
 
       - name: Build and post initial state
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
@@ -794,6 +908,7 @@ jobs:
           echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER}"
 
       - name: Record decomposition candidate
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -824,6 +939,7 @@ jobs:
             --issue-number "${TRACKING_ISSUE_NUMBER}"
 
       - name: Dispatch Wave 1
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
@@ -863,6 +979,12 @@ jobs:
         if: always()
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_ORCHESTRATE || '200000' }}
+          SHORT_CIRCUIT: ${{ steps.evaluate_short_circuit.outputs.short_circuit }}
+          SHORT_CIRCUIT_REASON: ${{ steps.evaluate_short_circuit.outputs.short_circuit_reason }}
+          SHORT_CIRCUIT_LENGTH: ${{ steps.evaluate_short_circuit.outputs.short_circuit_length }}
+          SHORT_CIRCUIT_MAX_CHARS: ${{ steps.evaluate_short_circuit.outputs.short_circuit_max_chars }}
+          SHORT_CIRCUIT_MARKER_FOUND: ${{ steps.evaluate_short_circuit.outputs.short_circuit_marker_found }}
+          PLAIN_ISSUE_NUMBER: ${{ steps.short_circuit_issue.outputs.plain_issue_number }}
         run: |
           set -euo pipefail
           : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
@@ -884,16 +1006,26 @@ jobs:
             echo "|-----|-------|"
             echo "| Model | \`${MODEL_EDITOR}\` |"
             echo "| Reasoning | \`${MODEL_REASONING_EFFORT}\` |"
-            if [ -n "${TOKENS}" ]; then
-              echo "| Tokens used | ${TOKENS} |"
-              TOKENS_NUM="${TOKENS//,/}"
-              if [ "${TOKENS_NUM}" -gt "${TOKEN_WARN_THRESHOLD}" ] 2>/dev/null; then
-                echo "| :warning: Token alert | Above ${TOKEN_WARN_THRESHOLD} threshold |"
+            if [ "${SHORT_CIRCUIT:-false}" = "true" ]; then
+              echo "| Mode | short-circuit |"
+              echo "| Reason | ${SHORT_CIRCUIT_REASON:-short-description-no-multi-step-markers} |"
+              echo "| Description length | ${SHORT_CIRCUIT_LENGTH:-0} / ${SHORT_CIRCUIT_MAX_CHARS:-1200} |"
+              echo "| Multi-step marker found | ${SHORT_CIRCUIT_MARKER_FOUND:-false} |"
+              if [ -n "${PLAIN_ISSUE_NUMBER:-}" ]; then
+                echo "| Plain issue | #${PLAIN_ISSUE_NUMBER} |"
               fi
-            fi
-            echo "| Issues created | ${ISSUE_COUNT} |"
-            if [ -n "${TRACKING_ISSUE_NUMBER:-}" ]; then
-              echo "| Tracking issue | #${TRACKING_ISSUE_NUMBER} |"
+            else
+              if [ -n "${TOKENS}" ]; then
+                echo "| Tokens used | ${TOKENS} |"
+                TOKENS_NUM="${TOKENS//,/}"
+                if [ "${TOKENS_NUM}" -gt "${TOKEN_WARN_THRESHOLD}" ] 2>/dev/null; then
+                  echo "| :warning: Token alert | Above ${TOKEN_WARN_THRESHOLD} threshold |"
+                fi
+              fi
+              echo "| Issues created | ${ISSUE_COUNT} |"
+              if [ -n "${TRACKING_ISSUE_NUMBER:-}" ]; then
+                echo "| Tracking issue | #${TRACKING_ISSUE_NUMBER} |"
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -903,6 +1035,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+          SHORT_CIRCUIT: ${{ steps.evaluate_short_circuit.outputs.short_circuit }}
+          SHORT_CIRCUIT_REASON: ${{ steps.evaluate_short_circuit.outputs.short_circuit_reason }}
         run: |
           set -euo pipefail
           : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
@@ -925,6 +1059,9 @@ jobs:
             EVENT_TYPE="orchestration_completed"
             EVENT_STATUS="ok"
             EVENT_MESSAGE="Orchestration completed"
+            if [ "${SHORT_CIRCUIT:-false}" = "true" ]; then
+              EVENT_MESSAGE="Orchestration short-circuited (${SHORT_CIRCUIT_REASON:-short-description-no-multi-step-markers})"
+            fi
           fi
 
           ARGS=(
@@ -949,6 +1086,12 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+          SHORT_CIRCUIT: ${{ steps.evaluate_short_circuit.outputs.short_circuit }}
+          SHORT_CIRCUIT_REASON: ${{ steps.evaluate_short_circuit.outputs.short_circuit_reason }}
+          SHORT_CIRCUIT_LENGTH: ${{ steps.evaluate_short_circuit.outputs.short_circuit_length }}
+          SHORT_CIRCUIT_MAX_CHARS: ${{ steps.evaluate_short_circuit.outputs.short_circuit_max_chars }}
+          PLAIN_ISSUE_NUMBER: ${{ steps.short_circuit_issue.outputs.plain_issue_number }}
+          PLAIN_ISSUE_URL: ${{ steps.short_circuit_issue.outputs.plain_issue_url }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
@@ -968,9 +1111,23 @@ jobs:
             ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
           fi
           if [ "${STATUS}" = "success" ]; then
-            MSG="Orchestrator: Decomposed project into ${ISSUE_COUNT} issues."
+            if [ "${SHORT_CIRCUIT:-false}" = "true" ]; then
+              MSG="Orchestrator: Short-circuited decomposer and created plain issue"
+              if [ -n "${PLAIN_ISSUE_NUMBER:-}" ]; then
+                MSG+=" #${PLAIN_ISSUE_NUMBER}"
+              fi
+              MSG+="."
+              MSG+=$'\n'
+              MSG+="Reason: ${SHORT_CIRCUIT_REASON:-short-description-no-multi-step-markers} (${SHORT_CIRCUIT_LENGTH:-0}/${SHORT_CIRCUIT_MAX_CHARS:-1200})"
+              if [ -n "${PLAIN_ISSUE_URL:-}" ]; then
+                MSG+=$'\n'
+                MSG+="Issue: ${PLAIN_ISSUE_URL}"
+              fi
+            else
+              MSG="Orchestrator: Decomposed project into ${ISSUE_COUNT} issues."
+            fi
             LEVEL="DEBUG"
-            if [ -n "${TRACKING_URL}" ]; then
+            if [ "${SHORT_CIRCUIT:-false}" != "true" ] && [ -n "${TRACKING_URL}" ]; then
               MSG+=$'\n'
               MSG+="Tracking: ${TRACKING_URL}"
             fi
