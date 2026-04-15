@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\nscripts/validate_process.sh\nscripts/validate_process.sh**\n\nLow confidence files (mentioned by 1 reviewer):\n/tmp/codex-pr-24433417841-1-15998/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\n`scripts/semantic_cache.py`\n`scripts/validate_process.sh`\nscripts/semantic_cache.py**",
+  "fingerprint": "d93f647cdd6fb8e20e38b2ebb284ca191ee740611c41a51fe4e598b611a08eac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 993,
+    "run_id": "24433417841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24433417841",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415025309_5c06ee8081",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 993,
+    "run_id": "24433417841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T02:53:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
