@@ -8,6 +8,7 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 ## [Unreleased]
 
 ### Changed
+- review/autofix now caches PR `closingIssuesReferences(first: 50)` once per job in `LINKED_ISSUES_JSON` and reuses it for linked-issue status/label updates and Telegram single-issue links, preserving existing PR title/body REST fallback and downstream behavior.
 - Reduced default reasoning effort where deep reasoning is unnecessary:
   - `THINKING_LEVEL_CLARIFY_RESPOND`: `medium` -> `low`
   - `THINKING_LEVEL_VALIDATE`: `xhigh` -> `high`
