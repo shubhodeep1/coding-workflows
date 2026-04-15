@@ -2531,6 +2531,7 @@ def test_in_progress_judge_does_not_advance_when_fixups_added_to_current_wave():
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
 		issue_labels={10: ["ai:merged"]},
 		codex_json=codex_json,
 	)
@@ -2587,27 +2588,20 @@ def test_clean_wave_skip_advances_without_judge_when_future_defs_remain():
 	state["pending_issue_defs"] = {
 		"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 5},
 	}
-	_prev = os.environ.get("ENABLE_CLEAN_WAVE_JUDGE_SKIP")
-	os.environ["ENABLE_CLEAN_WAVE_JUDGE_SKIP"] = "true"
-	try:
-		result = _run_poller(
-			state=state,
-			enable_validation="false",
-			max_validate_cycles="3",
-			issue_labels={10: ["ai:merged"]},
-			codex_json={
-				"status": "in_progress",
-				"justification": "unused",
-				"assessment": "unused",
-				"new_issues": [],
-				"issues_to_revert": [],
-			},
-		)
-	finally:
-		if _prev is None:
-			os.environ.pop("ENABLE_CLEAN_WAVE_JUDGE_SKIP", None)
-		else:
-			os.environ["ENABLE_CLEAN_WAVE_JUDGE_SKIP"] = _prev
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="true",
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "in_progress",
+			"justification": "unused",
+			"assessment": "unused",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
 	ls = result["latest_state"]
 	assert ls["current_wave"] == 2
 	assert ls["judge_cycle"] == 1
@@ -2628,27 +2622,20 @@ def test_clean_wave_skip_blocked_when_disabled():
 	state["pending_issue_defs"] = {
 		"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 5},
 	}
-	_prev = os.environ.get("ENABLE_CLEAN_WAVE_JUDGE_SKIP")
-	os.environ["ENABLE_CLEAN_WAVE_JUDGE_SKIP"] = "false"
-	try:
-		result = _run_poller(
-			state=state,
-			enable_validation="false",
-			max_validate_cycles="3",
-			issue_labels={10: ["ai:merged"]},
-			codex_json={
-				"status": "in_progress",
-				"justification": "on track",
-				"assessment": "advance",
-				"new_issues": [],
-				"issues_to_revert": [],
-			},
-		)
-	finally:
-		if _prev is None:
-			os.environ.pop("ENABLE_CLEAN_WAVE_JUDGE_SKIP", None)
-		else:
-			os.environ["ENABLE_CLEAN_WAVE_JUDGE_SKIP"] = _prev
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "in_progress",
+			"justification": "on track",
+			"assessment": "advance",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Judge Evaluation" in body for body in tracking_bodies)
 
@@ -2665,27 +2652,20 @@ def test_clean_wave_skip_blocked_when_wave_has_failed_issue():
 	state["pending_issue_defs"] = {
 		"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 5},
 	}
-	_prev = os.environ.get("ENABLE_CLEAN_WAVE_JUDGE_SKIP")
-	os.environ["ENABLE_CLEAN_WAVE_JUDGE_SKIP"] = "true"
-	try:
-		result = _run_poller(
-			state=state,
-			enable_validation="false",
-			max_validate_cycles="3",
-			issue_labels={10: ["ai:closed"]},
-			codex_json={
-				"status": "in_progress",
-				"justification": "needs decision",
-				"assessment": "failed issue present",
-				"new_issues": [],
-				"issues_to_revert": [],
-			},
-		)
-	finally:
-		if _prev is None:
-			os.environ.pop("ENABLE_CLEAN_WAVE_JUDGE_SKIP", None)
-		else:
-			os.environ["ENABLE_CLEAN_WAVE_JUDGE_SKIP"] = _prev
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="true",
+		issue_labels={10: ["ai:closed"]},
+		codex_json={
+			"status": "in_progress",
+			"justification": "needs decision",
+			"assessment": "failed issue present",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Judge Evaluation" in body for body in tracking_bodies)
 
@@ -2698,27 +2678,20 @@ def test_clean_wave_skip_blocked_when_stuck_wave_forces_judge():
 		"github_issue": None,
 		"status": "not_created",
 	})
-	_prev = os.environ.get("ENABLE_CLEAN_WAVE_JUDGE_SKIP")
-	os.environ["ENABLE_CLEAN_WAVE_JUDGE_SKIP"] = "true"
-	try:
-		result = _run_poller(
-			state=state,
-			enable_validation="false",
-			max_validate_cycles="3",
-			issue_labels={10: ["ai:merged"]},
-			codex_json={
-				"status": "in_progress",
-				"justification": "stuck handling",
-				"assessment": "judge required",
-				"new_issues": [],
-				"issues_to_revert": [],
-			},
-		)
-	finally:
-		if _prev is None:
-			os.environ.pop("ENABLE_CLEAN_WAVE_JUDGE_SKIP", None)
-		else:
-			os.environ["ENABLE_CLEAN_WAVE_JUDGE_SKIP"] = _prev
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="true",
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "in_progress",
+			"justification": "stuck handling",
+			"assessment": "judge required",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Judge Evaluation" in body for body in tracking_bodies)
 
