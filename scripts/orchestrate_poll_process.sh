@@ -317,6 +317,13 @@ if ! [[ "${MAX_STALL_RECOVERIES_PER_ISSUE}" =~ ^[0-9]+$ ]] || [ "${MAX_STALL_REC
   MAX_STALL_RECOVERIES_PER_ISSUE="5"
 fi
 
+ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
+if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
+  ENABLE_STALL_HUMAN_TERMINALIZATION="true"
+else
+  ENABLE_STALL_HUMAN_TERMINALIZATION="false"
+fi
+
 # Stall judge trigger configuration
 STALL_JUDGE_TRIGGER_COUNT="${STALL_JUDGE_TRIGGER_COUNT:-2}"
 if ! [[ "${STALL_JUDGE_TRIGGER_COUNT}" =~ ^[0-9]+$ ]] || [ "${STALL_JUDGE_TRIGGER_COUNT}" -lt 1 ]; then
@@ -345,6 +352,13 @@ else
   ENABLE_STANDALONE_STALL_RECOVERY="false"
 fi
 
+ENABLE_CLEAN_WAVE_JUDGE_SKIP="${ENABLE_CLEAN_WAVE_JUDGE_SKIP:-true}"
+if is_truthy "${ENABLE_CLEAN_WAVE_JUDGE_SKIP}"; then
+  ENABLE_CLEAN_WAVE_JUDGE_SKIP="true"
+else
+  ENABLE_CLEAN_WAVE_JUDGE_SKIP="false"
+fi
+
 ENABLE_CLOSE_MERGED_ISSUES="${ENABLE_CLOSE_MERGED_ISSUES:-true}"
 if is_truthy "${ENABLE_CLOSE_MERGED_ISSUES}"; then
   ENABLE_CLOSE_MERGED_ISSUES="true"
@@ -362,6 +376,22 @@ MAX_VALIDATION_RECOVERY_ATTEMPTS="${MAX_VALIDATION_RECOVERY_ATTEMPTS:-2}"
 if ! [[ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" -lt 0 ]; then
   echo "::warning::MAX_VALIDATION_RECOVERY_ATTEMPTS must be a non-negative integer; defaulting to 2"
   MAX_VALIDATION_RECOVERY_ATTEMPTS="2"
+fi
+
+# Per-batch ceiling for "validation-fixing" poll cycles.  The fix-up loop
+# iterates whatever issue numbers a validation workflow posted in its latest
+# "Runtime validation found fixable issues" comment and waits for all of them
+# to reach ai:merged (or a merged-PR-evidence backfill).  If any of those
+# issues stalls open without progress, the loop previously had no self-imposed
+# ceiling and relied entirely on the global stall-recovery path.  This knob
+# bounds how many poll cycles a single fix batch can spend in progress before
+# the poller declares the batch stalled and routes the project through
+# mark_validation_failed (which still honours MAX_VALIDATION_RECOVERY_ATTEMPTS
+# for the judge re-evaluation budget).
+MAX_VALIDATION_FIX_BATCH_CYCLES="${MAX_VALIDATION_FIX_BATCH_CYCLES:-30}"
+if ! [[ "${MAX_VALIDATION_FIX_BATCH_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATION_FIX_BATCH_CYCLES}" -lt 1 ]; then
+  echo "::warning::MAX_VALIDATION_FIX_BATCH_CYCLES must be a positive integer; defaulting to 30"
+  MAX_VALIDATION_FIX_BATCH_CYCLES="30"
 fi
 
 STALL_RECOVERY_SHOULD_INCREMENT="false"
@@ -607,6 +637,20 @@ set_tracking_phase_label() {
 get_issue_labels_json() {
   local issue_num="$1"
   gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" --jq '[.[].name]' || echo '[]'
+}
+
+# get_issue_state_labels_json — fetch {state, state_reason, labels} in a single
+# API call.  Used by the validation fix-up loop to consolidate what used to be
+# two separate round-trips (labels + state) and to make the loop state-aware
+# (an issue closed without the ai:closed label was previously invisible to the
+# closure detector).  On lookup failure, emits a conservative open/empty
+# fallback so callers keep making progress rather than mis-classifying a
+# transient API failure as a closed-without-merge event.
+get_issue_state_labels_json() {
+  local issue_num="$1"
+  gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" \
+    --jq '{state: (.state // "open"), state_reason: (.state_reason // ""), labels: [(.labels // [])[] | .name]}' \
+    || echo '{"state":"open","state_reason":"","labels":[]}'
 }
 
 has_label() {
@@ -2093,6 +2137,7 @@ mark_validation_failed() {
        .validation_recovery_count = $count |
        .validation_failure_reason = $reason |
        .validation_active_fix_issues = [] |
+       .validation_fix_issues_batch_cycles = 0 |
        .validation_cycle = 1 |
        .validation_last_dispatch_cycle = 0 |
        .validation_completed_cycle = null' \
@@ -2109,7 +2154,7 @@ Transitioning back to judge for re-evaluation."
   fi
 
   # Recovery budget exhausted — terminal failure
-  jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason | .validation_active_fix_issues = []' \
+  jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason | .validation_active_fix_issues = [] | .validation_fix_issues_batch_cycles = 0' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
   set_tracking_phase_label "ai:validation-failed"
@@ -2194,6 +2239,7 @@ sync_validation_fix_issues_from_comments() {
       '.status = "validation-fixing" |
        .validation_last_fix_comment_id = $comment_id |
        .validation_active_fix_issues = $active_fix_issues |
+       .validation_fix_issues_batch_cycles = 0 |
        .validation_seen_fix_issues = ((.validation_seen_fix_issues // []) + $active_fix_issues | unique)' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   else
@@ -2453,21 +2499,29 @@ recovery_action_for_phase() {
   local phase="$1"
   local recovery_count="$2"
 
+  [[ "${recovery_count}" =~ ^[0-9]+$ ]] || recovery_count="0"
+
   if [ "${recovery_count}" -ge "${MAX_STALL_RECOVERIES_PER_ISSUE}" ]; then
     echo "skip"
     return
   fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" "${ENABLE_STALL_HUMAN_TERMINALIZATION}" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "${MAX_STALL_RECOVERIES_PER_ISSUE}" "${ENABLE_STALL_HUMAN_TERMINALIZATION}" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
-from orchestrate_lib import resolve_declarative_stall_recovery_action
+from orchestrate_lib import resolve_stall_recovery_action
 
 phase = sys.argv[1]
 recovery_count = int(sys.argv[2])
-allow_human_terminalization = sys.argv[3].strip().lower() == "true"
-print(resolve_declarative_stall_recovery_action(phase, recovery_count, allow_human_terminalization))
+max_recoveries = int(sys.argv[3])
+allow_human_terminalization = sys.argv[4].strip().lower() in {"1", "true", "yes", "on"}
+print(resolve_stall_recovery_action(
+    phase=phase,
+    recovery_count=recovery_count,
+    max_recoveries=max_recoveries,
+    allow_human_terminalization=allow_human_terminalization,
+))
 PY
 )"
   if [ -z "${action}" ]; then
@@ -2475,6 +2529,30 @@ PY
   else
     echo "${action}"
   fi
+}
+
+non_human_recovery_action_for_phase() {
+  local phase="$1"
+  local recovery_count="$2"
+  local action
+
+  action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+  if [ "${action}" != "escalate_human" ]; then
+    echo "${action}"
+    return
+  fi
+
+  local idx="${recovery_count}"
+  while [ "${idx}" -gt 0 ]; do
+    idx=$((idx - 1))
+    action="$(recovery_action_for_phase "${phase}" "${idx}")"
+    if [ "${action}" != "escalate_human" ]; then
+      echo "${action}"
+      return
+    fi
+  done
+
+  echo "retrigger_pipeline"
 }
 
 stall_recovery_action_is_terminal() {
@@ -2734,10 +2812,12 @@ REISSUE_EOF
 
       local new_url new_url_clean new_num
       ensure_label_exists "ai:clarification"
+      ensure_label_exists "ai:orchestrator-managed"
       new_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" \
-        --label "ai:clarification" 2>/dev/null || echo "")"
+        --label "ai:clarification" \
+        --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
       if [ -n "${new_url}" ]; then
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
@@ -2832,6 +2912,9 @@ invoke_stall_judge() {
 
   local fallback_action
   fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+  if [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ] && [ "${fallback_action}" = "escalate_human" ]; then
+    fallback_action="$(non_human_recovery_action_for_phase "${phase}" "${recovery_count}")"
+  fi
 
   local comments_issue_num="${issue_num}"
   if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
@@ -3011,9 +3094,17 @@ invoke_stall_judge() {
   fi
 
   local judge_action
+  local effective_action
   local judge_justification
+  local judge_effective_note=""
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
+  effective_action="${judge_action}"
+  if [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ] && [ "${effective_action}" = "escalate_human" ]; then
+    effective_action="${fallback_action}"
+    judge_effective_note="**Effective action:** ${effective_action} (human terminalization disabled)"
+    echo "::warning::Stall judge returned escalate_human for issue #${issue_num} while ENABLE_STALL_HUMAN_TERMINALIZATION is disabled; using ${effective_action}."
+  fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
     STALL_JUDGE_TARGET_PR="${target_pr}"
@@ -3028,6 +3119,7 @@ invoke_stall_judge() {
 
 **Decision:** ${judge_action}
 **Justification:** ${judge_justification}
+${judge_effective_note}
 
 **Diagnostics snapshot:**
 
@@ -3040,16 +3132,15 @@ ${diagnostics}
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${judge_comment}" >/dev/null 2>&1 || true
   fi
-  tg_notify "Stall judge evaluated issue #${issue_num}: ${judge_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
-
-  if [ "${judge_action}" = "escalate_human" ] && [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ]; then
-    echo "::notice::Stall judge returned escalate_human for issue #${issue_num}, but ENABLE_STALL_HUMAN_TERMINALIZATION=false; falling back to ${fallback_action}."
-    judge_action="${fallback_action}"
+  local tg_action_summary="${effective_action}"
+  if [ "${judge_action}" != "${effective_action}" ]; then
+    tg_action_summary="judge=${judge_action}, effective=${effective_action}"
   fi
+  tg_notify "Stall judge evaluated issue #${issue_num}: ${tg_action_summary}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
 
-  case "${judge_action}" in
+  case "${effective_action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human)
-      execute_stall_recovery_action "${issue_num}" "${phase}" "${judge_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
+      execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
       return $?
       ;;
     resolve_merge_conflict)
@@ -3643,10 +3734,10 @@ state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
 PY
 )"
-		  write_standalone_state_json "${issue_num}" "${failed_reissue_state}" "${state_comment_id}"
-		fi
-		took_action="true"
-		;;
+			  write_standalone_state_json "${issue_num}" "${failed_reissue_state}" "${state_comment_id}"
+			fi
+			took_action="true"
+			;;
       skip)
         close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${recovery_count})."
         ensure_label_exists "ai:closed"
@@ -3874,6 +3965,7 @@ recover_stalled_issue() {
         if [ "${_lpr_state}" = "open" ]; then
           echo "STALL_SKIP issue=${issue_num} reason=open_linked_pr pr=${_lpr_num} phase=${phase} action=${action}"
           add_healing_note "Issue #${issue_num}: skipped early-phase stall recovery '${action}' (phase=${phase}) — open linked PR #${_lpr_num} already exists"
+          STALL_HEALING_CHANGED=true
           tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because open linked PR #${_lpr_num} already exists."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
           return 1  # Signal: no action taken (caller should not increment counter)
         fi
@@ -4263,14 +4355,37 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
 
     while IFS= read -r fix_num; do
       [ -n "${fix_num}" ] || continue
-      FIX_LABELS="$(get_issue_labels_json "${fix_num}")"
+
+      # Single consolidated API call: state + state_reason + labels.  Previous
+      # implementation fetched only labels here and never consulted the issue's
+      # state, so any fix-up issue closed without the ai:closed label (manual
+      # close, "not planned" close, external rename, etc.) was invisible to the
+      # closure detector and the batch would loop "still in progress" forever.
+      FIX_INFO_JSON="$(get_issue_state_labels_json "${fix_num}")"
+      FIX_LABELS="$(echo "${FIX_INFO_JSON}" | jq -c '.labels // []')"
+      FIX_STATE="$(echo "${FIX_INFO_JSON}" | jq -r '.state // "open"')"
+      FIX_STATE_REASON="$(echo "${FIX_INFO_JSON}" | jq -r '.state_reason // ""')"
       FIX_IS_MERGED="false"
+      FIX_THIS_CLOSED_WITHOUT_MERGE="false"
+      # Capture the evidence-lookup exit code in a dedicated variable instead
+      # of reading $? after the else branch — more robust to future edits that
+      # might insert a command between the call and the exit-status capture.
+      FIX_EVIDENCE_STATUS=0
 
       if has_label "${FIX_LABELS}" "ai:merged"; then
         FIX_IS_MERGED="true"
-      else
+      elif [ "${FIX_STATE}" = "closed" ] || has_label "${FIX_LABELS}" "ai:closed"; then
+        # Issue is closed (live GitHub state) or carries an ai:closed label.
+        # Walk the timeline once for merged-PR evidence; on success backfill
+        # ai:merged, otherwise treat the issue as closed-without-merge
+        # regardless of which of the two signals raised it.  Widening this
+        # gate to include the ai:closed label catches the case the original
+        # loop missed (fix-up issue closed with the ai:closed label but state
+        # cache still says open) while still short-circuiting the evidence
+        # walk for issues that are genuinely still open (the common case).
         if validation_fix_issue_has_merged_pr_evidence "${fix_num}"; then
-          echo "Validation fix-up issue #${fix_num}: merged PR detected; backfilling ai:merged."
+          FIX_EVIDENCE_STATUS=0
+          echo "Validation fix-up issue #${fix_num}: closed with merged PR evidence; backfilling ai:merged."
           if backfill_validation_fix_issue_merged_label "${fix_num}"; then
             echo "Validation fix-up issue #${fix_num}: ai:merged label backfilled."
           else
@@ -4278,16 +4393,29 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
           fi
           FIX_IS_MERGED="true"
         else
-          EVIDENCE_STATUS="$?"
-          if [ "${EVIDENCE_STATUS}" -eq 1 ]; then
-            echo "Validation fix-up issue #${fix_num}: no merged PR evidence detected."
+          FIX_EVIDENCE_STATUS=$?
+          if [ "${FIX_EVIDENCE_STATUS}" -eq 1 ]; then
+            echo "Validation fix-up issue #${fix_num}: no merged PR evidence detected (state=${FIX_STATE}, state_reason=${FIX_STATE_REASON:-none})."
           else
-            echo "::warning::Validation fix-up issue #${fix_num}: merged PR lookup failed; leaving labels unchanged this cycle." >&2
+            # Exit code 2 = transient timeline lookup failure.  The issue is
+            # still flagged as closed (the state/label said so) but without a
+            # verifiable merged PR we treat the batch as failed and let the
+            # validation recovery path re-evaluate.  Preserved message text
+            # "merged PR lookup failed" matches existing test expectations
+            # and operator muscle memory.
+            echo "::warning::Validation fix-up issue #${fix_num}: merged PR lookup failed; treating as closed without merge." >&2
           fi
+          FIX_THIS_CLOSED_WITHOUT_MERGE="true"
         fi
+      else
+        # Issue still open and has no ai:closed label — nothing to backfill
+        # this cycle.  Skipping the timeline walk here removes a per-issue
+        # API round-trip (+ pagination) that the original loop made every
+        # poll cycle for issues that were clearly still in progress.
+        echo "Validation fix-up issue #${fix_num}: still open; awaiting PR merge."
       fi
 
-      if has_label "${FIX_LABELS}" "ai:closed" && [ "${FIX_IS_MERGED}" != "true" ]; then
+      if [ "${FIX_THIS_CLOSED_WITHOUT_MERGE}" = "true" ]; then
         FIX_ANY_CLOSED="true"
         CLOSED_FIX_NUMS="${CLOSED_FIX_NUMS} #${fix_num}"
       fi
@@ -4303,7 +4431,30 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
     fi
 
     if [ "${FIX_ALL_MERGED}" != "true" ]; then
-      echo "Validation fix-up issues are still in progress."
+      # Per-batch stall ceiling: a single batch of fix-up issues cannot sit in
+      # "in progress" forever.  Increment a cycle counter stored alongside the
+      # active fix issues and escalate through mark_validation_failed when it
+      # exceeds MAX_VALIDATION_FIX_BATCH_CYCLES.  The counter is reset when a
+      # new fix-issues comment arrives (sync_validation_fix_issues_from_comments)
+      # and when mark_validation_failed clears the active list.
+      FIX_BATCH_CYCLES="$(jq -r '.validation_fix_issues_batch_cycles // 0' "${STATE_FILE}")"
+      if ! [[ "${FIX_BATCH_CYCLES}" =~ ^[0-9]+$ ]]; then
+        FIX_BATCH_CYCLES="0"
+      fi
+      FIX_BATCH_CYCLES=$(( FIX_BATCH_CYCLES + 1 ))
+
+      jq --argjson c "${FIX_BATCH_CYCLES}" \
+        '.validation_fix_issues_batch_cycles = $c' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+      if [ "${FIX_BATCH_CYCLES}" -gt "${MAX_VALIDATION_FIX_BATCH_CYCLES}" ]; then
+        ACTIVE_FIX_ISSUES_SUMMARY="$(echo "${ACTIVE_FIX_ISSUES_JSON}" | jq -r 'map("#\(.)") | join(", ")' 2>/dev/null || echo "<unavailable>")"
+        mark_validation_failed "Validation fix-up batch stalled: ${FIX_BATCH_CYCLES} poll cycles elapsed without all fix-up issues reaching ai:merged (MAX_VALIDATION_FIX_BATCH_CYCLES=${MAX_VALIDATION_FIX_BATCH_CYCLES}). Active issues: ${ACTIVE_FIX_ISSUES_SUMMARY}."
+        continue
+      fi
+
+      echo "Validation fix-up issues are still in progress (batch cycle ${FIX_BATCH_CYCLES}/${MAX_VALIDATION_FIX_BATCH_CYCLES})."
+      post_state_comment
       continue
     fi
 
@@ -4318,7 +4469,8 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
     jq --argjson cycle "${NEXT_VALIDATION_CYCLE}" \
       '.status = "validating" |
        .validation_cycle = $cycle |
-       .validation_active_fix_issues = []' \
+       .validation_active_fix_issues = [] |
+       .validation_fix_issues_batch_cycles = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     set_tracking_phase_label "ai:validating"
@@ -4348,6 +4500,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
          .validation_cycle = 1 |
          .validation_recovery_count = 0 |
          .validation_active_fix_issues = [] |
+         .validation_fix_issues_batch_cycles = 0 |
          .validation_last_dispatch_cycle = 0 |
          .validation_completed_cycle = null |
          del(.validation_failure_reason)' \
@@ -4534,11 +4687,13 @@ The poller will resume processing on the next cycle."
 - Managed by: AI Orchestrator"
 
       ensure_label_exists "ai:clarification"
+      ensure_label_exists "ai:orchestrator-managed"
       NEW_URL="$(gh issue create \
         --repo "${GITHUB_REPOSITORY}" \
         --title "${DEF_TITLE}" \
         --body "${FULL_BODY}" \
-        --label "ai:clarification" 2>/dev/null || echo "")"
+        --label "ai:clarification" \
+        --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
 
       if [ -z "${NEW_URL}" ]; then
         echo "::warning::Failed to create issue for ${local_id}; will retry next poll cycle."
@@ -5854,11 +6009,13 @@ ${RB_FIX_DESC}
 - Managed by: AI Orchestrator"
 
             ensure_label_exists "ai:clarification"
+            ensure_label_exists "ai:orchestrator-managed"
             NEW_URL="$(gh issue create \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${NEW_ISSUE_TITLE}" \
               --body "${FULL_NEW_BODY}" \
-              --label "ai:clarification")"
+              --label "ai:clarification" \
+              --label "ai:orchestrator-managed")"
             NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
             NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
             echo "  Created replacement issue #${NEW_NUM}: ${NEW_ISSUE_TITLE}"
@@ -6001,10 +6158,12 @@ REISSUE_EOF
 )"
 
     ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
     NEW_ISSUE_URL="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
       --title "${IF_TITLE}" \
       --body "${NEW_BODY}" \
-      --label "ai:clarification" 2>/dev/null || echo "")"
+      --label "ai:clarification" \
+      --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
     if [ -n "${NEW_ISSUE_URL}" ]; then
       NEW_ISSUE_URL_CLEAN="$(printf '%s\n' "${NEW_ISSUE_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
       NEW_ISSUE_NUM="$(basename "${NEW_ISSUE_URL_CLEAN%%[?#]*}")"
@@ -6089,6 +6248,7 @@ fi
       --labels-json "${LABELS_JSON}"
       --threshold-minutes "${STALL_THRESHOLD_MINUTES}"
       --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}"
+      --allow-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
       --stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}"
       --enable-stall-judge "${ENABLE_STALL_JUDGE}"
       --allow-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
@@ -6175,6 +6335,21 @@ with open('${STATE_FILE}', 'w') as f:
     echo "Wave ${CURRENT_WAVE} stuck — invoking judge to define missing issues or decide next action..."
   else
     echo "Wave ${CURRENT_WAVE} complete!"
+  fi
+
+  if [ "${WAVE_COMPLETE}" = "true" ] \
+    && [ "${ANY_FAILED}" = "false" ] \
+    && [ "${PROJECT_COMPLETE}" = "false" ] \
+    && [ "${INVOKE_JUDGE_FOR_STUCK}" = "false" ] \
+    && [ "${ENABLE_CLEAN_WAVE_JUDGE_SKIP}" = "true" ]; then
+    NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
+    if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
+      echo "Clean-wave advance: skipping judge for wave ${CURRENT_WAVE} (no failures, project incomplete)."
+      jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1" \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment
+      continue
+    fi
   fi
 
   # ---------------------------------------------------------------
@@ -6550,6 +6725,7 @@ All waves have merged and the judge is satisfied. Transitioning to runtime valid
          .judge_cycle += 1 |
          .validation_cycle = $cycle |
          .validation_active_fix_issues = [] |
+         .validation_fix_issues_batch_cycles = 0 |
          .validation_seen_fix_issues = (.validation_seen_fix_issues // []) |
          .validation_last_fix_comment_id = (.validation_last_fix_comment_id // 0) |
          .validation_last_dispatch_cycle = 0 |
@@ -6669,11 +6845,13 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Managed by: AI Orchestrator"
 
           ensure_label_exists "ai:clarification"
+          ensure_label_exists "ai:orchestrator-managed"
           FIX_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${FIX_TITLE}" \
             --body "${FULL_FIX_BODY}" \
-            --label "ai:clarification")"
+            --label "ai:clarification" \
+            --label "ai:orchestrator-managed")"
           echo "  Created fix-up: ${FIX_URL}"
 
           # Record in state so subsequent cycles/iterations won't recreate,
@@ -6737,11 +6915,13 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Managed by: AI Orchestrator"
 
           ensure_label_exists "ai:clarification"
+          ensure_label_exists "ai:orchestrator-managed"
           NEW_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${NEW_TITLE}" \
             --body "${FULL_NEW_BODY}" \
-            --label "ai:clarification")"
+            --label "ai:clarification" \
+            --label "ai:orchestrator-managed")"
           echo "  Created: ${NEW_URL}"
 
           # Record in state so subsequent cycles/iterations won't recreate,
@@ -6819,11 +6999,13 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Managed by: AI Orchestrator"
 
           ensure_label_exists "ai:clarification"
+          ensure_label_exists "ai:orchestrator-managed"
           NEW_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${DEF_TITLE}" \
             --body "${FULL_BODY}" \
-            --label "ai:clarification")"
+            --label "ai:clarification" \
+            --label "ai:orchestrator-managed")"
 
           NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
           NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"

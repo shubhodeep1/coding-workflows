@@ -360,6 +360,44 @@ STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
 	"no_labels": [
 		"retrigger_pipeline",
 		"retrigger_pipeline",
+		"close_and_reissue",
+	],
+	"ai:clarification": [
+		"auto_respond_clarify",
+		"auto_respond_clarify",
+		"close_and_reissue",
+	],
+	"ai:planning": [
+		"retrigger_plan",
+		"retrigger_plan",
+		"close_and_reissue",
+	],
+	"ai:awaiting-approval": [
+		"auto_approve",
+		"auto_approve",
+		"auto_approve",
+	],
+	"ai:implementing": [
+		"retrigger_implement",
+		"retrigger_implement",
+		"close_and_reissue",
+	],
+	"ai:done": [
+		"retrigger_review",
+		"retrigger_review",
+		"close_and_reissue",
+	],
+	"ai:ready-to-merge": [
+		"attempt_merge",
+		"attempt_merge",
+		"attempt_merge",
+	],
+}
+
+STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION: dict[str, list[str]] = {
+	"no_labels": [
+		"retrigger_pipeline",
+		"retrigger_pipeline",
 		"escalate_human",
 	],
 	"ai:clarification": [
@@ -393,6 +431,63 @@ STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
 		"escalate_human",
 	],
 }
+
+VALID_STALL_RECOVERY_ACTIONS: set[str] = {
+	action
+	for actions in (
+		list(STALL_RECOVERY_ACTIONS.values()) +
+		list(STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION.values())
+	)
+	for action in actions
+}
+
+
+def _coerce_bool(value: Any) -> bool:
+	if isinstance(value, bool):
+		return value
+	if value is None:
+		return False
+	return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_stall_recovery_action(
+	phase: str,
+	recovery_count: int,
+	max_recoveries: int,
+	allow_human_terminalization: bool = False,
+	judged_action: str | None = None,
+) -> str:
+	"""Resolve the effective stall recovery action for the given issue phase.
+
+	When *judged_action* is provided, only supported actions are accepted;
+	unsupported/malformed values fail-open to the declarative ladder outcome.
+	"""
+	try:
+		recovery_count = int(recovery_count)
+	except (TypeError, ValueError):
+		recovery_count = 0
+	if recovery_count < 0:
+		recovery_count = 0
+
+	if recovery_count >= max_recoveries:
+		return "skip"
+
+	default_actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
+	actions = default_actions
+	if allow_human_terminalization:
+		actions = STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION.get(phase, default_actions)
+
+	action_idx = min(recovery_count, len(actions) - 1)
+	fallback_action = actions[action_idx]
+	allowed_actions = set(actions)
+
+	if judged_action is None:
+		return fallback_action
+
+	candidate = str(judged_action).strip()
+	if candidate in VALID_STALL_RECOVERY_ACTIONS and candidate in allowed_actions:
+		return candidate
+	return fallback_action
 
 
 def _parse_cli_bool(value: Any, default: bool) -> bool:
@@ -560,6 +655,10 @@ def detect_stalls(
 	reached (but still below *max_recoveries*), recovery action is
 	overridden to RUN_STALL_JUDGE_ACTION for non-dedicated phases.
 
+	When *allow_human_terminalization* is false, declarative ladder
+	recovery never emits ``escalate_human`` and instead falls back to the
+	last non-human ladder action.
+
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
 		stall_duration_minutes, stall_recovery_count
@@ -607,7 +706,13 @@ def detect_stalls(
 		if elapsed < threshold_secs:
 			continue
 
-		recovery_count = issue.get("stall_recovery_count", 0)
+		recovery_count_raw = issue.get("stall_recovery_count", 0)
+		try:
+			recovery_count = int(recovery_count_raw)
+		except (TypeError, ValueError):
+			recovery_count = 0
+		if recovery_count < 0:
+			recovery_count = 0
 
 		# Determine recovery action
 		if recovery_count >= max_recoveries:
@@ -615,9 +720,10 @@ def detect_stalls(
 		elif enable_stall_judge and stall_judge_trigger_count >= 1 and recovery_count >= stall_judge_trigger_count:
 			action = RUN_STALL_JUDGE_ACTION
 		else:
-			action = resolve_declarative_stall_recovery_action(
+			action = resolve_stall_recovery_action(
 				phase=phase,
 				recovery_count=recovery_count,
+				max_recoveries=max_recoveries,
 				allow_human_terminalization=allow_human_terminalization,
 			)
 
