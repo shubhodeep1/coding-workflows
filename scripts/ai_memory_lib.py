@@ -523,11 +523,11 @@ def list_processed_command_entries(
         except (MemoryValidationError, OSError, ValueError) as exc:
             _log.warning("Skipping invalid processed command entry %s: %s", entry_path, exc)
             continue
-        if command_filter and str(payload.get("command") or "").strip().lower() != command_filter:
+        if command and str(payload.get("command") or "").strip().lower() != command_filter:
             continue
-        if workflow_filter and str(payload.get("workflow") or "").strip().lower() != workflow_filter:
+        if workflow and str(payload.get("workflow") or "").strip().lower() != workflow_filter:
             continue
-        if status_filter and str(payload.get("status") or "").strip().lower() != status_filter:
+        if status and str(payload.get("status") or "").strip().lower() != status_filter:
             continue
         entries.append(payload)
     return sorted(entries, key=lambda item: (str(item.get("timestamp") or ""), int(item.get("comment_id") or 0)))
