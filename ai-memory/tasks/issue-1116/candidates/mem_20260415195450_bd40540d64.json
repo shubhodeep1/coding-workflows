@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan\n\n1. Clarification answer interpretation\n- No Q<ID> clarification questions were asked.\n- `/answer [auto-answered-by-clarify]` is an auto-continue marker, so there are no user-choice mappings to resolve.\n- Inputs are sufficient to produce the implementation plan.\n\n2. Factual conflicts detected\n- `prompts/mode-plan.txt` and `prompts/mode-clarify.txt` are currently not the runtime source for plan/clarify model prompts; those prompts are inlined in `.github/workflows/plan.yml` and `.github/workflows/clarify.yml`.\n- `ai:blocked` escalation plumbing currently exists in `.github/workflows/orchestrate_clarify_respond.yml` (loop-breaker path), not yet in plan/clarify workflows.\n\n3. Files likely to change\n- `prompts/mode-plan.txt`\n- `prompts/mode-clarify.txt`\n- `.github/workflows/plan.yml`\n- `.github/workflows/clarify.yml`\n- `tests/test_plan_clarify_blocked_output.py` (new)\n- `.github/workflows/ci.yml`\n- `.github/workflows/test-and-mark-stable.yml` (if this repo\u2019s stable gate should run the new test)\n- `README.md` (behavior update note for blocked handoff)\n\n4. Functions/modules/logic to implement\n- Prompt contract updates:\n  - Add rule in both plan/clarify prompts: if required input is external and non-synthesizable (SHA, branch, credential, external URL), emit exactly `BLOCKED: <short reason>` and do not emit Q/Choices.\n- Planning ref context:\n  - In `plan.yml`, add a small step to capture `git rev-parse HEAD` and `git symbolic-ref --short -q HEAD` (or detached marker), parse integration-branch metadata from issue body, and append this context into planning input.\n  - Update planning prompt instructions to require surfacing this ref context and to emit `BLOCKED: integration branch mismatch` when metadata branch and checked-out ref differ.\n- Output parsing:\n  - In `plan.yml` parse step, add high-priority detection of `^BLOCKED:\\s+`.\n  - In `clarify.yml` parse step, add high-priority detection of `^BLOCKED:\\s+`.\n- Controlled blocked-path escalation (reusing loop-breaker style behavior):\n  - Add blocked handler step in both workflows to:\n    - ensure/add `ai:blocked`\n    - remove `ai:planning` and `ai:clarification` (and `ai:awaiting-approval` where relevant)\n    - post human-facing blocked comment with reason\n    - send Telegram alert\n    - exit cleanly (non-error handoff)\n- Preserve normal flow:\n  - Gate existing clarification-question and clear/auto-answer branches so they only run when blocked=false.\n\n5. Data structures affected\n- Workflow step outputs:\n  - Add `blocked=true|false` output from parse steps in plan/clarify workflows.\n- Processed-command ledger (plan workflow):\n  - Complete claimed `/answer` command with a blocked status (string-safe; schema already allows free-form status pattern).\n- Issue label state transitions:\n  - Add deterministic transition into `ai:blocked` for blocked events.\n\n6. API/interface changes\n- LLM output contract now supports a third top-level form in plan/clarify:\n  - `BLOCKED: <short reason>`\n- No external API endpoint changes.\n- No DB contract/index changes.\n\n7. Risks and edge cases\n- False-positive blocked detection if `BLOCKED:` appears in unrelated text; parser should anchor to line start and prioritize exact format.\n- Detached HEAD handling must be explicit in ref-context output.\n- Integration-branch metadata may be missing or malformed; mismatch rule should only apply when metadata is present and parseable.\n- Avoid duplicate blocked comments on retries/reruns by using one blocked handler path per run and existing command-claim/idempotency where applicable.\n- Ensure blocked path does not post `/answer`, preventing auto-answer loops.\n\n8. Testing considerations\n- Prompt/parse test:\n  - Verify both workflows detect `BLOCKED:` reliably.\n  - Verify standard Q<ID>/Choices `NEEDS_CLARIFICATION` parsing remains intact.\n- Workflow-unit style test (mocked GH/TG):\n  - Verify blocked path sets `ai:blocked`, removes phase labels, posts blocked comment, and triggers Telegram alert.\n  - Verify blocked path skips auto-answer continuation behavior.\n- Regression test:\n  - Verify normal clarification path with valid Q<ID>/Choices still passes unchanged.\n- CI wiring:\n  - Add new test to `ci.yml` (and stable validation job if required in this repo\u2019s release gate).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d6473e7feb9d2c11e8951afa9cadb7f13a8d08a802bc092fd25e047cbf47e2ec",
+  "lineage": {
+    "issue_number": 1116,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24474760773",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24474760773",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1116"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415195450_bd40540d64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1116,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24474760773"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1116",
+  "timestamps": {
+    "created_at": "2026-04-15T19:54:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
