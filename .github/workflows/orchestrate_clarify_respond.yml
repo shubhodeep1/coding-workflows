@@ -594,6 +594,7 @@ jobs:
           LOOP_REASON="none"
           PREVIOUS_CLARIFY_COMMENT_ID="0"
           PREVIOUS_ANSWER_COMMENT_ID="0"
+          USED_CLARIFY_HASH=""
           MAX_CYCLES="${ORCHESTRATOR_MAX_CLARIFY_CYCLES}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
@@ -666,6 +667,11 @@ jobs:
                 --max-cycles "${MAX_CYCLES}" \
                 --current-comment-id "${CLARIFICATION_COMMENT_ID}")"
 
+              USED_CLARIFY_HASH="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.clarify_hash // empty' 2>/dev/null || echo "")"
+              if [ -z "${USED_CLARIFY_HASH}" ]; then
+                USED_CLARIFY_HASH="${CLARIFY_HASH}"
+              fi
+
               LOOP_BLOCKED="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.blocked // false' 2>/dev/null || echo "false")"
               LOOP_REASON="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.reason // "none"' 2>/dev/null || echo "none")"
               CYCLE="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.cycle // 1' 2>/dev/null || echo "1")"
@@ -728,7 +734,7 @@ jobs:
                 --command "answer" \
                 --status "blocked_loop" \
                 --metadata-json "$(jq -cn \
-                  --arg clarify_hash "${CLARIFY_HASH}" \
+                  --arg clarify_hash "${USED_CLARIFY_HASH}" \
                   --arg answer_hash "${ANSWER_HASH}" \
                   --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" \
                   --arg cycle "${CYCLE}" \
@@ -784,7 +790,7 @@ jobs:
               --command "answer" \
               --status "answered" \
               --metadata-json "$(jq -cn \
-                --arg clarify_hash "${CLARIFY_HASH}" \
+                --arg clarify_hash "${USED_CLARIFY_HASH}" \
                 --arg answer_hash "${ANSWER_HASH}" \
                 --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" \
                 --arg answer_comment_id "${ANSWER_COMMENT_ID}" \
