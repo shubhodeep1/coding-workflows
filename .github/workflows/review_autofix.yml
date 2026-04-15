@@ -2713,6 +2713,10 @@ jobs:
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               install -m 0755 .codex-workflow-src/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
               source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
+            elif [ -f .codex-workflow-src-main/scripts/label_helpers.sh ]; then
+              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
+              install -m 0755 .codex-workflow-src-main/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
+              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             else
               ensure_label_exists() {
                 local label_name="$1"

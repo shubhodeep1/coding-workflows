@@ -402,8 +402,8 @@ jobs:
           fi
           if [ ! -f prompts/mode-implement-repair.txt ]; then
             if ! _gh_api_fetch "prompts/mode-implement-repair.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-implement-repair.txt?ref=${script_ref}"; then
-              echo "::warning::mode-implement-repair.txt not found on ${script_ref}; falling back to main"
+              "repos/${wf_source}/contents/prompts/mode-implement-repair.txt?ref=${SCRIPT_REF}"; then
+              echo "::warning::mode-implement-repair.txt not found on ${SCRIPT_REF}; falling back to main"
               _gh_api_fetch "prompts/mode-implement-repair.txt" api -H 'Accept: application/vnd.github.raw+json' \
                 "repos/${wf_source}/contents/prompts/mode-implement-repair.txt?ref=main"
             fi
