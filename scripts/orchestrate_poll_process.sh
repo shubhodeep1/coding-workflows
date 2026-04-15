@@ -5500,7 +5500,7 @@ sys.exit(1)
                 if [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
                   BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
                   echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
-                else
+                elif [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
                   FOLLOWUP_PR_BLOCKED="true"
                   RB_FOLLOWUP_REFUSED="true"
                   FOLLOWUP_BLOCK_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}), but integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}."

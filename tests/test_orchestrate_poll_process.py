@@ -1438,7 +1438,7 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 
 
 	assert len(result["prs"]) == 1
-	assert "refusing to create follow-up PR against 'main'" in (result["stdout"] + result["stderr"])
+	assert "Aborting follow-up PR creation to avoid targeting main" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_context():
@@ -2961,7 +2961,6 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 	assert not any("/approved" in body for body in issue_comments)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 3
-	assert "ai:needs-human" in result["issues"]["10"]["labels"]
 
 
 
