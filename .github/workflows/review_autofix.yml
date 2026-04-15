@@ -123,6 +123,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
     steps:
       - name: Dispatch standalone validate for orchestrator short-circuit issues
         run: |
@@ -152,6 +153,7 @@ jobs:
           fi
 
           validation_dispatched="false"
+          validate_workflow="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
 
@@ -163,10 +165,10 @@ jobs:
 
             if [ "${validation_dispatched}" = "false" ]; then
               echo "Dispatching standalone validation for linked issue #${issue_number} (tracking_issue=0)."
-              if gh workflow run "ai-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0" || gh workflow run "internal-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0"; then
+              if gh workflow run "${validate_workflow}" --repo "${REPOSITORY}" -f tracking_issue="0" || { [ "${validate_workflow}" != "internal-validate.yml" ] && gh workflow run "internal-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0"; }; then
                 validation_dispatched="true"
               else
-                echo "::warning::Failed to dispatch ai-validate.yml/internal-validate.yml for issue #${issue_number}; continuing without failing workflow."
+                echo "::warning::Failed to dispatch ${validate_workflow}/internal-validate.yml for issue #${issue_number}; continuing without failing workflow."
                 continue
               fi
             fi
@@ -175,6 +177,10 @@ jobs:
               echo "::warning::Standalone validation dispatched for issue #${issue_number}, but failed to remove ai:orchestrator-validate-required."
             fi
           done <<< "${issue_numbers}"
+
+          if [ "${validation_dispatched}" = "false" ]; then
+            echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
+          fi
 
   codex-agent:
     needs: gate

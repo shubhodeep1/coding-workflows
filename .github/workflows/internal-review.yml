@@ -22,6 +22,7 @@ permissions:
 
 jobs:
   review:
+    if: ${{ github.event.action != 'closed' || github.event.pull_request.merged == true }}
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@main
     with:
       pr_number: ${{ github.event.inputs.pr_number || '' }}
