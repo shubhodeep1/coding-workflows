@@ -2101,7 +2101,7 @@ jobs:
                 --color "f9d0c4" --description "AI clarification required before planning" \
                 2>/dev/null || true
               gh_retry gh label create "ai:orchestrator-managed" --repo "${{ github.repository }}" \
-                --color "a2eeef" --description "Issue managed by AI orchestrator lifecycle" \
+                --color "bfdadc" --description "Issue is managed by the AI orchestrator" \
                 2>/dev/null || true
             fi
           }

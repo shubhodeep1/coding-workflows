@@ -634,10 +634,12 @@ ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
 START_TS="$(date +%s)"
 
 if [ -f "${ENV_FILE}" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "${ENV_FILE}"
-  set +a
+  while IFS= read -r env_line || [ -n "${env_line}" ]; do
+    env_line="${env_line%$'\r'}"
+    [ -z "${env_line}" ] && continue
+    [ "${env_line#\#}" != "${env_line}" ] && continue
+    export "${env_line}"
+  done < "${ENV_FILE}"
 fi
 
 mkdir -p "${LOG_DIR}"
