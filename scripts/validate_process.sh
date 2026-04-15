@@ -287,9 +287,11 @@ dispatch_self_heal_improvements()
 
     # Hard-cap total payload size so a pathological patches ledger
     # cannot produce a giant repository_dispatch body. 1 MiB total is
-    # already far larger than any legitimate self-heal sequence
-    # (max per-patch 64 KiB × max 2 attempts = 128 KiB). Above that we
-    # skip dispatch and preserve the full ledger in the run artifact.
+    # already far larger than any legitimate self-heal sequence given
+    # the per-patch size limit (SELF_HEAL_MAX_PATCH_BYTES, default
+    # 64 KiB) and the configured self-heal attempt budget
+    # (MAX_SELF_HEAL_ATTEMPTS, default 2). Above the cap we skip
+    # dispatch and preserve the full ledger in the run artifact.
     local max_dispatch_bytes="${SELF_HEAL_MAX_DISPATCH_BYTES:-1048576}"
     local patches_size
     patches_size="$(wc -c < "${patches_array_file}" | tr -d ' ')"

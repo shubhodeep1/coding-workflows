@@ -4,8 +4,14 @@
 # failure context, then signalling validate_process.sh to re-run.
 #
 # This script is invoked ONLY by scripts/validate_process.sh, which passes
-# the failure context via env vars and reads back the patch decision from
-# ${SELF_HEAL_DECISION_FILE}. Callers must check the exit code:
+# the failure context via env vars and dispatches on this script's exit
+# code. The self-heal decision JSON and the resulting patch are written
+# to files under ${RUNTIME_DIR} (validate_self_heal_decision.json and
+# validate_self_heal_patch.diff) for diagnostic/artifact purposes only;
+# the caller does not read those files. The accumulated-patches JSONL
+# ledger at ${SELF_HEAL_PATCHES_FILE} IS consumed by the caller later,
+# in dispatch_self_heal_improvements(), to build the repository_dispatch
+# payload. Callers must check the exit code:
 #   0  — patch produced and applied; caller should re-exec validate_process.sh
 #   1  — no patch produced; caller should fall through to normal hard-fail
 #   2  — hard error inside self-heal (LLM failure, malformed decision, budget
