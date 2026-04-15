@@ -264,7 +264,7 @@ fi
 # Reject obvious out-of-scope diffs: patch must only touch prompts/<target>.
 # Accept a/, b/ prefixes and optional trailing whitespace+timestamp.
 # (/dev/null is excluded here because the earlier guard rejects it.)
-_expected_re="(a/|b/)?prompts/${DECISION_TARGET}([[:space:]]|\$)"
+_expected_re="(a/|b/)?prompts/${DECISION_TARGET}([[:space:]]|$)"
 if grep -E '^(\+\+\+|---) ' "${SELF_HEAL_PATCH_TMP}" | grep -vE "${_expected_re}" >/dev/null 2>&1; then
 	echo "self-heal: refusing — patch touches files outside prompts/${DECISION_TARGET}" >&2
 	exit 2
