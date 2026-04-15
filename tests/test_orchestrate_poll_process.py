@@ -308,7 +308,6 @@ def _run_poller(
 	enable_stall_judge: str = "true",
 	enable_stall_human_terminalization: str = "false",
 	stall_judge_trigger_count: str = "2",
-	enable_stall_human_terminalization: str = "false",
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -1067,7 +1066,6 @@ print(json.dumps(parsed))
 				"ENABLE_STALL_JUDGE": enable_stall_judge,
 				"ENABLE_STALL_HUMAN_TERMINALIZATION": enable_stall_human_terminalization,
 				"STALL_JUDGE_TRIGGER_COUNT": stall_judge_trigger_count,
-				"ENABLE_STALL_HUMAN_TERMINALIZATION": enable_stall_human_terminalization,
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"GH_MOCK_STORE": str(store_file),
