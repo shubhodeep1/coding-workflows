@@ -1002,10 +1002,33 @@ fi
 
 # ---------------------------------------------------------------
 # Phase 0: Discover validation hints when repository hints are absent
+#
+# Hint source precedence:
+#   1. .ai/validate.yml         — committed in consumer repo (authoritative)
+#   2. .ai/validate-hints-cache/hints.yml
+#                                — restored from GitHub Actions cache
+#                                  (written by a prior successful discover
+#                                  run in the same workspace)
+#   3. codex discover call      — LLM-driven discovery, last resort
+#
+# The cache path is restored by a `Restore validate hints cache` step in
+# the validate workflow via actions/cache. On successful discovery we
+# copy the hints back into the cache directory so the next run in this
+# repo can reuse them without a codex call. Different repos are
+# automatically isolated because GitHub Actions cache is per-repo. The
+# cache key hashes files that drive discovery output (Dockerfile,
+# compose, package manifests) so a repo structure change invalidates it.
 # ---------------------------------------------------------------
+VALIDATE_HINTS_CACHE_DIR="${VALIDATE_HINTS_CACHE_DIR:-.ai/validate-hints-cache}"
+VALIDATE_HINTS_CACHE_FILE="${VALIDATE_HINTS_CACHE_DIR}/hints.yml"
+
 if [ -f .ai/validate.yml ]; then
   cp .ai/validate.yml "${VALIDATE_HINTS_FILE}"
   HINTS_SOURCE="committed"
+elif [ -f "${VALIDATE_HINTS_CACHE_FILE}" ] && [ -s "${VALIDATE_HINTS_CACHE_FILE}" ]; then
+  cp "${VALIDATE_HINTS_CACHE_FILE}" "${VALIDATE_HINTS_FILE}"
+  HINTS_SOURCE="cache"
+  echo "Reused validation hints from ${VALIDATE_HINTS_CACHE_FILE} (skipped codex discovery)."
 else
 {
   cat "${STATIC_CONTEXT_FILE}"
@@ -1084,6 +1107,14 @@ PY
   if [ "${DISCOVER_SUCCESS}" != "true" ]; then
     printf '# No .ai/validate.yml hints file found\n' > "${VALIDATE_HINTS_FILE}"
     HINTS_SOURCE="none"
+  else
+    # Persist the discovered hints to the cache directory so subsequent
+    # runs in the same workspace can skip the codex discover call. The
+    # cache is saved by the `Save validate hints cache` / actions/cache
+    # post-step in validate.yml.
+    if mkdir -p "${VALIDATE_HINTS_CACHE_DIR}" 2>/dev/null; then
+      cp "${VALIDATE_HINTS_FILE}" "${VALIDATE_HINTS_CACHE_FILE}" 2>/dev/null || true
+    fi
   fi
 fi
 
