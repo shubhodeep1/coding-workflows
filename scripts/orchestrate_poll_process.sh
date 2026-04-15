@@ -338,18 +338,18 @@ else
   ENABLE_STALL_JUDGE="false"
 fi
 
-ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
-if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
-  ENABLE_STANDALONE_STALL_RECOVERY="true"
-else
-  ENABLE_STANDALONE_STALL_RECOVERY="false"
-fi
-
 ENABLE_CLEAN_WAVE_JUDGE_SKIP="${ENABLE_CLEAN_WAVE_JUDGE_SKIP:-true}"
 if is_truthy "${ENABLE_CLEAN_WAVE_JUDGE_SKIP}"; then
   ENABLE_CLEAN_WAVE_JUDGE_SKIP="true"
 else
   ENABLE_CLEAN_WAVE_JUDGE_SKIP="false"
+fi
+
+ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
+if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
+  ENABLE_STANDALONE_STALL_RECOVERY="true"
+else
+  ENABLE_STANDALONE_STALL_RECOVERY="false"
 fi
 
 ENABLE_CLOSE_MERGED_ISSUES="${ENABLE_CLOSE_MERGED_ISSUES:-true}"
@@ -4904,16 +4904,13 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
           FIX_EVIDENCE_STATUS=$?
           if [ "${FIX_EVIDENCE_STATUS}" -eq 1 ]; then
             echo "Validation fix-up issue #${fix_num}: no merged PR evidence detected (state=${FIX_STATE}, state_reason=${FIX_STATE_REASON:-none})."
+            FIX_THIS_CLOSED_WITHOUT_MERGE="true"
           else
-            # Exit code 2 = transient timeline lookup failure.  The issue is
-            # still flagged as closed (the state/label said so) but without a
-            # verifiable merged PR we treat the batch as failed and let the
-            # validation recovery path re-evaluate.  Preserved message text
-            # "merged PR lookup failed" matches existing test expectations
-            # and operator muscle memory.
-            echo "::warning::Validation fix-up issue #${fix_num}: merged PR lookup failed; treating as closed without merge." >&2
+            # Exit code 2 = transient timeline/API lookup failure.  Keep this
+            # issue in-progress so the next poll cycle can retry instead of
+            # forcing a false validation failure.
+            echo "::warning::Validation fix-up issue #${fix_num}: merged PR lookup failed; leaving issue pending for retry." >&2
           fi
-          FIX_THIS_CLOSED_WITHOUT_MERGE="true"
         fi
       else
         # Issue still open and has no ai:closed label — nothing to backfill
@@ -7159,20 +7156,24 @@ with open('${STATE_FILE}', 'w') as f:
     echo "Wave ${CURRENT_WAVE} complete!"
   fi
 
-  if [ "${WAVE_COMPLETE}" = "true" ] \
-    && [ "${ANY_FAILED}" = "false" ] \
-    && [ "${PROJECT_COMPLETE}" = "false" ] \
-    && [ "${INVOKE_JUDGE_FOR_STUCK}" = "false" ] \
-    && [ "${ENABLE_CLEAN_WAVE_JUDGE_SKIP}" = "true" ]; then
-    NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
-    if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
-      echo "Clean-wave advance: skipping judge for wave ${CURRENT_WAVE} (no failures, project incomplete)."
-      jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1 | .judge_stall_cycles = 0" \
-        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_state_comment
-      continue
-    fi
+  SKIP_JUDGE_FOR_CLEAN_WAVE="false"
+  if [ "${ENABLE_CLEAN_WAVE_JUDGE_SKIP}" = "true" ] \
+    && [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ] \
+    && [ "${WAVE_COMPLETE}" = "true" ] \
+    && [ "${ANY_FAILED}" != "true" ] \
+    && [ "${PROJECT_COMPLETE}" != "true" ] \
+    && [ "${CURRENT_WAVE}" -lt "${TOTAL_WAVES}" ]; then
+    SKIP_JUDGE_FOR_CLEAN_WAVE="true"
+    JUDGE_STATUS="in_progress"
+    JUDGE_JUSTIFICATION="clean_wave_skip_enabled"
+    JUDGE_ASSESSMENT="Clean wave completed with deferred future-wave issue definitions; advancing without judge invocation."
+    NEW_ISSUES_COUNT=0
+    REVERT_COUNT=0
+    JUDGE_JSON='{"status":"in_progress","justification":"clean_wave_skip_enabled","assessment":"Clean wave completed with deferred future-wave issue definitions; advancing without judge invocation.","new_issues":[],"issues_to_revert":[]}'
+    echo "Clean wave skip eligible on wave ${CURRENT_WAVE}; advancing to next wave without judge invocation."
   fi
+
+  if [ "${SKIP_JUDGE_FOR_CLEAN_WAVE}" != "true" ]; then
 
   # ---------------------------------------------------------------
   # Guard: cap judge stall cycles to prevent infinite loops.
@@ -7505,6 +7506,7 @@ PRs to revert: ${REVERT_COUNT}"
     JUDGE_STATUS="in_progress"
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
       -f body="⚠️ Judge verdict overridden: \`complete\` → \`in_progress\` because wave ${CURRENT_WAVE}/${TOTAL_WAVES} is not the final wave. Advancing to next wave." >/dev/null
+  fi
   fi
 
   # ---------------------------------------------------------------
@@ -7881,7 +7883,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       # Post updated state
       post_state_comment
 
-      fi  # end: PENDING_IN_WAVE guard
+      fi  # end: current-wave issue-change guard
       ;;
 
     *)

@@ -240,6 +240,7 @@ jobs:
           ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+          ISSUE_BODY_DELIM="EOF_$(date +%s%N)_$RANDOM"
 
           # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
           # issue. It is passed via heredoc (not shell expansion) to prevent injection
@@ -247,9 +248,9 @@ jobs:
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
-            echo 'ISSUE_BODY<<EOF'
-            echo "${ISSUE_BODY}"
-            echo 'EOF'
+            printf 'ISSUE_BODY<<%s\n' "${ISSUE_BODY_DELIM}"
+            printf '%s\n' "${ISSUE_BODY}"
+            printf '%s\n' "${ISSUE_BODY_DELIM}"
           } >> "$GITHUB_ENV"
 
       - name: Detect smoke test and tune LLM settings
@@ -907,6 +908,145 @@ jobs:
             echo "NEEDS_CLARIFICATION=false" >> "$GITHUB_ENV"
           fi
 
+      - name: Evaluate orchestrator auto-answer eligibility
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
+        id: orchestrator_auto_answer_eval
+        run: |
+          set -euo pipefail
+
+          write_output() {
+            local key="$1"
+            local value="$2"
+            local delim
+            delim="EOF_$(date +%s%N)_$RANDOM"
+            {
+              printf '%s<<%s\n' "$key" "$delim"
+              printf '%s\n' "$value"
+              printf '%s\n' "$delim"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          HAS_ORCHESTRATOR_LABEL="false"
+          if jq -e '[.labels[].name] | index("ai:orchestrator-managed") != null' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+            HAS_ORCHESTRATOR_LABEL="true"
+          fi
+
+          IS_ORCHESTRATOR_MANAGED="false"
+          if [ "${HAS_ORCHESTRATOR_LABEL}" = "true" ] || printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+            IS_ORCHESTRATOR_MANAGED="true"
+          fi
+
+          write_output "is_orchestrator" "${IS_ORCHESTRATOR_MANAGED}"
+          write_output "auto_answer_eligible" "false"
+          write_output "auto_answer_parse_failed" "false"
+          write_output "auto_answer_failure_reason" ""
+          write_output "auto_answer_mapping" ""
+          write_output "auto_answer_command" ""
+
+          if [ "${IS_ORCHESTRATOR_MANAGED}" != "true" ]; then
+            exit 0
+          fi
+
+          PARSE_RESULT_FILE="${RUNTIME_DIR}/orchestrator_auto_answer_parse.txt"
+          perl - "${CODEX_OUTPUT_FILE}" > "${PARSE_RESULT_FILE}" <<'PERL'
+          use strict;
+          use warnings;
+
+          my ($file) = @ARGV;
+          open my $fh, '<', $file or die "Unable to read $file: $!";
+
+          my $in_code_fence = 0;
+          my $current_qid = '';
+          my @qid_order;
+          my %seen_qid;
+          my %recommended_tokens;
+
+          while (my $line = <$fh>) {
+            chomp $line;
+
+            if ($line =~ /^\s*(?:```|~~~)/) {
+              $in_code_fence = !$in_code_fence;
+              next;
+            }
+            next if $in_code_fence;
+
+            if ($line =~ /^\s*(?:\*\*)?\s*(Q[0-9]+)\s*(?:\*\*)?\s*:/i) {
+              $current_qid = uc($1);
+              if ($seen_qid{$current_qid}) {
+                print "status=error\n";
+                print "reason=Duplicate Q-ID ${current_qid}\n";
+                exit 0;
+              }
+              $seen_qid{$current_qid} = 1;
+              push @qid_order, $current_qid;
+              next;
+            }
+
+            next if !$current_qid;
+            if ($line =~ /^\s*-\s*(?:\*\*)?([A-Za-z](?:\+[A-Za-z])*)(?:\*\*)?\s*[—–-].*\(RECOMMENDED\)/i) {
+              push @{ $recommended_tokens{$current_qid} }, uc($1);
+            }
+          }
+
+          if (!@qid_order) {
+            print "status=error\n";
+            print "reason=No Q-ID blocks detected\n";
+            exit 0;
+          }
+
+          for my $qid (@qid_order) {
+            my @tokens = @{ $recommended_tokens{$qid} // [] };
+            if (scalar(@tokens) == 0) {
+              print "status=error\n";
+              print "reason=Missing recommended option for ${qid}\n";
+              exit 0;
+            }
+            if (scalar(@tokens) > 1) {
+              print "status=error\n";
+              print "reason=Multiple recommended options for ${qid}\n";
+              exit 0;
+            }
+            if ($tokens[0] !~ /^[A-Z]$/) {
+              print "status=error\n";
+              print "reason=Non-single-letter recommended option '${tokens[0]}' for ${qid}\n";
+              exit 0;
+            }
+          }
+
+          my @mapping_tokens;
+          my @answer_tokens;
+          for my $qid (@qid_order) {
+            my $opt = $recommended_tokens{$qid}[0];
+            push @mapping_tokens, "${qid}->${opt}";
+            push @answer_tokens, "${qid}: ${opt}";
+          }
+
+          print "status=ok\n";
+          print "mapping=" . join(", ", @mapping_tokens) . "\n";
+          print "answer=" . join(", ", @answer_tokens) . "\n";
+          PERL
+
+          PARSE_STATUS="$(sed -n 's/^status=//p' "${PARSE_RESULT_FILE}" | head -n1)"
+          if [ "${PARSE_STATUS}" != "ok" ]; then
+            PARSE_REASON="$(sed -n 's/^reason=//p' "${PARSE_RESULT_FILE}" | head -n1)"
+            if [ -z "${PARSE_REASON}" ]; then
+              PARSE_REASON="Unable to parse recommended options from clarification output"
+            fi
+            write_output "auto_answer_parse_failed" "true"
+            write_output "auto_answer_failure_reason" "${PARSE_REASON}"
+            echo "::notice::Orchestrator auto-answer skipped (run_id=${{ github.run_id }}): ${PARSE_REASON}"
+            exit 0
+          fi
+
+          AUTO_ANSWER_MAPPING="$(sed -n 's/^mapping=//p' "${PARSE_RESULT_FILE}" | head -n1)"
+          AUTO_ANSWER_PAYLOAD="$(sed -n 's/^answer=//p' "${PARSE_RESULT_FILE}" | head -n1)"
+
+          write_output "auto_answer_eligible" "true"
+          write_output "auto_answer_mapping" "${AUTO_ANSWER_MAPPING}"
+          write_output "auto_answer_command" "/answer ${AUTO_ANSWER_PAYLOAD} [auto-answered-by-orchestrator]"
+
+          echo "::notice::Orchestrator auto-answer eligible (run_id=${{ github.run_id }}): ${AUTO_ANSWER_MAPPING}"
+
       - name: Guard plans targeting template-owned paths
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && !endsWith(github.repository, '/coding-workflows')
         env:
@@ -936,7 +1076,7 @@ jobs:
             if ($in && /^\s{0,3}#{1,6}\s+\S/) { $in = 0; }
             print if $in;
           ' "${CODEX_OUTPUT_FILE}" > "${FILES_SECTION_FILE}"
-          EXCLUDED_RE='`(scripts/|\.github/prompts/|\.github/scripts/)'
+          EXCLUDED_RE='(^|[^[:alnum:]_./-])`?(\./|/)?(scripts/|\.github/prompts/|\.github/scripts/)'
           if [ -s "${FILES_SECTION_FILE}" ] && grep -nE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}" >/dev/null; then
             echo "::error::Plan's 'Files likely to change' section lists template-owned paths (scripts/, .github/prompts/, .github/scripts/) which are excluded from Codex commits in implement.yml. Changes to those paths belong in the coding-workflows repository."
             echo "Offending lines (from Files section):"
@@ -959,6 +1099,10 @@ jobs:
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          IS_ORCHESTRATOR_MANAGED: ${{ steps.orchestrator_auto_answer_eval.outputs.is_orchestrator }}
+          AUTO_ANSWER_PARSE_FAILED: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_parse_failed }}
+          AUTO_ANSWER_FAILURE_REASON: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_failure_reason }}
+          AUTO_ANSWER_ELIGIBLE: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_eligible }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -975,17 +1119,61 @@ jobs:
             --add-label 'ai:clarification' --remove-label 'ai:planning' \
             --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
 
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
           {
-            echo "Clarification required"
+            if [ "${IS_ORCHESTRATOR_MANAGED}" = 'true' ]; then
+              echo "<!-- ai:clarification-questions -->"
+              if [ "${AUTO_ANSWER_PARSE_FAILED}" = 'true' ]; then
+                echo "Clarification questions (human response required)"
+              else
+                echo "Clarification questions"
+              fi
+            else
+              echo "Clarification required"
+            fi
             echo
             cat "${CODEX_OUTPUT_FILE}"
+            if [ "${IS_ORCHESTRATOR_MANAGED}" = 'true' ] && [ "${AUTO_ANSWER_PARSE_FAILED}" = 'true' ]; then
+              echo
+              echo "Auto-answer parse failure: ${AUTO_ANSWER_FAILURE_REASON}"
+              echo "Run: ${RUN_URL}"
+              echo "Human /answer is required for this clarification cycle."
+            elif [ "${IS_ORCHESTRATOR_MANAGED}" = 'true' ] && [ "${AUTO_ANSWER_ELIGIBLE}" = 'true' ]; then
+              echo
+              echo "Orchestrator auto-answer will be posted from the recommended options."
+            fi
             echo
             echo "Reply with:"
             echo "/answer"
           } > "${PLAN_COMMENT_FILE}"
 
+          CLARIFICATION_COMMENT_LEN="$(wc -c < "${PLAN_COMMENT_FILE}")"
+          if [ "${CLARIFICATION_COMMENT_LEN}" -gt 65536 ]; then
+            echo "Generated clarification comment too long (${CLARIFICATION_COMMENT_LEN} bytes); refusing to post over GitHub limit."
+            exit 1
+          fi
+
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${PLAN_COMMENT_FILE}")"
+
+      - name: Post orchestrator auto-answer
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true' && steps.orchestrator_auto_answer_eval.outputs.is_orchestrator == 'true' && steps.orchestrator_auto_answer_eval.outputs.auto_answer_eligible == 'true'
+        id: post_orchestrator_auto_answer
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AUTO_ANSWER_COMMAND: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_command }}
+          AUTO_ANSWER_MAPPING: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_mapping }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="${AUTO_ANSWER_COMMAND}"
+
+          echo "::notice::Posted orchestrator auto-answer (run_id=${{ github.run_id }}): ${AUTO_ANSWER_MAPPING}"
+          echo "auto_answer_posted=true" >> "$GITHUB_OUTPUT"
 
       - name: Record planning candidate (needs clarification)
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
@@ -1034,6 +1222,10 @@ jobs:
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          IS_ORCHESTRATOR_MANAGED: ${{ steps.orchestrator_auto_answer_eval.outputs.is_orchestrator }}
+          AUTO_ANSWER_POSTED: ${{ steps.post_orchestrator_auto_answer.outputs.auto_answer_posted }}
+          AUTO_ANSWER_PARSE_FAILED: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_parse_failed }}
+          AUTO_ANSWER_FAILURE_REASON: ${{ steps.orchestrator_auto_answer_eval.outputs.auto_answer_failure_reason }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -1045,10 +1237,18 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
 
-          # Orchestrator-managed issues: skip TG alert (auto-answered by orchestrate_clarify_respond).
+          # Orchestrator-managed issues: send alerts only when human intervention is needed.
           # Non-orchestrator issues: phase tracking (cleaned up when plan is approved).
-          if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
-            echo "Skipping TG alert for orchestrator-managed issue (will be auto-answered)."
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = 'true' ]; then
+            if [ "${AUTO_ANSWER_POSTED:-false}" = 'true' ]; then
+              echo "Skipping TG alert for orchestrator-managed issue (auto-answer posted)."
+            else
+              MSG+=$'\n'
+              MSG+="Auto-answer parser failed; waiting for human /answer."
+              MSG+=$'\n'
+              MSG+="Reason: ${AUTO_ANSWER_FAILURE_REASON:-Unknown parse failure}"
+              tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "WARNING"
+            fi
           else
             tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "CRITICAL"
           fi

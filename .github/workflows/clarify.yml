@@ -31,6 +31,7 @@ jobs:
       ISSUE_URL: ${{ github.event.issue.html_url }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY || 'medium' }}
+      THINKING_LEVEL_CLARIFY_ORCHESTRATOR: ${{ vars.THINKING_LEVEL_CLARIFY_ORCHESTRATOR || 'high' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
     steps:
@@ -226,6 +227,37 @@ jobs:
             echo "ISSUE_TITLE=${ISSUE_TITLE}"
           } >> "$GITHUB_ENV"
 
+      - name: Decide clarify route
+        id: clarify_route
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          LABELS_CSV="$(jq -r '[(.labels // [])[]?.name] | join(",")' "${ISSUE_META_FILE}")"
+
+          IS_ORCHESTRATOR_MANAGED="false"
+          if jq -e '[(.labels // [])[]?.name] | index("ai:orchestrator-managed") != null' "${ISSUE_META_FILE}" >/dev/null; then
+            IS_ORCHESTRATOR_MANAGED="true"
+          fi
+
+          IS_FORCED_RECLARIFY="false"
+          if [ "${EVENT_NAME}" = "issue_comment" ] && printf '%s' "${COMMENT_BODY}" | grep -q '^/reclarify'; then
+            IS_FORCED_RECLARIFY="true"
+          fi
+
+          SKIP_CODEX="false"
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_FORCED_RECLARIFY}" != "true" ]; then
+            SKIP_CODEX="true"
+          fi
+
+          echo "is_orchestrator_managed=${IS_ORCHESTRATOR_MANAGED}" >> "$GITHUB_OUTPUT"
+          echo "is_forced_reclarify=${IS_FORCED_RECLARIFY}" >> "$GITHUB_OUTPUT"
+          echo "skip_codex=${SKIP_CODEX}" >> "$GITHUB_OUTPUT"
+
+          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} skip_codex=${SKIP_CODEX}"
+
       - name: Detect smoke test and tune LLM settings
         run: |
           set -euo pipefail
@@ -235,6 +267,7 @@ jobs:
           fi
 
       - name: Fetch issue comments
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -284,6 +317,21 @@ jobs:
             gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           fi
 
+      - name: Orchestrator-managed fast path
+        if: steps.clarify_route.outputs.skip_codex == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          source scripts/label_helpers.sh
+          ensure_label_exists "ai:planning" "${{ github.repository }}"
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:planning' --remove-label 'ai:clarification' >/dev/null 2>&1 || true
+
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body=$'/answer [auto-answered-by-orchestrator]\n\nAuto answer was posted because this issue is labeled ai:orchestrator-managed and this run was not a forced human /reclarify.'
+
       - name: Record clarification run start
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -323,6 +371,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Build context file
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         run: |
           set -euo pipefail
           {
@@ -334,6 +383,7 @@ jobs:
           } > "${ISSUE_CONTEXT_FILE}"
 
       - name: Create Codex config
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         run: |
           set -euo pipefail
           mkdir -p ~/.codex
@@ -358,6 +408,7 @@ jobs:
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Setup Serena MCP server
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         env:
           SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
           SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
@@ -371,6 +422,7 @@ jobs:
           bash scripts/setup_serena.sh --mode planning --context codex
 
       - name: Pre-assemble static context (cacheable across runs)
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         run: |
           set -euo pipefail
 
@@ -437,6 +489,7 @@ jobs:
           echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
 
       - name: Retrieve memory context
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -454,14 +507,14 @@ jobs:
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
 
       - name: Install Redis Python client
-        if: vars.SEMANTIC_CACHE_BACKEND == 'redis'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis'
         continue-on-error: true
         run: |
           set -euo pipefail
           python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
 
       - name: Restore semantic cache SQLite
-        if: vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
@@ -471,7 +524,7 @@ jobs:
             semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-
       - name: Semantic cache lookup
         id: semantic_cache_lookup
-        if: always()
+        if: always() && steps.clarify_route.outputs.skip_codex != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -511,9 +564,15 @@ jobs:
             fi
           fi
 
+      - name: Set orchestrator /reclarify reasoning effort
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.clarify_route.outputs.is_orchestrator_managed == 'true' && steps.clarify_route.outputs.is_forced_reclarify == 'true'
+        run: |
+          set -euo pipefail
+          sed -i -E "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${THINKING_LEVEL_CLARIFY_ORCHESTRATOR}\"/" ~/.codex/config.toml
+
       - name: Run Codex
         id: run_codex
-        if: steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY || '15' }}
@@ -713,7 +772,7 @@ jobs:
           done
 
       - name: Semantic cache store
-        if: always() && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        if: always() && steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -741,14 +800,14 @@ jobs:
           fi
 
       - name: Save semantic cache SQLite
-        if: always() && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
+        if: always() && steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Write run summary
-        if: always()
+        if: always() && steps.clarify_route.outputs.skip_codex != 'true'
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_CLARIFY || '80000' }}
         run: |
@@ -784,6 +843,7 @@ jobs:
 
       - name: Parse Codex output
         id: parse_codex
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         run: |
           set -euo pipefail
           # Case-insensitive, flexible parsing to handle LLM output variability
@@ -816,7 +876,7 @@ jobs:
           fi
 
       - name: Post clarification questions
-        if: steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -837,7 +897,7 @@ jobs:
             -f body="$(cat "${RUNTIME_DIR}/clarification_comment.md")"
 
       - name: Record clarification candidate (needs clarification)
-        if: steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -859,7 +919,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Post clear-to-proceed comment
-        if: steps.parse_codex.outputs.needs_clarification != 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -878,7 +938,7 @@ jobs:
             -f body=$'/answer [auto-answered-by-clarify]\n\nAuto answer was posted because no human clarification was required.'
 
       - name: Record clarification candidate (clear)
-        if: steps.parse_codex.outputs.needs_clarification != 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -898,7 +958,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Telegram clarification notification
-        if: steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -915,10 +975,9 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
 
-          # Orchestrator-managed issues: skip TG alert (auto-answered by orchestrate_clarify_respond).
+          # Orchestrator-managed issues: skip TG alert.
           # Non-orchestrator issues: use phase tracking (cleaned up when plan starts).
-          ISSUE_BODY_CHECK="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
-          if printf '%s' "${ISSUE_BODY_CHECK}" | grep -qF 'Managed by: AI Orchestrator'; then
+          if [ "${{ steps.clarify_route.outputs.is_orchestrator_managed }}" = "true" ] && [ "${{ steps.clarify_route.outputs.is_forced_reclarify }}" != "true" ]; then
             echo "Skipping TG alert for orchestrator-managed issue (will be auto-answered)."
           else
             tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "CRITICAL"
@@ -935,7 +994,9 @@ jobs:
           declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
 
           OUTCOME="clear"
-          if [ "${{ steps.parse_codex.outputs.needs_clarification }}" = "true" ]; then
+          if [ "${{ steps.clarify_route.outputs.skip_codex }}" = "true" ]; then
+            OUTCOME="auto_answered_by_orchestrator"
+          elif [ "${{ steps.parse_codex.outputs.needs_clarification }}" = "true" ]; then
             OUTCOME="needs_clarification"
           fi
 
