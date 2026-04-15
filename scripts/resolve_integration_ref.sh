@@ -45,7 +45,7 @@ branch_exists() {
 	local encoded_ref
 	local err
 	encoded_ref="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${ref_name}")"
-	if err="$(gh api "repos/${REPO}/git/ref/heads/${encoded_ref}" 2>&1 >/dev/null)"; then
+	if err="$(gh api "repos/${REPO}/git/ref/heads/${encoded_ref}" 2>&1)"; then
 		return 0
 	fi
 	if printf '%s' "${err}" | grep -Eq '404|Not Found'; then
