@@ -331,6 +331,7 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:merged",
 	"ai:closed",
 	"ai:needs-human",
+	"ai:blocked",
 	"ai:ready-to-merge",
 	"ai:review-blocked",
 	"ai:implementation-failed",
@@ -351,7 +352,7 @@ TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"
 
 # Phases already handled by dedicated logic in the poller — stall detector
 # should not double-act on these.
-DEDICATED_HANDLER_PHASES: set[str] = {"ai:needs-human", "ai:review-blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
+DEDICATED_HANDLER_PHASES: set[str] = {"ai:needs-human", "ai:blocked", "ai:review-blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
 
 # Escalating recovery actions per detected phase.
 # The poller indexes into this list using the per-issue stall_recovery_count.

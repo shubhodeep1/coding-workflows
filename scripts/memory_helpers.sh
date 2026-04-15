@@ -154,6 +154,46 @@ memory_processed_command_check()
 	}
 }
 
+memory_processed_command_list()
+{
+	if ! _memory_enabled; then
+		echo '{"entries": [], "count": 0}'
+		return 0
+	fi
+
+	local list_result
+	if list_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-list "$@")"; then
+		printf '%s\n' "${list_result}"
+		return 0
+	fi
+
+	{
+		_memory_warn "processed-command-list failed (fail-open)"
+		echo '{"entries": [], "count": 0}'
+		return 0
+	}
+}
+
+memory_clarify_loop_guard()
+{
+	if ! _memory_enabled; then
+		echo '{"result": {"blocked": false, "reason": "none", "cycle": 1, "max_cycles": null}}'
+		return 0
+	fi
+
+	local guard_result
+	if guard_result="$(python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" clarify-loop-guard "$@")"; then
+		printf '%s\n' "${guard_result}"
+		return 0
+	fi
+
+	{
+		_memory_warn "clarify-loop-guard failed (fail-open)"
+		echo '{"result": {"blocked": false, "reason": "none", "cycle": 1, "max_cycles": null}}'
+		return 0
+	}
+}
+
 memory_finalize_task()
 {
 	if ! _memory_enabled; then
