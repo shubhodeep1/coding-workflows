@@ -152,7 +152,6 @@ jobs:
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
-
           _fetched_scripts=()
           for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
             src=".codex-workflow-src/scripts/${f}"
@@ -1294,7 +1293,19 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           source scripts/label_helpers.sh
-          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          # Reuse the cached issue snapshot from the "Fetch issue
+          # metadata" step when available — failure paths can run
+          # before that step succeeded, so fall back to a fresh API
+          # call on cache-miss OR jq parse failure (under
+          # `set -euo pipefail` an unsuppressed jq error would kill
+          # the whole step).
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:planning") != null' >/dev/null; then
             ensure_label_exists "ai:clarification" "${{ github.repository }}"
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \

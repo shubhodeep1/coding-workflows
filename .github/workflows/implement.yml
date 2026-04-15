@@ -307,9 +307,8 @@ jobs:
             fi
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
-            if [ "${is_self_repo}" = "false" ]; then
-              echo "scripts/${f}" >> "${FETCHED_MANIFEST}"
-            fi
+            # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
+            # see the persistence note above the loop.
           done
 
           if [ "${is_self_repo}" = "false" ]; then
@@ -378,6 +377,11 @@ jobs:
             if [ "${is_self_repo}" = "false" ]; then
               echo "prompts/serena-efficiency-block.txt" >> "${FETCHED_MANIFEST}"
             fi
+            # Intentionally NOT adding to FETCHED_MANIFEST — the
+            # `:!prompts` exclusion in the commit step keeps this file
+            # out of consumer commits, and the ensure_diagnose_asset()
+            # helper in the post-Codex diagnose step needs it to still
+            # be on disk after the manifest cleanup.
           fi
           if [ ! -f prompts/mode-implement-diagnose.txt ]; then
             src=".codex-workflow-src/prompts/mode-implement-diagnose.txt"
@@ -392,6 +396,8 @@ jobs:
             if [ "${is_self_repo}" = "false" ]; then
               echo "prompts/mode-implement-diagnose.txt" >> "${FETCHED_MANIFEST}"
             fi
+            # Intentionally NOT adding to FETCHED_MANIFEST — same
+            # rationale as serena-efficiency-block.txt above.
           fi
 
           if [ -f .codex-workflow-src/agents.md ]; then
@@ -493,7 +499,20 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           source scripts/label_helpers.sh
-          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          # Reuse the issue snapshot fetched in "Fetch issue metadata"
+          # rather than re-hitting the API.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it
+          # (partial write, truncated download, etc.) — under
+          # `set -euo pipefail` an unsuppressed jq failure would kill
+          # the whole step instead of degrading safely (Copilot review
+          # on PR #1044).
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          fi
           # Refuse redispatch of any issue that previously tripped the
           # destructive-commit guard (P2/P3), regardless of phase label.
           # A destructive rejection latches this label onto the issue; a
@@ -1586,7 +1605,10 @@ jobs:
             echo "::error::Missing required support script git_ref_health_check.sh in staged support source"
             exit 1
           fi
-          health_script="$(mktemp -t git_ref_health_check.XXXXXX.sh)"
+          if ! health_script="$(mktemp -t git_ref_health_check.XXXXXX.sh)"; then
+            echo "::error::failed to create temporary file for git_ref_health_check.sh"
+            exit 1
+          fi
           # Ensure the temp file is always cleaned up even if `install`,
           # `chmod`, or the script itself fails under `set -euo pipefail`.
           trap 'rm -f "${health_script}"' EXIT
@@ -2096,7 +2118,19 @@ jobs:
 
           echo "handled=false" >> "$GITHUB_OUTPUT"
 
-          ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+          # Reuse the cached issue snapshot when available — see the
+          # "Fetch issue metadata" step.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it
+          # (partial write, truncated download, etc.); the API path
+          # itself falls back to '[]' so the failure path still
+          # degrades safely.
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+          fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementation-failed") != null' >/dev/null 2>&1; then
             echo "Issue #${ISSUE_NUMBER} already has ai:implementation-failed label; skipping post-Codex diagnosis."
             echo "handled=true" >> "$GITHUB_OUTPUT"
@@ -2150,7 +2184,17 @@ jobs:
 
           if [ -z "${ISSUE_BODY_FILE:-}" ] || [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
             ISSUE_BODY_FILE="${RUNTIME_DIR}/issue_body_from_api.txt"
-            gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+            # Prefer the cached issue snapshot from "Fetch issue
+            # metadata" before re-hitting the API.  jq failure (e.g.
+            # truncated/partial file) falls through to the API path
+            # rather than killing the step under set -euo pipefail.
+            : > "${ISSUE_BODY_FILE}"
+            if [ -s "${ISSUE_META_FILE:-}" ]; then
+              jq -er '.body // ""' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null || : > "${ISSUE_BODY_FILE}"
+            fi
+            if [ ! -s "${ISSUE_BODY_FILE}" ]; then
+              gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+            fi
           fi
 
           TRACKING_ISSUE_NUM="$(sed -nE 's/.*Tracking issue:[[:space:]]*#([0-9]+).*/\1/p' "${ISSUE_BODY_FILE}" | head -n1 | tr -d '\r')"
@@ -2516,7 +2560,16 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
-          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          # Reuse the cached issue snapshot when available — see the
+          # "Fetch issue metadata" step.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it.
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
             gh_retry gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
               --color "fbca04" --description "Awaiting human approval to implement" \

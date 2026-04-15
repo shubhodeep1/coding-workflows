@@ -301,7 +301,6 @@ jobs:
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
-
           _fetched_scripts=()
           for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
             src=".codex-workflow-src/scripts/${f}"
