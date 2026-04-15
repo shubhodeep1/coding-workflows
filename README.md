@@ -907,7 +907,11 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 
 1. **Pre-LLM short-circuit (cost guard):** If `project_description` is short (`<= ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS`, default `1200`) and has no multi-step markers (`step\s*\d|phase\s*\d|wave\s*\d|\bthen\b|\bafter\b|\band\s+then\b|multi[- ]?step`), orchestrate skips decomposer entirely and creates exactly one plain issue from the description. This path does not apply orchestrator labels and does not create tracking issue, integration branch, state comment, or wave dispatch.
 2. **Decomposition (default path):** When the short-circuit condition is not met, the LLM reads your repo and breaks the project into scoped issues with a dependency graph. If decomposition returns exactly one issue, orchestrate creates a single standalone issue (labels: `ai:clarification`, `ai:orchestrator-managed`, `ai:orchestrator-validate-required`) without creating a tracking issue or integration branch. Otherwise it creates a tracking issue (labeled `ai:orchestrator-tracking`).
-3. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically. If clarification questions are raised, the `orchestrate_clarify_respond` workflow answers them automatically using an LLM. When `plan.yml` emits structured `Q<ID>` clarification blocks with single-letter `(RECOMMENDED)` options for every question, `plan.yml` now posts a synthesized `/answer Q1: A, ... [auto-answered-by-orchestrator]`; if parsing fails or any recommendation is non-single-letter (for example `A+C`), it does not auto-answer and keeps the human `/answer` loop.
+3. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically.
+   - **Pre-LLM guard (plain issues):** `orchestrate_clarify_respond` exits before model work when the issue is not orchestrator-managed (`Managed by: AI Orchestrator` missing in issue metadata).
+   - **Post-LLM auto-answer (non-tracking issues):** in `clarify.yml`, when no actionable clarification questions remain for a non-tracking issue, the workflow posts `/answer [auto-answered-by-clarify]` so the issue can continue to planning without human input.
+   - **Orchestrator clarify auto-answer:** when clarification questions are raised on orchestrator-managed issues, `orchestrate_clarify_respond` posts `/answer [auto-answered-by-orchestrator]` and enforces `ORCHESTRATOR_MAX_CLARIFY_CYCLES` before escalating to `ai:blocked`.
+   - **Plan auto-answer (structured recommendations):** when `plan.yml` emits structured `Q<ID>` clarification blocks with single-letter `(RECOMMENDED)` options for every question, it posts a synthesized `/answer Q1: A, ... [auto-answered-by-orchestrator]`; if parsing fails or any recommendation is non-single-letter (for example `A+C`), it does not auto-answer and keeps the human `/answer` loop.
 4. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. If a PR has merge conflicts (e.g. `main` advanced since the PR was created), the poller automatically updates the PR branch via the GitHub API before retrying the merge. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
 5. **In-progress conflict resolution:** When the base branch advances and creates merge conflicts on open PRs whose tracking issue is in the `in_progress` or `done` wave status (still going through the review/autofix cycle, or sitting in `ai:done` awaiting promotion to `ai:ready-to-merge`), the poller detects the conflict (`mergeable == false`). It first tries a GitHub API branch update; if that fails (real conflicts), it dispatches the review workflow via `workflow_dispatch`. The review workflow's built-in Codex conflict resolver then handles the resolution on a dedicated runner with a clean environment.
 6. **Polling:** Every 5 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
@@ -959,7 +963,11 @@ Your `GH_PAT` must have permission to enable auto-merge (repo scope with admin o
 
 ### Labels
 
-The orchestrator uses `ai:orchestrator-tracking` for tracking issues. Child issues use the standard `ai:*` phase labels.
+The orchestrator uses `ai:orchestrator-tracking` for tracking issues. Child issues use the standard `ai:*` phase labels plus orchestrator-specific control labels.
+
+Orchestrator-specific labels:
+- `ai:orchestrator-managed` — marks issues created/managed by the orchestrator for tracking and poller-managed flows; orchestrator auto-answering itself keys off the issue-body marker `Managed by: AI Orchestrator`.
+- `ai:orchestrator-validate-required` — contract label indicating an orchestrator issue requires the validate phase before completion when applied.
 
 The label contract (`/.github/ai/label_contract.v1.json`) is the single source of truth for:
 - label definitions (name/color/description),

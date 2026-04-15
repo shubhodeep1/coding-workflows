@@ -18,6 +18,7 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 - Trimmed static prompt assembly in planning, implementation, and review/autofix workflows to reduce token overhead.
 - Updated review/autofix prompt assembly to inline pre-assembled static context directly into editor/reviewer prompts (removed runtime "read pre_assembled_static.txt first" round-trip instructions).
 - Updated README thinking-level defaults and judge adaptive behavior notes to match workflow/script behavior.
+- Documented orchestrator cost/safety behavior updates across README and agents instructions: `THINKING_LEVEL_ORCHESTRATE` default `medium`, clean-wave judge skip semantics, orchestrator clarify auto-answer paths (`auto-answered-by-orchestrator` and clear-path `auto-answered-by-clarify`), and orchestrator control labels (`ai:orchestrator-managed`, `ai:orchestrator-validate-required`).
 
 ### Added
 - `test-and-mark-stable.yml`: E2E smoke test workflow that exercises all pipeline phases
