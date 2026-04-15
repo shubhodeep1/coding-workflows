@@ -2815,8 +2815,8 @@ def test_clean_wave_skip_disabled_keeps_judge_invocation():
 
 
 
-def test_clean_wave_skip_does_not_run_when_pending_issue_defs_exist():
-	"""Non-empty pending issue definitions must keep judge invocation enabled."""
+def test_clean_wave_skip_advances_when_pending_issue_defs_exist():
+	"""Deferred later-wave definitions should not block clean-wave judge skip."""
 	state = {
 		"schema_version": "orchestrate_state.v1",
 		"project_title": "Test Project",
@@ -2855,15 +2855,11 @@ def test_clean_wave_skip_does_not_run_when_pending_issue_defs_exist():
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"]},
 		enable_clean_wave_judge_skip="true",
-		codex_json={
-			"status": "in_progress",
-			"justification": "advance",
-			"assessment": "Proceed",
-			"new_issues": [],
-			"issues_to_revert": [],
-		},
 	)
-	assert "Running judge evaluation" in result["stdout"]
+	ls = result["latest_state"]
+	assert ls["current_wave"] == 2
+	assert ls["judge_cycle"] == 1
+	assert "Running judge evaluation" not in result["stdout"]
 
 
 def test_clean_wave_skip_does_not_run_when_wave_has_failures():
