@@ -1089,7 +1089,12 @@ import re
 import sys
 
 HEREDOC_PATTERN = re.compile(
-    r'^.*\bpython3\b[^\n<]*<<\s*(-)?\s*[\'"](\w+)[\'"][^\n]*$',
+    # Skip lines whose first non-whitespace character is `#` (commented-out
+    # examples) so we never ast-parse a documented example block. Keep
+    # `python3` matchable anywhere on the line (mid-pipeline, after
+    # `docker compose exec -T svc`, inside `$(...)`, etc.) — anchoring on
+    # `^[ \t]*python3` would miss every legitimate generated invocation.
+    r'^(?![ \t]*#).*\bpython3\b[^\n<]*<<\s*(-)?\s*[\'"](\w+)[\'"][^\n]*$',
     re.MULTILINE,
 )
 
@@ -1134,9 +1139,10 @@ for path in sorted(root.rglob("*.sh")):
         except SyntaxError as exc:
             opener_line = text[: match.start()].count('\n') + 1
             absolute_line = opener_line + (exc.lineno or 1)
+            offset_suffix = "" if exc.offset is None else f" (offset {exc.offset})"
             errors.append(
                 f"{path}:{absolute_line}: embedded Python heredoc <<{delim}>>: "
-                f"SyntaxError: {exc.msg} (offset {exc.offset})"
+                f"SyntaxError: {exc.msg}{offset_suffix}"
             )
 
 if errors:
