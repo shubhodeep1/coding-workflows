@@ -460,7 +460,13 @@ def resolve_effective_stall_recovery_action(
 	action = str(judged_action).strip()
 	if not action:
 		return fallback_action
-	if allowed_judged_actions is not None and action not in allowed_judged_actions:
+	if allowed_judged_actions is None:
+		allowed_judged_actions = {
+			"retrigger_pipeline", "auto_respond_clarify", "retrigger_plan", "auto_approve",
+			"retrigger_implement", "retrigger_review", "attempt_merge", "close_and_reissue",
+			"escalate_human", "resolve_merge_conflict",
+		}
+	if action not in allowed_judged_actions:
 		return fallback_action
 	if action == "escalate_human" and not allow_human_terminalization:
 		return fallback_action

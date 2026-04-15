@@ -442,6 +442,24 @@ def test_detect_stalls_allows_human_terminalization_when_explicitly_enabled():
 	assert stalls[0]["recovery_action"] == "escalate_human"
 
 
+def test_resolve_effective_stall_recovery_action_defaults_to_safe_allowed_actions():
+	unknown_action = orchestrate_lib.resolve_effective_stall_recovery_action(
+		phase="ai:implementing",
+		recovery_count=2,
+		allow_human_terminalization=False,
+		judged_action="unsupported_action",
+	)
+	assert unknown_action == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][1]
+
+	conflict_action = orchestrate_lib.resolve_effective_stall_recovery_action(
+		phase="ai:implementing",
+		recovery_count=2,
+		allow_human_terminalization=False,
+		judged_action="resolve_merge_conflict",
+	)
+	assert conflict_action == "resolve_merge_conflict"
+
+
 def test_detect_stalls_skips_needs_human_label():
 	state = _make_state()
 	state["waves"][0]["issues"][0]["status"] = "in_progress"
