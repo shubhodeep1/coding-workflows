@@ -1441,7 +1441,18 @@ invoke_judge_for_integration_conflict() {
 
   local pr_diff
   local pr_files
-  pr_diff="$(gh_retry gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}" 2>/dev/null | head -c 120000 || true)"
+  # Fetch into a temp file before truncating: piping gh pr diff directly
+  # into `head -c` causes SIGPIPE on gh pr diff once head has read enough
+  # bytes, which gh_retry then treats as a transient failure and retries
+  # with exponential backoff. Capture first, truncate second.
+  local _pr_diff_tmp
+  _pr_diff_tmp="$(mktemp)"
+  if gh_retry_to_file "${_pr_diff_tmp}" gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}" 2>/dev/null; then
+    pr_diff="$(head -c 120000 "${_pr_diff_tmp}")"
+  else
+    pr_diff=""
+  fi
+  rm -f "${_pr_diff_tmp}"
   pr_files="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}/files" --jq '[.[] | {filename, status, additions, deletions}]' 2>/dev/null || echo "[]")"
   local retries
   retries="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
@@ -6486,8 +6497,18 @@ Manual intervention required." >/dev/null
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
       || echo "")"
     if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
-      PR_DIFF="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
-        -H 'Accept: application/vnd.github.diff' 2>/dev/null | head -500 || echo "(diff unavailable)")"
+      # Fetch the diff into a temp file before truncating: piping
+      # gh api directly into `head -500` causes SIGPIPE on gh api once
+      # head has read enough lines, which gh_retry then treats as a
+      # transient failure and retries with exponential backoff.
+      _pr_diff_tmp="$(mktemp)"
+      if gh_retry_to_file "${_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
+        -H 'Accept: application/vnd.github.diff' 2>/dev/null; then
+        PR_DIFF="$(head -500 "${_pr_diff_tmp}")"
+      else
+        PR_DIFF="(diff unavailable)"
+      fi
+      rm -f "${_pr_diff_tmp}"
       _issue_status="$(jq -r --arg num "${inum}" --argjson wi "${WAVE_IDX}" \
         '.waves[$wi].issues[] | select((.github_issue | tostring) == $num) | .status // ""' \
         "${STATE_FILE}" 2>/dev/null | head -n1)"

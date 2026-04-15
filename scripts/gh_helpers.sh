@@ -98,15 +98,20 @@ _gh_rate_limit_wait()
 # the throttle still works while the GitHub API itself is the
 # resource being limited.
 #
-# Fail-closed semantics (Q8=B): on any read/pin error the
-# function returns without sending — if pinning fails AFTER the
-# message is sent, the sent message is deleted so the invariant
+# Fail-closed semantics: on any read/pin error the function
+# returns without sending — if pinning fails AFTER the message is
+# sent, the sent message is deleted so the invariant
 # "≤ 1 alert per cooldown window" is preserved even under
 # transient Telegram failures.
+#
+# Alert level: WARNING. The function honours `ALERT_MSG_LEVEL`
+# (the same global threshold `tg_helpers.sh::tg_send_msg` uses);
+# when ALERT_MSG_LEVEL is ERROR or CRITICAL the alert is skipped.
 #
 # Env (all optional, function no-ops when creds are missing):
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID (fallback TG_CHAT_ID)
 #   TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS (default 3600)
+#   ALERT_MSG_LEVEL (default DEBUG; suppresses when > WARNING)
 #   GITHUB_WORKFLOW, GITHUB_SERVER_URL, GITHUB_REPOSITORY,
 #   GITHUB_RUN_ID — used to build a descriptive message.
 #
@@ -126,6 +131,17 @@ _gh_ratelimit_tg_alert()
 	if ! command -v jq >/dev/null 2>&1; then
 		return 0
 	fi
+
+	# Honour the global ALERT_MSG_LEVEL threshold the same way
+	# tg_helpers.sh::tg_send_msg does. This alert is WARNING level,
+	# so when the operator has configured ALERT_MSG_LEVEL=ERROR or
+	# CRITICAL the rate-limit alert is suppressed (no send, no pin
+	# update, cooldown window is not advanced).
+	case "$(printf '%s' "${ALERT_MSG_LEVEL:-DEBUG}" | tr '[:lower:]' '[:upper:]')" in
+		DEBUG|WARNING) : ;;
+		ERROR|CRITICAL) return 0 ;;
+		*) : ;;  # unknown value → match tg_helpers.sh permissive default
+	esac
 
 	# Cooldown window (seconds). Reject non-numeric values, fall
 	# back to 3600.

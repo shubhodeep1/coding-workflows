@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+# Fallback: if gh_helpers.sh was not sourced (missing file), define a
+# pass-through so subsequent `gh_retry gh ...` calls still execute —
+# without the rate-limit retry/alert behaviour, but without hard-failing
+# under `set -e`.
+if ! command -v gh_retry >/dev/null 2>&1; then
+  gh_retry() { "$@"; }
+fi
 if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
   :
 else

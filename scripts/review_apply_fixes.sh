@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Source rate-limit-aware GH API helpers (provides gh_retry and the
-# Telegram admin alert on GH API rate-limit events). Fail-open if the
-# helper is absent.
-source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+# Telegram admin alert on GH API rate-limit events).
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
+fi
+# Fallback: if gh_helpers.sh was not sourced (missing file, unset
+# SUPPORT_SCRIPTS_DIR), define a pass-through so subsequent
+# `gh_retry gh ...` calls still execute — without the rate-limit
+# retry/alert behaviour, but without hard-failing under `set -e`.
+if ! command -v gh_retry >/dev/null 2>&1; then
+  gh_retry() { "$@"; }
+fi
 
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty before editor stage; using placeholder context."
