@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/implement.yml\nscripts/validate_changed_files_\nscripts/validate_changed_files_syntax.sh\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/validate_changed_files_syntax.",
+  "fingerprint": "050c9076160cce8fb5987d7a8261de3bbac0803957ad8e464ba8c3cf84a3e9ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1061,
+    "run_id": "24458647365",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24458647365",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415140736_5f07c5cf56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1061,
+    "run_id": "24458647365"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T14:07:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
