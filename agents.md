@@ -152,9 +152,9 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
-- Implement repair control in this repo: `MAX_POST_CODEX_REPAIR_ATTEMPTS` (default `1`) for the in-job post-syntax-failure Codex repair loop.
+- Clarify orchestrator override: `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` (default `high`) applies only when clarify LLM runs for `ai:orchestrator-managed` issues via forced human `/reclarify`; non-forced orchestrator-managed clarify runs skip Codex and auto-post `/answer [auto-answered-by-orchestrator]`.
 - Stall recovery controls include `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`): legacy autonomous ladder remains default; stall-judge `escalate_human` outputs are terminalization-gated to the non-human fallback action unless explicitly enabled.
-- Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
+- Orchestrator pre-LLM short-circuit control: `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` (default `1200`) allows `orchestrate.yml` to skip decomposer and open one plain issue when description length is below threshold and no multi-step markers are detected.
 - Orchestrator clarify loop guard: `ORCHESTRATOR_MAX_CLARIFY_CYCLES` (default `3`) caps auto-answer clarification cycles before escalating to `ai:blocked`.
 - Implementation no-op reissue cap: `MAX_IMPL_NOOP_REISSUES` (default `2`) limits automatic re-issues for `ai:implementation-failed` before the poller closes the issue and lets the judge verify whether work is already present.
 - GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
@@ -368,6 +368,17 @@ If you need a new data shape that truly cannot be satisfied by any existing call
   up immediately. Only run `test-and-mark-stable.yml` when promoting the
   fix to the `@stable` channel for consumer repos — it is not on the
   critical path for recovering this repo's own runtime.
+
+## 19. Workflow Checkout Integration-Ref Contract
+
+- Orchestrator-managed issue-phase workflows that checkout repository state from issue/issue_comment context (`.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/orchestrate_clarify_respond.yml`, `.github/workflows/implement.yml`) plus validation runs keyed by `inputs.tracking_issue` (`.github/workflows/validate.yml`) MUST resolve integration branch metadata before `actions/checkout@v5`.
+- Required checkout wiring in those workflows:
+  - pre-checkout step `- name: Resolve integration ref` with `id: refctx`
+  - checkout ref binding: `ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}`
+  - post-checkout logging of resolved ref + `git rev-parse HEAD` + `git symbolic-ref --short HEAD` (with detached fallback)
+- Resolver behavior must fail open: missing metadata, invalid format, missing branch, or GH API failure must emit warning/notice and leave `steps.refctx.outputs.ref` empty (checkout falls back to default branch).
+- `orchestrate_poll.yml` is an explicit exception: one run can process multiple tracking issues, so a single integration ref cannot be chosen safely for a shared checkout.
+- Regression guard: `tests/test_workflow_checkout_integration_ref_audit.py` scans all `.github/workflows/*.yml` checkout@v5 usages and fails unless each file is either in the required-resolver set above or in an explicit allow-list with rationale.
 
 ---
 

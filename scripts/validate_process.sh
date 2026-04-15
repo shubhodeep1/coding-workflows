@@ -633,12 +633,27 @@ COMPOSE_LOG="${LOG_DIR}/compose.log"
 ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
 START_TS="$(date +%s)"
 
-if [ -f "${ENV_FILE}" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "${ENV_FILE}"
-  set +a
-fi
+	if [ -f "${ENV_FILE}" ]; then
+	  while IFS= read -r env_line || [ -n "${env_line}" ]; do
+	    env_line="${env_line%$'\r'}"
+	    env_line="${env_line#"${env_line%%[![:space:]]*}"}"
+	    [ -z "${env_line}" ] && continue
+	    [ "${env_line#\#}" != "${env_line}" ] && continue
+	    if [[ ! "${env_line}" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
+	      printf 'validation_runtime_driver: %s: unparseable env_file line: %s\n' "${ENV_FILE}" "${env_line}" >&2
+	      exit 1
+	    fi
+	    key="${env_line%%=*}"
+	    value="${env_line#*=}"
+	    if [ "${#value}" -ge 2 ]; then
+	      first="${value:0:1}"; last="${value: -1}"
+	      if { [ "${first}" = '"' ] && [ "${last}" = '"' ]; } || { [ "${first}" = "'" ] && [ "${last}" = "'" ]; }; then
+	        value="${value:1:${#value}-2}"
+	      fi
+	    fi
+	    export "${key}=${value}"
+	  done < "${ENV_FILE}"
+	fi
 
 mkdir -p "${LOG_DIR}"
 : > "${COMPOSE_LOG}"
@@ -2127,10 +2142,15 @@ case "${DIAG_STATUS}" in
       exit 0
     fi
 
+    ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
+
 	FIX_URL_OUTPUT="$(gh_retry gh issue create \
 	  --repo "${GITHUB_REPOSITORY}" \
 	  --title "${CONSOLIDATED_TITLE}" \
-	  --body-file "${CONSOLIDATED_BODY_FILE}")"
+	  --body-file "${CONSOLIDATED_BODY_FILE}" \
+	  --label "ai:clarification" \
+	  --label "ai:orchestrator-managed")"
 	FIX_URL="$(printf '%s\n' "${FIX_URL_OUTPUT}" | grep -oE 'https://[^ ]+/issues/[0-9]+/?([?#][^ ]*)?' | tail -n 1 || true)"
 	FIX_NUM="$(basename "${FIX_URL%%[?#]*}")"
 	if ! [[ "${FIX_NUM}" =~ ^[0-9]+$ ]]; then

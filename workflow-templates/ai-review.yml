@@ -9,7 +9,7 @@ on:
   # "Validation self-healing"), which are opened as drafts to bypass
   # auto-review/automerge until a human reviews them.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -27,9 +27,10 @@ permissions:
   issues: write
 jobs:
   review:
+    if: ${{ github.event.action != 'closed' || github.event.pull_request.merged == true }}
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
     with:
-      pr_number: ${{ github.event.inputs.pr_number || '' }}
+      pr_number: ${{ github.event.inputs.pr_number || github.event.pull_request.number || '' }}
       pr_is_draft: ${{ github.event_name != 'workflow_dispatch' && github.event.pull_request.draft }}
       pr_title: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.title) || '' }}
       pr_body: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}

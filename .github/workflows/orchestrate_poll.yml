@@ -245,7 +245,7 @@ jobs:
               fi
             fi
           done
-          for pf in mode-judge.txt mode-judge-review-blocked.txt serena-efficiency-block.txt; do
+          for pf in mode-judge.txt mode-judge-review-blocked.txt mode-judge-stall-recovery.txt serena-efficiency-block.txt; do
             if ! _gh_api_fetch "prompts/${pf}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/prompts/${pf}?ref=${script_ref}"; then
               echo "::warning::${pf} not found on ${script_ref}; falling back to main"
