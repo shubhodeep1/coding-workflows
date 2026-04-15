@@ -6819,7 +6819,7 @@ ${RB_FIX_DESC}
 
       while IFS= read -r blocker_issue; do
         [ -n "${blocker_issue}" ] || continue
-        BLOCKER_STATE="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${blocker_issue}" --jq '.state' || echo "")"
+        BLOCKER_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${blocker_issue}" --jq '.state' || echo "")"
         case "${BLOCKER_STATE}" in
           open)
             IF_BLOCKER_OPEN_COUNT=$((IF_BLOCKER_OPEN_COUNT + 1))
