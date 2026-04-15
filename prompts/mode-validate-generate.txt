@@ -209,12 +209,17 @@ CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
 
 CRITICAL — Dockerfile PID 1 signal handling (prevents exit 137 in graceful_shutdown):
 - Any generated `validation/Dockerfile*` MUST use **exec-form** (JSON array) `CMD` and `ENTRYPOINT` so PID 1 is the actual application process and receives SIGTERM directly from `docker compose stop`.
-- CORRECT (exec-form, PID 1 is the app):
-    CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app:app"]
+- CORRECT (exec-form, PID 1 is the app). These are illustrative ALTERNATIVES, not composable — a real Dockerfile must contain at most one `CMD` and at most one `ENTRYPOINT`; if you emit multiple `CMD` lines only the last one takes effect and the earlier ones are silently discarded. Pick the shape that matches how the app-under-test actually starts; do not treat these examples as prescriptive runtime choices (do not install packages you do not already need):
+    # Option 1: a compiled binary or wrapper script installed inside the image
+    CMD ["/usr/local/bin/my-app", "--port", "8080"]
+    # Option 2: a Node.js entrypoint (only valid if the app itself registers process.on('SIGTERM', ...))
     CMD ["node", "server.js"]
-    ENTRYPOINT ["/usr/local/bin/app"]
-- WRONG (shell-form, PID 1 is `/bin/sh -c` which does NOT forward signals):
+    # Option 3: a binary wired via ENTRYPOINT instead of CMD
+    ENTRYPOINT ["/usr/local/bin/my-app"]
+- WRONG (shell-form, PID 1 is `/bin/sh -c` which does NOT forward signals). Again these are alternative failure examples, NOT stacked:
+    # Option 1: shell-form with a Python stdlib server
     CMD python3 -m http.server 18080
+    # Option 2: shell-form with a Node entrypoint
     CMD node server.js
   Shell-form makes `/bin/sh -c "..."` PID 1. POSIX `sh` does not forward SIGTERM to its child by default, so `docker compose stop` times out and docker escalates to SIGKILL. The container exits with code **137** (= 128 + SIGKILL), which fails the `graceful_shutdown` assertion even though the app itself was perfectly healthy right up to teardown. This is one of the two most common causes of false-negative shutdown failures in this harness; the other is the PID-1 kernel signal rule described next.
 - CRITICAL sub-rule — Linux PID-1 kernel signal semantics. Exec-form alone is NOT sufficient when PID 1 does not install a user-space SIGTERM handler. The Linux kernel has a "don't accidentally kill init" safeguard: **signals sent to PID 1 are silently dropped unless PID 1 has explicitly registered a handler for them.** SIGKILL and SIGSTOP are the only exceptions (kernel always honours them). A container running `python3 -m http.server` as PID 1 will therefore IGNORE SIGTERM, `docker compose stop` will time out, and docker will escalate to SIGKILL — producing the same exit 137 as shell-form CMD, even though the CMD is written in perfect exec-form. The symptom in validation logs is identical: `not ok N - graceful_shutdown: app exited with code 137`, with container logs showing the app serving healthy responses right up to teardown.
@@ -317,7 +322,24 @@ CRITICAL — post-restart readiness polling in graceful_shutdown:
     READY_URL="${READY_URL:-http://localhost:18080/}"
     HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
     HEALTH_POLL_INTERVAL_SECONDS="${HEALTH_POLL_INTERVAL_SECONDS:-1}"
-    docker compose -f "$COMPOSE_FILE" start "$APP_SERVICE" >/dev/null 2>&1 || true
+    # Restart the service. Check the start rc explicitly and emit a dedicated
+    # TAP diagnostic on failure — do NOT mask with `|| true`, which would turn
+    # a hard restart failure (bad compose file, missing service, image pull or
+    # build error) into a misleading "endpoint unreachable" timeout after the
+    # readiness poll. Distinguish "restart never started" from "restart started
+    # but app did not become ready in time".
+    compose_start_log="$(mktemp)"
+    set +e
+    docker compose -f "$COMPOSE_FILE" start "$APP_SERVICE" >"$compose_start_log" 2>&1
+    start_rc=$?
+    set -e
+    if [ "$start_rc" -ne 0 ]; then
+      echo "not ok $ASSERTION - docker compose start $APP_SERVICE failed (rc=$start_rc)"
+      sed 's/^/#   /' "$compose_start_log"
+      rm -f "$compose_start_log"
+      exit 1
+    fi
+    rm -f "$compose_start_log"
     deadline=$(( $(date +%s) + HEALTH_TIMEOUT_SECONDS ))
     attempts=0
     last_status="000"
