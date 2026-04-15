@@ -5872,6 +5872,10 @@ sys.exit(1)
                 fi
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
+                if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/)'; then
+                  echo "Error: scripts/, prompts/, or .github/ai is staged while ALLOW_WORKFLOW_EDITS=false"
+                  exit 1
+                fi
                 if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
                   echo "Error: .github/prompts or .github/scripts is staged"
                   exit 1
