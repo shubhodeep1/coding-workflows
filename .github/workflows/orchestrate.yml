@@ -554,6 +554,22 @@ jobs:
           # Compute waves for logging
           python3 scripts/orchestrate_lib.py compute-waves --input-file "${DECOMPOSITION_FILE}"
 
+      - name: Detect decomposition execution mode
+        id: decomposition_mode
+        run: |
+          set -euo pipefail
+          ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}")"
+          SINGLE_ISSUE_MODE="false"
+          if [ "${ISSUE_COUNT}" = "1" ]; then
+            SINGLE_ISSUE_MODE="true"
+          fi
+
+          {
+            echo "issue_count=${ISSUE_COUNT}"
+            echo "single_issue_mode=${SINGLE_ISSUE_MODE}"
+          } >> "$GITHUB_OUTPUT"
+          echo "SINGLE_ISSUE_MODE=${SINGLE_ISSUE_MODE}" >> "$GITHUB_ENV"
+
       - name: Ensure orchestrator labels exist
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -588,7 +604,50 @@ jobs:
             --description "Orchestrator issue requires validate phase before completion" \
             2>/dev/null || true
 
+      - name: Create standalone issue (single-issue short-circuit)
+        if: steps.decomposition_mode.outputs.single_issue_mode == 'true'
+        id: single_issue
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+
+          TITLE="$(jq -r '.issues[0].title' "${DECOMPOSITION_FILE}")"
+          BODY="$(jq -r '.issues[0].body' "${DECOMPOSITION_FILE}" | sed 's/\\n/\n/g')"
+          LOCAL_ID="$(jq -r '.issues[0].id' "${DECOMPOSITION_FILE}")"
+          PRIORITY="$(jq -r '.issues[0].priority' "${DECOMPOSITION_FILE}")"
+
+          FULL_BODY="$(cat <<EOF
+          ${BODY}
+
+          ---
+          **Orchestrator metadata** (do not edit)
+          - Local ID: \`${LOCAL_ID}\`
+          - Priority: ${PRIORITY}
+          - Managed by: AI Orchestrator
+          EOF
+          )"
+
+          ISSUE_URL="$(gh_retry gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "${TITLE}" \
+            --body "${FULL_BODY}" \
+            --label "ai:clarification" \
+            --label "ai:orchestrator-managed" \
+            --label "ai:orchestrator-validate-required")"
+
+          ISSUE_NUM="$(echo "${ISSUE_URL}" | grep -oE '[0-9]+$')"
+          echo "Created standalone issue #${ISSUE_NUM}: ${ISSUE_URL}"
+          {
+            echo "single_issue_number=${ISSUE_NUM}"
+            echo "single_issue_url=${ISSUE_URL}"
+          } >> "$GITHUB_OUTPUT"
+          echo "SINGLE_ISSUE_NUMBER=${ISSUE_NUM}" >> "$GITHUB_ENV"
+          echo "SINGLE_ISSUE_URL=${ISSUE_URL}" >> "$GITHUB_ENV"
+
       - name: Create tracking issue
+        if: steps.decomposition_mode.outputs.single_issue_mode != 'true'
         id: tracking_issue
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -618,6 +677,7 @@ jobs:
           echo "TRACKING_ISSUE_NUMBER=${TRACKING_ISSUE_NUMBER}" >> "$GITHUB_ENV"
 
       - name: Create integration branch
+        if: steps.decomposition_mode.outputs.single_issue_mode != 'true'
         id: integration_branch
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -658,6 +718,7 @@ jobs:
           echo "INTEGRATION_BRANCH=${INTEGRATION_BRANCH}" >> "$GITHUB_ENV"
 
       - name: Create Wave 1 issues only
+        if: steps.decomposition_mode.outputs.single_issue_mode != 'true'
         id: create_issues
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -745,6 +806,7 @@ jobs:
           echo "Issue map (Wave 1 only): $(cat "${RUNTIME_DIR}/issue_map.json")"
 
       - name: Build and post initial state
+        if: steps.decomposition_mode.outputs.single_issue_mode != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
@@ -794,6 +856,7 @@ jobs:
           echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER}"
 
       - name: Record decomposition candidate
+        if: steps.decomposition_mode.outputs.single_issue_mode != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -824,6 +887,7 @@ jobs:
             --issue-number "${TRACKING_ISSUE_NUMBER}"
 
       - name: Dispatch Wave 1
+        if: steps.decomposition_mode.outputs.single_issue_mode != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
@@ -863,11 +927,17 @@ jobs:
         if: always()
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_ORCHESTRATE || '200000' }}
+          SINGLE_ISSUE_MODE: ${{ steps.decomposition_mode.outputs.single_issue_mode }}
+          SINGLE_ISSUE_NUMBER: ${{ steps.single_issue.outputs.single_issue_number }}
+          SINGLE_ISSUE_URL: ${{ steps.single_issue.outputs.single_issue_url }}
         run: |
           set -euo pipefail
           : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
           : "${DECOMPOSITION_FILE:=${RUNTIME_DIR}/decomposition.json}"
           : "${TRACKING_ISSUE_NUMBER:=0}"
+          : "${SINGLE_ISSUE_MODE:=false}"
+          : "${SINGLE_ISSUE_NUMBER:=0}"
+          : "${SINGLE_ISSUE_URL:=}"
           TOKENS=""
           if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
             TOKENS="$(grep -A1 'tokens used' "${RUNTIME_DIR}/codex_log.txt" | tail -1 | tr -d '[:space:]' || true)"
@@ -891,8 +961,15 @@ jobs:
                 echo "| :warning: Token alert | Above ${TOKEN_WARN_THRESHOLD} threshold |"
               fi
             fi
+            if [ "${SINGLE_ISSUE_MODE}" = "true" ]; then
+              echo "| Execution mode | single-issue short-circuit |"
+            else
+              echo "| Execution mode | normal |"
+            fi
             echo "| Issues created | ${ISSUE_COUNT} |"
-            if [ -n "${TRACKING_ISSUE_NUMBER:-}" ]; then
+            if [ "${SINGLE_ISSUE_MODE}" = "true" ] && [ -n "${SINGLE_ISSUE_NUMBER:-}" ] && [ "${SINGLE_ISSUE_NUMBER}" != "0" ]; then
+              echo "| Standalone issue | #${SINGLE_ISSUE_NUMBER} |"
+            elif [ -n "${TRACKING_ISSUE_NUMBER:-}" ] && [ "${TRACKING_ISSUE_NUMBER}" != "0" ]; then
               echo "| Tracking issue | #${TRACKING_ISSUE_NUMBER} |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -949,12 +1026,16 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+          SINGLE_ISSUE_MODE: ${{ steps.decomposition_mode.outputs.single_issue_mode }}
+          SINGLE_ISSUE_URL: ${{ steps.single_issue.outputs.single_issue_url }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
           : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
           : "${DECOMPOSITION_FILE:=${RUNTIME_DIR}/decomposition.json}"
           : "${TRACKING_ISSUE_NUMBER:=0}"
+          : "${SINGLE_ISSUE_MODE:=false}"
+          : "${SINGLE_ISSUE_URL:=}"
           source scripts/tg_helpers.sh
 
           STATUS="${{ job.status }}"
@@ -968,11 +1049,18 @@ jobs:
             ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
           fi
           if [ "${STATUS}" = "success" ]; then
-            MSG="Orchestrator: Decomposed project into ${ISSUE_COUNT} issues."
+            if [ "${SINGLE_ISSUE_MODE}" = "true" ]; then
+              MSG="Orchestrator: Single-issue short-circuit mode created 1 standalone issue."
+            else
+              MSG="Orchestrator: Decomposed project into ${ISSUE_COUNT} issues."
+            fi
             LEVEL="DEBUG"
             if [ -n "${TRACKING_URL}" ]; then
               MSG+=$'\n'
               MSG+="Tracking: ${TRACKING_URL}"
+            elif [ "${SINGLE_ISSUE_MODE}" = "true" ] && [ -n "${SINGLE_ISSUE_URL:-}" ]; then
+              MSG+=$'\n'
+              MSG+="Issue: ${SINGLE_ISSUE_URL}"
             fi
           else
             MSG="Orchestrator: Failed (${STATUS})."
