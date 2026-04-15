@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Reduce GitHub REST rate-limit usage via H1\u2013H8 consolidation and GraphQL migration\",\"issues\":[{\"id\":\"h1-core-checkout-staging\",\"title\":\"H1A: Replace Contents API support-script fetches with checkout staging in core workflows\",\"priority\":1},{\"id\":\"h1-remaining-workflows-and-templates\",\"title\":\"H1B: Complete checkout-based support-file staging in remaining workflows and wrapper surfaces\",\"priority\":1},{\"id\":\"h2-review-linked-issues-cache\",\"title\":\"H2: Cache closingIssuesReferences once per review_autofix job\",\"priority\":2},{\"id\":\"h3-issue-timeline-graphql-shim\",\"title\":\"H3: Add GraphQL-backed issue timeline helper with legacy-shape shim and fallback\",\"priority\":3},{\"id\":\"h4-pr-comments-graphql-shim\",\"title\":\"H4: Add GraphQL-backed PR/comment bundle helper with legacy-shape shim and fallback\",\"priority\":4},{\"id\":\"h5-actions-runs-cache\",\"title\":\"H5: Add ai-memory-backed Actions runs cache and consolidate orchestrator poll fetches\",\"priority\":5},{\"id\":\"h6-workflow-log-analysis-cache\",\"title\":\"H6: Add ai-memory-backed workflow-log-analysis ETag/state cache\",\"priority\":6},{\"id\":\"h7-label-create-idempotency\",\"title\":\"H7: Remove redundant label existence GET probes and keep create idempotency\",\"priority\":7},{\"id\":\"h8-review-pr-state-poll-interval\",\"title\":\"H8: Add configurable PR-state poll interval with safe defaults and docs\",\"priority\":8}],\"dependency_edges\":[{\"from\":\"h1-core-checkout-staging\",\"to\":\"h1-remaining-workflows-and-templates\"},{\"from\":\"h1-remaining-workflows-and-templates\",\"to\":\"h2-review-linked-issues-cache\"},{\"from\":\"h2-review-linked-issues-cache\",\"to\":\"h3-issue-timeline-graphql-shim\"},{\"from\":\"h3-issue-timeline-graphql-shim\",\"to\":\"h4-pr-comments-graphql-shim\"},{\"from\":\"h4-pr-comments-graphql-shim\",\"to\":\"h5-actions-runs-cache\"},{\"from\":\"h5-actions-runs-cache\",\"to\":\"h6-workflow-log-analysis-cache\"},{\"from\":\"h6-workflow-log-analysis-cache\",\"to\":\"h7-label-create-idempotency\"},{\"from\":\"h7-label-create-idempotency\",\"to\":\"h8-review-pr-state-poll-interval\"}]}",
+  "fingerprint": "8347ce4b6a938099824fb2ba1377643b59767ec28a3f3f3770e0672c196475d9",
+  "lineage": {
+    "issue_number": 1057,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24442780582",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24442780582",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260415075826_a95d492a89",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1057,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24442780582"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Reduce GitHub REST rate-limit usage via H1\u2013H8 consolidation and GraphQL migration' into 9 issues (tracking #1057)",
+  "timestamps": {
+    "created_at": "2026-04-15T07:58:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
