@@ -631,7 +631,11 @@ jobs:
                 --actor "${{ github.actor }}" \
                 --run-id "${{ github.run_id }}" \
                 --run-attempt "${{ github.run_attempt }}" \
-                --metadata-json "$(jq -cn --arg issue_url "${ISSUE_URL}" --arg run_url "${RUN_URL}" --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" '{issue_url: $issue_url, run_url: $run_url, clarify_comment_id: ($clarify_comment_id|tonumber)}')")"
+                --metadata-json "$(jq -cn --arg issue_url "${ISSUE_URL}" --arg run_url "${RUN_URL}" --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" '{issue_url: $issue_url, run_url: $run_url, clarify_comment_id: ($clarify_comment_id|tonumber)}')" || true)"
+              if [ -z "${CLAIM_RESULT}" ]; then
+                echo "::warning::memory_processed_command_claim failed; continuing without claim gate (fail-open)."
+                CLAIM_RESULT='{"claimed": true}'
+              fi
 
               memory_enabled="$(printf '%s' "${AI_MEMORY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
               if [[ "${memory_enabled}" =~ ^(1|true|yes|on)$ ]]; then
@@ -650,7 +654,10 @@ jobs:
               fi
 
               if [ -f scripts/ai_memory_lib.py ]; then
-                CLARIFY_HASH="$(printf '%s' "${CLARIFICATION_TEXT}" | python3 -c 'from scripts.ai_memory_lib import compute_normalized_sha256; import sys; print(compute_normalized_sha256(sys.stdin.read()))')"
+                CLARIFY_HASH="$(printf '%s' "${CLARIFICATION_TEXT}" | python3 -c 'from scripts.ai_memory_lib import compute_normalized_sha256; import sys; print(compute_normalized_sha256(sys.stdin.read()))' 2>/dev/null || true)"
+                if [ -z "${CLARIFY_HASH}" ]; then
+                  echo "::warning::Failed to compute CLARIFY_HASH; continuing with empty hash."
+                fi
               fi
 
               LOOP_GUARD_JSON="$(memory_clarify_loop_guard \
@@ -669,7 +676,10 @@ jobs:
           fi
 
           if [ -f scripts/ai_memory_lib.py ]; then
-            ANSWER_HASH="$(printf '%s' "${ANSWERS_BODY}" | python3 -c 'from scripts.ai_memory_lib import compute_normalized_sha256; import sys; print(compute_normalized_sha256(sys.stdin.read()))')"
+            ANSWER_HASH="$(printf '%s' "${ANSWERS_BODY}" | python3 -c 'from scripts.ai_memory_lib import compute_normalized_sha256; import sys; print(compute_normalized_sha256(sys.stdin.read()))' 2>/dev/null || true)"
+            if [ -z "${ANSWER_HASH}" ]; then
+              echo "::warning::Failed to compute ANSWER_HASH; continuing with empty hash."
+            fi
           fi
 
           if [ "${LOOP_BLOCKED}" = "true" ]; then
@@ -738,7 +748,7 @@ jobs:
                     loop_break_comment_id: ($loop_break_comment_id|tonumber),
                     loop_blocked: true,
                     loop_block_reason: $loop_block_reason
-                  }')" >/dev/null
+                  }')" >/dev/null || echo "::warning::Failed to record blocked-loop completion in processed-command ledger (fail-open)."
             fi
 
             {
@@ -787,7 +797,7 @@ jobs:
                   cycle: ($cycle|tonumber),
                   loop_blocked: false,
                   loop_block_reason: "none"
-                }')" >/dev/null
+                }')" >/dev/null || echo "::warning::Failed to record answered completion in processed-command ledger (fail-open)."
           fi
 
           {
