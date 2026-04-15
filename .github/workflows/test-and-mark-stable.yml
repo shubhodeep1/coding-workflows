@@ -1178,11 +1178,19 @@ jobs:
             TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
             SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
             if [ "$TOTAL_JOBS" -eq 0 ]; then
-              # No jobs at all — typically a spurious re-trigger where the reusable
-              # workflow's job-level if: condition filtered out the only job before
-              # it materialized, so GitHub reports the run with zero jobs. Treat this
-              # the same as the all-skipped case: non-fatal.
-              echo "  │  ⊘ Run has no jobs (spurious re-trigger or not yet indexed) — OK"
+              # GitHub can briefly report zero jobs before the run is fully indexed.
+              # Re-fetch a few times so we don't false-pass real runs as spurious.
+              echo "  │  ⚠ Run has no jobs yet — rechecking for indexing delay..."
+              for _jobs_retry in 1 2 3; do
+                sleep $((_jobs_retry * 2))
+                JOBS_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null || echo '{"jobs":[]}')
+                TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
+                SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
+                [ "$TOTAL_JOBS" -gt 0 ] && break
+              done
+            fi
+            if [ "$TOTAL_JOBS" -eq 0 ]; then
+              echo "  │  ⊘ Run has no jobs after retries (spurious re-trigger) — OK"
               echo "  └─"
               return 0
             fi
