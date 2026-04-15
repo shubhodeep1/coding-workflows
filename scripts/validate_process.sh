@@ -1089,7 +1089,7 @@ import re
 import sys
 
 HEREDOC_PATTERN = re.compile(
-    r'^.*\bpython3\b[^\n<]*<<(-)?[\'"](\w+)[\'"]\s*$',
+    r'^.*\bpython3\b[^\n<]*<<\s*(-)?\s*[\'"](\w+)[\'"][^\n]*$',
     re.MULTILINE,
 )
 
@@ -1139,8 +1139,9 @@ if errors:
     print(
         "Prompt guidance: mode-validate-generate.txt forbids nested heredoc "
         "inline Python. Rewrite as a sidecar .py file under validation/tests/_lib/ "
-        "and invoke via `python3 validation/tests/_lib/<name>.py`, or use "
-        "`python3 -c \"$(cat <<'PY'\\n...\\nPY\\n)\"` with no additional shell layering."
+        "and invoke via `python3 validation/tests/_lib/<name>.py`, or run a "
+        "single-layer quoted heredoc directly as `python3 - <<'PY' ... PY` "
+        "with no `/bin/sh -c` / `bash -lc` wrapper."
     )
     sys.exit(1)
 
