@@ -4343,16 +4343,13 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
           FIX_EVIDENCE_STATUS=$?
           if [ "${FIX_EVIDENCE_STATUS}" -eq 1 ]; then
             echo "Validation fix-up issue #${fix_num}: no merged PR evidence detected (state=${FIX_STATE}, state_reason=${FIX_STATE_REASON:-none})."
+            FIX_THIS_CLOSED_WITHOUT_MERGE="true"
           else
-            # Exit code 2 = transient timeline lookup failure.  The issue is
-            # still flagged as closed (the state/label said so) but without a
-            # verifiable merged PR we treat the batch as failed and let the
-            # validation recovery path re-evaluate.  Preserved message text
-            # "merged PR lookup failed" matches existing test expectations
-            # and operator muscle memory.
-            echo "::warning::Validation fix-up issue #${fix_num}: merged PR lookup failed; treating as closed without merge." >&2
+            # Exit code 2 = transient timeline/API lookup failure.  Keep this
+            # issue in-progress so the next poll cycle can retry instead of
+            # forcing a false validation failure.
+            echo "::warning::Validation fix-up issue #${fix_num}: merged PR lookup failed; leaving issue pending for retry." >&2
           fi
-          FIX_THIS_CLOSED_WITHOUT_MERGE="true"
         fi
       else
         # Issue still open and has no ai:closed label — nothing to backfill

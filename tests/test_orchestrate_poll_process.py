@@ -2268,10 +2268,11 @@ def test_validation_fixing_lookup_failure_is_fail_safe_and_no_backfill():
 		issue_labels={10: ["ai:merged"], 501: ["ai:closed"]},
 		timeline_fail_for_issues=[501],
 	)
-	assert result["latest_state"]["status"] == "failed"
-	assert "closed without merge" in result["latest_state"].get("validation_failure_reason", "")
+	assert result["latest_state"]["status"] == "validation-fixing"
+	assert result["latest_state"].get("validation_fix_issues_batch_cycles") == 1
+	assert "validation_failure_reason" not in result["latest_state"]
 	assert "ai:merged" not in result["issues"]["501"]["labels"]
-	assert "merged PR lookup failed" in (result["stdout"] + result["stderr"])
+	assert "merged PR lookup failed; leaving issue pending for retry" in (result["stdout"] + result["stderr"])
 
 
 
