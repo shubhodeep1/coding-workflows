@@ -331,6 +331,13 @@ else
   ENABLE_STALL_JUDGE="false"
 fi
 
+ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
+if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
+  ENABLE_STALL_HUMAN_TERMINALIZATION="true"
+else
+  ENABLE_STALL_HUMAN_TERMINALIZATION="false"
+fi
+
 ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
 if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
   ENABLE_STANDALONE_STALL_RECOVERY="true"
@@ -2485,24 +2492,57 @@ recovery_action_for_phase() {
   local phase="$1"
   local recovery_count="$2"
 
-  if [ "${recovery_count}" -ge "${MAX_STALL_RECOVERIES_PER_ISSUE}" ]; then
-    echo "skip"
-    return
-  fi
-
   local action
-  action="$(python3 - "$phase" "$recovery_count" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
-from orchestrate_lib import STALL_RECOVERY_ACTIONS
+from orchestrate_lib import resolve_stall_recovery_action
 
 phase = sys.argv[1]
 recovery_count = int(sys.argv[2])
-actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
-idx = min(recovery_count, len(actions) - 1)
-print(actions[idx])
+max_recoveries = int(sys.argv[3])
+enable_human_terminalization = sys.argv[4].lower() == "true"
+print(resolve_stall_recovery_action(
+    phase,
+    recovery_count,
+    max_recoveries=max_recoveries,
+    enable_stall_human_terminalization=enable_human_terminalization,
+))
 PY
 )"
+  if [ -z "${action}" ]; then
+    echo "retrigger_pipeline"
+  else
+    echo "${action}"
+  fi
+}
+
+normalize_stall_recovery_action() {
+  local phase="$1"
+  local recovery_count="$2"
+  local candidate_action="${3:-}"
+
+  local action
+  action="$(python3 - "$phase" "$recovery_count" "$candidate_action" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" <<'PY'
+import sys
+sys.path.insert(0, 'scripts')
+from orchestrate_lib import resolve_effective_stall_recovery_action
+
+phase = sys.argv[1]
+recovery_count = int(sys.argv[2])
+candidate_action = sys.argv[3]
+max_recoveries = int(sys.argv[4])
+enable_human_terminalization = sys.argv[5].lower() == "true"
+print(resolve_effective_stall_recovery_action(
+    phase,
+    recovery_count,
+    candidate_action,
+    max_recoveries=max_recoveries,
+    enable_stall_human_terminalization=enable_human_terminalization,
+))
+PY
+)"
+
   if [ -z "${action}" ]; then
     echo "retrigger_pipeline"
   else
@@ -3058,6 +3098,8 @@ invoke_stall_judge() {
   local judge_justification
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
+  local effective_action
+  effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
     STALL_JUDGE_TARGET_PR="${target_pr}"
@@ -3070,7 +3112,8 @@ invoke_stall_judge() {
   local judge_comment
   judge_comment="## 🧑‍⚖️ Stall Judge — Issue #${issue_num} attempt $((recovery_count + 1))
 
-**Decision:** ${judge_action}
+**Decision (judge):** ${judge_action}
+**Decision (effective):** ${effective_action}
 **Justification:** ${judge_justification}
 
 **Diagnostics snapshot:**
@@ -3084,11 +3127,15 @@ ${diagnostics}
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${judge_comment}" >/dev/null 2>&1 || true
   fi
-  tg_notify "Stall judge evaluated issue #${issue_num}: ${judge_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+  tg_notify "Stall judge evaluated issue #${issue_num}: judged=${judge_action}, effective=${effective_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
 
-  case "${judge_action}" in
+  if [ "${effective_action}" != "${judge_action}" ]; then
+    echo "::notice::Stall judge action '${judge_action}' normalized to '${effective_action}' for issue #${issue_num}."
+  fi
+
+  case "${effective_action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human)
-      execute_stall_recovery_action "${issue_num}" "${phase}" "${judge_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
+      execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
       return $?
       ;;
     resolve_merge_conflict)
@@ -3110,7 +3157,7 @@ ${diagnostics}
       return 0
       ;;
     *)
-      echo "::warning::Unknown stall judge action '${judge_action}' for issue #${issue_num}; falling back to ${fallback_action}."
+      echo "::warning::Unknown effective stall action '${effective_action}' for issue #${issue_num}; falling back to ${fallback_action}."
       execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
       return $?
       ;;
@@ -6282,6 +6329,7 @@ fi
       --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}"
       --stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}"
       --enable-stall-judge "${ENABLE_STALL_JUDGE}"
+      --enable-stall-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
     )
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
