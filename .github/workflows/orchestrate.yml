@@ -492,7 +492,7 @@ jobs:
           PROJECT_CONTEXT_FILE="${RUNTIME_DIR}/project_description.txt"
           printf '%s\n' "${PROJECT_DESCRIPTION}" > "${PROJECT_CONTEXT_FILE}"
 
-          SHORTCIRCUIT_REGEX='step\s*\d|phase\s*\d|wave\s*\d|\bthen\b|\bafter\b|and\s+then|multi[- ]?step'
+          SHORTCIRCUIT_REGEX='step\s*\d|phase\s*\d|wave\s*\d|\bthen\b|\bafter\b|\band\s+then\b|multi[- ]?step'
           DESCRIPTION_LENGTH="$(python3 -c 'import os; print(len(os.environ.get("PROJECT_DESCRIPTION", "")))')"
 
           MAX_CHARS_RAW="${ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS:-1200}"
@@ -523,6 +523,8 @@ jobs:
             print(f"MARKER_SAMPLE={shlex.quote(marker_sample)}")
             PY
           )"
+          MARKER_SAMPLE="${MARKER_SAMPLE//$'\r'/ }"
+          MARKER_SAMPLE="${MARKER_SAMPLE//$'\n'/ }"
 
           SHORT_CIRCUIT="false"
           REASON="decomposer-path"
