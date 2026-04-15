@@ -595,7 +595,11 @@ jobs:
           PREVIOUS_CLARIFY_COMMENT_ID="0"
           PREVIOUS_ANSWER_COMMENT_ID="0"
           USED_CLARIFY_HASH=""
-          MAX_CYCLES="${ORCHESTRATOR_MAX_CLARIFY_CYCLES}"
+          MAX_CYCLES="${ORCHESTRATOR_MAX_CLARIFY_CYCLES:-3}"
+          if ! [[ "${MAX_CYCLES}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::warning::Invalid ORCHESTRATOR_MAX_CLARIFY_CYCLES='${MAX_CYCLES}'; defaulting to 3."
+            MAX_CYCLES="3"
+          fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           if [ -z "${CODEX_OUTPUT_FILE:-}" ] || [ ! -f "${CODEX_OUTPUT_FILE}" ]; then
