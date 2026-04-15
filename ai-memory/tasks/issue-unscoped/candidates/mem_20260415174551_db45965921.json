@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/issue_pr_status.yml\n.github/workflows/validate.yml\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/issue_pr_status.yml\n.github/workflows/issue_pr_status.yml\n.github/workflows/issue_pr_status.yml,\n.github/workflows/validate.yml\n.github/workflows/validate.yml\n.github/workflows/validate.yml\n`.github/workflows/issue_pr_status.yml`",
+  "fingerprint": "d2d9b05e0f62d95289169e132658635af60a77a7de1a912fd0ef3c247c8fae85",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1083,
+    "run_id": "24468700562",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24468700562",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415174551_db45965921",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1083,
+    "run_id": "24468700562"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T17:45:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
