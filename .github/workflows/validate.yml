@@ -232,18 +232,20 @@ jobs:
 
       - name: Restore validate hints cache
         # Reuse .ai/validate-hints-cache/hints.yml from a prior successful
-        # discover run in the same repo+workspace fingerprint so
+        # run in the same repo with a matching cache key so
         # validate_process.sh can skip the codex discover call entirely.
         # Cache is per-repo (GitHub Actions cache scoping). Key hashes
         # files that drive validation discovery output; changes invalidate
-        # it automatically. See scripts/validate_process.sh Phase 0.
+        # the cache so stale hints cannot leak across structural changes.
+        # Exact-key-only by design: no restore-keys fallback, because a
+        # partial-prefix hit would reuse hints computed against a different
+        # repo fingerprint and bypass the "changes invalidate" guarantee.
+        # See scripts/validate_process.sh Phase 0.
         id: validate_hints_cache
         uses: actions/cache@v4
         with:
           path: .ai/validate-hints-cache
           key: validate-hints-v1-${{ hashFiles('docker-compose*.yml', 'compose*.yml', '**/Dockerfile', '**/Dockerfile.*', '**/package.json', '**/pyproject.toml', '**/requirements*.txt', '**/go.mod', '**/Cargo.toml') }}
-          restore-keys: |
-            validate-hints-v1-
 
       - name: Record validation run start
         continue-on-error: true

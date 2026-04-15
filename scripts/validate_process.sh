@@ -1022,11 +1022,12 @@ fi
 VALIDATE_HINTS_CACHE_DIR="${VALIDATE_HINTS_CACHE_DIR:-.ai/validate-hints-cache}"
 VALIDATE_HINTS_CACHE_FILE="${VALIDATE_HINTS_CACHE_DIR}/hints.yml"
 
-# Lightweight sanity check for a hints file before reuse. Mirrors the
-# key-list validator the discover path applies to fresh codex output
-# (non-empty, size-capped, at least one expected top-level key). Used
-# to protect against a corrupted or poisoned cache entry silently
-# producing a broken harness. Returns 0 on pass, 1 on fail.
+# Lightweight sanity check for a hints file before reuse. Stricter than
+# the discover-path validator (which accepts indented keys) because a
+# cache entry may live across many runs and the poisoning threat model
+# is different: we require at least one TRULY top-level key (no leading
+# whitespace in the original line) so a nested mapping cannot satisfy
+# the regex by accident. Returns 0 on pass, 1 on fail.
 validate_hints_sanity_check() {
   local hints_file="$1"
   [ -s "${hints_file}" ] || return 1
@@ -1052,14 +1053,16 @@ expected_key = re.compile(
     r"^(type|entry|port|health_check|services|env_overrides|custom_tests|skip_tests):\s*",
     re.IGNORECASE,
 )
+# Keep original indentation so we can distinguish truly top-level keys
+# (no leading whitespace) from nested ones.
 lines = [
-    line.lstrip()
+    line
     for line in candidate.splitlines()
     if line.strip() and not line.lstrip().startswith("#")
 ]
 if not lines:
     sys.exit(1)
-if not any(expected_key.match(line) for line in lines):
+if not any(line == line.lstrip() and expected_key.match(line) for line in lines):
     sys.exit(1)
 sys.exit(0)
 PY
