@@ -137,14 +137,14 @@ jobs:
             exit 0
           fi
 
-          issue_numbers="$(gh api graphql \
+          issue_nodes_json="$(gh api graphql \
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
             -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | .[].number' || true)"
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
 
-          if [ -z "${issue_numbers}" ]; then
+          if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
             pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
             repository_escaped="${REPOSITORY//./\\.}"
             issue_numbers="$(echo "${pr_data}" | grep -oiE "(github\\.com/${repository_escaped}/issues/[0-9]+|${repository_escaped}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
@@ -153,15 +153,25 @@ jobs:
               exit 0
             fi
             echo "Found linked issues via PR body/title fallback: ${issue_numbers}"
+
+            issue_nodes_json="$(printf '%s\n' "${issue_numbers}" | jq -Rsc 'split("\n") | map(select(length > 0)) | map({number: tonumber, labels: null})')"
           fi
 
           validation_dispatched="false"
           validate_workflow="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
-          while IFS= read -r issue_number; do
+          while IFS=$'\t' read -r issue_number has_validate_label labels_known; do
             [ -n "${issue_number}" ] || continue
 
-            issue_labels="$(gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null || true)"
-            if ! echo "${issue_labels}" | grep -Fxq 'ai:orchestrator-validate-required'; then
+            if [ "${labels_known}" != "true" ]; then
+              issue_labels="$(gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null || true)"
+              if echo "${issue_labels}" | grep -Fxq 'ai:orchestrator-validate-required'; then
+                has_validate_label="true"
+              else
+                has_validate_label="false"
+              fi
+            fi
+
+            if [ "${has_validate_label}" != "true" ]; then
               echo "Issue #${issue_number} does not have ai:orchestrator-validate-required; skipping."
               continue
             fi
@@ -179,7 +189,7 @@ jobs:
             if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:orchestrator-validate-required'; then
               echo "::warning::Standalone validation dispatched for issue #${issue_number}, but failed to remove ai:orchestrator-validate-required."
             fi
-          done <<< "${issue_numbers}"
+          done < <(printf '%s' "${issue_nodes_json}" | jq -r '.[] | [.number, (if (.labels | type) == "array" then ((.labels | index("ai:orchestrator-validate-required")) != null) else false end), ((.labels | type) == "array")] | @tsv')
 
           if [ "${validation_dispatched}" = "false" ]; then
             echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
