@@ -70,11 +70,15 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.evaluate.outputs.should_run }}
+      post_merge_dispatch: ${{ steps.evaluate.outputs.post_merge_dispatch }}
     steps:
       - name: Evaluate review gate
         id: evaluate
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
           PR_IS_DRAFT: ${{ inputs.pr_is_draft }}
           PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
           PR_TITLE: ${{ inputs.pr_title }}
@@ -83,8 +87,28 @@ jobs:
           set -euo pipefail
 
           SHOULD_RUN="true"
+          POST_MERGE_DISPATCH="false"
+
           if [ "${EVENT_NAME}" = "workflow_call" ]; then
-            if [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
+            pr_state=""
+            pr_merged="false"
+            if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+              SHOULD_RUN="false"
+              echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
+            else
+              pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
+              pr_merged="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.merged // false' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "false")"
+            fi
+
+            if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
+              SHOULD_RUN="false"
+              echo "::warning::Unable to determine PR state for #${PR_NUMBER}; skipping review run."
+            elif [ "${pr_state}" = "closed" ]; then
+              SHOULD_RUN="false"
+              if [ "${pr_merged}" = "true" ]; then
+                POST_MERGE_DISPATCH="true"
+              fi
+            elif [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
               SHOULD_RUN="false"
             elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
               SHOULD_RUN="false"
@@ -92,6 +116,74 @@ jobs:
           fi
 
           echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
+          echo "post_merge_dispatch=${POST_MERGE_DISPATCH}" >> "${GITHUB_OUTPUT}"
+
+  post-merge-validate-dispatch:
+    needs: gate
+    runs-on: ubuntu-latest
+    if: ${{ needs.gate.outputs.post_merge_dispatch == 'true' }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
+    steps:
+      - name: Dispatch standalone validate for orchestrator short-circuit issues
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Skipping post-merge validate dispatch: invalid PR number '${PR_NUMBER}'."
+            exit 0
+          fi
+
+          issue_numbers="$(gh api graphql \
+            -f owner="${REPOSITORY%/*}" \
+            -f name="${REPOSITORY#*/}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | .[].number' || true)"
+
+          if [ -z "${issue_numbers}" ]; then
+            pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            repository_escaped="${REPOSITORY//./\\.}"
+            issue_numbers="$(echo "${pr_data}" | grep -oiE "(github\\.com/${repository_escaped}/issues/[0-9]+|${repository_escaped}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
+            if [ -z "${issue_numbers}" ]; then
+              echo "No linked issues found for merged PR #${PR_NUMBER}."
+              exit 0
+            fi
+            echo "Found linked issues via PR body/title fallback: ${issue_numbers}"
+          fi
+
+          validation_dispatched="false"
+          validate_workflow="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
+          while IFS= read -r issue_number; do
+            [ -n "${issue_number}" ] || continue
+
+            issue_labels="$(gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null || true)"
+            if ! echo "${issue_labels}" | grep -Fxq 'ai:orchestrator-validate-required'; then
+              echo "Issue #${issue_number} does not have ai:orchestrator-validate-required; skipping."
+              continue
+            fi
+
+            if [ "${validation_dispatched}" = "false" ]; then
+              echo "Dispatching standalone validation for linked issue #${issue_number} (tracking_issue=0)."
+              if gh workflow run "${validate_workflow}" --repo "${REPOSITORY}" -f tracking_issue="0" || { [ "${validate_workflow}" != "internal-validate.yml" ] && gh workflow run "internal-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0"; }; then
+                validation_dispatched="true"
+              else
+                echo "::warning::Failed to dispatch ${validate_workflow}/internal-validate.yml for issue #${issue_number}; continuing without failing workflow."
+                continue
+              fi
+            fi
+
+            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:orchestrator-validate-required'; then
+              echo "::warning::Standalone validation dispatched for issue #${issue_number}, but failed to remove ai:orchestrator-validate-required."
+            fi
+          done <<< "${issue_numbers}"
+
+          if [ "${validation_dispatched}" = "false" ]; then
+            echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
+          fi
 
   codex-agent:
     needs: gate
