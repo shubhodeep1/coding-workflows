@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\nprompts/conflict-resolver.txt\nscripts/orchestrate_lib.py\nscripts/orchestrate_poll_process.sh\ntests/test_orchestrate_lib.py\ntests/test_orchestrate_poll_process.py\n\nLow confidence files (mentioned by 1 reviewer):\nprompts/conflict-resolver.txt**",
+  "fingerprint": "89d5898faa76239982a08327cecb20d029f8bf9ad601b66e5e82d660924c51ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1005,
+    "run_id": "24451343253",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24451343253",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415113823_694b0060d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1005,
+    "run_id": "24451343253"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T11:38:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
