@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which `scripts/orchestrate_poll_process.sh` timeline call sites are in scope for migrating to `gh_issue_timeline_with_cross_refs`?**\nChoices:\n- **A** \u2014 Only the call sites used by close-merged-issues sweep and validation-linked issue checks (minimum scope).\n- **B** \u2014 All issue-timeline cross-reference call sites in `scripts/orchestrate_poll_process.sh` should be migrated to the new helper (RECOMMENDED).\n- **C** \u2014 A specific subset other than A/B (please list exact function names or line regions).\nReply: `Q1: B`\n**Q2: Where should the required H3 changelog entry be added?**\nChoices:\n- **A** \u2014 Add it to `README.md` in the relevant workflow/orchestrator section (RECOMMENDED).\n- **B** \u2014 Add it to an existing changelog/release doc path you specify.\n- **C** \u2014 Create a new changelog file/path for H3 entries.\nReply: `Q2: A`\n**Q3: Where should the manual parity-check fixtures live?**\nChoices:\n- **A** \u2014 Under `scripts/fixtures/issue-timeline/` (RECOMMENDED).\n- **B** \u2014 Under another existing fixtures directory (please provide path).\n- **C** \u2014 Under a docs-facing path (please provide path).\nReply: `Q3: A`",
+  "fingerprint": "3de2596e4a3086a6a47836b8724d4c9ed1781d958f0fcaf8e22013553ffab1fa",
+  "lineage": {
+    "issue_number": 1115,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24474621481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24474621481",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260415194402_3bdf3d48dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1115,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24474621481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1115 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-15T19:44:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
