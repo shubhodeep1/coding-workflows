@@ -21,12 +21,54 @@ emit_early_init_failure_result()
 
 trap emit_early_init_failure_result EXIT
 
+# Safe parser for the Docker Compose env_file format used by
+# `validation/validate.env`. We intentionally do NOT `source` this file
+# because the generator prompt (prompts/mode-validate-generate.txt)
+# specifies env_file semantics — which permit unquoted values with
+# spaces (e.g. `CANARY_TOOLS=curl jq python3 node npm`). Bash `source`
+# would parse such a line as the shell simple command
+# `CANARY_TOOLS=curl jq python3 node npm` (a one-shot env-prefixed
+# invocation of `jq`), which fails preflight with
+# `jq: error: python3/0 is not defined` and triggers the
+# `validate_driver_init` EXIT trap before any test runs. Parse each
+# line ourselves so values with spaces are preserved verbatim.
+load_env_file()
+{
+	local env_path="$1"
+	local line key value
+	local lineno=0
+	while IFS= read -r line || [ -n "${line}" ]; do
+		lineno=$((lineno + 1))
+		# Strip a trailing CR so CRLF files parse cleanly.
+		line="${line%$'\r'}"
+		# Strip leading whitespace for the blank/comment check.
+		local trimmed="${line#"${line%%[![:space:]]*}"}"
+		if [ -z "${trimmed}" ] || [ "${trimmed:0:1}" = "#" ]; then
+			continue
+		fi
+		if [[ ! "${trimmed}" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+			echo "validate_driver: ignoring unparseable ${env_path} line ${lineno}" >&2
+			continue
+		fi
+		key="${BASH_REMATCH[1]}"
+		value="${BASH_REMATCH[2]}"
+		# Unwrap a single matched pair of surrounding quotes, matching
+		# Docker Compose env_file quoting semantics.
+		if [ "${#value}" -ge 2 ]; then
+			local first="${value:0:1}"
+			local last="${value: -1}"
+			if { [ "${first}" = '"' ] && [ "${last}" = '"' ]; } \
+				|| { [ "${first}" = "'" ] && [ "${last}" = "'" ]; }; then
+				value="${value:1:${#value}-2}"
+			fi
+		fi
+		export "${key}=${value}"
+	done < "${env_path}"
+}
+
 ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
 if [ -f "${ENV_FILE}" ]; then
-	set -a
-	# shellcheck disable=SC1090
-	source "${ENV_FILE}"
-	set +a
+	load_env_file "${ENV_FILE}"
 fi
 
 COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
