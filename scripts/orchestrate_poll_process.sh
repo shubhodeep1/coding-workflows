@@ -3849,23 +3849,30 @@ recover_stalled_issue() {
   # phase as "no_labels"/"ai:clarification"/"ai:planning"/"ai:awaiting-approval"/
   # "ai:implementing" and fire /reclarify, /answer, /approved, etc. against an
   # issue that already has an open PR, triggering a stuck-in-loop scenario.
-  # Consult the linked PR via the GitHub timeline and, if it is still open, bail
-  # out of the early-phase action so the issue can progress on its existing PR.
+  # Consult every cross-referenced PR from the GitHub timeline (not just the
+  # most recent one, to avoid missing an older still-open PR that has since
+  # been shadowed by a newer closed cross-reference) and, if *any* of them is
+  # still open, bail out of the early-phase action so the issue can progress
+  # on its existing PR.
   case "${action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement)
-      local _lpr_num
-      _lpr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
-        --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+      local _linked_pr_nums _lpr_num _lpr_state
+      _linked_pr_nums="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+        --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | unique | .[]' \
         2>/dev/null || echo "")"
-      if [[ "${_lpr_num}" =~ ^[0-9]+$ ]]; then
-        local _lpr_state
-        _lpr_state="$(_jq_field "$(_fetch_pr_json "${_lpr_num}")" '.state' 'open|closed|merged')"
-        if [ "${_lpr_state}" = "open" ]; then
-          echo "STALL_SKIP issue=${issue_num} reason=open_linked_pr pr=${_lpr_num} phase=${phase} action=${action}"
-          add_healing_note "Issue #${issue_num}: skipped early-phase stall recovery '${action}' (phase=${phase}) — open linked PR #${_lpr_num} already exists"
-          tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because open linked PR #${_lpr_num} already exists."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
-          return 1  # Signal: no action taken (caller should not increment counter)
-        fi
+      if [ -n "${_linked_pr_nums}" ]; then
+        while IFS= read -r _lpr_num; do
+          if ! [[ "${_lpr_num}" =~ ^[0-9]+$ ]]; then
+            continue
+          fi
+          _lpr_state="$(_jq_field "$(_fetch_pr_json "${_lpr_num}")" '.state' 'open|closed|merged')"
+          if [ "${_lpr_state}" = "open" ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=open_linked_pr pr=${_lpr_num} phase=${phase} action=${action}"
+            add_healing_note "Issue #${issue_num}: skipped early-phase stall recovery '${action}' (phase=${phase}) — open linked PR #${_lpr_num} already exists"
+            tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because open linked PR #${_lpr_num} already exists."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
+            return 1  # Signal: no action taken (caller should not increment counter)
+          fi
+        done <<< "${_linked_pr_nums}"
       fi
       ;;
   esac
