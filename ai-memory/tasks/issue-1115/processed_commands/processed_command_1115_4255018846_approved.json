@@ -5,13 +5,27 @@
   "entry_id": "processed_command_1115_4255018846_approved",
   "issue_number": 1115,
   "metadata": {
+    "branch": "ai/issue-1115",
+    "changed_files": [
+      "README.md",
+      "scripts/compare_issue_timeline_parity.sh",
+      "scripts/fixtures/issue-timeline/graphql_timeline_fixture.json",
+      "scripts/fixtures/issue-timeline/rest_timeline_fixture.json",
+      "scripts/gh_helpers.sh",
+      "scripts/orchestrate_poll_process.sh"
+    ],
+    "issue_number": 1115,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1115",
+    "pr_number": 1120,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1120",
+    "run_attempt": "1",
+    "run_id": "24475076179",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24475076179"
   },
   "run_attempt": 1,
   "run_id": "24475076179",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-15T19:53:00Z",
+  "status": "completed",
+  "timestamp": "2026-04-15T20:14:46Z",
   "workflow": "implement"
 }
