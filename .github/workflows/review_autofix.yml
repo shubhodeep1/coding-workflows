@@ -2096,6 +2096,26 @@ jobs:
           git config user.name  "codex-bot"        2>/dev/null || true
           git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
 
+          # Start this step from a clean tracked-file state.  The "Detect
+          # merge conflicts" step's conflict branch only runs `git merge
+          # --abort`; it does NOT `git reset --hard HEAD`, so stale
+          # working-tree modifications from an earlier autofix iteration
+          # (e.g. to scripts/label_helpers.sh) can linger into this step.
+          # When they do, the `git merge --no-commit --no-ff` replay below
+          # fails before entering merge state with "Your local changes to
+          # the following files would be overwritten by merge", the `|| true`
+          # swallows the failure, and `git diff --name-only --diff-filter=U`
+          # returns zero paths — fooling the downstream resolver into
+          # running Codex against an empty conflict set and producing
+          # hallucinated edits.  Reset symmetrically with the no-conflict
+          # cleanup in the detect step.  Only tracked files are affected;
+          # the untracked workflow-fetched dirs handled by RESOLVE_STASH
+          # below are untouched by reset.
+          if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+            git merge --abort 2>/dev/null || true
+          fi
+          git reset --hard HEAD 2>/dev/null || true
+
           # Move workflow-fetched untracked dirs out of the way so they don't
           # collide with files from origin/BASE_BRANCH during the merge.
           # First, explicitly remove known CI-generated files that may be
@@ -2155,6 +2175,34 @@ jobs:
           echo "Resolver allowlist (unmerged paths at merge replay): ${_resolver_allowlist_count} entries"
           if [ "${_resolver_allowlist_count}" -gt 0 ]; then
             sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
+          fi
+
+          # If the merge replay produced no unmerged paths AND left no
+          # merge in progress, there is nothing for Codex to resolve.
+          # This happens when the base branch advanced and the conflict
+          # was resolved upstream between the detect step and this step,
+          # or when git merge failed before entering merge state (e.g.
+          # exit 128 from an untracked/dirty working tree that the reset
+          # above could not fully clean).  Running Codex against an empty
+          # conflict set is how past runs have produced hallucinated
+          # edits to placeholder markers inside prompts/conflict-resolver.txt
+          # — the only file in the tree whose content resembles conflict
+          # markers.  Short-circuit instead: restore the stashed workflow
+          # dirs so later steps keep their environment, reset any partial
+          # merge artefacts, clear MERGE_CONFLICT so the second half of
+          # this split step (and downstream gates that key off it) treat
+          # the conflict as no longer present, and exit 0.
+          if [ "${_resolver_allowlist_count}" -eq 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+            echo "::warning::Merge replay produced no unmerged paths and no merge is in progress — skipping Codex resolver (nothing to resolve)."
+            for d in scripts .serena prompts ai-memory; do
+              if [ -d "${RESOLVE_STASH}/${d}" ]; then
+                cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
+              fi
+            done
+            rm -rf "${RESOLVE_STASH}"
+            git reset --hard HEAD 2>/dev/null || true
+            echo "MERGE_CONFLICT=false" >> "$GITHUB_ENV"
+            exit 0
           fi
 
           # Defensive: `git merge --no-commit` auto-stages merged hunks (and
