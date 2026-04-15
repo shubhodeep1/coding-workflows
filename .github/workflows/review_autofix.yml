@@ -2872,6 +2872,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          export LANG=C
 
           git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
           echo "Pushing pending commits to ${TARGET_BRANCH}..."
@@ -2912,10 +2913,16 @@ jobs:
             sleep "${push_backoff}"
             push_backoff=$((push_backoff * 2))
             push_attempt=$((push_attempt + 1))
-            if ! git fetch origin "${TARGET_BRANCH}"; then
-              echo "::error::git fetch origin ${TARGET_BRANCH} failed during push-retry; giving up to avoid pushing a stale tree."
-              exit 1
-            fi
+            fetch_attempt=1
+            while ! git fetch origin "${TARGET_BRANCH}"; do
+              if [ "${fetch_attempt}" -ge 2 ]; then
+                echo "::error::git fetch origin ${TARGET_BRANCH} failed twice during push-retry; giving up to avoid pushing a stale tree."
+                exit 1
+              fi
+              echo "::warning::git fetch origin ${TARGET_BRANCH} failed during push-retry (attempt ${fetch_attempt}/2); retrying in 2s."
+              fetch_attempt=$((fetch_attempt + 1))
+              sleep 2
+            done
             if ! git rebase "origin/${TARGET_BRANCH}"; then
               echo "::error::git rebase onto origin/${TARGET_BRANCH} failed — rebase would introduce new conflicts. Aborting rebase and failing the job; refusing to silently resurrect conflict markers."
               git rebase --abort || true
