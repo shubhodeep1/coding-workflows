@@ -1002,11 +1002,84 @@ fi
 
 # ---------------------------------------------------------------
 # Phase 0: Discover validation hints when repository hints are absent
+#
+# Hint source precedence:
+#   1. .ai/validate.yml         — committed in consumer repo (authoritative)
+#   2. .ai/validate-hints-cache/hints.yml
+#                                — restored from GitHub Actions cache
+#                                  (written by a prior successful run in
+#                                  the same repo with a matching cache key)
+#   3. codex discover call      — LLM-driven discovery, last resort
+#
+# The cache path is restored by a `Restore validate hints cache` step in
+# the validate workflow via actions/cache. On successful discovery we
+# copy the hints back into the cache directory so the next run in this
+# repo can reuse them without a codex call. Different repos are
+# automatically isolated because GitHub Actions cache is per-repo. The
+# cache key hashes files that drive discovery output (Dockerfile,
+# compose, package manifests) so a repo structure change invalidates it.
 # ---------------------------------------------------------------
+VALIDATE_HINTS_CACHE_DIR="${VALIDATE_HINTS_CACHE_DIR:-.ai/validate-hints-cache}"
+VALIDATE_HINTS_CACHE_FILE="${VALIDATE_HINTS_CACHE_DIR}/hints.yml"
+
+# Lightweight sanity check for a hints file before reuse. Stricter than
+# the discover-path validator (which accepts indented keys) because a
+# cache entry may live across many runs and the poisoning threat model
+# is different: we require at least one TRULY top-level key (no leading
+# whitespace in the original line) so a nested mapping cannot satisfy
+# the regex by accident. Returns 0 on pass, 1 on fail.
+validate_hints_sanity_check() {
+  local hints_file="$1"
+  [ -s "${hints_file}" ] || return 1
+  python3 - "${hints_file}" <<'PY' 2>/dev/null
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+try:
+    raw = path.read_text(encoding="utf-8", errors="replace")
+except Exception:
+    sys.exit(1)
+
+candidate = raw.strip()
+if not candidate:
+    sys.exit(1)
+
+if path.stat().st_size > 64 * 1024:
+    sys.exit(1)
+
+expected_key = re.compile(
+    r"^(type|entry|port|health_check|services|env_overrides|custom_tests|skip_tests):\s*",
+    re.IGNORECASE,
+)
+# Keep original indentation so we can distinguish truly top-level keys
+# (no leading whitespace) from nested ones.
+lines = [
+    line
+    for line in candidate.splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+]
+if not lines:
+    sys.exit(1)
+if not any(line == line.lstrip() and expected_key.match(line) for line in lines):
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
 if [ -f .ai/validate.yml ]; then
   cp .ai/validate.yml "${VALIDATE_HINTS_FILE}"
   HINTS_SOURCE="committed"
+elif [ -f "${VALIDATE_HINTS_CACHE_FILE}" ] \
+  && validate_hints_sanity_check "${VALIDATE_HINTS_CACHE_FILE}"; then
+  cp "${VALIDATE_HINTS_CACHE_FILE}" "${VALIDATE_HINTS_FILE}"
+  HINTS_SOURCE="cache"
+  echo "Reused validation hints from ${VALIDATE_HINTS_CACHE_FILE} (skipped codex discovery)."
 else
+  if [ -f "${VALIDATE_HINTS_CACHE_FILE}" ] && [ -s "${VALIDATE_HINTS_CACHE_FILE}" ]; then
+    echo "::warning::Cached validation hints at ${VALIDATE_HINTS_CACHE_FILE} failed sanity checks; falling back to codex discovery." >&2
+  fi
 {
   cat "${STATIC_CONTEXT_FILE}"
   echo
@@ -1084,6 +1157,14 @@ PY
   if [ "${DISCOVER_SUCCESS}" != "true" ]; then
     printf '# No .ai/validate.yml hints file found\n' > "${VALIDATE_HINTS_FILE}"
     HINTS_SOURCE="none"
+  else
+    # Persist the discovered hints to the cache directory so subsequent
+    # runs in the same workspace can skip the codex discover call. The
+    # cache is saved by the `Save validate hints cache` / actions/cache
+    # post-step in validate.yml.
+    if mkdir -p "${VALIDATE_HINTS_CACHE_DIR}" 2>/dev/null; then
+      cp "${VALIDATE_HINTS_FILE}" "${VALIDATE_HINTS_CACHE_FILE}" 2>/dev/null || true
+    fi
   fi
 fi
 

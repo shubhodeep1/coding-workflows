@@ -208,9 +208,22 @@ def build_tracking_state(
 				"priority": issue["priority"],
 			}
 
+	# Snapshot the tracking issue body at project creation time. The
+	# judge prompt reads this snapshot instead of re-fetching the live
+	# tracking issue body on every poll tick so (a) the body is
+	# guaranteed byte-stable for provider-side prompt-prefix caching,
+	# (b) one GH API call per judge tick is eliminated. The tracking
+	# body is immutable by contract ("Do not edit manually." — see
+	# build_tracking_issue_body below); validate and clarify-respond
+	# continue to read the live body for their own narrower purposes.
+	project_body_snapshot = build_tracking_issue_body(
+		data, waves, integration_branch=integration_branch
+	)
+
 	return {
 		"schema_version": "orchestrate_state.v1",
 		"project_title": data["project_title"],
+		"project_body_snapshot": project_body_snapshot,
 		"total_issues": len(data["issues"]),
 		"total_waves": len(waves),
 		"current_wave": 1,
@@ -778,6 +791,10 @@ def rebuild_tracking_state(
 	return {
 		"schema_version": "orchestrate_state.v1",
 		"project_title": parsed["project_title"],
+		# In the recovery path the body we were given *is* the current
+		# tracking body, so snapshot it directly for subsequent judge
+		# ticks (same semantics as build_tracking_state above).
+		"project_body_snapshot": body,
 		"total_issues": total_issues,
 		"total_waves": len(parsed["waves"]),
 		"current_wave": 1,
