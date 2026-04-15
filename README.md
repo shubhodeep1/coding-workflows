@@ -56,6 +56,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. |
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
+| `REVIEW_REASONING_SCHEDULE` | No | `xhigh,high,medium` | review_autofix | Reviewer-only cycle schedule for autofix rounds (cycle 1 uses first entry, cycle 2 second, cycle 3+ last). Accepted values: `xhigh`, `high`, `medium`, `low` (comma-separated). |
+| `REVIEW_AUTODOWNGRADE_DISABLED` | No | `false` | review_autofix | Kill switch for reviewer cycle schedule. When `true`, reviewer reasoning stays fixed at `THINKING_LEVEL_REVIEWER`. |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | No | `true` | review_autofix | When true, non-orchestrator PRs that exhaust autofix iterations invoke a judge (LLM) to decide: merge as-is, push a fix commit, or close and reissue. Orchestrator-managed PRs are skipped (handled by the poller). PRs without linked issues use the PR title/body as requirement context. |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | No | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge in non-orchestrator PRs (`xhigh`, `high`, `medium`, `low`). |
 | `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | review_autofix, orchestrate_poll | Maximum judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). Used by both the review_autofix judge (counts `[judge-fix]` commits) and the orchestrator poller. |
@@ -71,13 +73,16 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `STALL_THRESHOLD_IMPLEMENTING_MINUTES` | No | `120` | orchestrate_poll | Stall threshold for `ai:implementing` phase. |
 | `STALL_THRESHOLD_DONE_MINUTES` | No | `120` | orchestrate_poll | Stall threshold for `ai:done` phase (review/autofix). |
 | `STALL_THRESHOLD_READY_TO_MERGE_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for `ai:ready-to-merge` phase. |
-| `MAX_STALL_RECOVERIES_PER_ISSUE` | No | `5` | orchestrate_poll | Maximum stall recovery attempts per individual issue. After exhausting this limit the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion. |
+| `MAX_STALL_RECOVERIES_PER_ISSUE` | No | `5` | orchestrate_poll | Maximum stall recovery attempts per individual issue. Recovery selection uses `stall_recovery_count` against `STALL_RECOVERY_ACTIONS` (clamped to the last action), with optional escalation to `run_stall_judge` when enabled and the trigger count is reached. After exhausting this limit the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion. |
+| `STALL_JUDGE_TRIGGER_COUNT` | No | `2` | orchestrate_poll | Stall recovery attempt threshold at which the poller escalates from declarative ladder actions to `run_stall_judge` for deeper diagnostics and action selection. |
+| `ENABLE_STALL_JUDGE` | No | `true` | orchestrate_poll | Enables/disables stall-judge escalation (`run_stall_judge`) in orchestrator-managed and standalone stall recovery paths. |
 | `ENABLE_STANDALONE_STALL_RECOVERY` | No | `true` | orchestrate_poll | Enable stall detection and auto-recovery for standalone AI issues (issues not managed by an active orchestrator tracking state). |
 | `ENABLE_CLOSE_MERGED_ISSUES` | No | `true` | orchestrate_poll | Enable the per-cycle sweep that closes any open GitHub issue carrying `ai:merged` once at least one cross-referenced PR is verified merged via the GitHub REST API. Applies to both orchestrator-managed child issues and standalone (non-orchestrator) issues. Tracking issues (`ai:orchestrator-tracking`) are intentionally skipped — they are closed by the orchestrator project completion path. If an issue has `ai:merged` but no merged PR can be verified on its timeline, the sweep leaves it open and sends a Telegram `WARNING` alert instead of guessing. |
 | `MAX_RECOVERY_ATTEMPTS` | No | `3` | orchestrate_poll | Maximum project-level recovery cycles when the judge declares failure. Replaces the previous single-shot `recovery_attempted` boolean with a configurable counter. |
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | No | `2` | orchestrate_poll | Maximum times the poller transitions a validation-failed project back to the judge for re-evaluation before marking it as terminally failed. Set to `0` to disable (immediate terminal failure on first validation failure, matching pre-recovery behavior). |
 | `CONFLICT_DISPATCH_COOLDOWN_SECS` | No | `900` | orchestrate_poll | Minimum seconds between consecutive review/autofix dispatches against the same orchestrator integration-branch final PR. Prevents the self-healing loop from re-dispatching the resolver every poll tick while a previous run is still in flight. |
-| `INTEGRATION_CONFLICT_MAX_RETRIES` | No | `3` | orchestrate_poll | Circuit-breaker budget for automated integration-branch conflict resolution. After this many consecutive unresolved ticks on a `main` → integration-branch sync, the orchestrator escalates to the judge with full PR context; if the judge escalation itself fails the project is marked terminally failed. |
+| `INTEGRATION_CONFLICT_MAX_RETRIES` | No | `3` | orchestrate_poll | Circuit-breaker budget for automated integration-branch conflict resolution. The self-healing path attempts the `main -> integration_branch` sync via GitHub's merges API; on an HTTP 409 conflict, the poller dispatches `_dispatch_review_for_conflicts` for the final integration PR. After this many consecutive unresolved ticks, the orchestrator escalates to the judge with full PR context; if the judge escalation itself fails the project is marked terminally failed. |
+| `REVIEW_BLOCKED_AUTO_UNSTICK` | No | `true` | orchestrate_poll | Before invoking the review-blocked judge, the poller inspects each `ai:review-blocked` PR. If the PR is `mergeable=false` it dispatches `review_autofix.yml` (via `_dispatch_review_for_conflicts`) so the in-workflow Codex resolver gets a fresh shot at the conflict, and skips the judge for this tick. If the PR head commit was authored by an **external** identity (anything other than `codex`, `codex-bot`, `github-actions`, or `github-actions[bot]`), the poller also dispatches the review workflow AND clears `ai:review-blocked`, re-entering the normal phase loop — this bridges the GitHub platform rule that suppresses `pull_request.synchronize` events on commits pushed with the default `GITHUB_TOKEN` (Claude Code on the web, custom wrapper actions) and matches the "push a new commit to re-trigger the review workflow" contract printed in the workflow-failure comment. Set to `false` to disable both paths and force the judge-first flow. Dispatch is always gated by the existing `_dispatch_review_for_conflicts` cycle-local dedup and active-run detection, so repeat calls are cheap no-ops. |
 | `TG_ADMIN_CHAT_ID` | No | — | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Telegram chat ID for notifications (pair with `TG_BOT_SECRET`) |
 | `ALERT_MSG_LEVEL` | No | `DEBUG` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status, update_workflows, test-and-mark-stable | Minimum Telegram alert level to send. Alerts below this threshold are suppressed. Valid values: `DEBUG`, `WARNING`, `ERROR`, `CRITICAL`. Each alert is prefixed with an icon and level (e.g. `🔍 DEBUG:`, `⚠️ WARNING:`, `❌ ERROR:`, `🚨 CRITICAL:`). New alerts default to `CRITICAL` until explicitly recategorised. |
 | `SERENA_VERSION` | No | `main` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Version/branch of the Serena MCP server |
@@ -85,6 +90,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `SERENA_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate | Disable the Serena MCP server |
 | `CONTEXT7_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Context7 MCP server |
 | `GIT_MCP_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate | Disable the optional Git MCP server setup (preloaded diff artifacts remain the fallback). |
+| `OPENROUTER_PROMPT_CACHE_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, workflow-log-analysis | Kill switch for OpenRouter prompt-cache instrumentation. `false` enables cache-friendly prompt ordering and cache telemetry logging; `true` disables explicit cache breakpoints and related instrumentation. |
 | `WORKFLOW_ORCHESTRATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | orchestrate, orchestrate_poll | Model override for orchestrator decomposer and judge |
 | `ORCHESTRATE_POLL_INTERVAL` | No | `5` | orchestrate | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
 | `ORCHESTRATE_POLL_CALLER_WORKFLOW` | No | `ai-orchestrate-poll.yml` | orchestrate_poll | Filename of the caller wrapper workflow to retrigger for continuous polling. The poller dispatches this workflow via `workflow_dispatch` at the end of each run when active tracking issues exist, so the next cycle starts immediately instead of waiting for the cron schedule. Set to empty string to disable self-retrigger. |
@@ -93,8 +99,11 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `EDITOR_MIN_ATTEMPT_SECS` | No | `300` | review_autofix | Minimum remaining job budget (seconds) required to start an editor attempt. Prevents futile retries near the job deadline. |
 | `BULK_DELETE_THRESHOLD` | No | `3` | implement | Maximum number of file deletions allowed in a single AI implementation commit before the destructive-commit guard blocks it. Set higher for legitimate large refactors, or bypass on a per-run basis via `ALLOW_BULK_DELETE=true`. See "Destructive-commit guard" below. |
 | `ALLOW_BULK_DELETE` | No | `false` | implement | When `true`, the destructive-commit guard ignores the `BULK_DELETE_THRESHOLD` rejection path. Canonical workflow-source file deletions are still blocked unless `ALLOW_WORKFLOW_EDITS=true`. Use for legitimate large refactors approved by a human. |
+| `BATCH_API_DISABLED` | No | `false` | workflow-log-analysis, memory_maintenance | Kill switch for async batch mode. When `true`, workflow log analysis always uses synchronous inference. Memory maintenance emits compatibility/no-op batch logs only. |
+| `BATCH_API_PROVIDER` | No | `auto` | workflow-log-analysis, memory_maintenance | Batch provider routing hint for OpenRouter Responses API capability checks/submission (`auto`, `openai`, `anthropic`). Unsupported hints fall back to sync with structured warnings. |
+| `BATCH_API_POLL_TIMEOUT_HOURS` | No | `24` | workflow-log-analysis, memory_maintenance | Maximum pending batch age before workflow-log-analysis falls back to synchronous generation. |
 
-**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. **E2E smoke test override:** when an issue title contains `[E2E Smoke Test]`, all phases (clarify, plan, implement, review/edit) automatically switch to `low` reasoning effort to reduce cost and latency during release validation.
+**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. In `review_autofix`, reviewer effort also auto-schedules by autofix cycle via `REVIEW_REASONING_SCHEDULE` (default: cycle 1 `xhigh`, cycle 2 `high`, cycle 3+ `medium`) unless `REVIEW_AUTODOWNGRADE_DISABLED=true`. **E2E smoke test override has highest precedence:** when an issue title contains `[E2E Smoke Test]`, review/edit still force `low` reasoning regardless of schedule/kill-switch so release smoke runs stay cheap and fast.
 
 | Variable | Default | Used By | Description |
 |---|---|---|---|
@@ -268,6 +277,25 @@ jobs:
 > the caller holds the lock while the called job waits for it, and GitHub
 > Actions cancels the run. If you need to customize the concurrency group,
 > do so only inside the reusable workflow, not in the caller.
+
+> **Bootstrap fail-fast + resolver hallucination guard** — The
+> `review_autofix.yml` script-bootstrap loop classifies helpers as
+> `REQUIRED_BOOTSTRAP_SCRIPTS` (missing from both `${script_ref}` and
+> `main` is a hard error with an actionable `::error::` message) vs
+> `OPTIONAL_BOOTSTRAP_SCRIPTS` (missing emits a `::warning::` and
+> continues). Keep the optional list empty unless a genuinely optional
+> helper is added — this catches stale references introduced by
+> hallucinated `[ai-merge-resolve]` commits before they can cascade
+> into "unbound variable" errors in later cleanup steps. As a second
+> layer, the `Resolve merge conflicts with Codex` step captures the
+> set of unmerged paths from the merge replay into
+> `RESOLVER_ALLOWLIST_FILE` and — after Codex exec returns — rejects
+> the commit with a hard `::error::` if any `.github/workflows/*.y(a)ml`
+> file was touched outside that allowlist. This allowlist-enforcement
+> path currently runs on the workflow source repository path
+> (`IS_WORKFLOW_SOURCE_REPO=true`). Non-workflow out-of-allowlist edits
+> emit a warning only. Both guards are automatic and have no
+> configuration surface.
 
 **`.github/workflows/ai-issue-pr-status.yml`** — Syncs issue labels when PRs are merged/closed
 ```yaml
@@ -572,13 +600,23 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
   - default: `analysis/workflow-optimization-YYYY-MM-DD.md`
   - same-day collisions: `analysis/workflow-optimization-YYYY-MM-DD-2.md`, `-3.md`, etc.
 - `main` prints the final report path on stdout and exits non-zero on API/write/input errors.
+- Batch mode uses OpenRouter Responses API with deferred polling and state file support:
+  - `--batch-mode` (`auto|submit|poll|sync`)
+  - `--batch-state-file` path for persisted batch metadata
+  - `--batch-provider` (`auto|openai|anthropic`) provider hint
+  - `--batch-api-disabled` kill switch
+  - `--batch-poll-timeout-hours` timeout before sync fallback
+- Analyzer exits with code `3` when batch remains pending; workflow treats this as success and defers completion to future runs.
 
 ### Workflow outputs
 
 - Artifact upload: `workflow-log-report` containing `workflow_log_report.json` (retention 7 days).
 - Repository commit: generated markdown report is committed/pushed to `${{ github.ref_name }}`.
 - No-op behavior: if the report file has no diff, commit/push is skipped (`No report changes to commit.`).
-- Telegram summary: when configured, sends completion message with report URL and workflow run URL.
+- Telegram summary: when configured, sends either a pending-batch message or a completion message with report URL and workflow run URL.
+- Deferred artifact contract: pending batch metadata is uploaded as artifact `workflow-log-analysis-batch-state` containing `workflow_log_analysis_batch_state.json`; later runs fetch latest non-expired artifact and continue polling.
+- Structured logs are emitted for batch decisions and lifecycle (`batch_submit`, `batch_poll`, `batch_complete`, `batch_fallback`).
+- `memory_maintenance.yml` remains functionally unchanged (no LLM path in current repo) and now emits structured `batch_noop` compatibility logging with batch env values.
 - Low-data windows are valid: the analyzer still writes a report when input data is sparse.
 
 ## Required Secrets
@@ -599,6 +637,8 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ALLOW_WORKFLOW_EDITS` | `true` | Allow AI edits to workflow files and automatic wrapper updates |
 | `ENABLE_AUTO_MERGE` | `true` | Auto-merge PRs (squash) when review passes and checks are green |
 | `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before marking `ai:review-blocked` |
+| `REVIEW_REASONING_SCHEDULE` | `xhigh,high,medium` | Reviewer autofix-cycle reasoning schedule (`cycle1,cycle2,cycle3+`) |
+| `REVIEW_AUTODOWNGRADE_DISABLED` | `false` | Disable reviewer cycle schedule and keep fixed `THINKING_LEVEL_REVIEWER` |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | `true` | Enable review-blocked judge for non-orchestrator PRs |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | Reasoning effort for review-blocked judge |
 | `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum judge retries for review-blocked PRs (both review_autofix and orchestrate_poll) |
@@ -612,12 +652,14 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `STALL_THRESHOLD_IMPLEMENTING_MINUTES` | `120` | Stall threshold for implementation phase |
 | `STALL_THRESHOLD_DONE_MINUTES` | `120` | Stall threshold for review/autofix phase |
 | `STALL_THRESHOLD_READY_TO_MERGE_MINUTES` | `60` | Stall threshold for ready-to-merge phase |
-| `MAX_STALL_RECOVERIES_PER_ISSUE` | `5` | Max stall recovery attempts per issue before skipping |
+| `MAX_STALL_RECOVERIES_PER_ISSUE` | `5` | Max stall recovery attempts per issue before skipping (declarative `STALL_RECOVERY_ACTIONS` + optional `run_stall_judge` escalation) |
+| `STALL_JUDGE_TRIGGER_COUNT` | `2` | Recovery-attempt threshold to invoke stall judge escalation (`run_stall_judge`) |
+| `ENABLE_STALL_JUDGE` | `true` | Enable/disable stall-judge escalation in orchestrator and standalone stall recovery |
 | `ENABLE_STANDALONE_STALL_RECOVERY` | `true` | Enable standalone AI issue stall recovery in the poller |
 | `MAX_RECOVERY_ATTEMPTS` | `3` | Max project-level recovery cycles (judge failure → auto-fix) |
 | `MAX_VALIDATION_RECOVERY_ATTEMPTS` | `2` | Max validation-failure → judge re-evaluation cycles before terminal failure |
 | `CONFLICT_DISPATCH_COOLDOWN_SECS` | `900` | Min seconds between consecutive resolver dispatches against an integration-branch final PR |
-| `INTEGRATION_CONFLICT_MAX_RETRIES` | `3` | Max consecutive unresolved `main` → integration-branch sync ticks before escalating to the judge |
+| `INTEGRATION_CONFLICT_MAX_RETRIES` | `3` | Max consecutive unresolved conflict ticks before judge escalation, after `_dispatch_review_for_conflicts` healing attempts |
 | `CONTEXT7_DISABLED` | `false` | Disable the optional Context7 MCP server setup in workflows |
 | `GIT_MCP_DISABLED` | `false` | Disable the optional Git MCP server setup in workflows (preloaded diff artifacts remain fallback) |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
@@ -633,6 +675,8 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `THINKING_LEVEL_ANALYSIS` | `medium` | Reasoning effort for workflow log analysis report generation |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | Reasoning effort for reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | Reasoning effort for editor model (applying fixes) |
+| `REVIEW_REASONING_SCHEDULE` | `xhigh,high,medium` | Reviewer autofix-cycle schedule override (`xhigh|high|medium|low`, comma-separated) |
+| `REVIEW_AUTODOWNGRADE_DISABLED` | `false` | Reviewer schedule kill switch (`true` keeps fixed reviewer effort) |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
 | `TOOL_CALL_BUDGET_PLAN` | `40` | Tool call budget for planning |
 | `TOOL_CALL_BUDGET_IMPLEMENT` | `50` | Tool call budget for implementation |
@@ -647,6 +691,9 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `EDITOR_IDLE_TIMEOUT` | `1200` | Editor watchdog idle timeout (seconds); killed if no output and no active network connections |
 | `EDITOR_MAX_WALL` | `3300` | Max wall-clock seconds per editor attempt; auto-capped to remaining job budget |
 | `EDITOR_MIN_ATTEMPT_SECS` | `300` | Minimum job budget (seconds) required to start an editor attempt |
+| `BATCH_API_DISABLED` | `false` | Kill switch for async batch mode in workflow-log-analysis (`true` forces sync fallback) |
+| `BATCH_API_PROVIDER` | `auto` | Batch provider hint (`auto`, `openai`, `anthropic`) for OpenRouter responses routing checks |
+| `BATCH_API_POLL_TIMEOUT_HOURS` | `24` | Maximum pending batch age before synchronous fallback |
 | `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | Tool call budget for decomposer |
 | `TOOL_CALL_BUDGET_JUDGE` | `60` | Tool call budget for judge (needs deep repo inspection) |
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |
@@ -655,10 +702,72 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
+| `SEMANTIC_CACHE_BACKEND` | `none` | Semantic cache backend selector for clarification workloads: `none`, `redis`, `sqlite-vec` |
+| `SEMANTIC_CACHE_TTL_DAYS` | `14` | Cache TTL (days) for semantic cache entries |
+| `SEMANTIC_CACHE_SIMILARITY_THRESHOLD` | `0.92` | Minimum cosine similarity to treat a semantic cache lookup as a hit |
+| `SEMANTIC_CACHE_SQLITE_PATH` | `/tmp/semantic_cache.sqlite3` | SQLite cache file path when `SEMANTIC_CACHE_BACKEND=sqlite-vec` |
+| `SEMANTIC_CACHE_REDIS_URL` | _(empty)_ | Redis connection URL when `SEMANTIC_CACHE_BACKEND=redis` |
+| `SEMANTIC_CACHE_REDIS_KEY_NAMESPACE` | _(empty)_ | Redis key namespace for cross-repo isolation; defaults to `GITHUB_REPOSITORY` (sanitized + stable hash suffix) on GitHub runners, else empty |
+| `SEMANTIC_CACHE_EMBEDDING_MODEL` | `openai/text-embedding-3-small` | OpenRouter embedding model used for semantic cache keys |
+| `SEMANTIC_CACHE_EMBEDDING_BASE_URL` | `https://openrouter.ai/api/v1` | Base URL for embedding API requests |
+| `SEMANTIC_CACHE_MAX_CANONICAL_CHARS` | `50000` | Maximum canonical input length for cache key generation (longer inputs skip cache lookup/store) |
 | `SERENA_WARN_THRESHOLD_IMPLEMENT` | `50` | Minimum Serena efficiency (%) before implement emits low-adoption warning |
 | `SERENA_WARN_THRESHOLD_REVIEW` | `50` | Minimum Serena efficiency (%) before review_autofix emits low-adoption warning |
 
+## Semantic Cache (Clarification Only)
+
+An embedding-based semantic cache is available only for high-repetition clarification workloads.
+
+- Cached phases:
+  - `clarify`
+  - `orchestrate_clarify_respond`
+- Explicitly not cached:
+  - `implement`
+  - `review_autofix`
+  - `validate`
+  - `plan`
+  - `orchestrate`
+
+Cache key input is a canonical text built from:
+
+- issue body
+- issue thread history (chronological comments)
+
+Operational behavior:
+
+- `SEMANTIC_CACHE_BACKEND=none` keeps full passthrough behavior (default).
+- `SEMANTIC_CACHE_BACKEND=redis` requires the Python `redis` package on runner hosts (installed automatically in built-in clarify workflows).
+- Redis cache keys are namespaced by `SEMANTIC_CACHE_REDIS_KEY_NAMESPACE` (defaults to `GITHUB_REPOSITORY` on GitHub runners, sanitized + stable hash suffix) to prevent cross-repo collisions from normalization conflicts.
+- SQLite cache is persisted across workflow runs via GitHub Actions `actions/cache` (for `sqlite-vec` backend).
+- Cache entries are embedding-model scoped; changing `SEMANTIC_CACHE_EMBEDDING_MODEL` isolates old entries automatically.
+- Inputs exceeding `SEMANTIC_CACHE_MAX_CANONICAL_CHARS` are treated as cache misses and are not stored.
+- Any cache-layer error is fail-open: the workflows log a warning and continue with the normal OpenRouter/Codex path.
+- On cache hit, workflows emit structured audit fields in log output: `phase`, `similarity`, `cached_at`, `original_issue_id`.
+
 ## Prompt Caching (OpenRouter + Codex)
+
+### Current behavior
+
+- Prompt assembly is cache-friendly in all Codex-driven phases: static prefix first (`codex_system_instructions.md` + `agents.md` + `prompts/serena-efficiency-block.txt` + phase template), dynamic context second (memory context, issue/PR body, comments/diffs).
+- Explicit OpenRouter `cache_control: { "type": "ephemeral" }` breakpoints are added only in direct OpenRouter HTTP callers (`scripts/ai_memory_lib.py`, `scripts/analyze_workflow_logs.py`) when cache instrumentation is enabled.
+- Gemini-family model IDs skip explicit breakpoint insertion by design.
+- Fail-open safety is enforced: when a provider rejects explicit cache metadata, direct callers retry once without cache metadata instead of failing the workflow.
+
+### Kill switch
+
+- `OPENROUTER_PROMPT_CACHE_DISABLED=false` (default): cache behavior and telemetry are enabled.
+- `OPENROUTER_PROMPT_CACHE_DISABLED=true`: explicit breakpoint insertion is disabled and workflows continue with normal execution.
+
+### Telemetry fields
+
+- Structured OpenRouter usage logging now includes:
+  - `cache_creation_input_tokens`
+  - `cache_read_input_tokens`
+  - `prompt_tokens`, `completion_tokens`, `total_tokens`
+  - `phase`, `model`, and cache instrumentation flags when available
+- Usage parsing is normalized across provider response shapes, including both:
+  - `usage.cache_creation_input_tokens` / `usage.cache_read_input_tokens`
+  - `usage.prompt_tokens_details.cache_write_tokens` / `usage.prompt_tokens_details.cached_tokens`
 
 ### Determination (current stack)
 
@@ -735,17 +844,19 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 5. **Polling:** Every 5 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
 6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with adaptive thinking (`xhigh` for cycles 1-3, then `high`). Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
 7. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
-8. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge makes autonomous architectural and security trade-off decisions — it does not defer to humans. It can: (a) merge the PR as-is if remaining issues are cosmetic or low-risk, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts. For merged PR fix-ups, when orchestrator integration-branch context exists, follow-up `[orchestrator-fix]` PRs are retargeted to the integration branch and are refused (with explicit warnings) if safe retargeting is not possible.
-9. **Implementation-failed recovery:** When the implementation phase produces no file changes despite an approved plan (e.g. workflow edits stripped without `ALLOW_WORKFLOW_EDITS`, or model failure), the issue is labeled `ai:implementation-failed`. The poller automatically closes the failed issue and creates a replacement with additional guidance, so the pipeline retries without manual intervention.
-9a. **Destructive-commit guard (`ai:destructive-blocked`):** Before creating the AI implementation commit, `implement.yml` inspects the staged deletion set. The commit is refused — and the workflow run fails — on either of two conditions: (a) any deletion touches the canonical workflow-source list (`agents.md`, `ai_pipeline.md`, `codex_system_instructions.md`, `unattended_llm_system_instructions.md`, `prompts/**`, `scripts/**`, `.github/ai/**`) and `ALLOW_WORKFLOW_EDITS` is not `true`, or (b) the total staged deletions exceed `BULK_DELETE_THRESHOLD` (default `3`) and `ALLOW_BULK_DELETE` is not `true`. On rejection the issue is labeled `ai:destructive-blocked`, a visible comment is posted listing the blocked deletions, and a CRITICAL Telegram alert is sent so a human can intervene. The `Validate approval phase label` step at the top of every subsequent `implement.yml` run refuses to redispatch any issue carrying `ai:destructive-blocked` until a human removes the label after auditing the earlier rejection — the orchestrator's judge-cycle may still regenerate the same task under a fresh issue number, so the TG alert is the intended human-in-the-loop signal. This guard exists because PRs #917/#931 saw a test harness that set `GITHUB_REPOSITORY=owner/repo` trigger a consumer-repo cleanup block in `scripts/orchestrate_poll_process.sh` from within the real coding-workflows checkout, causing the AI implementation commit to silently delete ~10,700 lines across 28 tracked source files. The gate in the poller/review_rb_judge scripts has since been switched from the env var to a git-remote-URL check; the destructive-commit guard in `implement.yml` is the defense-in-depth layer that catches any future destructive path regardless of its trigger.
-10. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Recovery is attempted up to `MAX_RECOVERY_ATTEMPTS` (default 3) times; if all attempts fail, the project stops and the operator is notified via Telegram.
-11. **Validation-failure recovery:** When runtime validation fails, the poller transitions the project back to the judge for re-evaluation (labeled `ai:validation-recovery`) up to `MAX_VALIDATION_RECOVERY_ATTEMPTS` (default 2) times. The judge sees the failure diagnosis in tracking issue comments and can issue fix-up work before re-validating. After exhausting the recovery budget, the project goes to terminal `ai:validation-failed`.
+8. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge makes autonomous architectural and security trade-off decisions — it does not defer to humans. It can: (a) merge the PR as-is if remaining issues are cosmetic or low-risk, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts.
+9. **Implementation-failed recovery:** When the implementation phase reaches the post-Codex pre-commit path with no committable file changes despite an approved plan (e.g. workflow edits stripped without `ALLOW_WORKFLOW_EDITS=true`, or model failure), `implement.yml` labels the source issue `ai:implementation-failed`. The poller automatically closes that issue and creates a replacement with additional diagnostic guidance, so the pipeline retries without manual intervention.
+9a. **Post-Codex diagnose + fix-up issue creation:** For targeted post-Codex implementation failures, `implement.yml` now captures diagnostics (`${RUNTIME_DIR}/post_codex_validation_errors.txt`), runs a short diagnose pass (`prompts/mode-implement-diagnose.txt`), and creates orchestrator-compatible fix-up issue(s). If diagnosis/parsing fails, it creates a deterministic fallback fix-up issue with raw captured diagnostics so failures are never swallowed. This path applies `ai:implementation-failed` and suppresses the generic failure relabel/comment path (preventing re-add of `ai:awaiting-approval`). Out-of-scope failures (missing/empty capture file) continue using the existing generic failure behavior unchanged.
+9b. **Destructive-commit guard (`ai:destructive-blocked`):** Before creating the AI implementation commit, `implement.yml` inspects the staged deletion set. The commit is refused — and the workflow run fails — on either of two conditions: (a) any deletion touches the canonical workflow-source list (`agents.md`, `ai_pipeline.md`, `codex_system_instructions.md`, `unattended_llm_system_instructions.md`, `prompts/**`, `scripts/**`, `.github/ai/**`) and `ALLOW_WORKFLOW_EDITS` is not `true`, or (b) the total staged deletions exceed `BULK_DELETE_THRESHOLD` (default `3`) and `ALLOW_BULK_DELETE` is not `true`. On rejection the issue is labeled `ai:destructive-blocked`, a visible comment is posted listing the blocked deletions, and a CRITICAL Telegram alert is sent so a human can intervene. The `Validate approval phase label` step at the top of every subsequent `implement.yml` run refuses to redispatch any issue carrying `ai:destructive-blocked` until a human removes the label after auditing the earlier rejection — the orchestrator's judge-cycle may still regenerate the same task under a fresh issue number, so the TG alert is the intended human-in-the-loop signal. This guard exists because PRs #917/#931 saw a test harness that set `GITHUB_REPOSITORY=owner/repo` trigger a consumer-repo cleanup block in `scripts/orchestrate_poll_process.sh` from within the real coding-workflows checkout, causing the AI implementation commit to silently delete ~10,700 lines across 28 tracked source files. The gate in the poller/review_rb_judge scripts has since been switched from the env var to a git-remote-URL check; the destructive-commit guard in `implement.yml` is the defense-in-depth layer that catches any future destructive path regardless of its trigger.
+9c. **Targeted vs legacy post-Codex failure flow:** Targeted post-Codex failures with captured diagnostics follow 9a (diagnose + fix-up issue creation, then label source issue `ai:implementation-failed`). The no-op pre-commit path in 9 remains the close/re-issue retry lane. Other implement workflow failures (for example, missing/empty capture artifacts) remain on the legacy path (`failure()`/`cancelled()` handling in `implement.yml`) with failure comments/alerts.
+10. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Those fix-up issues include the standard orchestrator metadata block (`Tracking issue`, `Integration branch`, `Local ID`, `Managed by`) in the issue body. Recovery is attempted up to `MAX_RECOVERY_ATTEMPTS` (default 3) times; if all attempts fail, the project stops and the operator is notified via Telegram.
+11. **Validation-failure recovery:** When runtime validation fails, the poller transitions the project back to the judge for re-evaluation (labeled `ai:validation-recovery`) up to `MAX_VALIDATION_RECOVERY_ATTEMPTS` (default 2) times. The judge sees the validation diagnosis in tracking issue comments, can issue fix-up work (with orchestrator metadata), and then re-validates. After exhausting the recovery budget, the project goes to terminal `ai:validation-failed`.
 11a. **Integration branch delivery:** Orchestrator projects now create a per-project integration branch (`orchestrator/project-<tracking_issue>`). All orchestrator child issues include `Integration branch` metadata so implementation PRs target the integration branch instead of `main`. The poller periodically syncs default branch changes into this branch via the merge API.
-11b. **Sync conflict handling and superseded detection:** Before sync merge attempts, the poller checks whether the integration branch is effectively superseded by `main` (tracked child PRs are terminal and affected-path deltas are already represented on `main`). Superseded projects persist `sync.status = superseded-by-main`, post one final tracking comment, and skip future sync attempts without recurring Telegram warnings. Real unresolved conflicts include parsed conflict paths, a deduped fingerprint to prevent repeated spam, and a rebuild runbook link: [docs/orchestrator-integration-branch-rebuild-runbook.md](docs/orchestrator-integration-branch-rebuild-runbook.md).
-11c. **Integration self-healing:** If a periodic `main` → integration-branch sync returns HTTP 409 (real conflict), the poller (a) creates the final integration→default PR eagerly if it does not yet exist, (b) dispatches the review/autofix workflow against that PR to run the existing Codex conflict resolver on a clean runner, and (c) records the attempt in new tracking-state fields (`integration_sync_status`, `integration_sync_last_error`, `integration_conflict_dispatch_count`, `integration_conflict_dispatch_ts`, `integration_conflict_unresolved_ticks`). Dispatches are throttled by `CONFLICT_DISPATCH_COOLDOWN_SECS` (default 900s). After `INTEGRATION_CONFLICT_MAX_RETRIES` (default 3) unresolved ticks the orchestrator escalates by invoking the judge with full PR context via `codex exec`. Only after both the automated resolver *and* the judge escalation fail is the project marked terminally `failed`. The same healing flow is triggered from `finalize_integration_merge_if_needed` whenever the final PR is observed with `mergeable=false`, so the project no longer halts on first conflict.
+11b. **Sync conflict handling and superseded detection:** Before sync merge attempts, the poller checks whether the integration branch is effectively superseded by the default branch (tracked child PRs are terminal and affected-path deltas are already represented on the default branch). Superseded projects persist `sync.status = superseded-by-main`, post one final tracking comment, and skip future sync attempts without recurring Telegram warnings. Real unresolved conflicts include parsed conflict paths, a deduped fingerprint to prevent repeated spam, and a rebuild runbook link: [docs/orchestrator-integration-branch-rebuild-runbook.md](docs/orchestrator-integration-branch-rebuild-runbook.md).
+11c. **Integration self-healing:** If a periodic `main` → integration-branch sync returns HTTP 409 (real conflict), the poller routes recovery through `heal_integration_branch_conflict`: it (a) ensures/creates the final integration→default PR (eagerly, if it does not yet exist), (b) dispatches the review/autofix workflow through `_dispatch_review_for_conflicts` against that PR to run the existing Codex conflict resolver on a clean runner, and (c) records the attempt in new tracking-state fields (`integration_sync_status`, `integration_sync_last_error`, `integration_conflict_dispatch_count`, `integration_conflict_dispatch_ts`, `integration_conflict_unresolved_ticks`). Dispatches are throttled by `CONFLICT_DISPATCH_COOLDOWN_SECS` (default 900s). After `INTEGRATION_CONFLICT_MAX_RETRIES` (default 3) unresolved ticks the orchestrator escalates by invoking the judge with full PR context via `codex exec`. Only after both the automated resolver *and* the judge escalation fail is the project marked terminally `failed`. The same healing flow is triggered from `finalize_integration_merge_if_needed` whenever the final PR is observed with `mergeable=false`, so the project no longer halts on first conflict.
 11d. **Atomic final merge:** When a project is complete (or validated), the poller creates/reuses a final PR from integration branch to default branch and squash-merges it.
 11e. **Phase-agnostic feature-PR drift sweep:** On every poll tick the orchestrator enumerates all open PRs whose head branch matches `ai/issue-*` and calls the GitHub update-branch endpoint for any whose `mergeStateStatus` is `behind`. This fast-forwards clean-mergeable branches before they accumulate enough drift to become conflicted, regardless of the issue's current pipeline phase. Real conflicts (`dirty`) are left for the existing in-progress conflict loop to handle via the resolver dispatch path.
-12. **Stall detection and self-healing:** Every poll cycle, the poller tracks how long each issue has been in its current pipeline phase. Stall thresholds are **adaptive per phase**: lightweight phases (clarification, planning, approval, merge) default to 60 minutes, while heavy phases (implementation, review/autofix) default to 120 minutes. Each threshold is independently configurable via `STALL_THRESHOLD_<PHASE>_MINUTES` env vars, with `STALL_THRESHOLD_MINUTES` as the global fallback. Before stall checks, the poller reconciles managed-issue labels and state truth (labels + issue open/closed + linked PR merge state), repairs missing/conflicting phase labels, and persists reconciled statuses every cycle. Closed/terminal issues are hard-guarded out of retrigger paths; stale `no_labels` on closed issues is healed (label/state repair) instead of retriggered. When an issue exceeds its phase threshold, the poller attempts phase-specific auto-recovery: posting `/answer` for stuck clarification, `/approved` for stuck approval, pushing empty commits to re-trigger review, or closing and re-issuing as a last resort. Recovery actions escalate with each attempt. After `MAX_STALL_RECOVERIES_PER_ISSUE` (default 5) attempts, the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion and decides whether to reissue, accept, or fail. All stall recoveries trigger Telegram notifications. Standalone AI issues (not linked to any active orchestrator tracking state) also use the same stall recovery engine when `ENABLE_STANDALONE_STALL_RECOVERY=true`; standalone recovery state is persisted per issue in a hidden marker comment. Additionally, all orchestrator-created issues (Wave 1, deferred waves, reissues, and judge fix-ups) now receive the `ai:clarification` label at creation time, ensuring they enter the pipeline immediately without relying solely on the `issues.opened` event trigger.
+12. **Stall detection and self-healing:** Every poll cycle, the poller tracks how long each issue has been in its current pipeline phase. Stall thresholds are **adaptive per phase**: lightweight phases (clarification, planning, approval, merge) default to 60 minutes, while heavy phases (implementation, review/autofix) default to 120 minutes. Each threshold is independently configurable via `STALL_THRESHOLD_<PHASE>_MINUTES` env vars, with `STALL_THRESHOLD_MINUTES` as the global fallback. Before stall checks, the poller reconciles managed-issue labels and state truth (labels + issue open/closed + linked PR merge state), repairs missing/conflicting phase labels, and persists reconciled statuses every cycle. Closed/terminal issues are hard-guarded out of retrigger paths; stale `no_labels` on closed issues is healed (label/state repair) instead of retriggered. When an issue exceeds its phase threshold, the poller first selects a declarative action from `STALL_RECOVERY_ACTIONS` by `stall_recovery_count` (per issue): `no_labels` → `retrigger_pipeline`, `ai:clarification` → `auto_respond_clarify`, `ai:planning` → `retrigger_plan`, `ai:awaiting-approval` → `auto_approve`, `ai:implementing` → `retrigger_implement`, `ai:done` → `retrigger_review`, `ai:ready-to-merge` → `attempt_merge`, with each phase ladder ending in `escalate_human`. If `ENABLE_STALL_JUDGE=true` and `stall_recovery_count >= STALL_JUDGE_TRIGGER_COUNT` (while still below `MAX_STALL_RECOVERIES_PER_ISSUE`), the recovery action switches to `run_stall_judge` for diagnostics-driven action selection. The stall judge may choose targeted actions including `resolve_merge_conflict`; that path attempts GitHub `update-branch` for the target PR and then dispatches `_dispatch_review_for_conflicts`. If stall-judge execution fails, output parsing fails, or the returned action is unsupported, the poller fail-opens to the same declarative ladder action for that phase/recovery count. If `stall_recovery_count` exceeds the phase ladder length, the final declarative action is repeated until the max budget is hit. After `MAX_STALL_RECOVERIES_PER_ISSUE` (default 5) attempts, the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion and decides whether to reissue, accept, or fail. When `ENABLE_STALL_JUDGE=false`, or when `STALL_JUDGE_TRIGGER_COUNT` is effectively unreachable within the configured recovery budget, recovery remains on the declarative `STALL_RECOVERY_ACTIONS` ladder without judge escalation. All stall recoveries trigger Telegram notifications. Standalone AI issues (not linked to any active orchestrator tracking state) also use the same stall recovery engine when `ENABLE_STANDALONE_STALL_RECOVERY=true`; standalone recovery state is persisted per issue in a hidden marker comment. Additionally, all orchestrator-created issues (Wave 1, deferred waves, reissues, and judge fix-ups) now receive the `ai:clarification` label at creation time, ensuring they enter the pipeline immediately without relying solely on the `issues.opened` event trigger.
 12a. **Missing state recovery:** If the orchestrate.yml workflow creates issues but fails before posting the initial state comment (e.g. due to a transient API error or timeout), the poller automatically reconstructs the state. It parses the tracking issue body to extract the wave structure and dependency graph, searches for child issues that reference the tracking issue, and builds a new state object. The reconstructed state is posted as a comment so subsequent poll cycles operate normally. This prevents projects from being permanently stuck when the initial orchestration run fails mid-execution.
 13. **Validation gate:** When the judge says "complete" and `ENABLE_VALIDATION=true`, the poller dispatches `ai-validate.yml` on the integration branch (`--ref <integration_branch>`), marks the tracking issue `ai:validating`, and only transitions to complete after `ai:validated` plus successful final squash merge.
 14. **Completion:** When validation is disabled, completion remains judge-driven and immediate.
@@ -829,6 +940,7 @@ This phase starts only after the orchestrator judge returns `complete`.
 - Non-terminal failure: `needs_fixes` diagnosis with fix-up issues (enters the fix/revalidate loop).
 - Terminal failure: validation dispatch failure, harness error, infeasible diagnosis, unknown diagnosis payload, closed fix-up issues, or cycle limit exceeded.
 - Terminal failure label: `ai:validation-failed`.
+- Managed artifact contract: startup checks now enforce only managed artifacts (`scripts/validate_process.sh`, optional `scripts/validate_driver.sh`) and the transient `validation/validate.sh` rule. Repos may keep unrelated consumer scripts such as `scripts/validate_local.sh` without failing validation.
 
 ### Manual Reset: `/revalidate`
 
@@ -890,6 +1002,9 @@ Use this after manual intervention (e.g. fixing a problematic issue, merging a s
 
 - Cycle 1 generates a new harness under `validation/`.
 - Cycle 2+ reuses and targeted-fixes the existing owned harness when `validation/` is present (for example, restored from artifacts); otherwise it safely falls back to full regeneration.
+- `validation/validate.sh` is generated as a thin wrapper that delegates to checked-in `scripts/validate_driver.sh`.
+- Canonical runtime harness behavior now lives in `scripts/validate_driver.sh` (pre-flight, compose startup/logging, health polling, canary gating, TAP-safe counting, result emission/finalization).
+- `scripts/validate_driver.sh` loads optional `validation/validate.env` and applies conservative defaults for supported knobs (including `APP_SERVICE`, `APP_URL`, `HEALTH_TIMEOUT`, `PHASE`).
 - Before execution, validation runs pre-flight checks (`docker compose config`, shell syntax, and compose build path resolution).
 - Pre-flight failures are classified as terminal `harness_error` for that run.
 - The first generated test must be a canary infrastructure check (`00_canary.sh` style); infra-only canary failures shortcut to `harness_error`, while app startup/crash signals continue to diagnosis.

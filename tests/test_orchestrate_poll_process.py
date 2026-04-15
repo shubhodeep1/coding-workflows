@@ -25,48 +25,188 @@ POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 POLLER_SUBPROCESS_TIMEOUT_SEC = 180.0
 
 
+# Directories and top-level files that the poller script under test needs
+# to resolve at runtime via relative paths (helper scripts, prompt files,
+# schema JSON, canonical instruction markdown). Each sandbox run gets an
+# isolated copy of these so any file mutations the script performs are
+# confined to the sandbox and cannot reach the real coding-workflows
+# checkout the test runner started from.
+_SANDBOX_DIRS = ("scripts", "prompts", ".github/ai")
+_SANDBOX_FILES = (
+	"agents.md",
+	"codex_system_instructions.md",
+	"ai_pipeline.md",
+	"unattended_llm_system_instructions.md",
+)
+
+
+def _make_poller_sandbox(target: Path) -> None:
+	"""Populate ``target`` with a minimal copy of the coding-workflows tree
+	the poller expects at runtime and initialize a throwaway git repo
+	inside it.
+
+	The sandbox contains **real copies**, not symlinks, so ``rm``/``git
+	rm``/``rm -rf`` operations the script performs touch only the
+	sandbox. The sandbox's git origin is deliberately set to a URL that
+	does **not** match ``*/coding-workflows`` so the poller's
+	consumer-repo cleanup path is exercised against throwaway copies —
+	the real checkout is never at risk regardless of how that cleanup
+	path is gated in a future revision.
+	"""
+	for rel in _SANDBOX_DIRS:
+		src = REPO_ROOT / rel
+		if src.exists():
+			shutil.copytree(src, target / rel)
+	for rel in _SANDBOX_FILES:
+		src = REPO_ROOT / rel
+		if src.exists():
+			dst = target / rel
+			dst.parent.mkdir(parents=True, exist_ok=True)
+			shutil.copy2(src, dst)
+	subprocess.run(
+		["git", "init", "--quiet", str(target)],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "config", "user.email", "sandbox@example.com"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "config", "user.name", "Poller Sandbox"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "checkout", "-B", "main"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "commit", "--allow-empty", "-m", "sandbox init", "--quiet"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		[
+			"git", "-C", str(target), "remote", "add",
+			"origin", "https://github.com/test-harness/poller-sandbox.git",
+		],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+
+
+def _rewrite_cmd_for_sandbox(cmd: list, sandbox: Path) -> list:
+	"""Rewrite any command-line argument that is an absolute path under
+	``REPO_ROOT`` so it resolves to the equivalent path inside
+	``sandbox``. Leaves all other arguments untouched.
+
+	Existing callers pass ``str(POLLER_SCRIPT)`` as the script to exec,
+	which is an absolute path into ``REPO_ROOT/scripts``; after rewrite
+	they exec the sandbox's copy instead.
+	"""
+	rewritten: list = []
+	repo_root_resolved = REPO_ROOT.resolve()
+	for arg in cmd:
+		if isinstance(arg, (str, os.PathLike)):
+			arg_str = os.fspath(arg)
+			if os.path.isabs(arg_str):
+				try:
+					rel = Path(arg_str).resolve().relative_to(repo_root_resolved)
+					rewritten.append(str(sandbox / rel))
+					continue
+				except (OSError, ValueError):
+					pass
+			rewritten.append(arg_str)
+		else:
+			rewritten.append(arg)
+	return rewritten
+
+
 def _run_poller_subprocess(
 	cmd: list,
 	*,
-	cwd: str,
+	cwd: str | None = None,
 	env: dict,
+	sandbox: Path | None = None,
 ) -> subprocess.CompletedProcess:
-	"""Run the poller with a bounded timeout, reaping the whole process group.
+	"""Run the poller under test in an isolated sandbox directory with a
+	bounded timeout, reaping the whole process group on timeout.
 
-	The poller spawns a tree of bash/sleep helpers. Using ``start_new_session``
-	puts every descendant in its own process group so a timeout can kill the
-	entire tree via ``killpg`` rather than leaking orphan children that keep
-	the CI runner alive.
+	Previously this helper ran the poller with ``cwd=REPO_ROOT`` so the
+	script could find its sibling helper scripts under the real
+	coding-workflows checkout. That made the real working tree the
+	blast radius of any destructive code path the script happened to
+	execute — and in fact did so destructively at least twice (PRs
+	#917/#931), where a consumer-repo cleanup block gated on
+	``GITHUB_REPOSITORY`` fired while pytest was running from the real
+	checkout and deleted ~28 tracked source files. The fix in the
+	poller itself (switch to a git-remote-URL gate) closes that
+	specific hole, but sandboxing the subprocess here is the
+	defense-in-depth layer: any future destructive path, regardless of
+	how it is gated, can only ever touch files inside a throwaway
+	tempdir.
+
+	The poller spawns a tree of bash/sleep helpers. Using
+	``start_new_session`` puts every descendant in its own process
+	group so a timeout can kill the entire tree via ``killpg`` rather
+	than leaking orphan children that keep the CI runner alive.
+
+	The ``cwd`` argument is accepted for source-level compatibility
+	with earlier call sites but its value is ignored — the sandbox
+	directory always wins as the cwd. Tests that need to inspect
+	sandbox state after the run may pre-stage and pass a ``sandbox``
+	path; otherwise one is auto-created per call and removed when the
+	call returns.
 	"""
-	proc = subprocess.Popen(
-		cmd,
-		cwd=cwd,
-		env=env,
-		stdout=subprocess.PIPE,
-		stderr=subprocess.PIPE,
-		text=True,
-		start_new_session=True,
-	)
+	del cwd  # explicit: sandbox always overrides caller cwd
+	owns_sandbox = False
+	if sandbox is None:
+		sandbox = Path(tempfile.mkdtemp(prefix="poller-sandbox-"))
+		owns_sandbox = True
+		_make_poller_sandbox(sandbox)
 	try:
-		stdout, stderr = proc.communicate(timeout=POLLER_SUBPROCESS_TIMEOUT_SEC)
-	except subprocess.TimeoutExpired:
-		# Kill the entire process group, not just the direct child, so the
-		# bash -> bash -> sleep descendants observed in hung jobs get reaped.
-		try:
-			os.killpg(proc.pid, signal.SIGKILL)
-		except ProcessLookupError:
-			pass
-		try:
-			stdout, stderr = proc.communicate(timeout=5)
-		except subprocess.TimeoutExpired:
-			stdout, stderr = "", ""
-		raise AssertionError(
-			"poller did not exit within "
-			f"{POLLER_SUBPROCESS_TIMEOUT_SEC:.0f}s; process group killed\n"
-			f"stdout:\n{stdout}\n"
-			f"stderr:\n{stderr}"
+		cmd = _rewrite_cmd_for_sandbox(cmd, sandbox)
+		proc = subprocess.Popen(
+			cmd,
+			cwd=str(sandbox),
+			env=env,
+			stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE,
+			text=True,
+			start_new_session=True,
 		)
-	return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+		try:
+			stdout, stderr = proc.communicate(timeout=POLLER_SUBPROCESS_TIMEOUT_SEC)
+		except subprocess.TimeoutExpired:
+			# Kill the entire process group, not just the direct child, so the
+			# bash -> bash -> sleep descendants observed in hung jobs get reaped.
+			try:
+				os.killpg(proc.pid, signal.SIGKILL)
+			except ProcessLookupError:
+				pass
+			try:
+				stdout, stderr = proc.communicate(timeout=5)
+			except subprocess.TimeoutExpired:
+				stdout, stderr = "", ""
+			raise AssertionError(
+				"poller did not exit within "
+				f"{POLLER_SUBPROCESS_TIMEOUT_SEC:.0f}s; process group killed\n"
+				f"stdout:\n{stdout}\n"
+				f"stderr:\n{stderr}"
+			)
+		return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+	finally:
+		if owns_sandbox:
+			shutil.rmtree(sandbox, ignore_errors=True)
 
 
 def test_judge_reasoning_effort_logic_is_adaptive_after_cycle_three():
@@ -163,11 +303,15 @@ def _run_poller(
 	update_branch_fail_for_prs: list[int] | None = None,
 	review_dispatch_fail_for_prs: list[int] | None = None,
 	active_autofix_runs: list[dict] | None = None,
+	mock_stall_judge_json: dict | None = None,
+	enable_stall_judge: str = "true",
+	stall_judge_trigger_count: str = "2",
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
 	tracking_comments = tracking_comments or []
-	issue_labels = issue_labels or {10: ["ai:merged"]}
+	if issue_labels is None:
+		issue_labels = {10: ["ai:merged"]}
 	gql_labels = gql_labels or {}
 	prs = prs or []
 	existing_branches = existing_branches or ["main"]
@@ -180,6 +324,7 @@ def _run_poller(
 	update_branch_fail_for_prs = update_branch_fail_for_prs or []
 	review_dispatch_fail_for_prs = review_dispatch_fail_for_prs or []
 	active_autofix_runs = active_autofix_runs or []
+	mock_stall_judge_json = mock_stall_judge_json or {}
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -871,6 +1016,8 @@ print(json.dumps(parsed))
 				"SERENA_IGNORED_DIRS": "",
 				"MAX_REVIEW_BLOCKED_RETRIES": "2",
 				"MAX_VALIDATION_RECOVERY_ATTEMPTS": "0",
+				"ENABLE_STALL_JUDGE": enable_stall_judge,
+				"STALL_JUDGE_TRIGGER_COUNT": stall_judge_trigger_count,
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"GH_MOCK_STORE": str(store_file),
@@ -880,6 +1027,8 @@ print(json.dumps(parsed))
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			}
 		)
+		if mock_stall_judge_json:
+			env["MOCK_STALL_JUDGE_JSON"] = json.dumps(mock_stall_judge_json)
 
 		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],
@@ -1106,6 +1255,48 @@ def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
 	assert second["merge_calls"] == []
 
 
+def test_superseded_state_reactivates_when_timeline_lookup_fails_for_other_issue():
+	state = _base_state(status="in_progress")
+	state["status"] = "done"
+	state["total_issues"] = 2
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_status"] = "superseded-by-main"
+	state["final_merge_pr"] = 300
+	state["sync"] = {
+		"status": "superseded-by-main",
+		"superseded_notified": True,
+		"last_sync_outcome": "superseded-skip",
+		"superseded_at": "2026-04-14T00:00:00Z",
+	}
+	state["waves"][0]["issues"].append({"id": "issue-2", "github_issue": 11, "status": "pending"})
+	state["issue_number_map"]["issue-2"] = 11
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 11: ["ai:implementing"]},
+		issue_linked_prs={11: 902},
+		prs=[
+			{
+				"number": 902,
+				"state": "open",
+				"merged": False,
+				"baseRefName": "main",
+				"headRefName": "ai/issue-11",
+				"mergeable": None,
+				"mergeable_state": "unknown",
+				"files": ["scripts/orchestrate_poll_process.sh"],
+			},
+		],
+		timeline_fail_for_issues=[10],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+	)
+	assert result["latest_state"]["sync"]["status"] == "conflict"
+	assert "Integration sync conflict" in "\n".join(c.get("body", "") for c in result["issues"]["192"]["comments"])
+	assert "keeping sync paused for now" not in (result["stdout"] + result["stderr"])
+
+
 def test_sync_conflict_comment_includes_paths_and_runbook_link():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "main"
@@ -1201,7 +1392,35 @@ def test_sync_conflict_posts_again_when_conflict_set_changes():
 	assert "- `src/b.py`" in conflict_comments[-1]
 
 
+def test_sync_conflict_escalates_to_judge_immediately_after_retry_budget_exhausted():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 3
+	# Keep the dispatch timestamp inside cooldown so this test verifies that
+	# retry-budget exhaustion takes priority over cooldown deferral.
+	state["integration_conflict_dispatch_ts"] = 9999999999
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Integration judge invoked" in body for body in tracking_bodies)
+	assert result["review_dispatches"] == []
+
 def test_final_merge_conflict_sets_merge_conflict_status():
+	# Regression coverage for the self-healing flow introduced in PR #918
+	# (issue #832). When the final integration->default PR is unmergeable,
+	# finalize_integration_merge_if_needed must NOT halt the project with
+	# status=merge_conflict (the legacy stall behavior). Instead it must
+	# route the PR through heal_integration_branch_conflict, which
+	# dispatches the review/autofix workflow against the final PR and
+	# leaves the project status=in_progress so the next poll tick can
+	# retry the merge after automated conflict resolution. The historical
+	# test name is preserved per CLAUDE.md §6 (Naming Immutability).
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
 	prs = [
@@ -1222,9 +1441,38 @@ def test_final_merge_conflict_sets_merge_conflict_status():
 		prs=prs,
 		existing_branches=["main", "orchestrator/project-192"],
 	)
-	assert result["latest_state"]["status"] == "merge_conflict"
-	assert result["latest_state"]["final_merge_status"] == "conflict"
+	# Project must NOT halt with status=merge_conflict anymore — the
+	# self-healing flow keeps the project in_progress so finalize can
+	# retry on the next poll tick.
+	assert result["latest_state"]["status"] == "in_progress"
+	# The final PR is still recorded (eager final-PR handling) but its
+	# merge is deferred to the next tick (final_merge_status=pending),
+	# not flagged as a terminal "conflict".
 	assert result["latest_state"]["final_merge_pr"] == 351
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	# finalize_integration_merge_if_needed must report that it routed
+	# the unmergeable PR through the self-healing flow rather than
+	# halting the project. This stdout marker is the contract that the
+	# new mergeability gate fired (scripts/orchestrate_poll_process.sh
+	# ~L1377).
+	assert "[final-merge] PR #351 is not mergeable; invoking self-healing flow." in result["stdout"], (
+		f"expected self-healing flow log line in poller stdout; got tail:\n"
+		f"{result['stdout'][-2000:]}"
+	)
+	# A review/autofix workflow_dispatch was issued against final PR #351
+	# for automated conflict resolution. The standalone PR conflict sweep
+	# attempts update-branch first (which the mock returns success for)
+	# and only falls back to dispatch on update-branch failure, so the
+	# only path that can produce a dispatch entry for #351 in this test
+	# is heal_integration_branch_conflict -> _dispatch_review_for_conflicts.
+	dispatched_for_final = [
+		d for d in result["review_dispatches"] if d.get("pr_number") == 351
+	]
+	assert dispatched_for_final, (
+		f"expected a review workflow dispatch for final PR #351 "
+		f"(via heal_integration_branch_conflict), "
+		f"got: {result['review_dispatches']}"
+	)
 
 
 def test_final_merge_waits_for_required_checks_before_merging():
@@ -2190,6 +2438,117 @@ def test_contract_helper_guard_in_poller_tests():
 	assert helper_labels == set(contract["labels"].keys())
 
 
+
+def test_stall_judge_resolve_merge_conflict_dispatches_review_and_increments_once():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 77},
+		prs=[
+			{
+				"number": 77,
+				"state": "open",
+				"mergeable": False,
+				"headRefName": "feature/stall-judge",
+				"headRefFromApi": "feature/stall-judge",
+				"headSha": "deadbeef",
+				"baseRefName": "main",
+			},
+		],
+		mock_stall_judge_json={
+			"action": "resolve_merge_conflict",
+			"justification": "conflicted",
+			"target_pr": 77,
+			"head_ref": "feature/stall-judge",
+		},
+	)
+	assert 77 in result.get("update_branch_calls", [])
+	assert result.get("review_dispatches", []), result
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
+
+
+
+def test_stall_judge_escalate_human_adds_needs_human_label_and_increments_counter():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_escalate_human_issue_not_redetected_after_needs_human():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing", "ai:needs-human"]},
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert not any("/approved" in body or "/reclarify" in body for body in issue_comments)
+	assert not any("Stall Judge — Issue #10" in body for body in tracking_comments)
+
+
+
+def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:awaiting-approval"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval"]},
+		mock_stall_judge_json={
+			"action": "nonsense",
+			"justification": "bad output",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Stall Judge — Issue #10" in body for body in tracking_comments)
+	assert any("/approved" in body for body in issue_comments)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
+
+
+
 def test_no_labels_open_issue_uses_bounded_recovery_policy():
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status_since_ts"] = 1
@@ -2206,6 +2565,44 @@ def test_no_labels_open_issue_uses_bounded_recovery_policy():
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1
 	assert issue_entry["status"] == "in_progress"
+
+
+def test_managed_stall_recovery_skips_needs_human_phase():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "ai:needs-human"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:planning", "ai:needs-human"]},
+	)
+
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 2
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert not any("Stall recovery" in body or "/approved" in body or "/answer" in body for body in issue_comments)
+
+
+def test_standalone_stall_recovery_skips_needs_human_candidates():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:needs-human"]},
+	)
+
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert not any("Standalone stall recovery" in body for body in issue_comments)
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"].get("closed", False) is False
 
 
 def test_state_extraction_with_special_chars_in_comment_bodies():
@@ -2383,6 +2780,7 @@ sys.exit(1)
 				"SERENA_IGNORED_DIRS": "",
 				"MAX_REVIEW_BLOCKED_RETRIES": "2",
 				"MAX_VALIDATION_RECOVERY_ATTEMPTS": "0",
+				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"ENABLE_VALIDATION": "false",
 				"MAX_VALIDATE_CYCLES": "3",
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",

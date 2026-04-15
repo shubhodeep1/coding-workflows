@@ -45,6 +45,10 @@
       "color": "0e8a16",
       "description": "PR review complete and ready to merge"
     },
+    "ai:needs-human": {
+      "color": "e11d48",
+      "description": "Escalated for human intervention; autonomous stall recovery is paused"
+    },
     "ai:merged": {
       "color": "5319e7",
       "description": "Linked PR merged"
@@ -56,6 +60,10 @@
     "ai:implementation-failed": {
       "color": "e11d48",
       "description": "Implementation produced no changes despite an approved plan — will be re-issued"
+    },
+    "ai:destructive-blocked": {
+      "color": "b60205",
+      "description": "Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review"
     },
     "ai:closed": {
       "color": "6a737d",
@@ -82,6 +90,7 @@
         "ai:validation-recovery",
         "ai:done",
         "ai:ready-to-merge",
+        "ai:needs-human",
         "ai:review-blocked",
         "ai:implementation-failed",
         "ai:merged",

@@ -150,18 +150,27 @@ Instructs the LLM to:
    - If the project already has a Dockerfile, reference it; if not, generate a minimal one
 
    **`validation/validate.sh`**:
-   - POSIX-compliant, `set -euo pipefail`
-   - Pre-flight checks (docker available, ports free)
-   - Build and start: `docker compose -f docker-compose.test.yml up -d --build`
-   - Health-check polling with 120-second timeout
-   - Execute each test script in `validation/tests/`
-   - Capture container logs to `validation/logs/`
-   - Teardown: `docker compose down -v --remove-orphans` (via `trap` on EXIT)
-   - Output structured JSON result to stdout as last output:
+   - Thin generated wrapper only (no embedded harness logic)
+   - `#!/usr/bin/env bash` + `set -euo pipefail`
+   - Delegates to `scripts/validate_driver.sh`:
+     ```bash
+     exec bash scripts/validate_driver.sh "$@"
+     ```
+
+   **`scripts/validate_driver.sh`** (canonical checked-in runtime harness):
+   - Pre-flight checks (docker available, compose available, compose file exists, `docker compose config -q`)
+   - Build and start: `docker compose -f validation/docker-compose.test.yml up -d --build`
+   - Health-check polling with timeout/deadline
+   - Execute sorted `validation/tests/*.sh` with canary-first gating
+   - TAP-safe counting of `ok` / `not ok`
+   - Capture deterministic logs under `validation/logs/` (`compose.log`)
+   - Teardown via EXIT trap: `docker compose down -v --remove-orphans`
+   - Robust `append_failure`, `emit_result`, `fail_fast`, and idempotent finalization
+   - Output structured JSON result to stdout as last output with unchanged schema:
      ```json
      {
        "result": "pass" | "fail",
-       "phase": "build" | "startup" | "health" | "tests",
+       "phase": "preflight" | "build" | "startup" | "health" | "tests" | "runtime_validation",
        "total_tests": <int>,
        "passed_tests": <int>,
        "failed_tests": <int>,
@@ -172,6 +181,7 @@ Instructs the LLM to:
      }
      ```
    - Exit 0 on pass, 1 on fail
+   - Loads optional `validation/validate.env` and applies conservative defaults for supported knobs (`APP_SERVICE`, `APP_URL`, `HEALTH_TIMEOUT`, `PHASE`, plus existing test credentials/paths)
 
    **`validation/tests/*.sh`**: Individual test scripts. Each outputs TAP-like lines (`ok N description` / `not ok N description`). Which scripts to generate depends on project type — the prompt must list all categories from the "Scope" section above and instruct the LLM to generate every test that applies.
 
@@ -203,7 +213,7 @@ Outputs only YAML for `.ai/validate.yml` schema-compatible hints. This output is
 
 Prompt for cycle 2+ targeted harness repair.
 
-Scope is strictly `validation/` files and prior failure context; it must patch failing assertions/config minimally instead of regenerating the whole harness.
+Scope is strictly `validation/` artifacts and prior failure context; it must patch failing assertions/config minimally instead of regenerating the whole harness. In canonical driver mode, keep `validation/validate.sh` as a wrapper and leave `scripts/validate_driver.sh` unchanged during fix-harness runs.
 
 ### 2. prompts/mode-validate-diagnose.txt
 
@@ -280,7 +290,7 @@ SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS
 6. Build prompt: static context + TOOL_CALL_BUDGET + selected prompt + project spec + hints + prior failure context
 7. Run Codex: `cat prompt | codex exec --model "${MODEL_EDITOR}" --full-auto > output 2> log`
    - Retry up to 2 attempts
-   - Verify `validation/validate.sh` was created
+   - Verify `validation/validate.sh` exists as a delegating wrapper and `scripts/validate_driver.sh` is present
    - On failure: post comment, Telegram, exit 1
 8. `chmod +x` all `.sh` files in `validation/`
 
@@ -293,7 +303,7 @@ SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS
 
 **Phase 3: Execute validation**
 
-1. Run `validation/validate.sh` with `timeout ${VALIDATION_TIMEOUT}m`
+1. Run `validation/validate.sh` (wrapper -> `scripts/validate_driver.sh`) with `timeout ${VALIDATION_TIMEOUT}m`
 2. Capture output to `${VALIDATION_LOG}`
 3. Extract structured JSON result from output — use the brace-matching Python pattern from `orchestrate_poll_process.sh` lines 313-348 to find last JSON with `"result"` key
 4. If timeout (exit 124): synthesize failure JSON with `"phase": "timeout"`
@@ -356,7 +366,7 @@ env:
 6. Verify Docker available (`docker --version && docker compose version`)
 7. Validate required env vars
 8. Create runtime workspace (`/tmp/codex-validate-...`)
-9. Fetch support scripts from coding-workflows@stable: `setup_serena.sh`, `validate_process.sh`, `ai_labels.py`, `mode-validate-generate.txt`, `mode-validate-diagnose.txt`, `codex_system_instructions.md`, `ai_pipeline.md`
+9. Fetch support scripts from coding-workflows@stable: `setup_serena.sh`, `validate_process.sh`, `validate_driver.sh`, `ai_labels.py`, `mode-validate-generate.txt`, `mode-validate-diagnose.txt`, `codex_system_instructions.md`, `ai_pipeline.md`
 10. Configure git identity (github-actions[bot])
 11. Run `bash scripts/validate_process.sh` with env vars: GH_TOKEN, OPENROUTER_API_KEY, TG_BOT_SECRET, TG_ADMIN_CHAT_ID, TRACKING_ISSUE, VALIDATION_TIMEOUT (default 15), TOOL_CALL_BUDGET_VALIDATE (default 60), SERENA vars
 12. Upload artifacts (validation/logs/, runtime dir files) — `actions/upload-artifact@v4`, retention 14 days, `if: always()`

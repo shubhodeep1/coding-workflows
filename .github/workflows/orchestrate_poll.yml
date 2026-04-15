@@ -24,6 +24,7 @@ name: AI Orchestrate Poller (Reusable)
 env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'xhigh' }}
+  OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
 jobs:
   poll:
@@ -219,7 +220,7 @@ jobs:
             done; return 1
           }
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh ai_labels.py orchestrate_lib.py orchestrate_poll_process.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh ai_labels.py orchestrate_lib.py orchestrate_poll_process.sh render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -344,6 +345,8 @@ jobs:
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
+          STALL_JUDGE_TRIGGER_COUNT: ${{ vars.STALL_JUDGE_TRIGGER_COUNT || '2' }}
+          ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
           ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
           MAX_RECOVERY_ATTEMPTS: ${{ vars.MAX_RECOVERY_ATTEMPTS || '3' }}
           MAX_VALIDATION_RECOVERY_ATTEMPTS: ${{ vars.MAX_VALIDATION_RECOVERY_ATTEMPTS || '2' }}

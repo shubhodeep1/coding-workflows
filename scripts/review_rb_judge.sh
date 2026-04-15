@@ -123,8 +123,6 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
     cat ./pre_assembled_static.txt
   fi
   echo
-  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
-  echo
   echo "=== REVIEW-BLOCKED JUDGE TASK ==="
   echo
   if [ -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
@@ -135,6 +133,8 @@ RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
   else
     echo "Evaluate the review-blocked PR and decide: merge, fix, or close_and_reissue."
   fi
+  echo
+  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
   echo
   if [ -n "${FIRST_ISSUE}" ]; then
     echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
@@ -213,6 +213,14 @@ fi
 # -----------------------------------------------------------
 # Parse judge output
 # -----------------------------------------------------------
+# Pre-initialize to guarantee JUDGE_JSON is bound under `set -u`. The
+# complex multi-line command substitution below has been observed to
+# leave JUDGE_JSON unbound in rare cases (e.g. when the python3 subshell
+# is killed mid-run by an external signal, which prevents the `|| echo ""`
+# fallback from completing). Without this default, the subsequent
+# `[ -z "${JUDGE_JSON}" ]` check fires `JUDGE_JSON: unbound variable`
+# under `set -u` and aborts the whole review_autofix job.
+JUDGE_JSON=""
 JUDGE_JSON="$(PYTHONDONTWRITEBYTECODE=1 python3 -c "
 import json, re, sys
 
@@ -250,7 +258,7 @@ print('Could not parse review-blocked judge JSON', file=sys.stderr)
 sys.exit(1)
 " 2>/dev/null || echo "")"
 
-if [ -z "${JUDGE_JSON}" ]; then
+if [ -z "${JUDGE_JSON:-}" ]; then
   echo "::warning::Could not parse review-blocked judge output — falling back to manual intervention."
   exit 0
 fi
@@ -401,20 +409,36 @@ case "${RB_ACTION}" in
         git config user.name "codex-bot"
         git config user.email "codex@users.noreply.github.com"
 
-        # Clean up workflow-fetched artifacts before committing
-        if [[ "${REPOSITORY}" != *"/coding-workflows" ]]; then
-          rm -f ./pre_assembled_static.txt
-          rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
-          rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
-          rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py
-          rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh
-          rm -rf ai-memory
-          rm -rf .serena
-          rm -rf prompts
-        fi
+        # Clean up workflow-fetched artifacts before committing.
+        #
+        # Gate on the git origin URL rather than ${REPOSITORY}: the env
+        # var (and GITHUB_REPOSITORY) is user-controllable and any test
+        # harness that sets e.g. REPOSITORY=owner/repo while running this
+        # script as a subprocess from the real coding-workflows checkout
+        # would trip this block and rm the tracked source files under
+        # that checkout (see PRs #917/#931 for the incident in the sibling
+        # orchestrate_poll_process.sh cleanup block). The remote URL
+        # reflects the actual checkout on disk, not a user-overridable
+        # env var. Unknown/empty URL is fail-closed: skip cleanup.
+        _rb_origin_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+        case "${_rb_origin_url}" in
+          ""|*/coding-workflows|*/coding-workflows.git|*/coding-workflows/|*/coding-workflows.git/)
+            : # self-repo or unknown — keep files; consumer-repo-only cleanup
+            ;;
+          *)
+            rm -f ./pre_assembled_static.txt
+            rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
+            rm -f scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
+            rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py
+            rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh
+            rm -rf ai-memory
+            rm -rf .serena
+            ;;
+        esac
+        unset _rb_origin_url
 
         if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
         else
           git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
         fi
@@ -514,4 +538,3 @@ ${RB_FIX_DESC}"
     echo "::warning::Unknown review-blocked judge action: ${RB_ACTION} — falling back to manual intervention."
     ;;
 esac
-
