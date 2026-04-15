@@ -146,6 +146,7 @@ CRITICAL — post-restart readiness polling in graceful_shutdown:
       echo "not ok $ASSERTION - app restarted but endpoint unreachable after graceful shutdown (attempts=$attempts last_status=$last_status curl_exit=$last_curl_exit)"
       exit 1
     fi
+    ASSERTION=$((ASSERTION + 1))
 - Do NOT "fix" this by loosening the assertion, deleting the restart leg, or widening what counts as "reachable". The restart leg exists specifically to catch apps that shut down cleanly but fail to re-initialize — preserve its intent and fix the probe timing.
 
 CRITICAL — independent readiness gating for tests that run after graceful_shutdown:
