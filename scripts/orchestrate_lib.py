@@ -696,7 +696,13 @@ def increment_stall_recovery(
 	now_ts = int(time.time())
 	for issue in waves[current_wave_idx]["issues"]:
 		if issue.get("id") == issue_id:
-			issue["stall_recovery_count"] = issue.get("stall_recovery_count", 0) + 1
+			raw_recovery_count = issue.get("stall_recovery_count", 0)
+			try:
+				recovery_count = int(raw_recovery_count or 0)
+			except (TypeError, ValueError):
+				print(f"::warning::Malformed stall_recovery_count for issue {issue.get('id')}; resetting to 0", file=sys.stderr)
+				recovery_count = 0
+			issue["stall_recovery_count"] = max(0, recovery_count) + 1
 			issue["status_since_ts"] = now_ts
 			break
 

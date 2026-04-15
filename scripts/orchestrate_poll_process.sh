@@ -3840,7 +3840,7 @@ PY
 )"
 
     status_since="$(echo "${updated_state}" | jq -r '.status_since_ts // 0')"
-    recovery_count="$(echo "${updated_state}" | jq -r '.stall_recovery_count // 0')"
+    recovery_count="$(echo "${updated_state}" | jq -r '.stall_recovery_count | tonumber? // 0')"
     threshold_minutes="$(python3 - "$phase" "$STALL_THRESHOLD_MINUTES" "$PHASE_THRESHOLDS_JSON" <<'PY'
 import json, sys
 sys.path.insert(0, 'scripts')
@@ -4151,7 +4151,11 @@ PY
 import json, sys, time
 state = json.loads(sys.argv[1])
 now = int(time.time())
-state["stall_recovery_count"] = int(state.get("stall_recovery_count", 0) or 0) + 1
+try:
+    current = int(state.get("stall_recovery_count", 0) or 0)
+except (TypeError, ValueError):
+    current = 0
+state["stall_recovery_count"] = current + 1
 state["status_since_ts"] = now
 state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
@@ -4182,7 +4186,11 @@ state = json.loads(sys.argv[1])
 should_increment = sys.argv[2].lower() == "true"
 now = int(time.time())
 if should_increment:
-    state["stall_recovery_count"] = int(state.get("stall_recovery_count", 0)) + 1
+    try:
+        current = int(state.get("stall_recovery_count", 0) or 0)
+    except (TypeError, ValueError):
+        current = 0
+    state["stall_recovery_count"] = current + 1
 state["status_since_ts"] = now
 state["updated_ts"] = now
 print(json.dumps(state, separators=(",", ":")))
