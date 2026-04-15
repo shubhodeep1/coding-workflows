@@ -153,7 +153,9 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Preserve all existing env var names.
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
 - Clarify orchestrator override: `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` (default `high`) applies only when clarify LLM runs for `ai:orchestrator-managed` issues via forced human `/reclarify`; non-forced orchestrator-managed clarify runs skip Codex and auto-post `/answer [auto-answered-by-orchestrator]`.
+- Stall recovery controls include `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`): legacy autonomous ladder remains default; stall-judge `escalate_human` outputs are terminalization-gated to the non-human fallback action unless explicitly enabled.
 - Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
+- Orchestrator pre-LLM short-circuit control: `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` (default `1200`) allows `orchestrate.yml` to skip decomposer and open one plain issue when description length is below threshold and no multi-step markers are detected.
 - GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
 
 ---
