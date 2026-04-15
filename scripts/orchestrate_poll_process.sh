@@ -352,6 +352,25 @@ else
   ENABLE_CLOSE_MERGED_ISSUES="false"
 fi
 
+# ENABLE_STALL_MERGED_PR_GUARD — when true, early-phase stall recovery
+# actions (retrigger_pipeline / auto_respond_clarify / retrigger_plan /
+# auto_approve / retrigger_implement) double-check the issue's linked
+# pull request state before firing a command.  If the most recent
+# linked PR is MERGED, the action is skipped and the issue is tagged
+# ai:merged so close_merged_issues_sweep can close it on the next
+# cycle.  Introduced to stop /reclarify (and friends) from being
+# posted on issues whose work is already merged but whose phase label
+# got stripped (or whose "Closes #N" autolink never fired).  The
+# linked-PR state is prefetched in a single batched GraphQL call per
+# stall path so the guard adds 0 additional per-issue REST calls.
+# Default true; set to false to disable the guard entirely.
+ENABLE_STALL_MERGED_PR_GUARD="${ENABLE_STALL_MERGED_PR_GUARD:-true}"
+if is_truthy "${ENABLE_STALL_MERGED_PR_GUARD}"; then
+  ENABLE_STALL_MERGED_PR_GUARD="true"
+else
+  ENABLE_STALL_MERGED_PR_GUARD="false"
+fi
+
 MAX_RECOVERY_ATTEMPTS="${MAX_RECOVERY_ATTEMPTS:-3}"
 if ! [[ "${MAX_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_RECOVERY_ATTEMPTS}" -lt 1 ]; then
   echo "::warning::MAX_RECOVERY_ATTEMPTS must be a positive integer; defaulting to 3"
@@ -3167,17 +3186,26 @@ _fetch_standalone_marker_issues_graphql() {
     }' 2>/dev/null || echo '{"state":[],"clarify":[]}'
 }
 
-# Batch-fetch labels and recent comments for a list of candidate issue
-# numbers via a single GraphQL query per batch (aliased issue selectors).
-# Replaces the per-candidate REST /labels and /comments round-trips
-# with ceil(N / batch_size) GraphQL calls.  Returns a JSON object keyed
-# by stringified issue number:
+# Batch-fetch labels, recent comments and latest-linked-PR state for a
+# list of candidate issue numbers via a single GraphQL query per batch
+# (aliased issue selectors).  Replaces the per-candidate REST /labels,
+# /comments and /timeline round-trips with ceil(N / batch_size) GraphQL
+# calls.  Returns a JSON object keyed by stringified issue number:
 #   { "123": {"labels": ["ai:clarification"],
-#             "comments": [{"id":N,"body":"...","created_at":"..."},...]},
+#             "comments": [{"id":N,"body":"...","created_at":"..."},...],
+#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool} | null },
 #     ... }
 # Comment shape mirrors the REST response (.id / .body / .created_at)
 # so existing parsers (e.g. _extract_standalone_state_comment_id_from_comments)
 # keep working unchanged.
+#
+# `linked_pr` is derived from the most recent CrossReferencedEvent
+# whose source is a pull request (equivalent to the REST
+# `[.[] | select(.event=="cross-referenced" and .source.issue.pull_request != null)] | last`
+# walk used by the existing open-PR guard).  It is consumed by the
+# merged-PR stall-recovery guard (ENABLE_STALL_MERGED_PR_GUARD) to
+# avoid firing /reclarify (and friends) on issues whose work has
+# already been merged.
 #
 # Trade-off: we fetch `comments(last: 100)` which covers only the 100
 # newest comments rather than the full pagination walk the REST path
@@ -3186,7 +3214,10 @@ _fetch_standalone_marker_issues_graphql() {
 # ai:clarification-questions marker is added near the top of the
 # clarification phase before high comment counts accrue.  If an issue
 # drifts past 100 comments *and* has an ancient marker, the
-# label-based detection path still catches it.
+# label-based detection path still catches it.  Similarly
+# `timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT])` covers
+# the 50 most-recent cross-references, which is plenty for AI pipeline
+# issues that rarely accumulate more than a handful.
 _fetch_candidate_issue_details_graphql() {
   local numbers_json="$1"
   local count
@@ -3221,6 +3252,16 @@ _fetch_candidate_issue_details_graphql() {
           number
           labels(first: 50) { nodes { name } }
           comments(last: 100) { nodes { databaseId body createdAt } }
+          timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
+            nodes {
+              ... on CrossReferencedEvent {
+                source {
+                  __typename
+                  ... on PullRequest { number state merged }
+                }
+              }
+            }
+          }
         }"
     done
 
@@ -3252,7 +3293,15 @@ _fetch_candidate_issue_details_graphql() {
               id: .databaseId,
               body: .body,
               created_at: .createdAt
-            }]
+            }],
+            linked_pr: (
+              [
+                (.value.timelineItems.nodes // [])[]?
+                | (.source // null)
+                | select(. != null and .__typename == "PullRequest")
+                | {number: .number, state: .state, merged: (.merged // false)}
+              ] | last // null
+            )
           }
         }
       ) | from_entries
@@ -3264,6 +3313,180 @@ _fetch_candidate_issue_details_graphql() {
   done
 
   echo "${merged}"
+}
+
+# _fetch_linked_pr_status_graphql — Batch-fetch latest-linked-PR state
+# for a list of issue numbers via a single GraphQL query per batch.
+# Lighter than _fetch_candidate_issue_details_graphql (only timeline
+# items, no labels/comments) and used by the orchestrator-managed
+# stall recovery loop, which already has its own label/state source
+# of truth.
+#
+# Input: JSON array of issue numbers, e.g. "[123, 456]"
+# Output: JSON object keyed by stringified issue number:
+#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool},
+#     "456": null, ... }
+# A value of `null` means the issue has no cross-referenced PR (or the
+# batch call failed for that batch and the issue fell out of the cache).
+# Callers must treat missing/null entries as "no merged PR known" and
+# proceed normally — the guard fails open.
+_fetch_linked_pr_status_graphql() {
+  local numbers_json="$1"
+  local count
+  count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
+  if [ -z "${count}" ] || [ "${count}" -eq 0 ]; then
+    echo '{}'
+    return
+  fi
+
+  local owner="${GITHUB_REPOSITORY%%/*}"
+  local name="${GITHUB_REPOSITORY##*/}"
+  local batch_size=25
+  local merged='{}'
+  local start=0
+  local end
+  local i
+  local n
+  local query
+  local fragment
+  local batch_resp
+  local batch_transformed
+
+  while [ "${start}" -lt "${count}" ]; do
+    end=$(( start + batch_size ))
+    [ "${end}" -gt "${count}" ] && end="${count}"
+
+    fragment=""
+    for ((i=start; i<end; i++)); do
+      n="$(printf '%s' "${numbers_json}" | jq -r ".[${i}]")"
+      [[ "${n}" =~ ^[0-9]+$ ]] || continue
+      fragment+=$'\n'"        i${i}: issue(number: ${n}) {
+          number
+          timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
+            nodes {
+              ... on CrossReferencedEvent {
+                source {
+                  __typename
+                  ... on PullRequest { number state merged }
+                }
+              }
+            }
+          }
+        }"
+    done
+
+    if [ -z "${fragment}" ]; then
+      start="${end}"
+      continue
+    fi
+
+    query="query {
+  repository(owner: \"${owner}\", name: \"${name}\") {${fragment}
+  }
+}"
+
+    if ! batch_resp="$(gh_retry gh api graphql -f query="${query}" 2>/dev/null)"; then
+      # Fail open: leave this batch's issues out of the cache so the
+      # caller treats them as "no merged PR known" and proceeds.
+      start="${end}"
+      continue
+    fi
+
+    batch_transformed="$(printf '%s' "${batch_resp}" | jq -c '
+      (.data.repository // {}) | to_entries | map(
+        select(.value != null and (.value.number? != null)) | {
+          key: (.value.number | tostring),
+          value: (
+            [
+              (.value.timelineItems.nodes // [])[]?
+              | (.source // null)
+              | select(. != null and .__typename == "PullRequest")
+              | {number: .number, state: .state, merged: (.merged // false)}
+            ] | last // null
+          )
+        }
+      ) | from_entries
+    ' 2>/dev/null || echo '{}')"
+
+    merged="$(jq -s '.[0] * .[1]' <(printf '%s\n' "${merged}") <(printf '%s\n' "${batch_transformed}") 2>/dev/null || echo "${merged}")"
+
+    start="${end}"
+  done
+
+  echo "${merged}"
+}
+
+# _check_merged_pr_guard — Shared guard used by both the standalone and
+# orchestrator-managed stall recovery paths.  Given an issue number and
+# a pre-fetched linked-PR JSON object (from either
+# _fetch_candidate_issue_details_graphql or
+# _fetch_linked_pr_status_graphql), returns 0 if the linked PR is
+# merged (caller should skip the stall action) and 1 otherwise.
+#
+# On a hit, exports STALL_MERGED_PR_NUM with the PR number so the
+# caller can log + notify + reconcile labels.
+#
+# The guard is feature-flagged via ENABLE_STALL_MERGED_PR_GUARD and
+# fails open (returns 1) if the guard is disabled or the linked_pr
+# payload is missing/empty — i.e. the guard NEVER causes a stall
+# recovery to fire when it otherwise wouldn't have.
+#
+# Args:
+#   $1 — issue number (for logging only)
+#   $2 — linked_pr JSON (shape: {"number":N,"state":"MERGED","merged":bool} or "null"/empty)
+_check_merged_pr_guard() {
+  local issue_num="$1"
+  local linked_json="$2"
+  STALL_MERGED_PR_NUM=""
+
+  if [ "${ENABLE_STALL_MERGED_PR_GUARD}" != "true" ]; then
+    return 1
+  fi
+
+  if [ -z "${linked_json}" ] || [ "${linked_json}" = "null" ] || [ "${linked_json}" = "{}" ]; then
+    return 1
+  fi
+
+  local merged_flag
+  merged_flag="$(printf '%s' "${linked_json}" | jq -r '.merged // false' 2>/dev/null || echo "false")"
+  if [ "${merged_flag}" != "true" ]; then
+    return 1
+  fi
+
+  local pr_num
+  pr_num="$(printf '%s' "${linked_json}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+  if ! [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  STALL_MERGED_PR_NUM="${pr_num}"
+  return 0
+}
+
+# _reconcile_merged_pr_issue — Tag an issue whose linked PR is merged
+# with ai:merged so close_merged_issues_sweep will close it on the
+# next cycle, and emit a one-line healing note + Telegram alert.  Used
+# by both stall recovery paths when _check_merged_pr_guard fires.
+# Fails open: label-edit errors are swallowed so a transient label
+# hiccup never blocks the stall recovery short-circuit.
+_reconcile_merged_pr_issue() {
+  local issue_num="$1"
+  local phase="$2"
+  local action="$3"
+  local pr_num="$4"
+
+  if declare -F ensure_label_exists >/dev/null 2>&1; then
+    ensure_label_exists "ai:merged" >/dev/null 2>&1 || true
+  fi
+  gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label "ai:merged" >/dev/null 2>&1 || true
+
+  if declare -F add_healing_note >/dev/null 2>&1; then
+    add_healing_note "Issue #${issue_num}: skipped stall recovery '${action}' (phase=${phase}) — linked PR #${pr_num} already merged; tagged ai:merged for close_merged_issues_sweep"
+  fi
+  if declare -F tg_notify >/dev/null 2>&1; then
+    tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because linked PR #${pr_num} is already merged. Tagged ai:merged."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${pr_num}")" "WARNING"
+  fi
 }
 
 run_standalone_stall_recovery() {
@@ -3452,6 +3675,25 @@ PY
       fi
       continue
     fi
+
+    # ---- Merged-PR guard: don't fire early-phase actions on issues whose
+    # linked PR is already merged.  Relies on the linked_pr payload the
+    # batched GraphQL prefetch already put in _candidate_details_json
+    # (0 additional API calls) and fails open on missing data.
+    case "${action}" in
+      retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement)
+        local _std_linked_json
+        _std_linked_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // null' 2>/dev/null || echo "null")"
+        if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
+          echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
+          _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+          if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+            write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          fi
+          continue
+        fi
+        ;;
+    esac
 
     if [ "${action}" != "skip" ] && [ "${action}" != "attempt_merge" ] && [ "${action}" != "escalate_human" ]; then
       cancel_zombie_runs_for_issue "${issue_num}"
@@ -3891,31 +4133,64 @@ recover_stalled_issue() {
     return 1  # Signal: no action taken (caller should not increment counter)
   fi
 
-  # ---- Guard: skip pre-implementation recovery when an open linked PR already exists ----
+  # ---- Guard: skip pre-implementation recovery when a linked PR already exists ----
   # Early-phase actions (retrigger_pipeline, auto_respond_clarify, retrigger_plan,
   # auto_approve, retrigger_implement) assume the issue has not yet produced a PR.
   # When phase labels are stale/missing (e.g. issue ends up with no ai:* labels even
   # though implementation already happened) the stall detector can misclassify the
   # phase as "no_labels"/"ai:clarification"/"ai:planning"/"ai:awaiting-approval"/
   # "ai:implementing" and fire /reclarify, /answer, /approved, etc. against an
-  # issue that already has an open PR, triggering a stuck-in-loop scenario.
-  # Consult the linked PR via the GitHub timeline and, if it is still open, bail
-  # out of the early-phase action so the issue can progress on its existing PR.
+  # issue that already has a PR (either still open OR already merged), triggering
+  # a stuck-in-loop scenario like GH issue #1074.
+  #
+  # Two sub-guards:
+  #   1. Merged-PR guard (ENABLE_STALL_MERGED_PR_GUARD): if the latest linked PR
+  #      is MERGED, short-circuit + tag ai:merged so close_merged_issues_sweep
+  #      closes the issue on the next cycle.
+  #   2. Open-PR guard (legacy): if the latest linked PR is OPEN, short-circuit
+  #      so the issue can progress on its existing PR.
+  #
+  # Both sub-guards first consult STALL_MANAGED_LINKED_PR_CACHE, which is
+  # populated once per stall loop via a single batched GraphQL call
+  # (_fetch_linked_pr_status_graphql).  On cache miss they fall back to the
+  # legacy per-issue REST lookup — fail-open behaviour preserved.
   case "${action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement)
-      local _lpr_num
-      _lpr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
-        --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-        2>/dev/null || echo "")"
-      if [[ "${_lpr_num}" =~ ^[0-9]+$ ]]; then
-        local _lpr_state
-        _lpr_state="$(_jq_field "$(_fetch_pr_json "${_lpr_num}")" '.state' 'open|closed|merged')"
-        if [ "${_lpr_state}" = "open" ]; then
-          echo "STALL_SKIP issue=${issue_num} reason=open_linked_pr pr=${_lpr_num} phase=${phase} action=${action}"
-          add_healing_note "Issue #${issue_num}: skipped early-phase stall recovery '${action}' (phase=${phase}) — open linked PR #${_lpr_num} already exists"
-          tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because open linked PR #${_lpr_num} already exists."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
-          return 1  # Signal: no action taken (caller should not increment counter)
+      local _lpr_cache_entry=""
+      if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
+        _lpr_cache_entry="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null")"
+      fi
+
+      # --- Merged-PR sub-guard (uses cache only; fails open on miss) ---
+      if _check_merged_pr_guard "${issue_num}" "${_lpr_cache_entry}"; then
+        echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
+        _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+        STALL_HEALING_CHANGED=true
+        return 1  # Signal: no action taken (caller should not increment counter)
+      fi
+
+      # --- Open-PR sub-guard (uses cache first, falls back to per-issue REST) ---
+      local _lpr_num=""
+      local _lpr_state=""
+      if [ -n "${_lpr_cache_entry}" ] && [ "${_lpr_cache_entry}" != "null" ]; then
+        _lpr_num="$(printf '%s' "${_lpr_cache_entry}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+        # GraphQL PR state is uppercase (OPEN/CLOSED/MERGED); normalize to lower for the legacy compare.
+        _lpr_state="$(printf '%s' "${_lpr_cache_entry}" | jq -r '.state // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+      fi
+      if [ -z "${_lpr_num}" ]; then
+        # Cache miss — fall back to the legacy per-issue REST lookup.
+        _lpr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+          --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+          2>/dev/null || echo "")"
+        if [[ "${_lpr_num}" =~ ^[0-9]+$ ]]; then
+          _lpr_state="$(_jq_field "$(_fetch_pr_json "${_lpr_num}")" '.state' 'open|closed|merged')"
         fi
+      fi
+      if [[ "${_lpr_num}" =~ ^[0-9]+$ ]] && [ "${_lpr_state}" = "open" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=open_linked_pr pr=${_lpr_num} phase=${phase} action=${action}"
+        add_healing_note "Issue #${issue_num}: skipped early-phase stall recovery '${action}' (phase=${phase}) — open linked PR #${_lpr_num} already exists"
+        tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because open linked PR #${_lpr_num} already exists."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
+        return 1  # Signal: no action taken (caller should not increment counter)
       fi
       ;;
   esac
@@ -6324,6 +6599,22 @@ fi
       if [ -n "${ACTIVE_WORKFLOW_ISSUES}" ]; then
         echo "Issues with active workflow runs: $(echo "${ACTIVE_WORKFLOW_ISSUES}" | tr '\n' ' ')"
       fi
+
+      # Prefetch linked-PR state for every stalled issue in a single
+      # batched GraphQL call, so recover_stalled_issue's merged-PR and
+      # open-PR sub-guards consume the data from an in-memory cache
+      # instead of hitting the GitHub API per issue.  Fails open: an
+      # empty/failed prefetch leaves the legacy per-issue REST lookup
+      # in place as a fallback.
+      STALL_MANAGED_LINKED_PR_CACHE='{}'
+      if [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ]; then
+        _stall_issue_nums_json="$(echo "${STALLS_JSON}" | jq -c '[.stalls[].github_issue | select(type == "number")] | unique')"
+        if [ "$(printf '%s' "${_stall_issue_nums_json}" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ]; then
+          STALL_MANAGED_LINKED_PR_CACHE="$(_fetch_linked_pr_status_graphql "${_stall_issue_nums_json}")"
+          echo "Prefetched linked-PR state for $(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq 'length' 2>/dev/null || echo 0) stalled issue(s) (1 batched GraphQL call)."
+        fi
+      fi
+      export STALL_MANAGED_LINKED_PR_CACHE
 
       while IFS= read -r stall_entry; do
         [ -n "${stall_entry}" ] || continue
