@@ -492,6 +492,86 @@ CRITICAL — robust synthetic env-var assertions in env_var_validation tests:
   using their respective compose default values.
 - Always include both expected and actual values in failure messages to aid debugging.
 
+CRITICAL — inline Python inside generated validation/tests/*.sh scripts:
+- Codex-generated test scripts frequently embed short Python snippets via
+  `python3 - <<'PY' ... PY` heredocs or `python3 -c '...'` arguments.
+  These patterns are a high-risk source of `harness_error` outcomes
+  because nested shell quoting (especially `docker compose exec -T svc /bin/sh -c '...'`
+  wrapping a heredoc or `python3 -c`) mangles single quotes inside the
+  Python source at runtime, producing `SyntaxError: f-string: expecting a
+  valid expression after '{'` or `unterminated string literal` errors
+  that never reproduce in static review. The pre-flight phase statically
+  ast-parses every quoted python3 heredoc under `validation/**/*.sh` and
+  fails fast on SyntaxError, but the easiest fix is to avoid the nesting
+  in the first place.
+- Hard rule: do NOT nest a `python3 - <<"PY"` or `python3 -c '...'` inside
+  another shell layer (`/bin/sh -c '...'`, `docker compose exec -T svc /bin/sh -c '...'`,
+  `bash -lc '...'`, `sudo sh -c '...'`, etc.) when the Python source contains
+  single quotes, f-strings with `{'...'}` interpolations, or any backslash
+  escape that a second shell layer could re-interpret.
+- Preferred pattern A — sidecar Python file under `validation/tests/_lib/`:
+    # validation/tests/_lib/check_markers.py
+    import pathlib, sys
+    required = {
+        "scripts/foo.py": ["subprocess", "zipfile"],
+        "scripts/bar.py": ["json", "urllib.request"],
+    }
+    errors = []
+    for rel, snippets in required.items():
+        text = pathlib.Path(rel).read_text(encoding="utf-8")
+        missing = [s for s in snippets if s not in text]
+        if missing:
+            joined = ", ".join(missing)
+            errors.append(f"{rel} missing markers: {joined}")
+    if errors:
+        print("; ".join(errors))
+        sys.exit(1)
+    print("dependency markers present")
+  And invoke from the test script:
+    if docker compose -f "$COMPOSE_FILE" exec -T "$APP_SERVICE" \
+        python3 /workspace/validation/tests/_lib/check_markers.py; then
+      echo "ok $ASSERTION - dependency marker audit passed"
+    else
+      echo "not ok $ASSERTION - dependency marker audit failed"
+      exit 1
+    fi
+  Sidecar files are the ONLY reliable way to ship inline Python into a
+  nested `docker compose exec` layer without quoting regressions. Place
+  them under `validation/tests/_lib/` so the existing `find validation -type f -name '*.sh'`
+  pre-flight sweep skips them and the lexical `NN_*.sh` runner does not
+  execute them as tests.
+- Preferred pattern B — single-layer quoted heredoc (no `/bin/sh -c` wrap).
+  POSIX requires the closing heredoc delimiter to start at column 0 (or, with
+  `<<-`, after only TAB indentation), so the example below is shown
+  unindented; do NOT visually-indent the `python3 - <<'PY'` / `PY` pair to
+  match a surrounding bullet:
+python3 - <<'PY'
+import pathlib
+text = pathlib.Path("scripts/foo.py").read_text(encoding="utf-8")
+joined = ", ".join(["subprocess", "zipfile"])
+if any(m not in text for m in ["subprocess", "zipfile"]):
+    raise SystemExit(f"missing markers: {joined}")
+print("ok")
+PY
+  Use this ONLY when the check runs on the runner itself (not inside a
+  container). Note that the heredoc delimiter is single-quoted (`<<'PY'`)
+  so the body is taken literally and never expanded by the outer shell.
+- Hard constraint on f-strings: when you MUST interpolate a joined list
+  into an f-string, build the joined value into a NAMED variable first
+  and interpolate the variable, NOT the join expression. This eliminates
+  the `f"{','.join(x)}"` foot-gun where nested quoting breaks the f-string
+  parse at runtime:
+    # WRONG — single quotes inside the f-string expression are fragile
+    # when any outer shell layer re-quotes the script.
+    errors.append(f"{rel} missing markers: {', '.join(missing)}")
+    # RIGHT — build the joined value first, then interpolate the variable.
+    joined = ", ".join(missing)
+    errors.append(f"{rel} missing markers: {joined}")
+- Forbidden: the pattern `/bin/sh -c '"'python3 - <<"PY" ... PY'` (close-
+  open single-quote runs wrapped around `/bin/sh -c`). It is always a
+  bug even when the Python parses in isolation, because the outer shell
+  eats the single quotes inside the heredoc body at runtime.
+
 Validation coverage (implement only when concretely applicable):
 1. Build verification
 2. Startup and health checks
