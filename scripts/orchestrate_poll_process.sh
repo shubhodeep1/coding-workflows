@@ -3932,6 +3932,7 @@ recover_stalled_issue() {
         if [ "${_lpr_state}" = "open" ]; then
           echo "STALL_SKIP issue=${issue_num} reason=open_linked_pr pr=${_lpr_num} phase=${phase} action=${action}"
           add_healing_note "Issue #${issue_num}: skipped early-phase stall recovery '${action}' (phase=${phase}) — open linked PR #${_lpr_num} already exists"
+          STALL_HEALING_CHANGED=true
           tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because open linked PR #${_lpr_num} already exists."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
           return 1  # Signal: no action taken (caller should not increment counter)
         fi

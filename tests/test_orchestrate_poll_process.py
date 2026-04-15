@@ -2714,10 +2714,10 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Stall Judge — Issue #10" in body for body in tracking_comments)
 	# At stall_recovery_count=2 for phase ai:awaiting-approval, the declarative
-	# ladder (STALL_RECOVERY_ACTIONS) selects escalate_human at index 2, so the
-	# fallback adds the ai:needs-human label and does not post /approved.
-	assert "ai:needs-human" in result["issues"]["10"]["labels"]
-	assert not any("/approved" in body for body in issue_comments)
+	# fallback action is auto_approve (human terminalization ladder is not used
+	# in this test), so /approved is posted and ai:needs-human is not added.
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert any("/approved" in body for body in issue_comments)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 3
 
