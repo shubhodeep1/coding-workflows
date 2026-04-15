@@ -17,6 +17,7 @@ Rules:
 - Ask only ambiguities affecting implementation behavior, correctness, safety, interfaces, or rollout.
 - Do not ask style/preference questions when a safe default can be inferred.
 - Batch all blocking questions in one pass. Maximum 20 questions (highest-impact first).
+- If a required input is external and non-synthesizable by the auto-answerer (for example branch name, commit SHA, credential, or external URL), do not emit Q/Choices; emit exactly `BLOCKED: <short reason>`.
 - Use repo documentation only; no external web searches.
 - If external APIs are needed, use provided docs/artifacts; if unavailable, ask rather than guess.
 - Do not write code or propose solutions.
@@ -33,3 +34,6 @@ RATIONALE: <1-3 short lines>
 QUESTIONS:
 - None (if CLEAR)
 - Q<ID> blocks in mandatory format (if NEEDS_CLARIFICATION)
+
+Or, for blocked handoff:
+BLOCKED: <short reason>
