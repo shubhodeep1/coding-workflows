@@ -27,6 +27,7 @@ def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
 	assert "repos/${wf_source}/contents/prompts/${pf}?ref=${script_ref}" in wf
 	assert "${pf} not found on ${script_ref}; falling back to main" in wf
 	assert "repos/${wf_source}/contents/prompts/${pf}?ref=main" in wf
+	assert "::warning::${pf} not found on ${script_ref}; falling back to main" in wf
 
 
 def main() -> int:
