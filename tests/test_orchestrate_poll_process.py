@@ -783,12 +783,33 @@ if args[0] == 'api':
 	m = re.search(r'/issues/(\d+)$', path)
 	if m:
 		issue = get_issue(m.group(1))
+		issue_state = 'closed' if issue.get('closed') else 'open'
 		if jq == '.body':
 			print(issue.get('body', ''))
 		elif jq == '.state':
-			print('closed' if issue.get('closed') else 'open')
+			print(issue_state)
+		elif jq and (jq == '.title' or jq == '.title // ""'):
+			print(issue.get('title', ''))
+		elif jq:
+			# Generic path: build a comprehensive issue-like object and pipe
+			# it through real jq so callers can request arbitrary filters
+			# (e.g. the consolidated {state, state_reason, labels} fetch used
+			# by the validation fix-up loop).
+			issue_obj = {
+				'body': issue.get('body', ''),
+				'title': issue.get('title', ''),
+				'state': issue_state,
+				'state_reason': issue.get('state_reason', ''),
+				'labels': [{'name': l} for l in issue.get('labels', [])],
+			}
+			import subprocess as _sp
+			p = _sp.run(['jq', '-rc', jq], input=json.dumps(issue_obj), capture_output=True, text=True)
+			if p.returncode != 0:
+				print(p.stderr, file=sys.stderr, end='')
+				sys.exit(p.returncode)
+			print(p.stdout, end='')
 		else:
-			print(json.dumps({'body': issue.get('body', ''), 'state': ('closed' if issue.get('closed') else 'open')}))
+			print(json.dumps({'body': issue.get('body', ''), 'state': issue_state}))
 		sys.exit(0)
 
 	m = re.search(r'/pulls/(\d+)$', path)
