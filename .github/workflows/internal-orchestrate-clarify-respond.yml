@@ -10,5 +10,5 @@ permissions:
 
 jobs:
   respond:
-    uses: ./.github/workflows/orchestrate_clarify_respond.yml
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_clarify_respond.yml@main
     secrets: inherit
