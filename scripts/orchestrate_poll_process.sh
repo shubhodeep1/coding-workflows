@@ -5861,13 +5861,31 @@ sys.exit(1)
               if [ -n "$(git status --porcelain)" ]; then
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
+                # `git add -u` with only negative pathspecs exits non-zero
+                # on newer git versions (observed with 2.53) when the index
+                # is empty — e.g. test sandboxes whose base commit tracks
+                # no files — because git implicitly appends `.` as a
+                # positive pathspec and then errors on every pathspec that
+                # did not match. Under `set -euo pipefail` that aborts the
+                # whole poll run. Guard on a non-empty index so production
+                # checkouts still run the update and empty sandboxes
+                # silently fall through to the untracked-file add below.
+                _HAS_TRACKED_FILES=false
+                if [ -n "$(git ls-files | head -c1 2>/dev/null || true)" ]; then
+                  _HAS_TRACKED_FILES=true
+                fi
                 if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-                  git add -u -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  if [ "${_HAS_TRACKED_FILES}" = "true" ]; then
+                    git add -u -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  fi
                   git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
                 else
-                  git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  if [ "${_HAS_TRACKED_FILES}" = "true" ]; then
+                    git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  fi
                   git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
                 fi
+                unset _HAS_TRACKED_FILES
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
                 if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
