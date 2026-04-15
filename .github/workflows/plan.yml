@@ -1137,6 +1137,12 @@ jobs:
             echo "/answer"
           } > "${PLAN_COMMENT_FILE}"
 
+          CLARIFICATION_COMMENT_LEN="$(wc -c < "${PLAN_COMMENT_FILE}")"
+          if [ "${CLARIFICATION_COMMENT_LEN}" -gt 65536 ]; then
+            echo "Generated clarification comment too long (${CLARIFICATION_COMMENT_LEN} bytes); refusing to post over GitHub limit."
+            exit 1
+          fi
+
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${PLAN_COMMENT_FILE}")"
 
