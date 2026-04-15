@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Fix orchestrator clarify-plan yo-yo by honoring Integration branch metadata and adding blocked/loop safeguards\",\"issues\":[{\"id\":\"integration-ref-resolver-foundation\",\"title\":\"Add canonical Integration-branch resolver (bash + Python) with shared fixtures\",\"priority\":1},{\"id\":\"workflow-checkout-integration-ref-wiring\",\"title\":\"Wire Integration-ref resolution into phase/judge checkouts and enforce checkout audit guard\",\"priority\":1},{\"id\":\"clarify-loop-breaker-memory-ledger\",\"title\":\"Add clarify-loop breaker in orchestrate_clarify_respond with ai-memory ledgered hashes and cycle budget\",\"priority\":2},{\"id\":\"blocked-output-prompt-and-plan-handling\",\"title\":\"Harden clarify/plan prompts and workflow handling for unsatisfiable external-input blockers\",\"priority\":2},{\"id\":\"judge-branch-audit-e2e-docs\",\"title\":\"Audit judge branch context, fix remaining default-branch reads, and add end-to-end/docs verification\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"integration-ref-resolver-foundation\",\"to\":\"workflow-checkout-integration-ref-wiring\"},{\"from\":\"workflow-checkout-integration-ref-wiring\",\"to\":\"blocked-output-prompt-and-plan-handling\"},{\"from\":\"clarify-loop-breaker-memory-ledger\",\"to\":\"blocked-output-prompt-and-plan-handling\"},{\"from\":\"workflow-checkout-integration-ref-wiring\",\"to\":\"judge-branch-audit-e2e-docs\"},{\"from\":\"clarify-loop-breaker-memory-ledger\",\"to\":\"judge-branch-audit-e2e-docs\"},{\"from\":\"blocked-output-prompt-and-plan-handling\",\"to\":\"judge-branch-audit-e2e-docs\"}]}",
+  "fingerprint": "fc100f5df534ded4ffe8f08245ceea257af0a54cd3259805d195e5e6296b861e",
+  "lineage": {
+    "issue_number": 1047,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24440646387",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24440646387",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260415070128_7f34698552",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1047,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24440646387"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Fix orchestrator clarify-plan yo-yo by honoring Integration branch metadata and adding blocked/loop safeguards' into 5 issues (tracking #1047)",
+  "timestamps": {
+    "created_at": "2026-04-15T07:01:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
