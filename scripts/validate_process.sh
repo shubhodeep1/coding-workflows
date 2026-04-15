@@ -31,6 +31,11 @@ fi
 
 MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.3-codex}"
 MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-high}"
+# Export MODEL_EDITOR so child processes (notably scripts/self_heal_validation.sh)
+# see it even when the caller relied on our default fallback. In CI the workflow
+# env: block already exports MODEL_EDITOR, but standalone/local invocations
+# would otherwise lose the default at the env boundary.
+export MODEL_EDITOR
 VALIDATION_TIMEOUT="${VALIDATION_TIMEOUT:-15}"
 if ! [[ "${VALIDATION_TIMEOUT}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_TIMEOUT}" -le 0 ]; then
   echo "VALIDATION_TIMEOUT must be a positive integer (got: ${VALIDATION_TIMEOUT})" >&2
