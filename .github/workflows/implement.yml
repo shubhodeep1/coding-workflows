@@ -332,6 +332,17 @@ jobs:
               echo "prompts/mode-implement-diagnose.txt" >> "${FETCHED_MANIFEST}"
             fi
           fi
+          if [ ! -f prompts/mode-implement-repair-syntax.txt ]; then
+            if ! _gh_api_fetch "prompts/mode-implement-repair-syntax.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/mode-implement-repair-syntax.txt?ref=${script_ref}"; then
+              echo "::warning::mode-implement-repair-syntax.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/mode-implement-repair-syntax.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/mode-implement-repair-syntax.txt?ref=main"
+            fi
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "prompts/mode-implement-repair-syntax.txt" >> "${FETCHED_MANIFEST}"
+            fi
+          fi
 
           # Fetch canonical agents.md from coding-workflows into the runtime
           # directory. This is combined with the caller repo's own agents.md
@@ -1016,7 +1027,7 @@ jobs:
           fi
           git checkout -B "${TARGET_BRANCH}"
 
-      - name: Validate syntax of changed files
+      - name: Check syntax of changed files (non-fatal)
         if: env.SKIP_IMPLEMENT != 'true'
         id: validate_syntax_changed_files
         run: |
@@ -1102,11 +1113,38 @@ jobs:
             fi
           done
 
+          if [ -n "${GITHUB_OUTPUT:-}" ]; then
+            echo "syntax_error_count=${ERRORS}" >> "$GITHUB_OUTPUT"
+            if [ "${ERRORS}" -gt 0 ]; then
+              echo "has_syntax_errors=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_syntax_errors=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
           if [ "${ERRORS}" -gt 0 ]; then
-            echo "::error::${ERRORS} file(s) failed syntax validation."
+            echo "::warning::${ERRORS} file(s) failed syntax validation during check phase."
+          else
+            echo "All changed files passed syntax validation."
+          fi
+
+      - name: Validate syntax of changed files
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: validate_syntax_gate
+        run: |
+          set -euo pipefail
+          HAS_SYNTAX_ERRORS="${{ steps.validate_syntax_changed_files.outputs.has_syntax_errors }}"
+          SYNTAX_ERROR_COUNT="${{ steps.validate_syntax_changed_files.outputs.syntax_error_count }}"
+
+          if [ "${HAS_SYNTAX_ERRORS}" = "true" ]; then
+            if [ -z "${SYNTAX_ERROR_COUNT}" ]; then
+              SYNTAX_ERROR_COUNT="unknown"
+            fi
+            echo "::error::${SYNTAX_ERROR_COUNT} file(s) failed syntax validation."
             exit 1
           fi
-          echo "All changed files passed syntax validation."
+
+          echo "Syntax validation gate passed."
 
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
