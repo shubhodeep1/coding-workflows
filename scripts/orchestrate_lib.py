@@ -396,6 +396,11 @@ STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION: dict[str, list[str]] = {
 		"retrigger_plan",
 		"escalate_human",
 	],
+	"ai:awaiting-approval": [
+		"auto_approve",
+		"auto_approve",
+		"escalate_human",
+	],
 	"ai:implementing": [
 		"retrigger_implement",
 		"retrigger_implement",
@@ -404,6 +409,11 @@ STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION: dict[str, list[str]] = {
 	"ai:done": [
 		"retrigger_review",
 		"retrigger_review",
+		"escalate_human",
+	],
+	"ai:ready-to-merge": [
+		"attempt_merge",
+		"attempt_merge",
 		"escalate_human",
 	],
 }
@@ -439,6 +449,13 @@ def resolve_stall_recovery_action(
 	When *judged_action* is provided, only supported actions are accepted;
 	unsupported/malformed values fail-open to the declarative ladder outcome.
 	"""
+	try:
+		recovery_count = int(recovery_count)
+	except (TypeError, ValueError):
+		recovery_count = 0
+	if recovery_count < 0:
+		recovery_count = 0
+
 	if recovery_count >= max_recoveries:
 		return "skip"
 
@@ -602,6 +619,8 @@ def detect_stalls(
 		try:
 			recovery_count = int(recovery_count_raw)
 		except (TypeError, ValueError):
+			recovery_count = 0
+		if recovery_count < 0:
 			recovery_count = 0
 
 		# Determine recovery action

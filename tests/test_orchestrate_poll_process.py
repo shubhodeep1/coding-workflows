@@ -2722,6 +2722,32 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 	assert issue_entry["stall_recovery_count"] == 3
 
 
+def test_stall_judge_escalate_human_falls_back_when_human_terminalization_disabled():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"]["closed"] is True
+	assert not any("/approved" in body for body in issue_comments)
+
+
 
 def test_no_labels_open_issue_uses_bounded_recovery_policy():
 	state = _base_state(status="in_progress")
