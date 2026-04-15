@@ -152,7 +152,6 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
-- Implement repair control in this repo: `MAX_POST_CODEX_REPAIR_ATTEMPTS` (default `1`) for the in-job post-syntax-failure Codex repair loop.
 - Stall recovery controls include `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`): legacy autonomous ladder remains default; stall-judge `escalate_human` outputs are terminalization-gated to the non-human fallback action unless explicitly enabled.
 - Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
 - Implementation no-op reissue cap: `MAX_IMPL_NOOP_REISSUES` (default `2`) limits automatic re-issues for `ai:implementation-failed` before the poller closes the issue and lets the judge verify whether work is already present.
