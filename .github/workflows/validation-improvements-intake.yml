@@ -188,7 +188,7 @@ jobs:
             expected_path="prompts/${target}"
             validate_log="/tmp/self-heal-patches/validate-${i}.log"
             if ! awk -v expected="${expected_path}" '
-              BEGIN { in_hunk = 0; saw_header = 0 }
+              BEGIN { in_hunk = 0; saw_minus_header = 0; saw_plus_header = 0 }
               function fail(msg) { print msg > "/dev/stderr"; exit 1 }
               /^new file mode( |$)/       { fail("new file patches are not allowed") }
               /^deleted file mode( |$)/   { fail("deleted file patches are not allowed") }
@@ -202,7 +202,7 @@ jobs:
                 if (path == "/dev/null") { fail("--- /dev/null is not allowed") }
                 sub(/^a\//, "", path)
                 if (path != expected) { fail("--- path must be a/" expected) }
-                saw_header = 1
+                saw_minus_header = 1
                 next
               }
               /^\+\+\+ / {
@@ -211,11 +211,11 @@ jobs:
                 if (path == "/dev/null") { fail("+++ /dev/null is not allowed") }
                 sub(/^b\//, "", path)
                 if (path != expected) { fail("+++ path must be b/" expected) }
-                saw_header = 1
+                saw_plus_header = 1
                 next
               }
               /^@@ / {
-                if (!saw_header) { fail("hunk encountered before file headers") }
+                if (!saw_minus_header || !saw_plus_header) { fail("hunk encountered before full file headers") }
                 in_hunk = 1
                 next
               }
@@ -223,7 +223,7 @@ jobs:
                 if (in_hunk && /^-/) { fail("deletion lines are not allowed in hunks") }
               }
               END {
-                if (!saw_header) { fail("patch must contain ---/+++ file headers") }
+                if (!saw_minus_header || !saw_plus_header) { fail("patch must contain both --- and +++ file headers") }
               }
             ' "${patch_file}" 2>"${validate_log}"; then
               echo "::warning::patch ${i} failed intake validation; skipping"
