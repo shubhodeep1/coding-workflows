@@ -402,7 +402,6 @@ VALID_STALL_RECOVERY_ACTIONS.update({
 	"close_and_reissue",
 	"resolve_merge_conflict",
 	"skip",
-	RUN_STALL_JUDGE_ACTION,
 })
 
 

@@ -3429,10 +3429,14 @@ def test_standalone_stall_recovery_skips_needs_human_candidates():
 
 def test_standalone_stall_recovery_uses_shared_gate_aware_action_resolver():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	anchor = "run_standalone_stall_recovery() {"
-	assert anchor in script
-	window = script[script.index(anchor):script.index(anchor) + 8000]
-	assert 'action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"' in window
+	function_match = re.search(
+		r'(^|\n)run_standalone_stall_recovery\(\) \{\n(?P<body>.*?)(?=^\w+\(\) \{|\Z)',
+		script,
+		re.MULTILINE | re.DOTALL,
+	)
+	assert function_match is not None
+	function_body = function_match.group("body")
+	assert 'action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"' in function_body
 	assert 'ENABLE_STALL_HUMAN_TERMINALIZATION' in script
 
 

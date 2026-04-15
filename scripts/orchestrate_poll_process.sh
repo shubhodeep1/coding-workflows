@@ -2492,6 +2492,12 @@ recovery_action_for_phase() {
   local phase="$1"
   local recovery_count="$2"
 
+  [[ "${recovery_count}" =~ ^[0-9]+$ ]] || recovery_count="0"
+  if [ "${recovery_count}" -ge "${MAX_STALL_RECOVERIES_PER_ISSUE}" ]; then
+    echo "skip"
+    return
+  fi
+
   local action
   action="$(python3 - "$phase" "$recovery_count" "$MAX_STALL_RECOVERIES_PER_ISSUE" "$ENABLE_STALL_HUMAN_TERMINALIZATION" <<'PY'
 import sys
@@ -2509,7 +2515,7 @@ print(resolve_stall_recovery_action(
     enable_stall_human_terminalization=enable_human_terminalization,
 ))
 PY
-)"
+)" || true
   if [ -z "${action}" ]; then
     echo "retrigger_pipeline"
   else
@@ -2541,7 +2547,7 @@ print(resolve_effective_stall_recovery_action(
     enable_stall_human_terminalization=enable_human_terminalization,
 ))
 PY
-)"
+)" || true
 
   if [ -z "${action}" ]; then
     echo "retrigger_pipeline"
@@ -3134,7 +3140,7 @@ ${diagnostics}
   fi
 
   case "${effective_action}" in
-    retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human)
+    retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human|skip)
       execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
       return $?
       ;;
