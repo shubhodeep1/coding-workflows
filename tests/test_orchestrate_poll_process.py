@@ -1060,6 +1060,25 @@ if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and 
 if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCESS', '') == 'true':
 	sys.exit(0)
 
+if len(args) == 4 and args[0] == 'fetch' and args[1] == '--no-tags' and args[2] == 'origin':
+	refspec = args[3]
+	if ':' in refspec:
+		src_ref, dst_ref = refspec.split(':', 1)
+		src_prefix = 'refs/heads/'
+		dst_prefix = 'refs/remotes/origin/'
+		if src_ref.startswith(src_prefix) and dst_ref.startswith(dst_prefix):
+			src_branch = src_ref[len(src_prefix):]
+			dst_branch = dst_ref[len(dst_prefix):]
+			if src_branch == dst_branch:
+				if src_branch in set(store.get('existing_branches', [])):
+					head_rev = subprocess.run([real_git, 'rev-parse', 'HEAD'], capture_output=True, text=True)
+					if head_rev.returncode != 0:
+						sys.exit(head_rev.returncode)
+					sha = head_rev.stdout.strip()
+					update_ref = subprocess.run([real_git, 'update-ref', dst_ref, sha])
+					sys.exit(update_ref.returncode)
+				sys.exit(1)
+
 proc = subprocess.run([real_git, *args])
 sys.exit(proc.returncode)
 ''',
@@ -1426,7 +1445,6 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 					"number": 901,
 					"state": "closed",
 					"merged": True,
-					"merged_at": "2026-04-15T00:00:00Z",
 					"baseRefName": "main",
 					"headRefName": "ai/issue-10",
 					"headRefFromApi": "ai/issue-10",
@@ -1495,8 +1513,9 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 				},
 				{
 					"number": 901,
-					"state": "open",
-					"merged": False,
+					"state": "closed",
+					"merged": True,
+					"merged_at": "2026-04-15T00:00:00Z",
 					"baseRefName": "main",
 					"headRefName": "ai/issue-10",
 					"headRefFromApi": "ai/issue-10",
@@ -1536,6 +1555,7 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 			},
 		],
 		existing_branches=["main"],
+		fail_issue_comment_get_after={192: 1},
 		codex_json={
 			"action": "fix",
 			"justification": "apply fixes",
@@ -1580,6 +1600,7 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 					"number": 901,
 					"state": "open",
 					"merged": False,
+					"merged_at": None,
 					"baseRefName": "main",
 					"headRefName": "ai/issue-10",
 					"headRefFromApi": "ai/issue-10",
