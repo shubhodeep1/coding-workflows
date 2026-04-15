@@ -1581,9 +1581,9 @@ jobs:
             git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
-          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/)'; then
             echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
           if [ "${PROTECTED_LEAKED}" = "true" ]; then
@@ -1843,7 +1843,7 @@ jobs:
           # Use -ffdx: double-force clears nested git repos (-ff), and -x also
           # removes files matching .gitignore (e.g. .serena/) so nothing
           # ignored can survive to block the upcoming merge simulation.
-          git clean -ffdx
+          git clean -ffdx -e .codex-workflow-src
 
           # The scripts may have been removed during artifact cleanup in the
           # commit step (caller repos delete fetched scripts before committing)
@@ -1908,7 +1908,7 @@ jobs:
           # git merge refuses to proceed when an untracked working-tree file
           # would be overwritten; this ensures the tree is fully clean before
           # the merge simulation.  Tracked files are never removed by git clean.
-          git clean -ffdx 2>/dev/null || true
+          git clean -ffdx -e .codex-workflow-src 2>/dev/null || true
 
           # Guardrail diagnostics: emit working tree state before merge so any
           # future untracked-file collision is immediately obvious in CI logs.
@@ -2054,7 +2054,7 @@ jobs:
           # Safety net: remove any remaining untracked files (including
           # .gitignore'd ones) that the loop above may have missed, preventing
           # "Untracked working tree file … would be overwritten by merge."
-          git clean -ffdx 2>/dev/null || true
+          git clean -ffdx -e .codex-workflow-src 2>/dev/null || true
 
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
 
@@ -2087,8 +2087,8 @@ jobs:
           # Skipped on the workflow source repo itself, where these paths are
           # real source code.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
-            git checkout -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+            git checkout -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
           fi
 
           # Restore stashed dirs so Codex has its full environment.
@@ -2448,9 +2448,9 @@ jobs:
               git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
-            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/)'; then
               echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-              git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+              git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
             if [ "${PROTECTED_LEAKED}" = "true" ]; then
