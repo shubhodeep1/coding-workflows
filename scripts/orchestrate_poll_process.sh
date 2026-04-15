@@ -2705,8 +2705,10 @@ STALL_EOF
       # swap the label back to ai:awaiting-approval BEFORE posting
       # /approved; otherwise the re-triggered workflow will no-op and the
       # stall recovery loops forever.
-      gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
-        --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
+      if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+        echo "::warning::Failed to swap ai:implementing → ai:awaiting-approval for issue #${issue_num}; /approved retrigger may no-op if label state is unchanged."
+      fi
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
 /approved
