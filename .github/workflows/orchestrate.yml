@@ -1298,6 +1298,9 @@ jobs:
             if [ -n "${TRACKING_ISSUE_NUMBER:-}" ] && [ "${TRACKING_ISSUE_NUMBER}" != "0" ]; then
               MSG+=$'\n'
               MSG+="Issue: ${TRACKING_URL}"
+            elif [ "${SINGLE_ISSUE_MODE:-false}" = "true" ] && [ -n "${SINGLE_ISSUE_URL:-}" ]; then
+              MSG+=$'\n'
+              MSG+="Issue: ${SINGLE_ISSUE_URL}"
             fi
           fi
           MSG+=$'\n'
