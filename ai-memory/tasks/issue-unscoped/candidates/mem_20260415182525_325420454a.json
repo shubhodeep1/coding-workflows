@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/orchestrate_clarify_respond.yml\nscripts/ai_memory_lib.py\nscripts/memory_helpers.sh\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/ai_memory_lib.py\nscripts/orchestrate_poll_process.sh",
+  "fingerprint": "4038541210c4508341d6736afa60d6aaa19e5f8a2565bc86a932acd639bbe445",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1108,
+    "run_id": "24470250195",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24470250195",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415182525_325420454a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1108,
+    "run_id": "24470250195"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T18:25:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
