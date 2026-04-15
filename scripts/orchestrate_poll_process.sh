@@ -2677,6 +2677,15 @@ STALL_EOF
         return 0
       fi
       echo "  Re-triggering implementation for issue #${issue_num}..."
+      # The implement workflow precheck (implement.yml) skips when
+      # ai:implementing is present ("another implement run is in progress")
+      # and also skips when ai:awaiting-approval is absent. A stalled issue
+      # still carries ai:implementing from the previous run, so we must
+      # swap the label back to ai:awaiting-approval BEFORE posting
+      # /approved; otherwise the re-triggered workflow will no-op and the
+      # stall recovery loops forever.
+      gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
 /approved
