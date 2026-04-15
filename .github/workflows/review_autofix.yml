@@ -2158,7 +2158,19 @@ jobs:
           # "Untracked working tree file … would be overwritten by merge."
           git clean -ffdx 2>/dev/null || true
 
-          git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || true
+          # Capture the merge exit code explicitly rather than swallowing
+          # it with `|| true`.  We must distinguish:
+          #   exit 0   — merge succeeded (base advanced, no conflicts left)
+          #              or already-up-to-date
+          #   exit 1   — merge produced content conflicts (expected path)
+          #   exit 128 — merge aborted before entering merge state (dirty
+          #              tree, missing ref, corrupt index, etc.) — SHOULD
+          #              be impossible because we reset the tracked-file
+          #              state at the top of this step, but if it ever
+          #              happens we must surface it instead of silently
+          #              running Codex against an empty conflict set.
+          _merge_exit=0
+          git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || _merge_exit=$?
 
           # Capture the set of actually-unmerged paths produced by this
           # merge replay.  This is the authoritative allowlist the Codex
@@ -2172,37 +2184,57 @@ jobs:
           RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
           git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
           _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
-          echo "Resolver allowlist (unmerged paths at merge replay): ${_resolver_allowlist_count} entries"
+          echo "Resolver allowlist (unmerged paths at merge replay): ${_resolver_allowlist_count} entries (git merge exit=${_merge_exit})"
           if [ "${_resolver_allowlist_count}" -gt 0 ]; then
             sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
           fi
 
-          # If the merge replay produced no unmerged paths AND left no
-          # merge in progress, there is nothing for Codex to resolve.
-          # This happens when the base branch advanced and the conflict
-          # was resolved upstream between the detect step and this step,
-          # or when git merge failed before entering merge state (e.g.
-          # exit 128 from an untracked/dirty working tree that the reset
-          # above could not fully clean).  Running Codex against an empty
-          # conflict set is how past runs have produced hallucinated
-          # edits to placeholder markers inside prompts/conflict-resolver.txt
-          # — the only file in the tree whose content resembles conflict
-          # markers.  Short-circuit instead: restore the stashed workflow
-          # dirs so later steps keep their environment, reset any partial
-          # merge artefacts, clear MERGE_CONFLICT so the second half of
-          # this split step (and downstream gates that key off it) treat
-          # the conflict as no longer present, and exit 0.
-          if [ "${_resolver_allowlist_count}" -eq 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
-            echo "::warning::Merge replay produced no unmerged paths and no merge is in progress — skipping Codex resolver (nothing to resolve)."
-            for d in scripts .serena prompts ai-memory; do
-              if [ -d "${RESOLVE_STASH}/${d}" ]; then
-                cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
+          # When the allowlist is empty there is nothing for Codex to
+          # resolve.  Running Codex against an empty conflict set is how
+          # past runs have produced hallucinated edits to placeholder
+          # markers inside prompts/conflict-resolver.txt — the only file
+          # in the tree whose content resembles conflict markers.  Two
+          # sub-cases, distinguished by the merge exit code:
+          #
+          #   1. _merge_exit == 0: the merge either succeeded cleanly
+          #      (base advanced and the conflict was resolved upstream
+          #      between the detect step and this step, or the merge
+          #      auto-resolved the textual conflict) or reported
+          #      "Already up-to-date".  In both cases there is nothing
+          #      real to resolve, even if MERGE_HEAD is still present
+          #      because --no-commit left the merge state around.  Abort
+          #      the in-progress merge to clear MERGE_HEAD, restore the
+          #      stashed workflow dirs so later steps still have their
+          #      environment, clear MERGE_CONFLICT so the second half of
+          #      this split step (and downstream gates keyed off it)
+          #      treat the conflict as no longer present, and exit 0.
+          #
+          #   2. _merge_exit != 0: the merge failed for a non-conflict
+          #      reason — dirty tree, missing ref, corrupt index, etc.
+          #      We must NOT clear MERGE_CONFLICT here: that would let
+          #      the workflow silently continue as if the conflict were
+          #      resolved.  Fail loudly with an error annotation and
+          #      dump diagnostics so the root cause is visible.
+          if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+            if [ "${_merge_exit}" -eq 0 ]; then
+              echo "::warning::Merge replay produced no unmerged paths (git merge exit=0) — skipping Codex resolver (nothing to resolve)."
+              if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+                git merge --abort 2>/dev/null || true
               fi
-            done
-            rm -rf "${RESOLVE_STASH}"
-            git reset --hard HEAD 2>/dev/null || true
-            echo "MERGE_CONFLICT=false" >> "$GITHUB_ENV"
-            exit 0
+              for d in scripts .serena prompts ai-memory; do
+                if [ -d "${RESOLVE_STASH}/${d}" ]; then
+                  cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
+                fi
+              done
+              rm -rf "${RESOLVE_STASH}"
+              git reset --hard HEAD 2>/dev/null || true
+              echo "MERGE_CONFLICT=false" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "::error::Merge replay failed with exit ${_merge_exit} before producing any unmerged paths. The clean-tree reset at the top of this step did not yield a tree git could merge — investigate. Diagnostics:"
+            git status --porcelain 2>/dev/null || true
+            git ls-files --others --exclude-standard 2>/dev/null | head -20 || true
+            exit 1
           fi
 
           # Defensive: `git merge --no-commit` auto-stages merged hunks (and
