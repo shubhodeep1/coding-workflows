@@ -2287,7 +2287,7 @@ sync_validation_fix_issues_from_comments() {
   local new_fix_issues_json
   local new_fix_count
 
-  latest_fix_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select(.body | startswith("## 🧪 Runtime validation found fixable issues"))] | last // empty')"
+  latest_fix_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select((.body // "") | startswith("## 🧪 Runtime validation found fixable issues"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty')"
   if [ -z "${latest_fix_comment_json}" ]; then
     return 0
   fi
@@ -3880,7 +3880,8 @@ extract_recommended_answers() {
           ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required"))
         )
     ]
-    | if length > 0 then .[0].body // "" else "" end
+    | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)])
+    | .body // ""
   ')"
 
   if [ -z "${clarify_body}" ]; then
@@ -4333,7 +4334,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       # "Runtime validation failed", "Runtime validation harness error",
       # "Runtime validation infeasible", or "Runtime validation found fixable issues").
       VALIDATION_FAIL_BODY="$(echo "${COMMENTS}" | jq -r '
-        [.[] | select(.body | test("## [❌🧪⚠️]+ Runtime validation"))] | last | .body // ""
+        [.[] | select((.body // "") | test("## [❌🧪⚠️]+ Runtime validation"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) | .body // ""
       ')"
       if [ -n "${VALIDATION_FAIL_BODY}" ] && [ "${VALIDATION_FAIL_BODY}" != "" ]; then
         mark_validation_failed "${VALIDATION_FAIL_BODY}"
