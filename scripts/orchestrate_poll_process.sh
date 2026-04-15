@@ -5861,6 +5861,19 @@ sys.exit(1)
               if [ -n "$(git status --porcelain)" ]; then
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
+                # `git add -u` with only negative pathspecs exits non-zero
+                # on newer git versions (observed with 2.53) when the index
+                # is empty — e.g. test sandboxes whose base commit tracks
+                # no files — because git implicitly appends `.` as a
+                # positive pathspec and then errors on every pathspec that
+                # did not match. Under `set -euo pipefail` that aborts the
+                # whole poll run. Guard on a non-empty index so production
+                # checkouts still run the update and empty sandboxes
+                # silently fall through to the untracked-file add below.
+                _HAS_TRACKED_FILES=false
+                if [ -n "$(git ls-files | head -c1 2>/dev/null || true)" ]; then
+                  _HAS_TRACKED_FILES=true
+                fi
                 if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
                   # Use a single add call so empty/minimal repos do not fail on
                   # exclude-only pathspecs (e.g. ':!node_modules').
@@ -5870,6 +5883,7 @@ sys.exit(1)
                   # tracked/untracked split staging pathspec failures.
                   git add -A -- . ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
                 fi
+                unset _HAS_TRACKED_FILES
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
                 if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/)'; then
