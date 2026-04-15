@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue `harden-followup-pr-base-guard-and-add-regression-tests`\n\nClarification interpretation:\n- No Q<ID> items were asked in Clarify.\n- `/answer [auto-answered-by-clarify]` means proceed with the full issue scope exactly as written.\n\n1. Files likely to change\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_poll_process.py`\n\n2. Functions/modules to implement\n- In `scripts/orchestrate_poll_process.sh`, update the review-blocked merged-follow-up path (the `RB_ACTION=fix` branch around follow-up base computation and `gh pr create`):\n- Add a state-backed integration-context derivation from current tracking `STATE_FILE` using `.integration_branch` plus `integration_branch_exists`.\n- Keep `resolve_active_orchestrator_context_for_issue` as supplemental context, but make safety guard independent from `ORCH_FOLLOWUP_OWNED` resolution success.\n- Before `gh pr create`, enforce: if active integration context exists and computed `BASE_REF` is `main` or the repo default branch, refuse follow-up PR creation.\n- Refusal must emit warning + tracking comment + Telegram warning, and stay on a code path that increments `review_blocked_retries`.\n- Preserve current behavior when no active integration context exists (default-base follow-up remains allowed).\n\n3. Data structures affected\n- No schema changes.\n- Reads from tracking state: `.integration_branch`.\n- Existing state bookkeeping updated on refusal path:\n- `.review_blocked_retries[<issue>]` incremented.\n- `REVIEW_BLOCKED_STATE_CHANGED=true` so state comment persists.\n\n4. API/interface changes\n- No external API contract changes.\n- Internal behavioral change:\n- Orchestrator-owned merged follow-up PRs are blocked from targeting default/main when integration context is active, even if orchestrator-context API resolution fails open.\n- Non-orchestrator/no-integration-context path remains unchanged.\n\n5. Potential risks and edge cases\n- Must compare against both `DEFAULT_BRANCH` and literal `main` to satisfy \u201cmain/default\u201d requirement.\n- Avoid false blocking when `.integration_branch` is empty (non-orchestrator behavior must continue).\n- Ensure refusal path does not `continue` before retry increment/state persistence.\n- Branch existence check currently fails open on transient API errors; this is acceptable for safety because it still avoids default-base targeting by preferring integration branch.\n\n6. Testing considerations (deterministic, behavioral)\n- Extend `_run_poller` harness in `tests/test_orchestrate_poll_process.py` only as needed to exercise real follow-up creation paths:\n- Add a deterministic way for mocked fix execution to produce a commit (so merged follow-up creation path executes).\n- Add a deterministic way to simulate context-resolution failure during follow-up resolution (without breaking initial tracking-state load), to reproduce old fail-open behavior.\n- Add new behavioral tests:\n- Merged follow-up retargets base to integration branch when integration context is active.\n- Merged follow-up is refused when integration context exists but integration branch is unavailable/invalid; assert no follow-up PR is created against main/default.\n- When no integration context exists, follow-up PR creation against default base remains allowed.\n- Refusal path increments `review_blocked_retries`.\n- Regression gate:\n- Keep existing superseded-sync dedupe tests green.\n- Run full `tests/test_orchestrate_poll_process.py` after adding cases.\n\nConflict check against codebase:\n- No factual contradiction found.\n- Current code already has partial guards, but they are gated by `ORCH_FOLLOWUP_OWNED`; this matches the reported fail-open gap when that resolution path fails.\n\nReply `/approved` to start implementation, or `/reclarify` if you want adjustments to this plan.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f9b503dfaba553a4c3390861cba8e6e98e04b897d14d284c266c5f8914782110",
+  "lineage": {
+    "issue_number": 990,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24432356354",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24432356354",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/990"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415020504_40659f5e22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 990,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24432356354"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #990",
+  "timestamps": {
+    "created_at": "2026-04-15T02:05:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
