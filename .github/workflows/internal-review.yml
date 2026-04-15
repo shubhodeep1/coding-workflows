@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   review:
-    uses: ./.github/workflows/review_autofix.yml
+    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@main
     with:
       pr_number: ${{ github.event.inputs.pr_number || '' }}
       pr_is_draft: >-
