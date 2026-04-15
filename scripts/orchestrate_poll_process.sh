@@ -5342,6 +5342,10 @@ ${FOLLOWUP_BLOCK_REASON}"
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
         echo "::warning::Review-blocked judge failed for issue #${rb_issue}"
         tg_notify "Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+        # Reset worktree + switch back to default branch if we entered
+        # combined mode — otherwise the next rb_issue iteration could
+        # fail to check out its target branch.
+        rb_cleanup_combined_workspace
         continue
       fi
 
@@ -5385,6 +5389,7 @@ sys.exit(1)
 
       if [ -z "${RB_JUDGE_JSON}" ]; then
         echo "::warning::Could not parse review-blocked judge output for #${rb_issue}"
+        rb_cleanup_combined_workspace
         continue
       fi
 
@@ -5547,14 +5552,19 @@ sys.exit(1)
             # the race-check fetch right above us. In that case we skip
             # commit/push this tick; the next tick sees the merged state
             # at the top of the loop and prep runs the merged-path
-            # (follow-up branch) cleanly. One retry is "wasted" on the
-            # race, which is acceptable.
+            # (follow-up branch) cleanly.
+            #
+            # No fix is applied in this path, so skip the retry-counter
+            # increment below — an external merge race must not consume
+            # a review-blocked retry slot.
+            RB_SKIP_RETRY_INCREMENT="false"
             if [ "${RB_COMBINED_MODE}" = "true" ] \
                && [ "${RB_TARGET_MERGED}" != "true" ] \
                && [ "${RB_PR_MERGED_NOW}" = "true" ]; then
               echo "::warning::Race detected: PR #${RB_PR} merged during combined judge call (prepped as open, now merged). Deferring fix application to the next poll tick."
               rb_cleanup_combined_workspace
               REVIEW_BLOCKED_STATE_CHANGED=true
+              RB_SKIP_RETRY_INCREMENT="true"
             elif [ "${RB_COMBINED_MODE}" != "true" ]; then
               echo "::warning::Combined-mode branch prep did not succeed for PR #${RB_PR}; cannot apply judge fixes this tick."
               git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
@@ -5717,10 +5727,13 @@ ${RB_FIX_DESC}
               git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
             fi
 
-            # Increment retry counter
-            jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
-              "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-            REVIEW_BLOCKED_STATE_CHANGED=true
+            # Increment retry counter (skipped when the merge-race path
+            # above deferred the fix without applying anything).
+            if [ "${RB_SKIP_RETRY_INCREMENT:-false}" != "true" ]; then
+              jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
+                "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+              REVIEW_BLOCKED_STATE_CHANGED=true
+            fi
           fi
           fi
           ;;
@@ -5787,6 +5800,7 @@ ${RB_FIX_DESC}
 
         *)
           echo "::warning::Unknown review-blocked judge action: ${RB_ACTION}"
+          rb_cleanup_combined_workspace
           ;;
       esac
     done < <(echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "review-blocked") | .github_issue')
@@ -6167,7 +6181,6 @@ Manual intervention required." >/dev/null
   #     tokens for mature projects).
   MERGED_PR_SUMMARIES=""
   OPEN_PR_SUMMARIES=""
-  ISSUE_MAP="$(jq -r '.issue_number_map // {}' "${STATE_FILE}")"
   _sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"
   for inum in ${_sorted_issue_nums}; do
     [ -n "${inum}" ] || continue

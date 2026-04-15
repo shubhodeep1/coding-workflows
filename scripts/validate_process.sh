@@ -1007,8 +1007,8 @@ fi
 #   1. .ai/validate.yml         — committed in consumer repo (authoritative)
 #   2. .ai/validate-hints-cache/hints.yml
 #                                — restored from GitHub Actions cache
-#                                  (written by a prior successful discover
-#                                  run in the same workspace)
+#                                  (written by a prior successful run in
+#                                  the same repo with a matching cache key)
 #   3. codex discover call      — LLM-driven discovery, last resort
 #
 # The cache path is restored by a `Restore validate hints cache` step in
@@ -1022,14 +1022,61 @@ fi
 VALIDATE_HINTS_CACHE_DIR="${VALIDATE_HINTS_CACHE_DIR:-.ai/validate-hints-cache}"
 VALIDATE_HINTS_CACHE_FILE="${VALIDATE_HINTS_CACHE_DIR}/hints.yml"
 
+# Lightweight sanity check for a hints file before reuse. Mirrors the
+# key-list validator the discover path applies to fresh codex output
+# (non-empty, size-capped, at least one expected top-level key). Used
+# to protect against a corrupted or poisoned cache entry silently
+# producing a broken harness. Returns 0 on pass, 1 on fail.
+validate_hints_sanity_check() {
+  local hints_file="$1"
+  [ -s "${hints_file}" ] || return 1
+  python3 - "${hints_file}" <<'PY' 2>/dev/null
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+try:
+    raw = path.read_text(encoding="utf-8", errors="replace")
+except Exception:
+    sys.exit(1)
+
+candidate = raw.strip()
+if not candidate:
+    sys.exit(1)
+
+if path.stat().st_size > 64 * 1024:
+    sys.exit(1)
+
+expected_key = re.compile(
+    r"^(type|entry|port|health_check|services|env_overrides|custom_tests|skip_tests):\s*",
+    re.IGNORECASE,
+)
+lines = [
+    line.lstrip()
+    for line in candidate.splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+]
+if not lines:
+    sys.exit(1)
+if not any(expected_key.match(line) for line in lines):
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
 if [ -f .ai/validate.yml ]; then
   cp .ai/validate.yml "${VALIDATE_HINTS_FILE}"
   HINTS_SOURCE="committed"
-elif [ -f "${VALIDATE_HINTS_CACHE_FILE}" ] && [ -s "${VALIDATE_HINTS_CACHE_FILE}" ]; then
+elif [ -f "${VALIDATE_HINTS_CACHE_FILE}" ] \
+  && validate_hints_sanity_check "${VALIDATE_HINTS_CACHE_FILE}"; then
   cp "${VALIDATE_HINTS_CACHE_FILE}" "${VALIDATE_HINTS_FILE}"
   HINTS_SOURCE="cache"
   echo "Reused validation hints from ${VALIDATE_HINTS_CACHE_FILE} (skipped codex discovery)."
 else
+  if [ -f "${VALIDATE_HINTS_CACHE_FILE}" ] && [ -s "${VALIDATE_HINTS_CACHE_FILE}" ]; then
+    echo "::warning::Cached validation hints at ${VALIDATE_HINTS_CACHE_FILE} failed sanity checks; falling back to codex discovery." >&2
+  fi
 {
   cat "${STATIC_CONTEXT_FILE}"
   echo
