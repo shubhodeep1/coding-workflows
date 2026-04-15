@@ -254,13 +254,8 @@ jobs:
             echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
           fi
 
-      - name: Set orchestrator /reclarify reasoning effort
-        if: steps.clarify_route.outputs.is_orchestrator_managed == 'true' && steps.clarify_route.outputs.is_forced_reclarify == 'true'
-        run: |
-          set -euo pipefail
-          echo "MODEL_REASONING_EFFORT=${THINKING_LEVEL_CLARIFY_ORCHESTRATOR}" >> "$GITHUB_ENV"
-
       - name: Fetch issue comments
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -364,6 +359,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Build context file
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         run: |
           set -euo pipefail
           {
@@ -375,6 +371,7 @@ jobs:
           } > "${ISSUE_CONTEXT_FILE}"
 
       - name: Create Codex config
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         run: |
           set -euo pipefail
           mkdir -p ~/.codex
@@ -399,6 +396,7 @@ jobs:
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Setup Serena MCP server
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         env:
           SERENA_VERSION: ${{ vars.SERENA_VERSION || 'main' }}
           SERENA_LANGUAGES: ${{ vars.SERENA_LANGUAGES || '' }}
@@ -412,6 +410,7 @@ jobs:
           bash scripts/setup_serena.sh --mode planning --context codex
 
       - name: Pre-assemble static context (cacheable across runs)
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         run: |
           set -euo pipefail
 
@@ -478,6 +477,7 @@ jobs:
           echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
 
       - name: Retrieve memory context
+        if: steps.clarify_route.outputs.skip_codex != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -495,14 +495,14 @@ jobs:
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
 
       - name: Install Redis Python client
-        if: vars.SEMANTIC_CACHE_BACKEND == 'redis'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis'
         continue-on-error: true
         run: |
           set -euo pipefail
           python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
 
       - name: Restore semantic cache SQLite
-        if: vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
@@ -551,6 +551,12 @@ jobs:
               echo "::warning::Semantic cache lookup fail-open: $(jq -r '.error // "unknown_error"' "${LOOKUP_JSON}")"
             fi
           fi
+
+      - name: Set orchestrator /reclarify reasoning effort
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.clarify_route.outputs.is_orchestrator_managed == 'true' && steps.clarify_route.outputs.is_forced_reclarify == 'true'
+        run: |
+          set -euo pipefail
+          sed -i -E "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${THINKING_LEVEL_CLARIFY_ORCHESTRATOR}\"/" ~/.codex/config.toml
 
       - name: Run Codex
         id: run_codex
@@ -789,7 +795,7 @@ jobs:
           path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Write run summary
-        if: always()
+        if: always() && steps.clarify_route.outputs.skip_codex != 'true'
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_CLARIFY || '80000' }}
         run: |
@@ -959,7 +965,7 @@ jobs:
 
           # Orchestrator-managed issues: skip TG alert.
           # Non-orchestrator issues: use phase tracking (cleaned up when plan starts).
-          if [ "${{ steps.clarify_route.outputs.is_orchestrator_managed }}" = "true" ]; then
+          if [ "${{ steps.clarify_route.outputs.is_orchestrator_managed }}" = "true" ] && [ "${{ steps.clarify_route.outputs.is_forced_reclarify }}" != "true" ]; then
             echo "Skipping TG alert for orchestrator-managed issue (will be auto-answered)."
           else
             tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "CRITICAL"
