@@ -156,13 +156,13 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Stall recovery controls include `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`): legacy autonomous ladder remains default; stall-judge `escalate_human` outputs are terminalization-gated to the non-human fallback action unless explicitly enabled.
 - Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
 - Implementation no-op reissue cap: `MAX_IMPL_NOOP_REISSUES` (default `2`) limits automatic re-issues for `ai:implementation-failed` before the poller closes the issue and lets the judge verify whether work is already present.
-- Post-Codex in-place repair retries: `MAX_POST_CODEX_REPAIR_ATTEMPTS` (default `1`) controls the in-job syntax-repair attempt cap in `implement.yml`; it must be a positive integer and invalid values fallback to `1`.
+- Post-Codex in-place repair retries: `MAX_POST_CODEX_REPAIR_ATTEMPTS` (default `1`) controls the in-job syntax-repair attempt cap in `implement.yml`; it must be a non-negative integer (`0` disables repair) and invalid values fallback to `1`.
 - GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
 
 ## 4a. Post-Codex Recovery Docs Sync
 
 - Recovery order for implementation failures must stay documented as: (1) syntax/step failure capture, (2) in-place repair attempt layer (`MAX_POST_CODEX_REPAIR_ATTEMPTS`-capped), (3) #829 diagnose/fix-up fallback, (4) poller handling of `ai:implementation-failed` reissue/closure (capped by `MAX_IMPL_NOOP_REISSUES`).
-- Current branch reality: step (2) is implemented and consumed by `implement.yml`; docs must keep the positive-integer validation/fallback semantics aligned with runtime behavior.
+- Current branch reality: step (2) is implemented and consumed by `implement.yml`; docs must keep the non-negative-integer validation/fallback semantics (including `0` disable mode) aligned with runtime behavior.
 - Implement diagnose fix-up issues use metadata type `implement-fix-up (post-codex-validation)` and enter pipeline via `ai:clarification`; an additive `ai:implement-fix-up` label is also applied for operations visibility.
 - `fix_issues[].depends_on` is additive metadata from diagnose output; `implement.yml` maps local IDs to created issue numbers via dependency-note comments. Poller state updates for implementation-failed reissues are additive (`waves[].issues[].github_issue`, `issue_number_map`) and backward-compatible with older state missing `impl_noop_count` (treated as `0`).
 - Out-of-scope failures (for example missing/empty post-Codex capture artifacts) must remain on the legacy generic failure path; do not document them as part of the targeted fix-up lane.
