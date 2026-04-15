@@ -171,6 +171,34 @@ class TestHardhatRpcProbe(unittest.TestCase):
                 f"{fname} must include 'type == \"object\"' guard in JSON-RPC pattern",
             )
 
+    def test_prompt_files_contain_graceful_shutdown_anti_137_guidance(self) -> None:
+        """Verify prompt contract enforces root-cause graceful shutdown fixes."""
+        from pathlib import Path
+
+        prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
+        for fname in ("mode-validate-generate.txt", "mode-validate-fix-harness.txt"):
+            content = (prompts_dir / fname).read_text(encoding="utf-8")
+            self.assertIn(
+                "accept exit code 137",
+                content,
+                f"{fname} must forbid accepting exit code 137 as graceful",
+            )
+            self.assertIn(
+                "exec-form",
+                content,
+                f"{fname} must require exec-form CMD/ENTRYPOINT guidance",
+            )
+            self.assertIn(
+                "init: true",
+                content,
+                f"{fname} must include init: true fallback guidance",
+            )
+            self.assertIn(
+                "PID 1",
+                content,
+                f"{fname} must reference PID 1 signal-forwarding behavior",
+            )
+
     def test_validate_generate_prompt_contract_scoped_to_repo_artifacts(self) -> None:
         """Ensure generate prompt only asks for per-repo artifacts and test-script contract."""
         from pathlib import Path
