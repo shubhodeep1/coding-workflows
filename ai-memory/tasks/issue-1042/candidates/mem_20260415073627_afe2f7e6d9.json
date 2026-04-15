@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nInterpreted clarification answer mapping:\n- `Q1: B` \u2014 plan against the current `in_progress` wave-advance logic in `scripts/orchestrate_poll_process.sh`.\n\nCodebase conflicts to flag up front:\n- `ENABLE_CLEAN_WAVE_JUDGE_SKIP` is not present in this repository today.\n- `.pending_issue_defs | length` exists in judge prompt context output, not as an active clean-wave eligibility gate.\n- A dangling comment references `PENDING_IN_WAVE` guard, but no active `PENDING_IN_WAVE` variable/guard exists.\n\nImplementation plan:\n\n1. Files likely to change\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_poll_process.py`\n\n2. Core module/function changes\n- In `scripts/orchestrate_poll_process.sh`, add a pre-judge \u201cclean-wave mechanical advance\u201d path in the main tracking loop (before judge invocation).\n- Reuse the existing wave-advance mechanics already implemented in the `JUDGE_STATUS=in_progress` branch (current representative logic around wave increment + deferred issue creation).\n- Keep existing safety gates intact:\n  - block skip when `ANY_FAILED=true`\n  - block skip when `PROJECT_COMPLETE=true`\n  - block skip when stuck-wave path is active (`INVOKE_JUDGE_FOR_STUCK=true`)\n  - require clean-wave skip flag enabled\n- Replace any global `pending_issue_defs` length dependency with current-wave-scoped gating only (or remove that dependency entirely for eligibility).\n- Preserve behavior: when eligible, increment `judge_cycle` and advance `current_wave` without running judge.\n- Remove or fix stale `PENDING_IN_WAVE` comment to match real control flow.\n\n3. Data structures affected\n- Orchestrator state fields only (no schema change):\n  - `current_wave`\n  - `judge_cycle`\n  - `waves[].issues[].{id, github_issue, status}`\n  - `issue_number_map`\n  - `pending_issue_defs`\n\n4. API/interface changes\n- No external API changes.\n- No DB contract changes.\n- No env var contract expansion; use existing clean-wave skip flag contract as authoritative (conflict noted above).\n\n5. Risks and edge cases\n- Avoid consuming stall budget (`judge_stall_cycles`) during clean-wave mechanical advance.\n- Ensure no duplicate issue creation while dispatching next wave (`issue_number_map` dedupe must remain authoritative).\n- Preserve stuck-wave precedence over clean-wave skip.\n- Keep final-wave/project-complete behavior on judge path.\n- Ensure missing deferred definitions for next-wave issues keep existing warn-and-continue behavior.\n\n6. Testing considerations\n- Use existing representative test pattern: `test_in_progress_judge_advances_when_no_new_issues`.\n- Add/update tests in `tests/test_orchestrate_poll_process.py` for:\n  - clean-wave skip occurs even when `pending_issue_defs` contains only future-wave entries\n  - skip blocked when safety conditions fail:\n    - failed issue present\n    - stuck-wave invocation path\n    - flag disabled\n- Assert judge invocation vs non-invocation via tracking comments (`Judge Evaluation \u2014 Cycle` presence/absence) and state deltas (`current_wave`, `judge_cycle`).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "47bc468e029ae5de12e804117707becc48753a9f7d0cdda4c281cc4544930a12",
+  "lineage": {
+    "issue_number": 1042,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24441107977",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24441107977",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1042"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415073627_afe2f7e6d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1042,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24441107977"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1042",
+  "timestamps": {
+    "created_at": "2026-04-15T07:36:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
