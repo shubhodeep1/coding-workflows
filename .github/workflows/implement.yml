@@ -1075,6 +1075,9 @@ jobs:
           while IFS= read -r -d '' path; do
             printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"
           done < <(git diff --name-only --diff-filter=ACMR -z HEAD)
+          while IFS= read -r -d '' path; do
+            printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"
+          done < <(git ls-files --others --exclude-standard -z)
           sort -u "${INITIAL_CHANGED_FILE}" -o "${INITIAL_CHANGED_FILE}" || true
 
           : > "${CAPTURED_FILES_FILE}"
