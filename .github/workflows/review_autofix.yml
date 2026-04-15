@@ -2064,7 +2064,18 @@ jobs:
           # collide with files from origin/BASE_BRANCH during the merge.
           # First, explicitly remove known CI-generated files that may be
           # untracked in consumer repos (see "Detect merge conflicts" step).
-          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh 2>/dev/null || true
+          # Skipped on the workflow source repo, where these paths are
+          # tracked source files — removing them here would leave them
+          # missing for the rest of this step because the consumer-repo
+          # restore block below (git reset/checkout on 'scripts' etc.) is
+          # intentionally skipped when IS_WORKFLOW_SOURCE_REPO=true, and
+          # `git merge --no-commit` does not rewrite paths whose content
+          # is identical between HEAD and BASE.  Downstream
+          # check_workflow_script_refs.py then fails the [ai-merge-resolve]
+          # commit because the referenced scripts are missing from disk.
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
+            rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh 2>/dev/null || true
+          fi
           RESOLVE_STASH="$(mktemp -d)"
           for d in scripts .serena prompts ai-memory; do
             if [ -d "${d}" ]; then
