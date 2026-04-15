@@ -512,6 +512,8 @@ def test_post_codex_syntax_repair_step_contract() -> None:
 	assert "prompts/mode-implement-repair.txt" in repair_block
 	assert "scripts/validate_changed_files_syntax.sh" in repair_block
 	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS" in repair_block
+	assert "[ \"${max_attempts_raw}\" -lt 0 ]" in repair_block
+	assert "if [ \"${max_attempts}\" -eq 0 ]; then" in repair_block
 	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
 	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
 	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PYTHONDONTWRITEBYTECODE=1
+
 ERRORS=0
 
 CAPTURE_FILE="${CAPTURE_FILE:-}"
