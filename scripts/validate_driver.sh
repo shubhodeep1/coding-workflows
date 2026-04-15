@@ -47,8 +47,14 @@ load_env_file()
 			continue
 		fi
 		if [[ ! "${trimmed}" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
-			echo "validate_driver: ignoring unparseable ${env_path} line ${lineno}" >&2
-			continue
+			# Fail fast — matches the prior `source` under `set -e`
+			# behaviour. Silently skipping malformed lines would hide
+			# misconfigurations until an unrelated later step reported
+			# a missing env var. Print the offending line number and
+			# content so the failure is immediately actionable in the
+			# validate_driver_init log tail.
+			echo "validate_driver: ${env_path}:${lineno}: unparseable env_file line: ${line}" >&2
+			return 1
 		fi
 		key="${BASH_REMATCH[1]}"
 		value="${BASH_REMATCH[2]}"
