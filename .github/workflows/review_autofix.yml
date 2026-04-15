@@ -140,7 +140,7 @@ jobs:
           issue_nodes_json="$(gh api graphql \
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
-            -f number="${PR_NUMBER}" \
+            -F number="${PR_NUMBER}" \
             -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }' \
             --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
 
@@ -2712,7 +2712,7 @@ jobs:
           LINKED_ISSUES_JSON="$(gh_retry gh api graphql \
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
-            -f number="${PR_NUMBER}" \
+            -F number="${PR_NUMBER}" \
             -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
             --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null || echo '[]')"
           LINKED_ISSUES_JSON="$(printf '%s' "${LINKED_ISSUES_JSON}" | jq -c '.' 2>/dev/null || echo '[]')"
