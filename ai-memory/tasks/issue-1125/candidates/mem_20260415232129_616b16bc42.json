@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` questions were asked in clarify.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with the issue scope exactly as written.\u201d\n\nConflicts detected between issue text and current codebase:\n- `README.md` says `scripts/gh_helpers.sh` already exposes `gh_issue_timeline_with_cross_refs`, but the current `scripts/gh_helpers.sh` in this branch does not contain that function.\n- Acceptance says each target site drops from 3 REST calls to 1 GraphQL call; in `scripts/review_rb_judge.sh`, metadata is currently read from `PR_META_FILE`, so this script currently has 2 direct REST fetches for comment context (not 3) at this layer.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/gh_helpers.sh`\n- `scripts/orchestrate_poll_process.sh`\n- `scripts/review_rb_judge.sh`\n- `scripts/compare_issue_timeline_parity.sh`\n- `scripts/fixtures/issue-timeline/*` or a new sibling fixture set for PR-comments parity (to keep H3 fixtures intact)\n- `README.md` (H4 changelog entry + parity script notes)\n\n2. Functions/modules to implement\n- Add `gh_pr_with_all_comments owner repo pr_number` in `scripts/gh_helpers.sh`:\n  - GraphQL query includes:\n    - PR metadata: `title`, `body`, `headRefName`, `baseRefName`, `headRefOid`\n    - PR issue comments: `comments(first: 100)` with `author.login`, `body`, `createdAt`\n    - Reviews: `reviews(first: 50)` with nested `comments(first: 100)` including `author.login`, `path`, `line`, `body`\n    - `pageInfo.hasNextPage` for all three pagination points\n  - Transform GraphQL response in-helper into legacy consumer shapes.\n- Add internal REST fallback path (private helper) that reproduces current REST behavior exactly.\n- Fallback triggers:\n  - GraphQL call fails after retry budget\n  - GraphQL payload parse/transform failure\n  - Any `hasNextPage == true` on PR comments, reviews, or nested review comments\n- Emit fail-open warning with stable key on every fallback path:\n  - `::warning::rate_limit_audit_fallback ...`\n- Replace call-site fetch blocks with helper usage:\n  - `scripts/orchestrate_poll_process.sh` review-blocked context block\n  - `scripts/review_rb_judge.sh` PR context block\n- Keep downstream jq semantics unchanged by rehydrating existing vars from helper output:\n  - `PR_META` / `PR_META_JSON`\n  - `PR_COMMENTS`\n  - `PR_REVIEW_COMMENTS`\n\n3. Data structures affected\n- New helper output contract (single JSON object) should preserve existing shapes:\n  - `meta`: `{title, body, head_ref, base_ref, head_sha}`\n  - `comments`: `[{author, body, created_at}]`\n  - `review_comments`: `[{author, path, line, body}]`\n- Existing downstream consumers continue using the same per-variable shapes after extraction from this object.\n\n4. API/interface changes\n- New shell helper API:\n  - `gh_pr_with_all_comments <owner> <repo> <pr_number>`\n- No env-var additions required.\n- Add fixture-capture command comments adjacent to helper in `gh_helpers.sh` for:\n  - REST baseline capture\n  - GraphQL-normalized capture\n\n5. Potential risks and edge cases\n- Partial GraphQL data must never be mixed with REST data; fallback should switch fully to REST contract output.\n- Null authors (`author: null`) and nullable `line` values must preserve existing semantics.\n- Nested review comment pagination is per-review; any single overflowing review must trigger REST fallback.\n- Decision stability risk: ordering differences in comments/review-comments can influence judge prompts; parity normalization should enforce deterministic ordering.\n\n6. Testing considerations\n- Extend H3 manual parity script/fixtures to include PR context parity (REST vs GraphQL-normalized helper output).\n- Verify unchanged behavior at both call sites by replaying fixture data through existing judge/orchestrator paths.\n- Validate both modes:\n  - Within GraphQL limits: one GraphQL fetch for comment context per site\n  - Over limit (`hasNextPage=true`): exact REST-equivalent output and unchanged downstream decisions\n- Update `README.md` with H4 changelog entry documenting helper, fallback rules, warning key, and parity-check usage.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4b9e22c39d93eb058593a72c51ff76b3287056dc2b29b6c6ec5a4c951c8d709d",
+  "lineage": {
+    "issue_number": 1125,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24483142466",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24483142466",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1125"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415232129_616b16bc42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1125,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24483142466"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1125",
+  "timestamps": {
+    "created_at": "2026-04-15T23:21:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
