@@ -12,9 +12,9 @@ else
     script_ref="stable"
   fi
   mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-  if { gh api -H 'Accept: application/vnd.github.raw+json' \
+  if { gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
     "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || \
-     gh api -H 'Accept: application/vnd.github.raw+json' \
+     gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
       "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; } && \
     [ -s "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
     chmod +x "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
@@ -25,13 +25,13 @@ else
       local repo="$2"
       case "${label_name}" in
         ai:ready-to-merge)
-          gh label create "${label_name}" --repo "${repo}" --color "0e8a16" --description "PR review complete and ready to merge" 2>/dev/null || true
+          gh_retry gh label create "${label_name}" --repo "${repo}" --color "0e8a16" --description "PR review complete and ready to merge" 2>/dev/null || true
           ;;
         ai:closed)
-          gh label create "${label_name}" --repo "${repo}" --color "6a737d" --description "Linked PR closed without merge" 2>/dev/null || true
+          gh_retry gh label create "${label_name}" --repo "${repo}" --color "6a737d" --description "Linked PR closed without merge" 2>/dev/null || true
           ;;
         *)
-          gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
+          gh_retry gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
           ;;
       esac
     }
@@ -59,7 +59,7 @@ ensure_label_exists "ai:closed" "${REPOSITORY}"
 # -----------------------------------------------------------
 # Find linked issues for judge context
 # -----------------------------------------------------------
-ISSUE_NUMBERS="$(gh api graphql \
+ISSUE_NUMBERS="$(gh_retry gh api graphql \
   -f owner="${REPOSITORY%/*}" \
   -f name="${REPOSITORY#*/}" \
   -F number="${PR_NUMBER}" \
@@ -104,11 +104,11 @@ fi
 # -----------------------------------------------------------
 # Collect PR context for judge
 # -----------------------------------------------------------
-PR_DIFF="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+PR_DIFF="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
   -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
-PR_COMMENTS="$(gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+PR_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
   | jq -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null || echo "[]")"
-PR_REVIEW_COMMENTS="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" \
+PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" \
   | jq -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo "[]")"
 PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
 
@@ -280,7 +280,7 @@ JUDGE_COMMENT="## Review-Blocked Judge Decision
 
 **Remaining issues:** ${RB_REMAINING}"
 
-gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
   -f body="${JUDGE_COMMENT}" >/dev/null 2>&1 || true
 
 # -----------------------------------------------------------
@@ -294,7 +294,7 @@ case "${RB_ACTION}" in
     ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
     while IFS= read -r issue_number; do
       [ -n "${issue_number}" ] || continue
-      gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
+      gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
         --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' \
         --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' \
         --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' \
@@ -318,7 +318,7 @@ case "${RB_ACTION}" in
     _mergeable_sleep="${PR_MERGEABLE_POLL_SLEEP:-5}"
     _attempt=0
     while [ "${_attempt}" -lt "${_mergeable_attempts}" ]; do
-      _pr_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+      _pr_json="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
       PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed|merged' || echo "")"
       PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
       # Stop polling as soon as state is terminal or mergeability is known.
@@ -334,8 +334,8 @@ case "${RB_ACTION}" in
 
     if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
       if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-        gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
+        gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
+          || gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
       fi
     elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
       echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is."
@@ -355,17 +355,17 @@ case "${RB_ACTION}" in
       ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
       while IFS= read -r issue_number; do
         [ -n "${issue_number}" ] || continue
-        gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
+        gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
           --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' \
           --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' \
           --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' \
           --add-label 'ai:ready-to-merge' || true
       done <<< "${ISSUE_NUMBERS}"
 
-      PR_STATE="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+      PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-        gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
+        gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
+          || gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
       fi
 
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"
@@ -473,7 +473,7 @@ ${RB_FIX_DESC}"
           ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
-            gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
+            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
           done <<< "${ISSUE_NUMBERS}"
           echo "judge_handled=true" >> "$GITHUB_OUTPUT"
@@ -484,7 +484,7 @@ ${RB_FIX_DESC}"
         ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
         while IFS= read -r issue_number; do
           [ -n "${issue_number}" ] || continue
-          gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
+          gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
             --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
         done <<< "${ISSUE_NUMBERS}"
         echo "judge_handled=true" >> "$GITHUB_OUTPUT"
@@ -497,7 +497,7 @@ ${RB_FIX_DESC}"
     echo "Judge says close PR #${PR_NUMBER} and reissue."
 
     # Close the PR
-    gh pr close "${PR_NUMBER}" --repo "${REPOSITORY}" \
+    gh_retry gh pr close "${PR_NUMBER}" --repo "${REPOSITORY}" \
       --comment "Closed by review-blocked judge — the approach needs rework. A new issue will be created with refined guidance." \
       2>/dev/null || true
 
@@ -505,7 +505,7 @@ ${RB_FIX_DESC}"
     ensure_label_exists "ai:closed" "${REPOSITORY}"
     while IFS= read -r issue_number; do
       [ -n "${issue_number}" ] || continue
-      gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
+      gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
         --remove-label 'ai:review-blocked' --remove-label 'ai:done' \
         --add-label 'ai:closed' 2>/dev/null || true
     done <<< "${ISSUE_NUMBERS}"

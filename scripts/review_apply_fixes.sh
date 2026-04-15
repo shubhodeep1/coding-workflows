@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Source rate-limit-aware GH API helpers (provides gh_retry and the
+# Telegram admin alert on GH API rate-limit events). Fail-open if the
+# helper is absent.
+source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty before editor stage; using placeholder context."
@@ -456,7 +460,7 @@ while [ "${attempt}" -le 3 ]; do
       # PR state check — abort if PR was merged/closed (~every 2 min)
       wd_iter=$((wd_iter + 1))
       if [ $((wd_iter % 8)) -eq 0 ]; then
-        pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+        pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
         if [ "${pr_state}" != "open" ]; then
           echo "Editor aborted — PR #${PR_NUMBER} is ${pr_state} (attempt ${attempt})." >&2
           touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"

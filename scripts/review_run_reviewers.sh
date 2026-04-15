@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Source rate-limit-aware GH API helpers (provides gh_retry and the
+# Telegram admin alert on GH API rate-limit events). Fail-open if the
+# helper is absent.
+source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty; using placeholder context for this run."
@@ -24,7 +28,7 @@ fi
 # Safe to skip on local/manual invocation where PR_NUMBER or REPOSITORY are
 # unset — downstream watchdog polling remains the fallback.
 if [ -n "${PR_NUMBER:-}" ] && [ -n "${REPOSITORY:-}" ] && command -v gh >/dev/null 2>&1; then
-  preflight_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+  preflight_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
   if [ "${preflight_state}" != "open" ]; then
     echo "Pre-flight: PR #${PR_NUMBER} is ${preflight_state} — skipping reviewer fan-out."
     mkdir -p "${PREVIOUS_REVIEWS_DIR}"
@@ -701,7 +705,7 @@ run_reviewer() {
           # stdout on 403/429 rate-limit responses (--jq is not applied
           # to error bodies, so raw JSON leaks into the variable and
           # defeats the || echo "open" fallback).
-          pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+          pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
           if [ "${pr_state}" != "open" ]; then
             echo "Reviewer ${model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
             printf 'pr_closed_api' > "${wd_reason_file}"
