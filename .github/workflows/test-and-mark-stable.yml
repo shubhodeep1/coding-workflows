@@ -1172,6 +1172,22 @@ jobs:
             # iterate over null (null)" on any error-body document whose .jobs
             # key is missing. Always assign the fallback outside the command
             # substitution so the two outputs can't concatenate.
+            #
+            # Single source of truth for the schema predicate. Uses `jq -se`
+            # (slurp + exit-status) so multi-document input fails the
+            # predicate — without `-s`, `jq -e` evaluates each document
+            # independently and exits with the truthiness of the *last*
+            # document, so a multi-doc blob whose tail happens to satisfy
+            # the schema would pass through and break downstream
+            # `jq '.jobs | length'` with mixed-line output. Extracted into a
+            # helper so the outer retry and the indexing-delay recheck stay
+            # in lock-step.
+            _jobs_json_valid() {
+              printf '%s' "$1" \
+                | jq -se 'length == 1 and (.[0] | type == "object" and (.jobs | type == "array"))' \
+                >/dev/null 2>&1
+            }
+
             JOBS_JSON='{"jobs":[]}'
             for _attempt in 1 2 3; do
               if _JOBS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null); then
@@ -1182,18 +1198,11 @@ jobs:
               sleep 2
             done
             unset _JOBS_OUT
-            # Shape check: reject anything that isn't a single JSON object with
-            # a `.jobs` array. This catches (a) all-retries-failed with an empty
-            # JOBS_JSON, (b) error-body responses that happen to parse, and
-            # (c) any future accidental multi-doc concatenation.
-            # Use `jq -se` (slurp + exit-status) so multi-document input
-            # (concatenated objects) fails the predicate. Without `-s`,
-            # `jq -e` evaluates each document independently and exits with
-            # the truthiness of the *last* document, so a multi-doc blob
-            # whose tail happens to satisfy the schema would pass through
-            # and break downstream `jq '.jobs | length'` with mixed-line
-            # output.
-            if ! printf '%s' "$JOBS_JSON" | jq -se 'length == 1 and (.[0] | type == "object" and (.jobs | type == "array"))' >/dev/null 2>&1; then
+            # Shape check: reject anything that isn't a single JSON object
+            # with a `.jobs` array. Catches (a) all-retries-failed with an
+            # empty JOBS_JSON, (b) error-body responses that happen to parse,
+            # and (c) any future accidental multi-doc concatenation.
+            if ! _jobs_json_valid "$JOBS_JSON"; then
               JOBS_JSON='{"jobs":[]}'
             fi
 
@@ -1218,9 +1227,7 @@ jobs:
                   JOBS_JSON='{"jobs":[]}'
                 fi
                 unset _JOBS_OUT
-                # Slurp + length==1 (see outer retry comment) so multi-doc
-                # blobs don't pass the per-document evaluation of `jq -e`.
-                if ! printf '%s' "$JOBS_JSON" | jq -se 'length == 1 and (.[0] | type == "object" and (.jobs | type == "array"))' >/dev/null 2>&1; then
+                if ! _jobs_json_valid "$JOBS_JSON"; then
                   JOBS_JSON='{"jobs":[]}'
                 fi
                 TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
