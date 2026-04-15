@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` clarification questions were asked in this run.\n- `/answer [auto-answered-by-clarify]` means the issue was treated as fully specified, so planning can proceed without additional Q/A.\n\nImplementation plan:\n\n1. Files likely to change\n- `.github/workflows/orchestrate.yml`\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_poll_process.py` (to validate new label propagation on created issues)\n\n2. Functions/modules to update\n- Workflow step `Ensure orchestrator labels exist` in `.github/workflows/orchestrate.yml`:\n  - Add idempotent creation for:\n    - `ai:orchestrator-managed`\n    - `ai:orchestrator-validate-required`\n  - Keep existing `gh label create ... || true` style.\n- Workflow step `Create Wave 1 issues only` in `.github/workflows/orchestrate.yml`:\n  - Keep `--label ai:clarification`.\n  - Add `--label ai:orchestrator-managed`.\n- `scripts/orchestrate_poll_process.sh` issue-creation paths:\n  - Add `--label ai:orchestrator-managed` to orchestrator-authored child issue creations, alongside existing phase label behavior.\n  - Ensure label existence before create (same existing helper pattern) so create calls do not fail on missing labels.\n  - Update these orchestrator child creation paths:\n    - managed stall recovery reissue (`close_and_reissue`)\n    - deferred wave issue creation\n    - review-blocked reissue\n    - implementation-failed reissue\n    - judge fix-up issue creation\n    - judge addition issue creation\n    - next-wave pending definition creation\n  - Keep metadata footer and existing `ai:clarification` behavior unchanged.\n\n3. Data structures affected\n- GitHub Issue label sets for orchestrator-authored child issues (adds `ai:orchestrator-managed`).\n- No `ORCHESTRATOR_STATE_V1` shape/fields change.\n\n4. API/interface changes\n- External behavior change only: orchestrator-authored child issues now include `ai:orchestrator-managed` at creation time.\n- No env var, CLI, or schema contract changes required.\n\n5. Risks and edge cases\n- If `ai:orchestrator-managed` does not exist, `gh issue create --label ...` can fail; mitigation is explicit ensure-before-create in poller and idempotent creation in orchestrate workflow.\n- Avoid mislabeling standalone (non-orchestrator-managed) stall-recovery reissues as orchestrator-managed.\n- Preserve existing labels/semantics (`ai:clarification` and footer content) exactly.\n\n6. Testing considerations\n- Extend poller test harness mock for `gh issue create` to capture passed labels.\n- Add/adjust tests in `tests/test_orchestrate_poll_process.py` to verify orchestrator-created child issues include both:\n  - `ai:clarification`\n  - `ai:orchestrator-managed`\n- Add a guard test that standalone stall-recovery issue creation path is not incorrectly forced into orchestrator-managed labeling.\n- Run targeted tests:\n  - `python3 tests/test_orchestrate_poll_process.py`\n\nConflict detection:\n- The script has both orchestrator-managed and standalone issue creation/reissue paths. Requirement applies to orchestrator-authored child issues; standalone recovery paths should remain excluded to avoid incorrect routing.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "47204b77fe569872c9783c82364499f8e43cf15045d23e38e9bcd350e5bdc39b",
+  "lineage": {
+    "issue_number": 1021,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24437830594",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24437830594",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1021"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415052921_93e3ee19d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1021,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24437830594"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1021",
+  "timestamps": {
+    "created_at": "2026-04-15T05:29:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
