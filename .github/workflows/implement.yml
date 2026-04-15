@@ -529,14 +529,17 @@ jobs:
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           source scripts/label_helpers.sh
           # Reuse the issue snapshot fetched in "Fetch issue metadata"
-          # rather than re-hitting the API.  The previous step always
-          # runs under the same `SKIP_IMPLEMENT != 'true'` gate, so
-          # ${ISSUE_META_FILE} is guaranteed to exist here.  Falls back
-          # to a fresh API call on the off-chance the file is missing
-          # or unreadable, preserving the original behavior.
+          # rather than re-hitting the API.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it
+          # (partial write, truncated download, etc.) — under
+          # `set -euo pipefail` an unsuppressed jq failure would kill
+          # the whole step instead of degrading safely (Copilot review
+          # on PR #1044).
+          ISSUE_LABELS_JSON=""
           if [ -s "${ISSUE_META_FILE:-}" ]; then
-            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}")"
-          else
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
             ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
           fi
           # Refuse redispatch of any issue that previously tripped the
@@ -2157,12 +2160,16 @@ jobs:
           echo "handled=false" >> "$GITHUB_OUTPUT"
 
           # Reuse the cached issue snapshot when available — see the
-          # "Fetch issue metadata" step.  Failure paths can run after
-          # the cache has been written but should still degrade safely
-          # if it's missing, so fall back to the API on cache-miss.
+          # "Fetch issue metadata" step.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it
+          # (partial write, truncated download, etc.); the API path
+          # itself falls back to '[]' so the failure path still
+          # degrades safely.
+          ISSUE_LABELS_JSON=""
           if [ -s "${ISSUE_META_FILE:-}" ]; then
-            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || echo '[]')"
-          else
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
             ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
           fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementation-failed") != null' >/dev/null 2>&1; then
@@ -2219,10 +2226,14 @@ jobs:
           if [ -z "${ISSUE_BODY_FILE:-}" ] || [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
             ISSUE_BODY_FILE="${RUNTIME_DIR}/issue_body_from_api.txt"
             # Prefer the cached issue snapshot from "Fetch issue
-            # metadata" before re-hitting the API.
-            if [ -s "${ISSUE_META_FILE:-}" ] && jq -er '.body // ""' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null; then
-              :
-            else
+            # metadata" before re-hitting the API.  jq failure (e.g.
+            # truncated/partial file) falls through to the API path
+            # rather than killing the step under set -euo pipefail.
+            : > "${ISSUE_BODY_FILE}"
+            if [ -s "${ISSUE_META_FILE:-}" ]; then
+              jq -er '.body // ""' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null || : > "${ISSUE_BODY_FILE}"
+            fi
+            if [ ! -s "${ISSUE_BODY_FILE}" ]; then
               gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
             fi
           fi
@@ -2594,12 +2605,13 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           # Reuse the cached issue snapshot when available — see the
-          # "Fetch issue metadata" step.  Failure paths can run after
-          # the cache has been written but should still degrade safely
-          # if it's missing.
+          # "Fetch issue metadata" step.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it.
+          ISSUE_LABELS_JSON=""
           if [ -s "${ISSUE_META_FILE:-}" ]; then
-            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || echo '[]')"
-          else
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
             ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
           fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then

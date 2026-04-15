@@ -497,9 +497,18 @@ ensure_label_exists() {
 
   # Check if label already exists to avoid futile retries (gh label create
   # returns a non-zero exit code for existing labels, which is not transient).
+  #
+  # NOTE: this probe is intentionally a bare `gh api` (no gh_retry).  On
+  # the normal first-run path the label does not exist yet and the call
+  # returns HTTP 404 — gh_retry treats every non-rate-limit failure as a
+  # transient error and would burn ~31 s of exponential backoff
+  # (1+2+4+8+16) per missing label before falling through to the
+  # `gh label create` path.  Single-attempt is correct here because the
+  # follow-up `gh_retry gh label create` already absorbs any rate-limit
+  # / transient hit on the actual mutating call.
   local encoded_name
   encoded_name="$(printf '%s' "${label_name}" | jq -sRr @uri)"
-  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
     _ENSURED_LABELS_CACHE[${label_name}]=1
     return 0
   fi
@@ -514,7 +523,10 @@ ensure_label_exists() {
 
   # Creation can fail if another concurrent actor created the label first.
   # Cache only when a follow-up read confirms the label now exists.
-  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+  # Bare `gh api` for the same reason as the probe above — a 404 here
+  # means the label genuinely doesn't exist and retrying with backoff
+  # would only delay the caller.
+  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
     _ENSURED_LABELS_CACHE[${label_name}]=1
   fi
 }
@@ -4184,21 +4196,31 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
+    # `sync_validation_fix_issues_from_comments` has three exit paths:
+    #   (A) early return when no new fix comment is present — no state
+    #       or label mutation;
+    #   (B) new-fix-comment path — bumps `validation_last_fix_comment_id`
+    #       and calls `set_tracking_phase_label "ai:validation-fixing"`,
+    #       which removes other phase labels via the label contract;
+    #   (C) extractable-count == 0 path — calls `mark_validation_failed`
+    #       which mutates labels AND transitions status (in_progress or
+    #       failed) without touching `validation_last_fix_comment_id`.
+    #
+    # The previously-fetched TRACKING_LABELS is only stale on (B) and
+    # (C).  Detect (B) via the marker delta and (C) via any status
+    # change, then re-fetch.  Path (A) leaves both unchanged so the
+    # re-fetch is skipped — preserves the optimization without the
+    # correctness gap flagged in the Copilot review on PR #1044.
     _project_status_before_sync="${PROJECT_STATUS}"
+    _last_fix_comment_id_before="$(jq -r '.validation_last_fix_comment_id // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
     sync_validation_fix_issues_from_comments "${COMMENTS}"
     PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
-    # Only re-fetch tracking labels when the sync actually changed
-    # the orchestrator status — sync_validation_fix_issues_from_comments
-    # only mutates labels on the tracking issue (via
-    # set_tracking_phase_label) when it transitions the project to
-    # validation-fixing, which always shows up as a status change in
-    # STATE_FILE.  When status is unchanged the previously fetched
-    # TRACKING_LABELS is still authoritative and re-fetching is a
-    # wasted GitHub API call.
-    if [ "${PROJECT_STATUS}" != "${_project_status_before_sync}" ]; then
+    _last_fix_comment_id_after="$(jq -r '.validation_last_fix_comment_id // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    if [ "${_last_fix_comment_id_after}" != "${_last_fix_comment_id_before}" ] \
+      || [ "${PROJECT_STATUS}" != "${_project_status_before_sync}" ]; then
       TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
     fi
-    unset _project_status_before_sync
+    unset _project_status_before_sync _last_fix_comment_id_before _last_fix_comment_id_after
   fi
 
   if [ "${PROJECT_STATUS}" = "validating" ] || [ "${PROJECT_STATUS}" = "validation-fixing" ]; then
