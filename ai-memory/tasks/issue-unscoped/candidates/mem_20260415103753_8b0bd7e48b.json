@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/ai/label_contract.v1.json\n.github/workflows/implement.yml\nscripts/validate_process.sh\ntests/test_validate_process_fixup_labels.py\n\nLow confidence files (mentioned by 1 reviewer):\n.github/ai/label_contract.v1.json**\n.github/workflows/ci.yml\n.github/workflows/implement.yml**\nscripts/validate_driver.sh\nscripts/validate_driver.sh:56\nscripts/validate_process.sh\nscripts/validate_process.sh**\nscripts/validate_process.sh:~639\ntests/test_validate_process_fixup_labels.py**",
+  "fingerprint": "896bdc43ae45de26a30083a68805533a014d89d1cf9f39ad3ff593f1434bf045",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1051,
+    "run_id": "24442057115",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "24442057115",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415103753_8b0bd7e48b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1051,
+    "run_id": "24442057115"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T10:37:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
