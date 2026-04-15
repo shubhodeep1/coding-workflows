@@ -740,12 +740,10 @@ jobs:
                   --arg cycle "${CYCLE}" \
                   --arg max_cycles "${MAX_CYCLES}" \
                   --arg previous_clarify_comment_id "${PREVIOUS_CLARIFY_COMMENT_ID}" \
-                  --arg previous_answer_comment_id "${PREVIOUS_ANSWER_COMMENT_ID}" \
-                  --arg loop_break_comment_id "${LOOP_BREAK_COMMENT_ID}" \
-                  --arg loop_block_reason "${LOOP_REASON}" \
-                  '{
-                    clarify_hash: $clarify_hash,
-                    answer_hash: $answer_hash,
+                --arg previous_answer_comment_id "${PREVIOUS_ANSWER_COMMENT_ID}" \
+                --arg loop_break_comment_id "${LOOP_BREAK_COMMENT_ID}" \
+                --arg loop_block_reason "${LOOP_REASON}" \
+                  '({
                     clarify_comment_id: ($clarify_comment_id|tonumber),
                     cycle: ($cycle|tonumber),
                     max_cycles: ($max_cycles|tonumber),
@@ -754,7 +752,9 @@ jobs:
                     loop_break_comment_id: ($loop_break_comment_id|tonumber),
                     loop_blocked: true,
                     loop_block_reason: $loop_block_reason
-                  }')" >/dev/null || echo "::warning::Failed to record blocked-loop completion in processed-command ledger (fail-open)."
+                  }
+                  + (if ($clarify_hash | test("^[a-f0-9]{64}$")) then {clarify_hash: $clarify_hash} else {} end)
+                  + (if ($answer_hash | test("^[a-f0-9]{64}$")) then {answer_hash: $answer_hash} else {} end))')" >/dev/null || echo "::warning::Failed to record blocked-loop completion in processed-command ledger (fail-open)."
             fi
 
             {
@@ -795,15 +795,15 @@ jobs:
                 --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" \
                 --arg answer_comment_id "${ANSWER_COMMENT_ID}" \
                 --arg cycle "${CYCLE}" \
-                '{
-                  clarify_hash: $clarify_hash,
-                  answer_hash: $answer_hash,
+                '({
                   clarify_comment_id: ($clarify_comment_id|tonumber),
                   answer_comment_id: ($answer_comment_id|tonumber),
                   cycle: ($cycle|tonumber),
                   loop_blocked: false,
                   loop_block_reason: "none"
-                }')" >/dev/null || echo "::warning::Failed to record answered completion in processed-command ledger (fail-open)."
+                }
+                + (if ($clarify_hash | test("^[a-f0-9]{64}$")) then {clarify_hash: $clarify_hash} else {} end)
+                + (if ($answer_hash | test("^[a-f0-9]{64}$")) then {answer_hash: $answer_hash} else {} end))')" >/dev/null || echo "::warning::Failed to record answered completion in processed-command ledger (fail-open)."
           fi
 
           {
