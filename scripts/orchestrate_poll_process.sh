@@ -2824,8 +2824,16 @@ invoke_stall_judge() {
   local stall_minutes="$4"
   local local_id="${5:-}"
 
+  local fallback_recovery_count="${recovery_count}"
+  if [[ "${recovery_count}" =~ ^[0-9]+$ ]] \
+    && [[ "${STALL_JUDGE_TRIGGER_COUNT:-}" =~ ^[0-9]+$ ]] \
+    && [ "${STALL_JUDGE_TRIGGER_COUNT}" -gt 0 ] \
+    && [ "${recovery_count}" -ge "${STALL_JUDGE_TRIGGER_COUNT}" ]; then
+    fallback_recovery_count="$((STALL_JUDGE_TRIGGER_COUNT - 1))"
+  fi
+
   local fallback_action
-  fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+  fallback_action="$(recovery_action_for_phase "${phase}" "${fallback_recovery_count}")"
 
   local comments_issue_num="${issue_num}"
   if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
