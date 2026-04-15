@@ -195,7 +195,7 @@ jobs:
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
-          wf_source="${{ github.repository_owner }}/coding-workflows"
+          wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
@@ -207,7 +207,7 @@ jobs:
         id: checkout_support_source
         uses: actions/checkout@v5
         with:
-          repository: ${{ github.repository_owner }}/coding-workflows
+          repository: shubhodeep1/coding-workflows
           ref: ${{ env.SCRIPT_REF }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
@@ -218,7 +218,7 @@ jobs:
         continue-on-error: true
         uses: actions/checkout@v5
         with:
-          repository: ${{ github.repository_owner }}/coding-workflows
+          repository: shubhodeep1/coding-workflows
           ref: main
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
@@ -238,7 +238,7 @@ jobs:
         continue-on-error: true
         uses: actions/checkout@v5
         with:
-          repository: ${{ github.repository_owner }}/coding-workflows
+          repository: shubhodeep1/coding-workflows
           ref: main
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
@@ -248,7 +248,7 @@ jobs:
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
-          wf_source="${{ github.repository_owner }}/coding-workflows"
+          wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()

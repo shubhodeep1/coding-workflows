@@ -102,7 +102,7 @@ jobs:
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         run: |
           set -euo pipefail
-          wf_source="${{ github.repository_owner }}/coding-workflows"
+          wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
@@ -115,7 +115,7 @@ jobs:
         continue-on-error: true
         uses: actions/checkout@v5
         with:
-          repository: ${{ github.repository_owner }}/coding-workflows
+          repository: shubhodeep1/coding-workflows
           ref: ${{ env.SCRIPT_REF }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
@@ -125,7 +125,7 @@ jobs:
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.checkout_support_source.outcome == 'failure'
         uses: actions/checkout@v5
         with:
-          repository: ${{ github.repository_owner }}/coding-workflows
+          repository: shubhodeep1/coding-workflows
           ref: main
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
@@ -145,7 +145,7 @@ jobs:
         continue-on-error: true
         uses: actions/checkout@v5
         with:
-          repository: ${{ github.repository_owner }}/coding-workflows
+          repository: shubhodeep1/coding-workflows
           ref: main
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
@@ -155,7 +155,7 @@ jobs:
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         run: |
           set -euo pipefail
-          wf_source="${{ github.repository_owner }}/coding-workflows"
+          wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
 
           _fetched_scripts=()
