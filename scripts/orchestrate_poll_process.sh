@@ -2492,6 +2492,8 @@ recovery_action_for_phase() {
   local phase="$1"
   local recovery_count="$2"
 
+  [[ "${recovery_count}" =~ ^[0-9]+$ ]] || recovery_count="0"
+
   if [ "${recovery_count}" -ge "${MAX_STALL_RECOVERIES_PER_ISSUE}" ]; then
     echo "skip"
     return
