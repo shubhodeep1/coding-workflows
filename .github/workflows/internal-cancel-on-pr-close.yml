@@ -10,5 +10,5 @@ permissions:
 
 jobs:
   cancel:
-    uses: ./.github/workflows/cancel_on_pr_close.yml
+    uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@main
     secrets: inherit
