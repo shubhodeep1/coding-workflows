@@ -1,0 +1,35 @@
+{
+	"meta": {
+		"title": "H4 sample PR",
+		"body": "Sample body from REST baseline",
+		"head_ref": "ai/issue-1125",
+		"base_ref": "main",
+		"head_sha": "abc123def456"
+	},
+	"comments": [
+		{
+			"author": "reviewer-a",
+			"body": "Please add fallback coverage.",
+			"created_at": "2026-04-10T12:00:00Z"
+		},
+		{
+			"author": null,
+			"body": "System note",
+			"created_at": "2026-04-10T12:05:00Z"
+		}
+	],
+	"review_comments": [
+		{
+			"author": "reviewer-b",
+			"path": "scripts/gh_helpers.sh",
+			"line": 612,
+			"body": "Keep this fallback fail-open."
+		},
+		{
+			"author": null,
+			"path": "scripts/orchestrate_poll_process.sh",
+			"line": null,
+			"body": "Nit: compact this block"
+		}
+	]
+}

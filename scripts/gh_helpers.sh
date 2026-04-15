@@ -8,6 +8,7 @@
 #   gh_retry             — run a gh CLI command with rate-limit detection + retry
 #   gh_retry_to_file     — like gh_retry but captures stdout to a specified file
 #   gh_api_json_to_file  — like gh_retry_to_file but also validates JSON output
+#   gh_pr_with_all_comments — PR meta + issue comments + review comments (GraphQL-first)
 #   curl_gh_api          — run a curl command against GitHub API with retry
 #
 # Rate limit detection: on 403/429 "rate limit" responses the helper
@@ -510,6 +511,210 @@ gh_api_json_to_file()
 }
 
 # ---------------------------------------------------------------
+# _gh_pr_with_all_comments_rest — legacy REST parity fetch path.
+#
+# Emits JSON object:
+# {
+#   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
+#   "comments": [{"author", "body", "created_at"}],
+#   "review_comments": [{"author", "path", "line", "body"}]
+# }
+#
+# Manual fixture capture (H4 parity):
+#   source scripts/gh_helpers.sh
+#   _gh_pr_with_all_comments_rest OWNER REPO PR_NUMBER \
+#     > scripts/fixtures/issue-timeline/rest_pr_with_comments_fixture.json
+#   gh_pr_with_all_comments OWNER REPO PR_NUMBER \
+#     > scripts/fixtures/issue-timeline/graphql_pr_with_comments_fixture.json
+# ---------------------------------------------------------------
+_gh_pr_with_all_comments_rest()
+{
+	local owner="$1"
+	local repo="$2"
+	local pr_number="$3"
+	local preloaded_meta_json="${4:-}"
+	local repo_path="${owner}/${repo}"
+
+	local meta_json comments_json review_comments_json
+	if [ -n "${preloaded_meta_json}" ] && echo "${preloaded_meta_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		meta_json="$(echo "${preloaded_meta_json}" | jq -c '.' 2>/dev/null || echo '{}')"
+	else
+		meta_json="$(gh_retry gh api "repos/${repo_path}/pulls/${pr_number}" 2>/dev/null \
+			| jq -c '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null \
+			|| echo '{}')"
+	fi
+	comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/issues/${pr_number}/comments" 2>/dev/null \
+		| jq -c -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null \
+		|| echo '[]')"
+	review_comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/pulls/${pr_number}/comments" 2>/dev/null \
+		| jq -c -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null \
+		|| echo '[]')"
+
+	jq -cn \
+		--argjson meta "${meta_json}" \
+		--argjson comments "${comments_json}" \
+		--argjson review_comments "${review_comments_json}" \
+		'{meta: $meta, comments: $comments, review_comments: $review_comments}'
+}
+
+# ---------------------------------------------------------------
+# gh_pr_with_all_comments — GraphQL-first consolidated PR context.
+#
+# Inputs:
+#   gh_pr_with_all_comments <owner> <repo> <pr_number>
+#
+# Emits JSON object:
+# {
+#   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
+#   "comments": [{"author", "body", "created_at"}],
+#   "review_comments": [{"author", "path", "line", "body"}]
+# }
+#
+# Mandatory fail-open fallback to REST parity path when:
+# - GraphQL request fails after retry budget
+# - GraphQL payload has errors or transform fails
+# - Any pagination boundary is hit (`hasNextPage=true` for PR comments,
+#   reviews, or nested review comments)
+#
+# All fallback paths emit:
+#   ::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments ...
+# ---------------------------------------------------------------
+gh_pr_with_all_comments()
+{
+	local owner="$1"
+	local repo="$2"
+	local pr_number="$3"
+	local preloaded_meta_json="${4:-}"
+
+	local _fallback_reason=""
+	local _gql_file
+	local goto_fallback=0
+	if ! _gql_file=$(mktemp "${TMPDIR:-/tmp}/gh_pr_with_all_comments.XXXXXX" 2>/dev/null); then
+		_fallback_reason="mktemp_failed"
+		goto_fallback=1
+	fi
+
+	if [ "${goto_fallback:-0}" -eq 0 ]; then
+		local gql_query
+		gql_query='query($owner: String!, $name: String!, $number: Int!) {
+		repository(owner: $owner, name: $name) {
+			pullRequest(number: $number) {
+				title
+				body
+				headRefName
+				baseRefName
+				headRefOid
+				comments(first: 100) {
+					nodes {
+						author { login }
+						body
+						createdAt
+					}
+					pageInfo { hasNextPage }
+				}
+				reviews(first: 50) {
+					nodes {
+						comments(first: 100) {
+							nodes {
+								author { login }
+								path
+								line
+								body
+							}
+							pageInfo { hasNextPage }
+						}
+					}
+					pageInfo { hasNextPage }
+				}
+			}
+		}
+	}'
+
+		if ! gh_api_json_to_file "${_gql_file}" \
+			gh api graphql \
+			-f query="${gql_query}" \
+			-F owner="${owner}" \
+			-F name="${repo}" \
+			-F number="${pr_number}"; then
+			_fallback_reason="graphql_request_failed"
+			goto_fallback=1
+		fi
+	fi
+
+	if [ "${goto_fallback:-0}" -eq 0 ]; then
+		if ! jq -e '.errors | not or length == 0' "${_gql_file}" >/dev/null 2>&1; then
+			_fallback_reason="graphql_errors"
+			goto_fallback=1
+		fi
+	fi
+
+	if [ "${goto_fallback:-0}" -eq 0 ]; then
+		if ! jq -e '.data.repository.pullRequest != null' "${_gql_file}" >/dev/null 2>&1; then
+			_fallback_reason="graphql_missing_pr"
+			goto_fallback=1
+		fi
+	fi
+
+	if [ "${goto_fallback:-0}" -eq 0 ]; then
+		local has_next
+		has_next="$(jq -r '
+			.data.repository.pullRequest as $pr
+			| (
+				($pr.comments.pageInfo.hasNextPage // false)
+				or ($pr.reviews.pageInfo.hasNextPage // false)
+				or ([$pr.reviews.nodes[]?.comments.pageInfo.hasNextPage // false] | any)
+			)
+		' "${_gql_file}" 2>/dev/null || echo 'true')"
+		if [ "${has_next}" = "true" ]; then
+			_fallback_reason="graphql_has_next_page"
+			goto_fallback=1
+		fi
+	fi
+
+	if [ "${goto_fallback:-0}" -eq 0 ]; then
+		if jq -c '
+			.data.repository.pullRequest as $pr
+			| {
+				meta: {
+					title: ($pr.title // ""),
+					body: ($pr.body // ""),
+					head_ref: ($pr.headRefName // ""),
+					base_ref: ($pr.baseRefName // ""),
+					head_sha: ($pr.headRefOid // "")
+				},
+				comments: [
+					($pr.comments.nodes // [])[]
+					| {
+						author: (.author.login // null),
+						body: (.body // ""),
+						created_at: (.createdAt // null)
+					}
+				],
+				review_comments: [
+					($pr.reviews.nodes // [])[]
+					| (.comments.nodes // [])[]
+					| {
+						author: (.author.login // null),
+						path: (.path // null),
+						line: (.line // null),
+						body: (.body // "")
+					}
+				]
+			}
+		' "${_gql_file}"; then
+			rm -f "${_gql_file}"
+			return 0
+		fi
+		_fallback_reason="graphql_transform_failed"
+		goto_fallback=1
+	fi
+
+	rm -f "${_gql_file:-}"
+	echo "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments reason=${_fallback_reason:-unknown} owner=${owner} repo=${repo} pr=${pr_number}" >&2
+	_gh_pr_with_all_comments_rest "${owner}" "${repo}" "${pr_number}" "${preloaded_meta_json}"
+}
+
+# ---------------------------------------------------------------
 # curl_gh_api — curl wrapper with rate-limit retry for GitHub API.
 #
 # Captures HTTP status code.  On 429 or 403-with-rate-limit body,
@@ -570,224 +775,4 @@ curl_gh_api()
 	rm -f "${body_file}" "${header_file}"
 	echo "::error::GitHub API curl failed after ${max_attempts} attempts" >&2
 	return 1
-}
-
-_gh_issue_timeline_with_cross_refs_rest()
-{
-	local owner="$1"
-	local repo="$2"
-	local issue_number="$3"
-	local timeline_json
-	local pr_urls
-	local pr_url
-	local pr_json
-	local pr_lookup_json='{}'
-	local github_api_base="${GITHUB_API_URL:-https://api.github.com}"
-	github_api_base="${github_api_base%/}"
-	local pr_api_prefix="${github_api_base}/repos/${owner}/${repo}/pulls/"
-
-	if ! timeline_json="$(gh_retry gh api --paginate "repos/${owner}/${repo}/issues/${issue_number}/timeline" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
-		return 1
-	fi
-
-	pr_urls="$(printf '%s' "${timeline_json}" | jq -r '[.[] | select(.event == "cross-referenced" and (.source.issue.pull_request.url? | type == "string")) | .source.issue.pull_request.url] | unique | .[]?' 2>/dev/null || true)"
-	if [ -n "${pr_urls}" ]; then
-		while IFS= read -r pr_url; do
-			[ -n "${pr_url}" ] || continue
-			if [[ "${pr_url}" != "${pr_api_prefix}"* ]]; then
-				continue
-			fi
-			if pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)" && printf '%s' "${pr_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
-				pr_lookup_json="$(jq -c --arg url "${pr_url}" --argjson pr "${pr_json}" '. + {($url): {ok: true, number: ($pr.number // null), state: ($pr.state // null), merged_at: ($pr.merged_at // null), merged: (($pr.merged_at != null) or ($pr.merged == true))}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
-			else
-				pr_lookup_json="$(jq -c --arg url "${pr_url}" '. + {($url): {ok: false}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
-			fi
-		done <<< "${pr_urls}"
-	fi
-
-	printf '%s' "${timeline_json}" | jq -c --argjson pr_lookup "${pr_lookup_json}" --arg pr_api_prefix "${pr_api_prefix}" '
-		map(
-			if (.event == "cross-referenced") and (.source.issue.pull_request.url? | type == "string") then
-				.source.issue.pull_request.url as $url
-				| if ($url | startswith($pr_api_prefix) | not) then
-					.source.issue.pull_request = null
-				else
-					($pr_lookup[$url] // null) as $enrich
-					| if ($enrich != null) and ($enrich.ok == true) then
-						.source.issue |= (. + {
-							number: ($enrich.number // .number // null),
-							state: ($enrich.state // null),
-							merged_at: ($enrich.merged_at // null),
-							merged: ($enrich.merged // false),
-							lookup_failed: false
-						})
-					elif ($enrich != null) and ($enrich.ok == false) then
-						.source.issue |= (. + {
-							merged: false,
-							lookup_failed: true
-						})
-					else
-						.
-					end
-				end
-			else
-				.
-			end
-		)
-	' 2>/dev/null
-}
-
-# gh_issue_timeline_with_cross_refs emits the legacy timeline-event shape used
-# across jq consumers in scripts/orchestrate_poll_process.sh.
-#
-# Contract (array of event objects):
-# - `.event` (e.g. "cross-referenced", "closed")
-# - `.source.issue.number`
-# - `.source.issue.pull_request.url` (REST API URL when source is a PR, else null)
-# - additive PR enrichment fields for merged checks:
-#   `.source.issue.state`, `.source.issue.merged_at`, `.source.issue.merged`,
-#   `.source.issue.lookup_failed`
-#
-# Maintainer fixture capture (manual, replace OWNER/REPO/ISSUE):
-# - REST helper output (legacy enriched shape): . scripts/gh_helpers.sh && _gh_issue_timeline_with_cross_refs_rest OWNER REPO ISSUE > scripts/fixtures/issue-timeline/rest_timeline_fixture.json
-# - GraphQL helper output (GraphQL-first, fail-open to REST): . scripts/gh_helpers.sh && gh_issue_timeline_with_cross_refs OWNER REPO ISSUE > scripts/fixtures/issue-timeline/graphql_timeline_fixture.json
-gh_issue_timeline_with_cross_refs()
-{
-	local owner="$1"
-	local repo="$2"
-	local issue_number="$3"
-	local graphql_query
-	local graphql_json
-	local has_next_page
-	local transformed_json
-	local graphql_api_base="${GITHUB_API_URL:-https://api.github.com}"
-	graphql_api_base="${graphql_api_base%/}"
-
-	graphql_query='query($owner: String!, $repo: String!, $issue_number: Int!) {
-  repository(owner: $owner, name: $repo) {
-    issue(number: $issue_number) {
-      timelineItems(first: 100, itemTypes: [CROSS_REFERENCED_EVENT, CLOSED_EVENT]) {
-        pageInfo {
-          hasNextPage
-        }
-        nodes {
-          __typename
-          ... on CrossReferencedEvent {
-            source {
-              __typename
-              ... on PullRequest {
-                number
-                state
-                mergedAt
-                repository {
-                  name
-                  owner {
-                    login
-                  }
-                }
-              }
-              ... on Issue {
-                number
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}'
-
-	if ! graphql_json="$(gh_retry gh api graphql -f query="${graphql_query}" -f owner="${owner}" -f repo="${repo}" -F issue_number="${issue_number}" 2>/dev/null)"; then
-		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=graphql_failed owner=${owner} repo=${repo} issue=${issue_number}" >&2
-		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
-		return $?
-	fi
-
-	if ! printf '%s' "${graphql_json}" | jq -e '.data.repository.issue.timelineItems.nodes | type == "array"' >/dev/null 2>&1; then
-		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=graphql_payload_invalid owner=${owner} repo=${repo} issue=${issue_number}" >&2
-		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
-		return $?
-	fi
-
-	if printf '%s' "${graphql_json}" | jq -e '.errors? | (type == "array" and length > 0)' >/dev/null 2>&1; then
-		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=graphql_errors owner=${owner} repo=${repo} issue=${issue_number}" >&2
-		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
-		return $?
-	fi
-
-	has_next_page="$(printf '%s' "${graphql_json}" | jq -r '.data.repository.issue.timelineItems.pageInfo.hasNextPage // false' 2>/dev/null || echo "true")"
-	if [ "${has_next_page}" = "true" ]; then
-		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=timeline_has_next_page owner=${owner} repo=${repo} issue=${issue_number}" >&2
-		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
-		return $?
-	fi
-
-	if ! transformed_json="$(printf '%s' "${graphql_json}" | jq -c --arg api_base "${graphql_api_base}" --arg owner "${owner}" --arg repo "${repo}" '
-		def source_issue($source):
-			if ($source | type) != "object" then
-				{
-					number: null,
-					pull_request: null,
-					state: null,
-					merged_at: null,
-					merged: false,
-					lookup_failed: false
-				}
-			elif $source.__typename == "PullRequest" then
-				{
-					number: ($source.number // null),
-					pull_request: (
-					if ($source.number != null)
-						and ($source.repository.owner.login? != null)
-						and ($source.repository.name? != null)
-						and (($source.repository.owner.login | ascii_downcase) == ($owner | ascii_downcase))
-						and (($source.repository.name | ascii_downcase) == ($repo | ascii_downcase)) then
-						{url: ($api_base + "/repos/" + $owner + "/" + $repo + "/pulls/" + ($source.number | tostring))}
-					else
-							null
-						end
-					),
-					state: (
-						if ($source.state // null) == "OPEN" then "open"
-						elif (($source.state // null) == "CLOSED") or (($source.state // null) == "MERGED") then "closed"
-						else null
-						end
-					),
-					merged_at: ($source.mergedAt // null),
-					merged: (($source.mergedAt != null) or (($source.state // "") == "MERGED")),
-					lookup_failed: false
-				}
-			else
-				{
-					number: ($source.number // null),
-					pull_request: null,
-					state: null,
-					merged_at: null,
-					merged: false,
-					lookup_failed: false
-				}
-			end;
-
-		[
-			.data.repository.issue.timelineItems.nodes[]?
-			| if .__typename == "CrossReferencedEvent" then
-				{
-					event: "cross-referenced",
-					source: {
-						issue: source_issue(.source)
-					}
-				}
-			  elif .__typename == "ClosedEvent" then
-				{event: "closed"}
-			  else
-				empty
-			  end
-		]
-	' 2>/dev/null)"; then
-		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=graphql_transform_failed owner=${owner} repo=${repo} issue=${issue_number}" >&2
-		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
-		return $?
-	fi
-
-	printf '%s\n' "${transformed_json}"
 }

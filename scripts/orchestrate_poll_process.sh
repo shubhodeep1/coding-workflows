@@ -5862,11 +5862,18 @@ json.dump(result, sys.stdout)
       # Collect full PR context for the judge
       PR_DIFF="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
         -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
-      PR_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
-        | jq -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null || echo "[]")"
-      PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" \
-        | jq -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo "[]")"
-      PR_META="$(echo "${_rb_pr_json}" | jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
+      if type gh_pr_with_all_comments >/dev/null 2>&1; then
+        RB_PRELOADED_META="$(echo "${_rb_pr_json}" | jq -c '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo '{}')"
+        RB_PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
+      else
+        RB_PR_CONTEXT_JSON="$(jq -cn '{}')"
+      fi
+      PR_COMMENTS="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.comments // []' 2>/dev/null || echo "[]")"
+      PR_REVIEW_COMMENTS="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.review_comments // []' 2>/dev/null || echo "[]")"
+      PR_META="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.meta // {}' 2>/dev/null || echo "{}")"
+      if [ "${PR_META}" = "{}" ]; then
+        PR_META="$(echo "${_rb_pr_json}" | jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
+      fi
       ISSUE_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' || echo "")"
 
       # Determine if this is a final decision (retries exhausted) or a fix attempt

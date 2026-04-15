@@ -123,11 +123,18 @@ fi
 # -----------------------------------------------------------
 PR_DIFF="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
   -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
-PR_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-  | jq -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null || echo "[]")"
-PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" \
-  | jq -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo "[]")"
-PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
+if type gh_pr_with_all_comments >/dev/null 2>&1; then
+  PRELOADED_PR_META="$(jq -c '.' "${PR_META_FILE}" 2>/dev/null || echo '{}')"
+  PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
+else
+  PR_CONTEXT_JSON="$(jq -cn '{}')"
+fi
+PR_COMMENTS="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.comments // []' 2>/dev/null || echo "[]")"
+PR_REVIEW_COMMENTS="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.review_comments // []' 2>/dev/null || echo "[]")"
+PR_META_JSON="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.meta // {}' 2>/dev/null || echo "{}")"
+if [ "${PR_META_JSON}" = "{}" ]; then
+  PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
+fi
 
 # -----------------------------------------------------------
 # Build judge prompt

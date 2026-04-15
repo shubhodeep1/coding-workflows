@@ -1027,6 +1027,20 @@ Any workflow or script that routes GitHub API calls through `scripts/gh_helpers.
   - Fixtures: `scripts/fixtures/issue-timeline/rest_timeline_fixture.json` and `scripts/fixtures/issue-timeline/graphql_timeline_fixture.json`
   - The script compares jq-normalized parity for merged-evidence detection, cross-reference URL/number extraction, and latest-linked-PR (`| last`) selection.
 
+### H4 PR Comments GraphQL Shim
+
+- `scripts/gh_helpers.sh` now exposes `gh_pr_with_all_comments owner repo pr_number`.
+- The helper fetches PR metadata + issue comments + review comments in one GraphQL call (`pullRequest` + `comments(first:100)` + `reviews(first:50)` + nested review `comments(first:100)`), then reshapes to the legacy contract consumed by existing jq filters:
+  - `meta`: `{title, body, head_ref, base_ref, head_sha}`
+  - `comments`: `[{author, body, created_at}]`
+  - `review_comments`: `[{author, path, line, body}]`
+- Fail-open fallback is mandatory and implemented: on GraphQL request/parse/transform failure, or if any `hasNextPage=true` (PR comments, reviews, or nested review comments), the helper falls back to the legacy REST pagination path.
+- Every fail-open path emits a structured warning with stable key: `::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments ...`.
+- `scripts/orchestrate_poll_process.sh` and `scripts/review_rb_judge.sh` now use this helper for comment-context hydration while preserving downstream prompt JSON semantics.
+- Manual parity check (`scripts/compare_issue_timeline_parity.sh`) now also validates PR context parity using:
+  - `scripts/fixtures/issue-timeline/rest_pr_with_comments_fixture.json`
+  - `scripts/fixtures/issue-timeline/graphql_pr_with_comments_fixture.json`
+
 ## Runtime Validation Phase
 
 This phase starts only after the orchestrator judge returns `complete`.
