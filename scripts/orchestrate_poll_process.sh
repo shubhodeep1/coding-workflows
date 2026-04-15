@@ -748,21 +748,21 @@ validation_fix_issue_has_merged_pr_evidence() {
   if printf '%s' "${timeline_json}" | jq -e '
     [.[]
       | select(.event == "cross-referenced")
-      | select((.source.issue.lookup_failed // false) == true)
-    ]
-    | length > 0
-  ' >/dev/null 2>&1; then
-    return 2
-  fi
-
-  if printf '%s' "${timeline_json}" | jq -e '
-    [.[]
-      | select(.event == "cross-referenced")
       | select((.source.issue.pull_request.url? | type == "string") and ((.source.issue.merged // false) == true))
     ]
     | length > 0
   ' >/dev/null 2>&1; then
     return 0
+  fi
+
+  if printf '%s' "${timeline_json}" | jq -e '
+    [.[]
+      | select(.event == "cross-referenced")
+      | select((.source.issue.lookup_failed // false) == true)
+    ]
+    | length > 0
+  ' >/dev/null 2>&1; then
+    return 2
   fi
 
   return 1

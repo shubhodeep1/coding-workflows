@@ -641,7 +641,8 @@ _gh_issue_timeline_with_cross_refs_rest()
 # - `.source.issue.number`
 # - `.source.issue.pull_request.url` (REST API URL when source is a PR, else null)
 # - additive PR enrichment fields for merged checks:
-#   `.source.issue.state`, `.source.issue.merged_at`, `.source.issue.merged`
+#   `.source.issue.state`, `.source.issue.merged_at`, `.source.issue.merged`,
+#   `.source.issue.lookup_failed`
 #
 # Maintainer fixture capture (manual, replace OWNER/REPO/ISSUE):
 # - REST:    gh api --paginate "repos/OWNER/REPO/issues/ISSUE/timeline" | jq -s 'add // []' > scripts/fixtures/issue-timeline/rest_timeline_fixture.json
@@ -655,6 +656,8 @@ gh_issue_timeline_with_cross_refs()
 	local graphql_json
 	local has_next_page
 	local transformed_json
+	local graphql_api_base="${GITHUB_API_URL:-https://api.github.com}"
+	graphql_api_base="${graphql_api_base%/}"
 
 	graphql_query='query($owner: String!, $repo: String!, $issue_number: Int!) {
   repository(owner: $owner, name: $repo) {
@@ -715,7 +718,7 @@ gh_issue_timeline_with_cross_refs()
 		return $?
 	fi
 
-	if ! transformed_json="$(printf '%s' "${graphql_json}" | jq -c --arg api_base "${GITHUB_API_URL:-https://api.github.com}" --arg owner "${owner}" --arg repo "${repo}" '
+	if ! transformed_json="$(printf '%s' "${graphql_json}" | jq -c --arg api_base "${graphql_api_base}" --arg owner "${owner}" --arg repo "${repo}" '
 		def source_issue($source):
 			if ($source | type) != "object" then
 				{
@@ -730,8 +733,12 @@ gh_issue_timeline_with_cross_refs()
 				{
 					number: ($source.number // null),
 					pull_request: (
-					if ($source.number != null) and ($source.repository.owner.login? != null) and ($source.repository.name? != null) and ($source.repository.owner.login == $owner) and ($source.repository.name == $repo) then
-						{url: ($api_base + "/repos/" + $source.repository.owner.login + "/" + $source.repository.name + "/pulls/" + ($source.number | tostring))}
+					if ($source.number != null)
+						and ($source.repository.owner.login? != null)
+						and ($source.repository.name? != null)
+						and (($source.repository.owner.login | ascii_downcase) == ($owner | ascii_downcase))
+						and (($source.repository.name | ascii_downcase) == ($repo | ascii_downcase)) then
+						{url: ($api_base + "/repos/" + $owner + "/" + $repo + "/pulls/" + ($source.number | tostring))}
 					else
 							null
 						end
