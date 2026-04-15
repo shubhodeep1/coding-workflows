@@ -74,43 +74,7 @@
       "format": "date-time"
     },
     "metadata": {
-      "type": "object",
-      "properties": {
-        "clarify_hash": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-f0-9]+$"
-        },
-        "answer_hash": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-f0-9]+$"
-        },
-        "clarify_comment_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "auto_answer_comment_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "cycle": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "source": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 120
-        },
-        "kind": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 120
-        }
-      }
+      "type": "object"
     }
   }
 }
