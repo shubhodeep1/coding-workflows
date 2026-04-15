@@ -513,6 +513,9 @@ def list_processed_command_entries(
     ensure_memory_layout(memory_root)
     processed_dir = memory_root / "tasks" / f"issue-{int(issue_number)}" / "processed_commands"
     entries: list[dict[str, Any]] = []
+    command_filter = command.strip().lower() if command else None
+    workflow_filter = workflow.strip().lower() if workflow else None
+    status_filter = status.strip().lower() if status else None
     for entry_path in _iter_json_files(processed_dir):
         try:
             payload = _load_json(entry_path)
@@ -520,11 +523,11 @@ def list_processed_command_entries(
         except (MemoryValidationError, OSError, ValueError) as exc:
             _log.warning("Skipping invalid processed command entry %s: %s", entry_path, exc)
             continue
-        if command and str(payload.get("command") or "").strip().lower() != command.strip().lower():
+        if command_filter and str(payload.get("command") or "").strip().lower() != command_filter:
             continue
-        if workflow and str(payload.get("workflow") or "").strip().lower() != workflow.strip().lower():
+        if workflow_filter and str(payload.get("workflow") or "").strip().lower() != workflow_filter:
             continue
-        if status and str(payload.get("status") or "").strip().lower() != status.strip().lower():
+        if status_filter and str(payload.get("status") or "").strip().lower() != status_filter:
             continue
         entries.append(payload)
     return sorted(entries, key=lambda item: (str(item.get("timestamp") or ""), int(item.get("comment_id") or 0)))
