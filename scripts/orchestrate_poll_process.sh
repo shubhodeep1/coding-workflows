@@ -1464,13 +1464,20 @@ invoke_judge_for_integration_conflict() {
   # and has no pipeline feedback.
   local _pr_diff_file
   _pr_diff_file="$(mktemp "${TMPDIR:-/tmp}/integration_pr_diff.XXXXXX")"
-  if gh_retry_to_file "${_pr_diff_file}" gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}" 2>/dev/null; then
+  # Let gh_retry_to_file surface its own retry / rate-limit warnings
+  # and terminal `::error::` diagnostics — suppressing them would
+  # make a silently-empty `pr_diff` undebuggable. On failure, emit
+  # an explicit warning so the judge prompt's "(diff unavailable)"
+  # fallback is traceable in the job log.
+  if gh_retry_to_file "${_pr_diff_file}" gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}"; then
     pr_diff="$(head -c 120000 "${_pr_diff_file}" 2>/dev/null || true)"
   else
+    echo "::warning::Failed to fetch PR #${final_pr} diff for integration-conflict judge; continuing with empty pr_diff." >&2
     pr_diff=""
   fi
   rm -f "${_pr_diff_file}"
-  pr_files="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}/files" --jq '[.[] | {filename, status, additions, deletions}]' 2>/dev/null || echo "[]")"
+  pr_files="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}/files" --jq '[.[] | {filename, status, additions, deletions}]' || echo "[]")"
+  [ -n "${pr_files}" ] || pr_files='[]'
   local retries
   retries="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
 
@@ -2040,16 +2047,16 @@ has_active_validation_run() {
   local wf_name="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
   local active_count
 
-  active_count="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
-    --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo '0')"
+  active_count="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
+    --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
   if [ "${active_count}" -gt 0 ]; then
     return 0
   fi
 
   # Fallback: check internal-validate.yml if primary name differs
   if [ "${wf_name}" != "internal-validate.yml" ]; then
-    active_count="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
-      --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo '0')"
+    active_count="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
+      --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
     if [ "${active_count}" -gt 0 ]; then
       return 0
     fi
@@ -2068,13 +2075,15 @@ get_last_validation_run_conclusion() {
   last_dispatch_ts="$(jq -r '.validation_last_dispatch_ts // 0' "${STATE_FILE}")"
 
   local runs_json
-  runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?status=completed&per_page=5" \
-    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?status=completed&per_page=5" \
+    --jq '.workflow_runs' || echo '[]')"
+  [ -n "${runs_json}" ] || runs_json='[]'
 
   # Fallback to internal-validate.yml if no completed runs found
   if [ "$(echo "${runs_json}" | jq 'length')" -eq 0 ] && [ "${wf_name}" != "internal-validate.yml" ]; then
-    runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?status=completed&per_page=5" \
-      --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+    runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?status=completed&per_page=5" \
+      --jq '.workflow_runs' || echo '[]')"
+    [ -n "${runs_json}" ] || runs_json='[]'
   fi
 
   # Select the most recent run created after our last dispatch timestamp
@@ -2294,11 +2303,13 @@ build_active_issue_set() {
 
   # Fetch in_progress + queued runs (recent, max 50)
   local runs_json
-  runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
-    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
+    --jq '.workflow_runs' || echo '[]')"
+  [ -n "${runs_json}" ] || runs_json='[]'
   local queued_json
-  queued_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
-    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+  queued_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
+    --jq '.workflow_runs' || echo '[]')"
+  [ -n "${queued_json}" ] || queued_json='[]'
 
   # Merge both lists
   local all_runs
@@ -2369,8 +2380,9 @@ cancel_zombie_runs_for_issue() {
 
   # Re-fetch in_progress runs and find zombies matching this issue
   local runs_json
-  runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
-    --jq '.workflow_runs' 2>/dev/null || echo '[]')"
+  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
+    --jq '.workflow_runs' || echo '[]')"
+  [ -n "${runs_json}" ] || runs_json='[]'
 
   local zombie_run_ids
   zombie_run_ids="$(echo "${runs_json}" | jq -r --argjson now "${now_epoch}" --argjson threshold "${stall_secs}" --arg issue "${issue_num}" '
@@ -6576,11 +6588,17 @@ Manual intervention required." >/dev/null
       # races SIGPIPE (once `head` stops reading, `gh api` exits
       # non-zero, gh_retry classifies that as transient and retries).
       # Retry-to-file + local truncation avoids the feedback loop.
+      # Intentionally NOT redirecting gh_retry_to_file's stderr — its
+      # rate-limit / retry / terminal-error diagnostics need to reach
+      # the job log so a silently-empty "(diff unavailable)" fallback
+      # is traceable.  On failure, emit an explicit warning to pair
+      # with the fallback value.
       _pr_diff_file="$(mktemp "${TMPDIR:-/tmp}/judge_pr_diff.XXXXXX")"
       if gh_retry_to_file "${_pr_diff_file}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
-        -H 'Accept: application/vnd.github.diff' 2>/dev/null; then
+        -H 'Accept: application/vnd.github.diff'; then
         PR_DIFF="$(head -n 500 "${_pr_diff_file}" 2>/dev/null || echo "(diff unavailable)")"
       else
+        echo "::warning::Failed to fetch PR #${PR_NUM} diff for judge context (issue #${inum}); falling back to '(diff unavailable)'." >&2
         PR_DIFF="(diff unavailable)"
       fi
       rm -f "${_pr_diff_file}"
@@ -7244,8 +7262,13 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		continue
 	fi
 
-	# Check mergeable state via REST API (dirty == merge conflicts)
-	S_PR_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" 2>/dev/null || echo '{}')"
+	# Check mergeable state via REST API (dirty == merge conflicts).
+	# Use _safe_gh_jq (not bare `gh api`): on non-2xx gh writes the
+	# error body to stdout, which would concatenate with the '{}'
+	# fallback and yield invalid JSON that breaks the jq parsing
+	# below.
+	S_PR_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" || echo '{}')"
+	[ -n "${S_PR_JSON}" ] || S_PR_JSON='{}'
 	S_STATE="$(echo "${S_PR_JSON}" | jq -r '.state // ""')"
 	if [ "${S_STATE}" != "open" ]; then
 		continue
