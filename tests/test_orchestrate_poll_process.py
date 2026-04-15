@@ -2767,6 +2767,91 @@ def test_standalone_close_and_reissue_keeps_clarification_only_label():
 	assert '--label "ai:orchestrator-managed"' not in window
 
 
+def test_implementation_failed_reissue_keeps_orchestrator_labels_and_updates_mapping():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "implementation-failed"
+	state["waves"][0]["issues"][0]["impl_noop_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:orchestrator-managed"],
+		issue_labels={10: ["ai:implementation-failed"]},
+	)
+	created = result.get("created_issues", [])
+	assert len(created) == 1
+	assert created[0]["number"] == 900
+	assert "ai:clarification" in created[0].get("labels", [])
+	assert "ai:orchestrator-managed" in created[0].get("labels", [])
+	latest = result["latest_state"]
+	assert str(latest["issue_number_map"]["issue-1"]) == "900"
+	assert latest["waves"][0]["issues"][0]["impl_noop_count"] == 1
+
+
+def test_implementation_failed_reissue_hits_cap_and_closes_without_creating_new_issue():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "implementation-failed"
+	state["waves"][0]["issues"][0]["impl_noop_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:orchestrator-managed"],
+		issue_labels={10: ["ai:implementation-failed"]},
+	)
+	assert result.get("created_issues", []) == []
+	assert 10 in result.get("closed_issues", [])
+	latest = result["latest_state"]
+	assert str(latest["waves"][0]["issues"][0]["github_issue"]) == "10"
+	assert latest["waves"][0]["issues"][0]["impl_noop_count"] == 3
+
+
+def test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs():
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 1,
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "implementation-failed", "impl_noop_count": 0},
+					{"id": "issue-2", "github_issue": None, "status": "not_created"},
+				],
+			}
+		],
+		"dependency_edges": [{"from": "issue-1", "to": "issue-2"}],
+		"issue_number_map": {"issue-1": 10},
+		"pending_issue_defs": {
+			"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 2},
+		},
+		"integration_branch": "",
+		"final_merge_strategy": "squash",
+		"final_merge_pr": None,
+		"final_merge_status": "pending",
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:orchestrator-managed"],
+		issue_labels={10: ["ai:implementation-failed"]},
+	)
+	latest = result["latest_state"]
+	assert str(latest["issue_number_map"]["issue-1"]) == "901"
+	assert str(latest["issue_number_map"]["issue-2"]) == "900"
+	assert latest["pending_issue_defs"] == {}
+	created = result.get("created_issues", [])
+	assert any(item.get("title") == "Issue 2" for item in created)
+	assert latest["dependency_edges"] == [{"from": "issue-1", "to": "issue-2"}]
+
+
 def test_clean_wave_skip_advances_without_judge_call():
 	"""A clean wave with no pending definitions should advance without invoking judge."""
 	state = {
