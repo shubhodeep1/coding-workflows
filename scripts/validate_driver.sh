@@ -358,12 +358,18 @@ discover_tests()
 
 	TEST_FILES=()
 	for candidate in "${all_candidates[@]}"; do
-		candidate_name="$(basename "${candidate}")"
+		# Use shell parameter expansion instead of `basename` to avoid
+		# spawning a subshell for every discovered file.
+		candidate_name="${candidate##*/}"
 		# Exclude helper/library scripts (e.g. `_lib_*.sh`) from test
 		# discovery. They are sourced by real tests and produce no TAP
 		# output when executed directly, which would otherwise be
 		# misreported as "test produced no TAP output" failures.
-		if [[ "${candidate_name}" == ${HELPER_PATTERN} ]]; then
+		# Guard against an accidentally-empty HELPER_PATTERN so the
+		# `[[ ... == ${HELPER_PATTERN} ]]` test never runs with an
+		# empty right-hand side (which would degrade to a literal
+		# empty-string match).
+		if [ -n "${HELPER_PATTERN}" ] && [[ "${candidate_name}" == ${HELPER_PATTERN} ]]; then
 			helper_files+=("${candidate}")
 			continue
 		fi
