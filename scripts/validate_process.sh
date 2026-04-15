@@ -1712,14 +1712,20 @@ case "${DIAG_STATUS}" in
       exit 0
     fi
 
-    FIX_URL="$(gh_retry gh issue create \
-      --repo "${GITHUB_REPOSITORY}" \
-      --title "${CONSOLIDATED_TITLE}" \
-      --body-file "${CONSOLIDATED_BODY_FILE}")"
-    FIX_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$' || true)"
-    if [ -n "${FIX_NUM}" ]; then
-      CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${FIX_NUM}" '. + [$num]')"
-    fi
+	FIX_URL="$(gh_retry gh issue create \
+	  --repo "${GITHUB_REPOSITORY}" \
+	  --title "${CONSOLIDATED_TITLE}" \
+	  --body-file "${CONSOLIDATED_BODY_FILE}")"
+	FIX_NUM="$(printf '%s' "${FIX_URL}" | sed -nE 's#^https://github\.com/[^/]+/[^/]+/issues/([0-9]+)$#\1#p')"
+	if [ -z "${FIX_NUM}" ]; then
+	  failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s), but creating the consolidated fix-up issue failed."
+	  post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
+	  set_tracking_phase_label "ai:validation-failed"
+	  write_result_files "fail" "Runtime validation failed" "${failure_summary}"
+	  tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: unable to create consolidated fix-up issue." "ERROR"
+	  exit 0
+	fi
+	CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${FIX_NUM}" '. + [$num]')"
 
     issue_list_md="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq -r '.[] | "- #\(.)"')"
     if [ -z "${issue_list_md}" ]; then
