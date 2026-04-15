@@ -318,14 +318,23 @@ CRITICAL — post-restart readiness polling in graceful_shutdown:
     HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
     HEALTH_POLL_INTERVAL_SECONDS="${HEALTH_POLL_INTERVAL_SECONDS:-1}"
     docker compose -f "$COMPOSE_FILE" start "$APP_SERVICE" >/dev/null 2>&1 || true
+    deadline=$(( $(date +%s) + HEALTH_TIMEOUT_SECONDS ))
     attempts=0
     last_status="000"
     last_curl_exit=0
     ready=0
-    while [ "$attempts" -lt "$HEALTH_TIMEOUT_SECONDS" ]; do
+    # Loop is driven by wall-clock deadline, not by attempt count, so the
+    # total budget remains HEALTH_TIMEOUT_SECONDS regardless of poll interval.
+    while [ "$(date +%s)" -lt "$deadline" ]; do
       attempts=$((attempts + 1))
-      last_status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$READY_URL" 2>/dev/null || true)"
+      # Capture curl's real exit code. Do NOT use `$(... || true)` inside the
+      # command substitution: `|| true` collapses the substitution's status to
+      # 0 and `$?` on the next line would always read 0. Use `set +e` so the
+      # script doesn't abort on a non-zero curl rc, then restore `set -e`.
+      set +e
+      last_status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$READY_URL" 2>/dev/null)"
       last_curl_exit=$?
+      set -e
       case "$last_status" in
         2*|3*) ready=1; break ;;
       esac
