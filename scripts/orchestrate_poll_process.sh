@@ -5407,7 +5407,13 @@ json.dump(result, sys.stdout)
             if [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
               BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
               echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
-            else
+            elif [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+              # Integration branch was explicitly configured on the tracking
+              # issue but is not currently resolvable (branch deleted,
+              # renamed, or the mock/API reports it as missing).  Block the
+              # follow-up PR to avoid accidentally targeting the default
+              # branch with changes that were intended for the integration
+              # branch.  Falls through to the abort + tg_notify flow below.
               FOLLOWUP_PR_BLOCKED="true"
               FOLLOWUP_BLOCK_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}), but integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}."
               echo "::warning::${FOLLOWUP_BLOCK_REASON}"
@@ -5420,6 +5426,16 @@ json.dump(result, sys.stdout)
 ${FOLLOWUP_BLOCK_REASON}"
               tg_notify "${FOLLOWUP_BLOCK_REASON}" "WARNING"
               TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
+            else
+              # Tracking issue exists but configures no integration branch
+              # at all.  The issue is still orchestrator-owned but has no
+              # integration-branch requirement, so fall through to the
+              # default BASE_REF (inherited from the PR metadata, typically
+              # the repo default branch).  This preserves the
+              # "keeps_default_base_when_no_integration_context" semantics
+              # restored in PR #1016's review-comment resolution and is
+              # required for the matching poller unit test to pass.
+              echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}) but no integration branch is configured. Keeping default base '${BASE_REF}'."
             fi
           fi
 
