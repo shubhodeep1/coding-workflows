@@ -588,10 +588,18 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		created = created_issues[0]
 		assert created["repo"] == "owner/repo"
 		assert created["title"] == "Repair syntax capture and parsing"
+		assert "--label" in created["args"]
+		assert created["args"].count("--label") == 2
+		assert "ai:clarification" in created["args"]
+		assert "ai:orchestrator-managed" in created["args"]
 		body = created["body"]
 		assert "Type: implement-fix-up (post-codex-validation)" in body
 		assert "Source issue: #948" in body
 		assert f"Failed step: {failed_step}" in body
+
+		created_labels = {entry.get("name") for entry in state.get("label_creates", [])}
+		assert "ai:clarification" in created_labels
+		assert "ai:orchestrator-managed" in created_labels
 
 		labels = state.get("issue_labels", [])
 		assert "ai:implementation-failed" in labels
@@ -692,6 +700,9 @@ def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid
 			assert len(created_issues) == 1
 			created = created_issues[0]
 			assert created["title"] == "Implement phase post-Codex validation failure fallback"
+			assert created["args"].count("--label") == 2
+			assert "ai:clarification" in created["args"]
+			assert "ai:orchestrator-managed" in created["args"]
 			assert "The diagnose step could not produce a valid JSON contract" in created["body"]
 			assert "yaml parse failed on alpha.yml" in created["body"]
 			assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
