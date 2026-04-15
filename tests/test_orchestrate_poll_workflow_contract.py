@@ -21,8 +21,16 @@ def test_stall_control_env_defaults_are_declared() -> None:
 	assert "ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}" in wf
 
 
+def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
+	wf = _workflow()
+	assert "for pf in mode-judge.txt mode-judge-review-blocked.txt mode-judge-stall-recovery.txt serena-efficiency-block.txt; do" in wf
+	assert "repos/${wf_source}/contents/prompts/${pf}?ref=${script_ref}" in wf
+	assert "repos/${wf_source}/contents/prompts/${pf}?ref=main" in wf
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
+	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
 	return 0
 
 
