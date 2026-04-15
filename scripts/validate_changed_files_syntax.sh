@@ -39,7 +39,7 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <(git diff --name-only --diff-filter=ACM -z HEAD -- '*.py')
+done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.py'; git ls-files --others --exclude-standard -z -- '*.py'; })
 
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ]; then
@@ -52,7 +52,7 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <(git diff --name-only --diff-filter=ACM -z HEAD -- '*.js')
+done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.js'; git ls-files --others --exclude-standard -z -- '*.js'; })
 
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ]; then
@@ -65,12 +65,12 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <(git diff --name-only --diff-filter=ACM -z HEAD -- '*.sh')
+done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.sh'; git ls-files --others --exclude-standard -z -- '*.sh'; })
 
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ]; then
     checker_stderr="$(mktemp)"
-    if ! python3 -c "import yaml, sys; f=open(sys.argv[1]); yaml.safe_load(f); f.close()" "${f}" 2>"${checker_stderr}"; then
+    if ! python3 -c "import yaml, sys; f=open(sys.argv[1], 'rb'); list(yaml.safe_load_all(f)); f.close()" "${f}" 2>"${checker_stderr}"; then
       echo "::error file=${f}::YAML syntax error in ${f}"
       cat "${checker_stderr}" >&2
       append_checker_error "${f}" "python3 yaml.safe_load" "${checker_stderr}"
@@ -78,7 +78,7 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <(git diff --name-only --diff-filter=ACM -z HEAD -- '*.yml' '*.yaml')
+done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.yml' '*.yaml'; git ls-files --others --exclude-standard -z -- '*.yml' '*.yaml'; })
 
 if [ "${ERRORS}" -gt 0 ]; then
   echo "::error::${ERRORS} file(s) failed syntax validation."
