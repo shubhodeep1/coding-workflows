@@ -40,7 +40,7 @@ normalize_openrouter_usage() {
   local log_file="$1"
   local call_label="$2"
   local model_name="$3"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "$log_file" "$call_label" "$model_name" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$log_file" "$call_label" "$model_name" <<'PY'
 import json
 import os
 import sys
