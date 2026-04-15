@@ -756,6 +756,23 @@ jobs:
           # Compute waves for logging
           python3 scripts/orchestrate_lib.py compute-waves --input-file "${DECOMPOSITION_FILE}"
 
+      - name: Detect decomposition execution mode
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
+        id: decomposition_mode
+        run: |
+          set -euo pipefail
+          ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}")"
+          SINGLE_ISSUE_MODE="false"
+          if [ "${ISSUE_COUNT}" = "1" ]; then
+            SINGLE_ISSUE_MODE="true"
+          fi
+
+          {
+            echo "issue_count=${ISSUE_COUNT}"
+            echo "single_issue_mode=${SINGLE_ISSUE_MODE}"
+          } >> "$GITHUB_OUTPUT"
+          echo "SINGLE_ISSUE_MODE=${SINGLE_ISSUE_MODE}" >> "$GITHUB_ENV"
+
       - name: Ensure orchestrator labels exist
         if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         env:
@@ -791,8 +808,38 @@ jobs:
             --description "Orchestrator issue requires validate phase before completion" \
             2>/dev/null || true
 
+      - name: Create standalone issue (single-issue short-circuit)
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true' && steps.decomposition_mode.outputs.single_issue_mode == 'true'
+        id: single_issue
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          TITLE="$(jq -r '.issues[0].title' "${DECOMPOSITION_FILE}")"
+          BODY="$(jq -r '.issues[0].body' "${DECOMPOSITION_FILE}")"
+
+          ISSUE_URL="$(gh_retry gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "${TITLE}" \
+            --body "${BODY}" \
+            --label "ai:clarification" \
+            --label "ai:orchestrator-managed" \
+            --label "ai:orchestrator-validate-required")"
+
+          ISSUE_NUM="$(echo "${ISSUE_URL}" | grep -oE '[0-9]+$')"
+          echo "Created standalone issue #${ISSUE_NUM}: ${ISSUE_URL}"
+          {
+            echo "single_issue_number=${ISSUE_NUM}"
+            echo "single_issue_url=${ISSUE_URL}"
+          } >> "$GITHUB_OUTPUT"
+          echo "SINGLE_ISSUE_NUMBER=${ISSUE_NUM}" >> "$GITHUB_ENV"
+          echo "SINGLE_ISSUE_URL=${ISSUE_URL}" >> "$GITHUB_ENV"
+
       - name: Create tracking issue
-        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true' && steps.decomposition_mode.outputs.single_issue_mode != 'true'
         id: tracking_issue
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -822,7 +869,7 @@ jobs:
           echo "TRACKING_ISSUE_NUMBER=${TRACKING_ISSUE_NUMBER}" >> "$GITHUB_ENV"
 
       - name: Create integration branch
-        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true' && steps.decomposition_mode.outputs.single_issue_mode != 'true'
         id: integration_branch
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -863,7 +910,7 @@ jobs:
           echo "INTEGRATION_BRANCH=${INTEGRATION_BRANCH}" >> "$GITHUB_ENV"
 
       - name: Create Wave 1 issues only
-        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true' && steps.decomposition_mode.outputs.single_issue_mode != 'true'
         id: create_issues
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -951,7 +998,7 @@ jobs:
           echo "Issue map (Wave 1 only): $(cat "${RUNTIME_DIR}/issue_map.json")"
 
       - name: Build and post initial state
-        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true' && steps.decomposition_mode.outputs.single_issue_mode != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
@@ -1001,7 +1048,7 @@ jobs:
           echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER}"
 
       - name: Record decomposition candidate
-        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true' && steps.decomposition_mode.outputs.single_issue_mode != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1032,7 +1079,7 @@ jobs:
             --issue-number "${TRACKING_ISSUE_NUMBER}"
 
       - name: Dispatch Wave 1
-        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true' && steps.decomposition_mode.outputs.single_issue_mode != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
@@ -1072,6 +1119,9 @@ jobs:
         if: always()
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_ORCHESTRATE || '200000' }}
+          SINGLE_ISSUE_MODE: ${{ steps.decomposition_mode.outputs.single_issue_mode }}
+          SINGLE_ISSUE_NUMBER: ${{ steps.single_issue.outputs.single_issue_number }}
+          SINGLE_ISSUE_URL: ${{ steps.single_issue.outputs.single_issue_url }}
           SHORT_CIRCUIT: ${{ steps.evaluate_short_circuit.outputs.short_circuit }}
           SHORT_CIRCUIT_REASON: ${{ steps.evaluate_short_circuit.outputs.short_circuit_reason }}
           SHORT_CIRCUIT_LENGTH: ${{ steps.evaluate_short_circuit.outputs.short_circuit_length }}
@@ -1083,6 +1133,9 @@ jobs:
           : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
           : "${DECOMPOSITION_FILE:=${RUNTIME_DIR}/decomposition.json}"
           : "${TRACKING_ISSUE_NUMBER:=0}"
+          : "${SINGLE_ISSUE_MODE:=false}"
+          : "${SINGLE_ISSUE_NUMBER:=0}"
+          : "${SINGLE_ISSUE_URL:=}"
           TOKENS=""
           if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
             TOKENS="$(grep -A1 'tokens used' "${RUNTIME_DIR}/codex_log.txt" | tail -1 | tr -d '[:space:]' || true)"
@@ -1116,8 +1169,16 @@ jobs:
                 fi
               fi
               echo "| Issues created | ${ISSUE_COUNT} |"
-              if [ -n "${TRACKING_ISSUE_NUMBER:-}" ]; then
+              if [ -n "${TRACKING_ISSUE_NUMBER:-}" ] && [ "${TRACKING_ISSUE_NUMBER}" != "0" ]; then
                 echo "| Tracking issue | #${TRACKING_ISSUE_NUMBER} |"
+              fi
+              if [ "${SINGLE_ISSUE_MODE:-false}" = "true" ]; then
+                echo "| Execution mode | single-issue short-circuit |"
+                if [ -n "${SINGLE_ISSUE_NUMBER:-}" ] && [ "${SINGLE_ISSUE_NUMBER}" != "0" ]; then
+                  echo "| Standalone issue | #${SINGLE_ISSUE_NUMBER} |"
+                fi
+              else
+                echo "| Execution mode | normal |"
               fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -1179,6 +1240,8 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
+          SINGLE_ISSUE_MODE: ${{ steps.decomposition_mode.outputs.single_issue_mode }}
+          SINGLE_ISSUE_URL: ${{ steps.single_issue.outputs.single_issue_url }}
           SHORT_CIRCUIT: ${{ steps.evaluate_short_circuit.outputs.short_circuit }}
           SHORT_CIRCUIT_REASON: ${{ steps.evaluate_short_circuit.outputs.short_circuit_reason }}
           SHORT_CIRCUIT_LENGTH: ${{ steps.evaluate_short_circuit.outputs.short_circuit_length }}
@@ -1191,6 +1254,8 @@ jobs:
           : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
           : "${DECOMPOSITION_FILE:=${RUNTIME_DIR}/decomposition.json}"
           : "${TRACKING_ISSUE_NUMBER:=0}"
+          : "${SINGLE_ISSUE_MODE:=false}"
+          : "${SINGLE_ISSUE_URL:=}"
           source scripts/tg_helpers.sh
 
           STATUS="${{ job.status }}"
@@ -1216,6 +1281,8 @@ jobs:
                 MSG+=$'\n'
                 MSG+="Issue: ${PLAIN_ISSUE_URL}"
               fi
+            elif [ "${SINGLE_ISSUE_MODE:-false}" = "true" ]; then
+              MSG="Orchestrator: Single-issue short-circuit mode created 1 standalone issue."
             else
               MSG="Orchestrator: Decomposed project into ${ISSUE_COUNT} issues."
             fi
@@ -1223,6 +1290,9 @@ jobs:
             if [ "${SHORT_CIRCUIT:-false}" != "true" ] && [ -n "${TRACKING_URL}" ]; then
               MSG+=$'\n'
               MSG+="Tracking: ${TRACKING_URL}"
+            elif [ "${SINGLE_ISSUE_MODE:-false}" = "true" ] && [ -n "${SINGLE_ISSUE_URL:-}" ]; then
+              MSG+=$'\n'
+              MSG+="Issue: ${SINGLE_ISSUE_URL}"
             fi
           else
             MSG="Orchestrator: Failed (${STATUS})."
@@ -1230,6 +1300,9 @@ jobs:
             if [ -n "${TRACKING_ISSUE_NUMBER:-}" ] && [ "${TRACKING_ISSUE_NUMBER}" != "0" ]; then
               MSG+=$'\n'
               MSG+="Issue: ${TRACKING_URL}"
+            elif [ "${SINGLE_ISSUE_MODE:-false}" = "true" ] && [ -n "${SINGLE_ISSUE_URL:-}" ]; then
+              MSG+=$'\n'
+              MSG+="Issue: ${SINGLE_ISSUE_URL}"
             fi
           fi
           MSG+=$'\n'
