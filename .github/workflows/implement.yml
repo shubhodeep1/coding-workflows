@@ -1520,6 +1520,9 @@ jobs:
             script_ref="stable"
           fi
           health_script="$(mktemp -t git_ref_health_check.XXXXXX.sh)"
+          # Ensure the temp file is always cleaned up even if `gh api`,
+          # `chmod`, or the script itself fails under `set -euo pipefail`.
+          trap 'rm -f "${health_script}"' EXIT
           if ! gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
             "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=${script_ref}" > "${health_script}" 2>/dev/null; then
             echo "::warning::git_ref_health_check.sh not found on ${script_ref}; falling back to main"
@@ -1530,6 +1533,7 @@ jobs:
 
           bash "${health_script}" repair
           rm -f "${health_script}"
+          trap - EXIT
 
           for attempt in 1 2 3; do
             # Fetch latest remote state before pushing so local tracking refs
