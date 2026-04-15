@@ -2402,10 +2402,11 @@ def test_validation_fixing_lookup_failure_is_fail_safe_and_no_backfill():
 		issue_labels={10: ["ai:merged"], 501: ["ai:closed"]},
 		timeline_fail_for_issues=[501],
 	)
-	assert result["latest_state"]["status"] == "failed"
-	assert "closed without merge" in result["latest_state"].get("validation_failure_reason", "")
+	assert result["latest_state"]["status"] == "validation-fixing"
+	assert result["latest_state"].get("validation_fix_issues_batch_cycles") == 1
+	assert "validation_failure_reason" not in result["latest_state"]
 	assert "ai:merged" not in result["issues"]["501"]["labels"]
-	assert "merged PR lookup failed" in (result["stdout"] + result["stderr"])
+	assert "merged PR lookup failed; leaving issue pending for retry" in (result["stdout"] + result["stderr"])
 
 
 
@@ -2686,9 +2687,9 @@ def test_in_progress_judge_does_not_advance_when_fixups_added_to_current_wave():
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
 		issue_labels={10: ["ai:merged"]},
 		codex_json=codex_json,
-		enable_clean_wave_judge_skip="false",
 	)
 	ls = result["latest_state"]
 	# Must NOT have advanced to wave 2 — fix-up is still pending in wave 1
@@ -2729,6 +2730,126 @@ def test_in_progress_judge_advances_when_no_new_issues():
 	ls = result["latest_state"]
 	# Should have advanced to wave 2
 	assert ls["current_wave"] == 2, f"Expected current_wave=2, got {ls['current_wave']}"
+
+
+def test_clean_wave_skip_advances_without_judge_when_future_defs_remain():
+	state = _base_state(status="in_progress")
+	state["total_waves"] = 2
+	state["waves"].append({
+		"wave": 2,
+		"issues": [
+			{"id": "issue-2", "github_issue": None, "status": "not_created"},
+		],
+	})
+	state["pending_issue_defs"] = {
+		"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 5},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="true",
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "in_progress",
+			"justification": "unused",
+			"assessment": "unused",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	ls = result["latest_state"]
+	assert ls["current_wave"] == 2
+	assert ls["judge_cycle"] == 1
+	assert ls.get("judge_stall_cycles", 0) == 0
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert not any("Judge Evaluation" in body for body in tracking_bodies)
+
+
+def test_clean_wave_skip_blocked_when_disabled():
+	state = _base_state(status="in_progress")
+	state["total_waves"] = 2
+	state["waves"].append({
+		"wave": 2,
+		"issues": [
+			{"id": "issue-2", "github_issue": None, "status": "not_created"},
+		],
+	})
+	state["pending_issue_defs"] = {
+		"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 5},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "in_progress",
+			"justification": "on track",
+			"assessment": "advance",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Judge Evaluation" in body for body in tracking_bodies)
+
+
+def test_clean_wave_skip_blocked_when_wave_has_failed_issue():
+	state = _base_state(status="in_progress")
+	state["total_waves"] = 2
+	state["waves"].append({
+		"wave": 2,
+		"issues": [
+			{"id": "issue-2", "github_issue": None, "status": "not_created"},
+		],
+	})
+	state["pending_issue_defs"] = {
+		"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 5},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="true",
+		issue_labels={10: ["ai:closed"]},
+		codex_json={
+			"status": "in_progress",
+			"justification": "needs decision",
+			"assessment": "failed issue present",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Judge Evaluation" in body for body in tracking_bodies)
+
+
+def test_clean_wave_skip_blocked_when_stuck_wave_forces_judge():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["waves"][0]["issues"].append({
+		"id": "missing-1",
+		"github_issue": None,
+		"status": "not_created",
+	})
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="true",
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "in_progress",
+			"justification": "stuck handling",
+			"assessment": "judge required",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Judge Evaluation" in body for body in tracking_bodies)
 
 
 def test_backward_scan_updates_prior_wave_merged_issue():
@@ -3928,13 +4049,6 @@ sys.exit(1)
 			"Expected a warning about invalid JSON in poller output\n"
 			f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
 		)
-
-
-# ---------------------------------------------------------------------------
-# Runner
-# ---------------------------------------------------------------------------
-
-
 def main() -> int:
 	# Force line-buffered stdout so PASS/FAIL messages surface to CI logs as
 	# each test completes, instead of sitting in Python's default block buffer
