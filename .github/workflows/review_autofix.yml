@@ -2596,6 +2596,22 @@ jobs:
             echo "No conflict resolution changes to commit"
           fi
 
+      - name: Cache linked issues references
+        if: always() && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set +e
+          LINKED_ISSUES_JSON="$(gh api graphql \
+            -f owner="${REPOSITORY%/*}" \
+            -f name="${REPOSITORY#*/}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes' 2>/dev/null || echo '[]')"
+          LINKED_ISSUES_JSON="$(printf '%s' "${LINKED_ISSUES_JSON}" | jq -c '.' 2>/dev/null || echo '[]')"
+          printf 'LINKED_ISSUES_JSON=%s\n' "${LINKED_ISSUES_JSON}" >> "$GITHUB_ENV"
+
       - name: Telegram conflict resolution message
         if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true'
         env:
@@ -2608,12 +2624,7 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ISSUE_NUM="$(gh api graphql \
-            -f owner="${{ github.repository_owner }}" \
-            -f name="${{ github.event.repository.name }}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+          ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           MSG="Merge conflicts resolved automatically"
           MSG+=$'\n'
           MSG+="PR: ${PR_URL}"
@@ -2656,12 +2667,7 @@ jobs:
             }
           fi
 
-          ISSUE_NUMBERS="$(gh_retry gh api graphql \
-            -f owner="${REPOSITORY%/*}" \
-            -f name="${REPOSITORY#*/}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
@@ -2733,12 +2739,7 @@ jobs:
             fi
           fi
 
-          ISSUE_NUMBERS="$(gh api graphql \
-            -f owner="${REPOSITORY%/*}" \
-            -f name="${REPOSITORY#*/}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
@@ -2994,12 +2995,7 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ISSUE_NUM="$(gh_retry gh api graphql \
-            -f owner="${{ github.repository_owner }}" \
-            -f name="${{ github.event.repository.name }}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+          ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           MSG="PR processed: #${PR_NUMBER}"
           MSG+=$'\n'
           MSG+="PR: ${PR_URL}"
@@ -3028,12 +3024,7 @@ jobs:
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ISSUE_NUM="$(gh api graphql \
-            -f owner="${{ github.repository_owner }}" \
-            -f name="${{ github.event.repository.name }}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+          ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           ISSUE_LINE=""
           if [ -n "${ISSUE_NUM}" ]; then
             ISSUE_LINE=$'\n'"Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
@@ -3092,12 +3083,7 @@ jobs:
             --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
             2>/dev/null || true
 
-          ISSUE_NUMBERS="$(gh_retry gh api graphql \
-            -f owner="${REPOSITORY%/*}" \
-            -f name="${REPOSITORY#*/}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
@@ -3154,12 +3140,7 @@ jobs:
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ISSUE_NUM="$(gh_retry gh api graphql \
-            -f owner="${{ github.repository_owner }}" \
-            -f name="${{ github.event.repository.name }}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+          ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           MSG="PR autofix failed"
           MSG+=$'\n'
           MSG+="PR: ${PR_URL}"
