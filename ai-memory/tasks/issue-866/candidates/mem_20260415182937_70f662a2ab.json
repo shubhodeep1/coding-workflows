@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness error; failure_summary=Validation harness error: Adjust the dependency-auditing harness requirement list to match the repository\u2019s current canonical review helper script contract. In the dependency-audit test logic (the generated `validation/08_dependency_auditing.sh` or its source template), remove the obsolete hard requirement on `scripts/review_autofix_process.sh` and validate the currently supported script path(s) instead (optionally accept old/new names for compatibility). Keep the check strict by failing only when no valid review help",
+  "fingerprint": "73acb2610627e28c30ed835a99828ee0a0ff756428477eca17c2bfc671919b8c",
+  "lineage": {
+    "issue_number": 866,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24470409855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24470409855",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260415182937_70f662a2ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 866,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24470409855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-15T18:29:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
