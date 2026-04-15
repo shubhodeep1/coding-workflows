@@ -1367,7 +1367,13 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
 	p_stalls.add_argument("--stall-judge-trigger-count", default="2", help="Recovery-count threshold to switch stall recovery to run_stall_judge")
 	p_stalls.add_argument("--enable-stall-judge", default="true", choices=("true", "false"), help="Enable/disable stall judge escalation action")
-	p_stalls.add_argument("--enable-stall-human-terminalization", default="false", choices=("true", "false"), help="Allow terminal escalate_human actions in the stall recovery ladder")
+	p_stalls.add_argument(
+		"--enable-stall-human-terminalization",
+		"--allow-human-terminalization",
+		default="false",
+		choices=("true", "false"),
+		help="Allow terminal escalate_human actions in the stall recovery ladder",
+	)
 	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
 	p_stalls.set_defaults(func=cmd_check_stalls)
 
