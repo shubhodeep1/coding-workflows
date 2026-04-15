@@ -98,7 +98,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `OPENROUTER_PROMPT_CACHE_DISABLED` | No | `false` | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, workflow-log-analysis | Kill switch for OpenRouter prompt-cache instrumentation. `false` enables cache-friendly prompt ordering and cache telemetry logging; `true` disables explicit cache breakpoints and related instrumentation. |
 | `WORKFLOW_ORCHESTRATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | orchestrate, orchestrate_poll | Model override for orchestrator decomposer and judge |
 | `ORCHESTRATE_POLL_INTERVAL` | No | `5` | orchestrate | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
-| `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` | No | `1200` | orchestrate | Pre-LLM short-circuit threshold for creating a single plain issue. If `project_description` length is `<=` this value and no multi-step markers match (`step\s*\d|phase\s*\d|wave\s*\d|\bthen\b|\bafter\b|and\s+then|multi[- ]?step`), orchestrate skips decomposer/tracking/wave dispatch and opens one unlabeled plain issue from the description. |
+| `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` | No | `1200` | orchestrate | Pre-LLM short-circuit threshold for creating a single plain issue. If `project_description` length is `<=` this value and no multi-step markers match (`step\s*\d|phase\s*\d|wave\s*\d|\bthen\b|\bafter\b|\band\s+then\b|multi[- ]?step`), orchestrate skips decomposer/tracking/wave dispatch and opens one unlabeled plain issue from the description. |
 | `ORCHESTRATE_POLL_CALLER_WORKFLOW` | No | `ai-orchestrate-poll.yml` | orchestrate_poll | Filename of the caller wrapper workflow to retrigger for continuous polling. The poller dispatches this workflow via `workflow_dispatch` at the end of each run when active tracking issues exist, so the next cycle starts immediately instead of waiting for the cron schedule. Set to empty string to disable self-retrigger. |
 | `EDITOR_IDLE_TIMEOUT` | No | `1200` | review_autofix, implement | Editor watchdog idle timeout in seconds. The editor is killed if it produces no output for this long and has no active network connections. |
 | `EDITOR_MAX_WALL` | No | `3300` | review_autofix, implement | Maximum wall-clock seconds per editor attempt. Budget-aware: auto-capped to remaining job time minus a 2-min buffer. |
@@ -114,6 +114,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | Variable | Default | Used By | Description |
 |---|---|---|---|
 | `THINKING_LEVEL_CLARIFY` | `medium` | clarify | Reasoning effort for the clarification phase |
+| `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `high` | clarify | Reasoning effort used only when clarify runs Codex for `ai:orchestrator-managed` issues on forced human `/reclarify` |
 | `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
 | `THINKING_LEVEL_IMPLEMENT` | `high` | implement | Reasoning effort for the implementation phase |
 | `THINKING_LEVEL_ANALYSIS` | `medium` | workflow-log-analysis | Reasoning effort for the workflow log analysis report generation. |
@@ -726,6 +727,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `AI_MEMORY_KEYWORD_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL for keyword model |
 | `AI_MEMORY_TOKEN_BUDGET_<ROLE>` | _(from profile)_ | Per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`) |
 | `THINKING_LEVEL_CLARIFY` | `medium` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
+| `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `high` | Clarify-only override for forced human `/reclarify` on `ai:orchestrator-managed` issues (normal clarify path auto-posts `/answer [auto-answered-by-orchestrator]` without Codex) |
 | `THINKING_LEVEL_PLAN` | `xhigh` | Reasoning effort for planning |
 | `THINKING_LEVEL_IMPLEMENT` | `high` | Reasoning effort for implementation |
 | `THINKING_LEVEL_ANALYSIS` | `medium` | Reasoning effort for workflow log analysis report generation |
@@ -894,7 +896,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 
 ### How it works
 
-1. **Pre-LLM short-circuit (cost guard):** If `project_description` is short (`<= ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS`, default `1200`) and has no multi-step markers (`step\s*\d|phase\s*\d|wave\s*\d|\bthen\b|\bafter\b|and\s+then|multi[- ]?step`), orchestrate skips decomposer entirely and creates exactly one plain issue from the description. This path does not apply orchestrator labels and does not create tracking issue, integration branch, state comment, or wave dispatch.
+1. **Pre-LLM short-circuit (cost guard):** If `project_description` is short (`<= ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS`, default `1200`) and has no multi-step markers (`step\s*\d|phase\s*\d|wave\s*\d|\bthen\b|\bafter\b|\band\s+then\b|multi[- ]?step`), orchestrate skips decomposer entirely and creates exactly one plain issue from the description. This path does not apply orchestrator labels and does not create tracking issue, integration branch, state comment, or wave dispatch.
 2. **Decomposition (default path):** When the short-circuit condition is not met, the LLM reads your repo, breaks the project into scoped issues with a dependency graph, and creates a tracking issue (labeled `ai:orchestrator-tracking`).
 3. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically. If clarification questions are raised, the `orchestrate_clarify_respond` workflow answers them automatically using an LLM. When `plan.yml` emits structured `Q<ID>` clarification blocks with single-letter `(RECOMMENDED)` options for every question, `plan.yml` now posts a synthesized `/answer Q1: A, ... [auto-answered-by-orchestrator]`; if parsing fails or any recommendation is non-single-letter (for example `A+C`), it does not auto-answer and keeps the human `/answer` loop.
 4. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. If a PR has merge conflicts (e.g. `main` advanced since the PR was created), the poller automatically updates the PR branch via the GitHub API before retrying the merge. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
@@ -966,7 +968,7 @@ Telegram notifications fall into three categories based on their lifecycle:
 
 **Phase-tracked alerts (deleted when the phase completes):**
 For non-orchestrator issues, human-intervention alerts are cleaned up automatically when the next phase begins:
-- **Clarification required** — sent by `clarify.yml` and `plan.yml` for non-orchestrator issues only, deleted when `plan.yml` runs (stored as `<!-- tg_phase:clarify:id -->`). For orchestrator-managed issues, phase-tracked clarify alerts are skipped; if `plan.yml` cannot auto-parse recommended clarification answers it sends a general tracked `WARNING` and waits for a human `/answer`.
+- **Clarification required** — sent by `clarify.yml` and `plan.yml` for non-orchestrator issues only, deleted when `plan.yml` runs (stored as `<!-- tg_phase:clarify:id -->`). Orchestrator-managed issues skip this alert because clarify uses a label-based fast path (`ai:orchestrator-managed`) that auto-posts `/answer [auto-answered-by-orchestrator]` unless a human forces `/reclarify`; if `plan.yml` cannot auto-parse recommended clarification answers it sends a general tracked `WARNING` and waits for a human `/answer`.
 - **Plan awaiting approval** — sent by `plan.yml` (when `AUTO_IMPLEMENT_ON_CLEAR_PLAN` is not true), deleted when `implement.yml` runs (stored as `<!-- tg_phase:plan:id -->`)
 
 **General tracked alerts (deleted at terminal state):**

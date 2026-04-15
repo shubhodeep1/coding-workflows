@@ -144,15 +144,95 @@ jobs:
               else return 1; fi
             done; return 1
           }
+          # Batch-fetch helper: pulls scripts/ and prompts/ trees from
+          # both ${script_ref} and main in a single GraphQL request so
+          # individual file resolution below is served from an in-memory
+          # cache instead of issuing one REST call per file.  Collapses
+          # ~10 script + 1 prompt REST fetches into one GraphQL call in
+          # the typical case.  See review_autofix.yml for full design.
+          _wf_owner="${wf_source%%/*}"
+          _wf_name="${wf_source##*/}"
+          _gh_batch_fetch_trees() {
+            local query
+            query="query {
+              repository(owner: \"${_wf_owner}\", name: \"${_wf_name}\") {
+                stable_scripts: object(expression: \"${script_ref}:scripts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                main_scripts: object(expression: \"main:scripts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                stable_prompts: object(expression: \"${script_ref}:prompts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                main_prompts: object(expression: \"main:prompts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+              }
+            }"
+            local attempt=1
+            local response
+            while [ "${attempt}" -le 5 ]; do
+              if response="$(gh api graphql -f query="${query}" 2>/tmp/_gh_rl_err)"; then
+                if printf '%s' "${response}" | jq -e '.data.repository' >/dev/null 2>&1; then
+                  printf '%s' "${response}"
+                  return 0
+                fi
+                return 1
+              fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::GraphQL batch fetch rate-limited (attempt ${attempt}/5), waiting…" >&2
+                _rl_wait; attempt=$((attempt + 1))
+              else
+                return 1
+              fi
+            done
+            return 1
+          }
+          _BATCH_TREES_JSON=""
+          _BATCH_TREES_TRIED="false"
+          _ensure_batch_trees() {
+            if [ "${_BATCH_TREES_TRIED}" = "true" ]; then
+              [ -n "${_BATCH_TREES_JSON}" ]
+              return $?
+            fi
+            _BATCH_TREES_TRIED="true"
+            if _BATCH_TREES_JSON="$(_gh_batch_fetch_trees)"; then
+              return 0
+            fi
+            _BATCH_TREES_JSON=""
+            return 1
+          }
+          # Args: <outpath> <category=scripts|prompts> <filename>
+          _resolve_dir_file() {
+            local outpath="$1"
+            local category="$2"
+            local fname="$3"
+            local stable_section="stable_${category}"
+            local main_section="main_${category}"
+            local _tmp section
+            if _ensure_batch_trees; then
+              _tmp="${outpath}.batch_tmp"
+              for section in "${stable_section}" "${main_section}"; do
+                : > "${_tmp}"
+                printf '%s' "${_BATCH_TREES_JSON}" | jq -j --arg section "${section}" --arg name "${fname}" '
+                  .data.repository[$section].entries[]?
+                  | select(.name == $name and .type == "blob" and .object.isBinary != true and .object.text != null)
+                  | .object.text
+                ' > "${_tmp}" 2>/dev/null || true
+                if [ -s "${_tmp}" ]; then
+                  mv "${_tmp}" "${outpath}"
+                  return 0
+                fi
+              done
+              rm -f "${_tmp}"
+            fi
+            if _gh_api_fetch "${outpath}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${category}/${fname}?ref=${script_ref}"; then
+              return 0
+            fi
+            _gh_api_fetch "${outpath}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${category}/${fname}?ref=main"
+          }
           # Only fetch scripts actually used by the plan workflow.
           # git_ref_health_check.sh is only needed by implement/edit workflows.
           _fetched_scripts=()
           for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
-            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
-              echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main"
+            if ! _resolve_dir_file "scripts/${f}" "scripts" "${f}"; then
+              echo "::error::Required support script '${f}' not found on ${script_ref} or main"
+              exit 1
             fi
             chmod +x "scripts/${f}"
             _fetched_scripts+=("${f}")
@@ -196,11 +276,8 @@ jobs:
 
           mkdir -p prompts
           if [ ! -f prompts/serena-efficiency-block.txt ]; then
-            if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
-              echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            if ! _resolve_dir_file "prompts/serena-efficiency-block.txt" "prompts" "serena-efficiency-block.txt"; then
+              echo "::warning::serena-efficiency-block.txt not found on ${script_ref} or main"
             fi
           fi
 
@@ -1482,7 +1559,19 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           source scripts/label_helpers.sh
-          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          # Reuse the cached issue snapshot from the "Fetch issue
+          # metadata" step when available — failure paths can run
+          # before that step succeeded, so fall back to a fresh API
+          # call on cache-miss OR jq parse failure (under
+          # `set -euo pipefail` an unsuppressed jq error would kill
+          # the whole step).
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:planning") != null' >/dev/null; then
             ensure_label_exists "ai:clarification" "${{ github.repository }}"
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
