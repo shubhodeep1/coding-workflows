@@ -593,7 +593,8 @@ Generated JSON report (`workflow_log_report.json`) includes:
 Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_logs.py)
 
 - Workflow invocation: `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json`
-- `--max-output-tokens` default is `100000`.
+- `--max-output-tokens` default is `100000`. The workflow auto-caps this to `60000` when the resolved `WORKFLOW_EDITOR_MODEL` contains `gemini` (Gemini 3.1 Pro Preview's max output is 65536).
+- Model resolution for this workflow only: the `Run workflow log analysis` step pins `WORKFLOW_EDITOR_MODEL` to `google/gemini-3.1-pro-preview` by default (pilot). Override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL` (e.g. `openai/gpt-5.3-codex`) to revert. This override is scoped to the analysis step env and does not affect the global `WORKFLOW_EDITOR_MODEL` used by `clarify`/`plan`/`implement`/`review_autofix`/`validate`/`orchestrate`.
 - `load_input_data` accepts either:
   - `--input` with a collector report (`runs` list; `runs[].log_excerpts` are flattened into `deep_dive_logs` as `{name: <repo>/<run_id>/<step_name>, excerpt}`), a combined bundle object (`run_metrics`, `summary_stats`, optional `deep_dive_logs`), or a JSON array of run metrics
   - `--data-dir` containing `workflow_log_report.json` or `run_metrics.json` + `summary_stats.json` (optionally `run_logs/`)
