@@ -5,13 +5,23 @@
   "entry_id": "processed_command_1088_4253061841_approved",
   "issue_number": 1088,
   "metadata": {
+    "branch": "ai/issue-1088",
+    "changed_files": [
+      ".github/workflows/orchestrate.yml",
+      "README.md"
+    ],
+    "issue_number": 1088,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1088",
+    "pr_number": 1094,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1094",
+    "run_attempt": "1",
+    "run_id": "24461293305",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24461293305"
   },
   "run_attempt": 1,
   "run_id": "24461293305",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-15T14:49:35Z",
+  "status": "completed",
+  "timestamp": "2026-04-15T14:54:23Z",
   "workflow": "implement"
 }
