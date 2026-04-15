@@ -222,21 +222,16 @@ jobs:
           # Fetch AI memory schema files so consumer repos that lack
           # schemas on their default branch can bootstrap the ai-memory
           # branch (schemas are validated during memory operations).
-          # TODO(H5/H6): replace placeholder schema filenames below with
-          # concrete cache schema file names once finalized.
+          # Include H5/H6 cache schemas; fetch remains best-effort until
+          # these files exist on the selected support ref.
           mkdir -p ai-memory/schemas
           for sf in \
             memory_record.v1.json \
             processed_command_entry.v1.json \
             run_ledger_entry.v1.json \
             task_lineage.v1.json \
-            TODO_H5_CACHE_SCHEMA_FILENAME.json \
-            TODO_H6_CACHE_SCHEMA_FILENAME.json; do
-            case "${sf}" in
-              TODO_H5_CACHE_SCHEMA_FILENAME.json|TODO_H6_CACHE_SCHEMA_FILENAME.json)
-                continue
-                ;;
-            esac
+            actions_runs_cache.v1.json \
+            workflow_log_analysis_cache.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
               schema_tmp="ai-memory/schemas/${sf}.tmp"
               if copy_from_ref_or_local "ai-memory/schemas/${sf}" "${schema_tmp}" "false" "true"; then
