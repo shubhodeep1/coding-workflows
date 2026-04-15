@@ -180,6 +180,50 @@ _gh_ratelimit_tg_alert()
 		fi
 	fi
 
+	# --- Best-effort de-race across concurrent workflow runs ---
+	#
+	# The getChat→send→pin sequence is not atomic: two runners can
+	# both read an old marker, both decide the cooldown has expired,
+	# and both go on to send+pin alerts, producing duplicate pings.
+	# Add a short randomized jitter (1–3 s) and then re-read the
+	# pinned message before sending. If a concurrent runner already
+	# published a fresh alert in the gap, `_recheck_epoch` will be
+	# within the current cooldown window and we suppress. This does
+	# not eliminate the race (Telegram has no client-side locks),
+	# but shrinks the window by orders of magnitude. The jitter cost
+	# is negligible inside a rate-limit branch that is already about
+	# to sleep up to 600 s waiting for the GH reset window.
+	local _jitter_secs
+	_jitter_secs=$(( (RANDOM % 3) + 1 ))
+	sleep "${_jitter_secs}"
+
+	local _recheck_resp _recheck_text _recheck_epoch
+	_recheck_resp=$(curl -sS --max-time 10 -X POST \
+		"${_tg_base}/getChat" \
+		-d "chat_id=${_chat_id}" 2>/dev/null) || return 0
+	[ -n "${_recheck_resp}" ] || return 0
+	if ! printf '%s' "${_recheck_resp}" | jq -e '.ok == true' >/dev/null 2>&1; then
+		return 0
+	fi
+	_recheck_text=$(printf '%s' "${_recheck_resp}" \
+		| jq -r '.result.pinned_message.text // ""' 2>/dev/null) || return 0
+	_recheck_epoch=$(printf '%s' "${_recheck_text}" \
+		| sed -n 's/.*<!-- gh_rl_ts:\([0-9]\{1,\}\) -->.*/\1/p' | tail -1)
+	_now=$(date +%s)
+	if [ -n "${_recheck_epoch}" ] && [ "${_recheck_epoch}" -gt 0 ] 2>/dev/null; then
+		local _recheck_age=$(( _now - _recheck_epoch ))
+		if [ "${_recheck_age}" -ge 0 ] && [ "${_recheck_age}" -lt "${_cooldown}" ]; then
+			# Another concurrent run already published a fresh
+			# pinned alert during the jitter window — suppress.
+			return 0
+		fi
+	fi
+	# Refresh _prev_pin_id from the rechecked state so the later
+	# unpin guard still targets the right message id if it changed.
+	_prev_pin_id=$(printf '%s' "${_recheck_resp}" \
+		| jq -r '.result.pinned_message.message_id // ""' 2>/dev/null) || _prev_pin_id=""
+	_last_epoch="${_recheck_epoch}"
+
 	# --- Build message body ---
 	local _workflow="${GITHUB_WORKFLOW:-unknown}"
 	local _repo="${GITHUB_REPOSITORY:-unknown}"

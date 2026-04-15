@@ -335,7 +335,11 @@ case "${RB_ACTION}" in
     _mergeable_sleep="${PR_MERGEABLE_POLL_SLEEP:-5}"
     _attempt=0
     while [ "${_attempt}" -lt "${_mergeable_attempts}" ]; do
-      _pr_json="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+      # Use _safe_gh_jq (via gh_retry) so a failed `gh api` response
+      # emits no stdout — preventing the error JSON body from being
+      # concatenated with the `|| echo '{}'` fallback, which would
+      # yield invalid JSON and break the downstream `jq` parses below.
+      _pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
       PR_STATE="$(echo "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed|merged' || echo "")"
       PR_MERGEABLE="$(echo "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
       # Stop polling as soon as state is terminal or mergeability is known.
@@ -351,8 +355,16 @@ case "${RB_ACTION}" in
 
     if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
       if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-        gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
-          || gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
+        # NOTE: gh pr merge is intentionally NOT wrapped with gh_retry.
+        # These calls are best-effort (trailing `|| true`); non-
+        # transient failures (branch protection, permissions, merge
+        # queue, 422 merge commit conflicts, etc.) would otherwise
+        # incur ~31s of exponential backoff under gh_retry before
+        # reaching the `|| true` fallthrough. Rate-limit alerts still
+        # fire through every other gh_retry-wrapped call in this
+        # script.
+        gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
+          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
       fi
     elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
       echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is."
@@ -381,8 +393,9 @@ case "${RB_ACTION}" in
 
       PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-        gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
-          || gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
+        # Best-effort merge — see note above re: gh_retry.
+        gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
+          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
       fi
 
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"

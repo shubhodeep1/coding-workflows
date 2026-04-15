@@ -2023,7 +2023,11 @@ has_active_validation_run() {
   local wf_name="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
   local active_count
 
-  active_count="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
+  # _safe_gh_jq (via gh_retry) suppresses stdout on failure so the
+  # `|| echo '0'` fallback yields a clean numeric value even when
+  # gh api fails — preventing the error JSON body from being
+  # concatenated with '0' and breaking the `-gt` comparison below.
+  active_count="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
     --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo '0')"
   if [ "${active_count}" -gt 0 ]; then
     return 0
@@ -2031,7 +2035,7 @@ has_active_validation_run() {
 
   # Fallback: check internal-validate.yml if primary name differs
   if [ "${wf_name}" != "internal-validate.yml" ]; then
-    active_count="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
+    active_count="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
       --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo '0')"
     if [ "${active_count}" -gt 0 ]; then
       return 0
@@ -2050,13 +2054,15 @@ get_last_validation_run_conclusion() {
   local last_dispatch_ts
   last_dispatch_ts="$(jq -r '.validation_last_dispatch_ts // 0' "${STATE_FILE}")"
 
+  # _safe_gh_jq (via gh_retry) guarantees empty stdout on failure so
+  # the `|| echo '[]'` fallback stays valid JSON.
   local runs_json
-  runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?status=completed&per_page=5" \
+  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?status=completed&per_page=5" \
     --jq '.workflow_runs' 2>/dev/null || echo '[]')"
 
   # Fallback to internal-validate.yml if no completed runs found
   if [ "$(echo "${runs_json}" | jq 'length')" -eq 0 ] && [ "${wf_name}" != "internal-validate.yml" ]; then
-    runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?status=completed&per_page=5" \
+    runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?status=completed&per_page=5" \
       --jq '.workflow_runs' 2>/dev/null || echo '[]')"
   fi
 
@@ -2275,12 +2281,13 @@ build_active_issue_set() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Fetch in_progress + queued runs (recent, max 50)
+  # Fetch in_progress + queued runs (recent, max 50).
+  # _safe_gh_jq guarantees empty stdout on failure → fallback is valid JSON.
   local runs_json
-  runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
+  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
     --jq '.workflow_runs' 2>/dev/null || echo '[]')"
   local queued_json
-  queued_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
+  queued_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
     --jq '.workflow_runs' 2>/dev/null || echo '[]')"
 
   # Merge both lists
@@ -2350,9 +2357,10 @@ cancel_zombie_runs_for_issue() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Re-fetch in_progress runs and find zombies matching this issue
+  # Re-fetch in_progress runs and find zombies matching this issue.
+  # _safe_gh_jq guarantees empty stdout on failure → fallback stays valid.
   local runs_json
-  runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
+  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
     --jq '.workflow_runs' 2>/dev/null || echo '[]')"
 
   local zombie_run_ids
@@ -2929,7 +2937,9 @@ invoke_stall_judge() {
 
   local workflows_json
   local workflow_outcomes
-  workflows_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=50" 2>/dev/null || echo '{"workflow_runs":[]}')"
+  # _safe_gh_jq → clean empty stdout on failure so the `|| echo '{...}'`
+  # fallback stays valid JSON for downstream jq reads.
+  workflows_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=50" 2>/dev/null || echo '{"workflow_runs":[]}')"
   workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" '
     [.workflow_runs[]?
       | select((.name // "") == "AI Review"
@@ -4790,7 +4800,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 
   if [ "${#_gql_issue_nums[@]}" -gt 0 ]; then
     _gql_query="query { repository(owner: \"${_repo_owner}\", name: \"${_repo_name}\") {${_gql_fields} } }"
-    _labels_result="$(gh_retry gh api graphql -f query="${_gql_query}" 2>/dev/null || echo '{}')"
+    # _safe_gh_jq → clean empty stdout on failure so the `|| echo '{}'`
+    # fallback stays valid JSON for the downstream python parser.
+    _labels_result="$(gh_retry _safe_gh_jq graphql -f query="${_gql_query}" 2>/dev/null || echo '{}')"
     LABELS_JSON="$(echo "${_labels_result}" | python3 -c "
 import json, sys
 raw = json.load(sys.stdin)
@@ -6509,6 +6521,7 @@ Manual intervention required." >/dev/null
         PR_DIFF="(diff unavailable)"
       fi
       rm -f "${_pr_diff_tmp}"
+      unset _pr_diff_tmp
       _issue_status="$(jq -r --arg num "${inum}" --argjson wi "${WAVE_IDX}" \
         '.waves[$wi].issues[] | select((.github_issue | tostring) == $num) | .status // ""' \
         "${STATE_FILE}" 2>/dev/null | head -n1)"
@@ -7170,7 +7183,9 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 
 	# Check mergeable state via REST API (dirty == merge conflicts)
-	S_PR_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" 2>/dev/null || echo '{}')"
+	# _safe_gh_jq → clean empty stdout on failure so the `|| echo '{}'`
+	# fallback stays valid JSON for the downstream jq reads.
+	S_PR_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" 2>/dev/null || echo '{}')"
 	S_STATE="$(echo "${S_PR_JSON}" | jq -r '.state // ""')"
 	if [ "${S_STATE}" != "open" ]; then
 		continue
