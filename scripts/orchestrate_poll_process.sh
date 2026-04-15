@@ -5430,6 +5430,19 @@ ${FOLLOWUP_BLOCK_REASON}"
               && git checkout -B "${FOLLOWUP_BRANCH}" "refs/remotes/origin/${BASE_REF}" 2>/dev/null; then
               RB_COMBINED_MODE="true"
               RB_COMBINED_BRANCH_INFO="You are on a follow-up branch (${FOLLOWUP_BRANCH}) based on ${BASE_REF}. The original PR #${RB_PR} was already merged. If you choose action=\"fix\", apply ONLY the fixes identified during review — do not re-apply the original PR's changes."
+            elif git checkout -B "${FOLLOWUP_BRANCH}" 2>/dev/null; then
+              # Fallback: `git fetch` against origin failed (e.g. transient
+              # network failure, remote temporarily unreachable, test sandbox
+              # with a fake origin URL). Create the follow-up branch from the
+              # current HEAD instead of from the freshly-fetched base ref.
+              # In production the initial fetch normally succeeds, so this
+              # fallback only fires on real network blips; the follow-up PR
+              # will still target the real BASE_REF (specified via `gh pr
+              # create --base ${BASE_REF}` below) — only the local starting
+              # commit differs from the ideal fetched-ref checkout.
+              echo "::warning::git fetch for ${BASE_REF} failed; creating follow-up branch ${FOLLOWUP_BRANCH} from current HEAD."
+              RB_COMBINED_MODE="true"
+              RB_COMBINED_BRANCH_INFO="You are on a follow-up branch (${FOLLOWUP_BRANCH}) derived from the local checkout (a fresh fetch of ${BASE_REF} failed). The original PR #${RB_PR} was already merged. If you choose action=\"fix\", apply ONLY the fixes identified during review — do not re-apply the original PR's changes."
             else
               echo "::warning::Could not prepare follow-up branch ${FOLLOWUP_BRANCH} for issue #${rb_issue}; combined-mode fix not possible."
             fi
@@ -5439,6 +5452,14 @@ ${FOLLOWUP_BLOCK_REASON}"
             && git checkout -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}" 2>/dev/null; then
             RB_COMBINED_MODE="true"
             RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF})."
+          elif git checkout -B "${HEAD_REF}" 2>/dev/null; then
+            # Fallback: same rationale as the merged-PR fallback above —
+            # keep the combined-mode fix path alive when the initial fetch
+            # can't reach origin, at the cost of starting the branch from
+            # the local HEAD instead of origin/${HEAD_REF}.
+            echo "::warning::git fetch for ${HEAD_REF} failed; reusing local HEAD as PR branch base."
+            RB_COMBINED_MODE="true"
+            RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF}), derived from the local checkout (a fresh fetch of ${HEAD_REF} failed)."
           else
             echo "::warning::Could not check out PR branch ${HEAD_REF} for issue #${rb_issue}; combined-mode fix not possible."
           fi
