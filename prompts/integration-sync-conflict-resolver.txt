@@ -1,0 +1,153 @@
+Repository task: Resolve merge conflicts on an orchestrator integration branch.
+
+The repository currently contains files with Git merge conflict markers.
+The PR head is an orchestrator-managed integration branch
+(`{{INTEGRATION_BRANCH}}`) carrying the work of {{MERGED_SUB_ISSUE_COUNT}}
+merged sub-issue(s) belonging to project #{{TRACKING_ISSUE_NUMBER}}.
+
+A Git merge conflict marker block is the standard output `git merge` writes
+into a conflicted file: a start line consisting of seven less-than characters
+followed by a space and the name HEAD, then the lines from HEAD, then a
+separator line consisting of seven equals characters, then the lines from the
+other branch, then an end line consisting of seven greater-than characters
+followed by a space and the name of the other branch. These start, separator,
+and end lines are what you must look for and remove; this prompt deliberately
+does not reproduce them literally so a repository-wide scan for conflict
+markers does not match this file.
+
+Conflicted files reported by `git diff --name-only --diff-filter=U` ({{CONFLICTED_FILES_COUNT}} total):
+{{CONFLICTED_FILES_LIST}}
+
+=== INTEGRATION PROJECT CONTEXT ===
+
+Tracking issue title:
+{{TRACKING_ISSUE_TITLE}}
+
+Tracking issue body (project intent — preserve at all costs):
+{{TRACKING_ISSUE_BODY}}
+
+Merged sub-issues already on this integration branch (their work MUST
+survive your resolution intact):
+{{MERGED_SUB_ISSUES_LIST}}
+
+=== INTENT FINGERPRINTS ===
+
+The orchestrator captured intent fingerprints when each sub-issue's PR
+merged into this integration branch. These are the authoritative
+acceptance criteria for your resolution. Two lists per sub-issue:
+
+- `must_contain`: regex patterns the post-resolve tree MUST still
+  match. They were derived from lines the sub-issue ADDED. If your
+  resolution removes any of these, your work has silently reverted
+  the sub-issue's intent and will be rejected.
+
+- `must_not_contain`: regex patterns the post-resolve tree MUST NOT
+  match. They were derived from lines the sub-issue REMOVED. If your
+  resolution reintroduces any of these, your work has resurrected
+  code that the sub-issue intentionally deleted and will be rejected.
+
+Fingerprints (JSON, may be empty for sub-issues merged before
+fingerprinting was enabled):
+{{INTENT_FINGERPRINTS_JSON}}
+
+=== YOUR TASK ===
+
+Resolve the merge conflicts in a way that satisfies ALL of these
+constraints simultaneously:
+
+1. Every conflicted file listed above must be free of Git conflict
+   markers after your edits.
+2. Every `must_contain` pattern in INTENT_FINGERPRINTS must still
+   match somewhere in its file in the post-resolve tree.
+3. No `must_not_contain` pattern in INTENT_FINGERPRINTS may match
+   anywhere in its file in the post-resolve tree.
+4. The post-resolve tree must compile/parse logically.
+
+If the only way to keep both sides of a conflict hunk is to SYNTHESIZE
+a new hunk that combines them — i.e. the conflict is between two
+independent rewrites of the same code, where neither side standalone
+preserves all merged sub-issue intents — then synthesize. Do not
+default to "pick side A or pick side B" when synthesis is possible.
+The integration-branch ("HEAD") side typically carries the merged
+sub-issue's intent; the default-branch (other) side typically carries
+unrelated maintenance fixes that you should layer in additively.
+
+=== HARD RULES ===
+
+- You MUST resolve EVERY conflicted file listed above in this single run.
+  Do not stop after fixing only one file or a subset.
+- Before declaring success, re-scan every file in the repository to
+  confirm no Git conflict markers (the seven-character lines git
+  inserts at the start, separator, and end of each conflict hunk)
+  remain anywhere. If any remain, keep resolving until none are left.
+- Only resolve conflicts. Do not introduce new functionality.
+- Do not refactor unrelated code.
+- Do not modify files that do not contain conflict markers.
+- Remove all conflict markers.
+- Ensure the final code compiles logically.
+- You may read repository files as needed.
+- You may modify repository files directly.
+- Do not generate patches.
+- Do not generate scripts.
+- Do not modify GitHub workflow files except when resolving merge conflicts.
+- Do not access the network.
+
+HARD CONSTRAINT — out-of-conflict edits are rejected:
+Your edits will be diff-checked against the set of files that
+actually had merge conflicts.  Any file you modify that did NOT
+contain conflict markers will cause the run to abort with no
+commit.  Do not "improve" surrounding code.  Do not rewrite
+unrelated sections.  Do not add new helper scripts, env vars,
+or workflow steps.  If you find yourself wanting to edit a
+file that has no conflict markers, STOP and leave it alone.
+
+HARD CONSTRAINT — no inventing files or commands:
+Before you finalize, perform this self-check on every edit:
+1. List every file path you reference in your edits (including
+   any path mentioned in a shell command, sourced script,
+   bootstrap fetch list, or workflow step you would add).
+2. For each path, verify the file already exists in the
+   repository tree by reading it.
+3. If you cannot read a referenced file, your resolution is
+   wrong — revert that edit and choose a resolution that does
+   not invent new files, scripts, or invocations.
+The most common failure mode for this step is hallucinating a
+plausible-looking helper script (e.g. build_repo_overview.sh,
+protected_paths.txt) and wiring it into the bootstrap loop.
+The downstream existence check will catch this and abort the
+merge-resolve commit, wasting the entire review run.  Do not
+do it.
+
+HARD CONSTRAINT — sub-issue intent is load-bearing:
+The orchestrator merges sub-issues into the integration branch in
+strict dependency order. Each sub-issue PR was reviewed and merged on
+its own merits before reaching this point. If you silently revert a
+sub-issue's intent during conflict resolution, downstream sub-issues
+that build on it will fail in confusing ways one or more waves later,
+far from the cause. Treat every `must_contain` and `must_not_contain`
+fingerprint pattern as a hard test case your resolution has to pass.
+When in doubt between two valid synthetic resolutions, pick the one
+that keeps MORE merged sub-issue intent verbatim.
+
+Final output must be plain text.
+
+Output sections:
+Conflicts resolved:
+- list files where conflicts were resolved
+
+Intent preserved:
+- for each merged sub-issue listed above, state how your resolution
+  preserved its intent (or note "not affected by this conflict" if
+  the sub-issue's files were untouched)
+
+Self-check:
+- confirm every edited file contained conflict markers
+- confirm every file path referenced by your edits exists in the repository
+- confirm no `must_not_contain` fingerprint pattern matches the
+  post-resolve tree
+- confirm every `must_contain` fingerprint pattern still matches the
+  post-resolve tree
+
+Notes:
+- brief explanation if any resolution required choosing one side
+- brief explanation if any resolution required synthesizing a new hunk

@@ -409,6 +409,30 @@ if ! [[ "${INTEGRATION_CONFLICT_MAX_RETRIES}" =~ ^[0-9]+$ ]] || [ "${INTEGRATION
   INTEGRATION_CONFLICT_MAX_RETRIES="3"
 fi
 
+# INTEGRATION_SYNC_CONFLICT_MAX_RETRIES is a tighter circuit-breaker
+# applied ONLY to integration-branch sync conflicts (head ref matches
+# orchestrator/project-*). The first-line conflict resolver
+# (prompts/conflict-resolver.txt) has no built-in awareness of merged
+# sub-issue intent — when it cannot reconcile two refactors of the same
+# hunk, the safest default is to escalate to the integration judge
+# quickly rather than burn three resolver dispatches that may "succeed"
+# textually while silently dropping a merged sub-issue's intent.
+#
+# Default 1: one resolver shot, then the judge (which gets a much
+# richer prompt with full PR context and the sub-issue intent rules).
+# Set to a higher value to give the resolver more attempts before
+# escalation. Set to 0 to skip the first-line resolver entirely and
+# escalate to the judge immediately on the first conflict tick.
+#
+# This setting only takes effect when the integration branch's head
+# ref matches orchestrator/project-*; non-integration conflict
+# dispatch sites continue to honour INTEGRATION_CONFLICT_MAX_RETRIES.
+INTEGRATION_SYNC_CONFLICT_MAX_RETRIES="${INTEGRATION_SYNC_CONFLICT_MAX_RETRIES:-1}"
+if ! [[ "${INTEGRATION_SYNC_CONFLICT_MAX_RETRIES}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::INTEGRATION_SYNC_CONFLICT_MAX_RETRIES must be a non-negative integer; defaulting to 1"
+  INTEGRATION_SYNC_CONFLICT_MAX_RETRIES="1"
+fi
+
 post_tracking_comment() {
   local comment_body="$1"
   local payload_file
@@ -1310,8 +1334,198 @@ ensure_integration_conflict_state_fields() {
         integration_sync_last_error: (.integration_sync_last_error // ""),
         integration_conflict_dispatch_count: (.integration_conflict_dispatch_count // 0),
         integration_conflict_dispatch_ts: (.integration_conflict_dispatch_ts // 0),
-        integration_conflict_unresolved_ticks: (.integration_conflict_unresolved_ticks // 0)
+        integration_conflict_unresolved_ticks: (.integration_conflict_unresolved_ticks // 0),
+        merged_issue_fingerprints: (.merged_issue_fingerprints // {})
       }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+}
+
+# Capture merged-sub-issue intent fingerprints for a sub-issue whose
+# linked PR has just landed on the integration branch. The resulting
+# regex allowlist/denylist is used by the integration-sync conflict
+# resolver (review_autofix.yml) to verify that the resolver's commit
+# preserves the sub-issue's intent — must_contain patterns are derived
+# from lines the sub-issue ADDED, must_not_contain from lines it
+# REMOVED.
+#
+# Storage: top-level state field `merged_issue_fingerprints`, an
+# object keyed by the sub-issue's GitHub issue number (string). Each
+# entry is:
+#   {
+#     "issue":            <int>,           # github issue number
+#     "pr":               <int>,           # github PR number
+#     "captured_at":      <iso8601>,
+#     "must_contain":     [ {file, regex}, ... ],
+#     "must_not_contain": [ {file, regex}, ... ]
+#   }
+#
+# Deliberately fail-open: any error in capture (no PR found, network
+# failure, malformed diff) logs a warning and leaves state unchanged.
+# Going-forward only (Q4:A): existing already-merged sub-issues on
+# in-flight integration branches are NOT backfilled.
+#
+# Caps:
+#   - Up to FINGERPRINT_PER_FILE_CAP patterns per file per direction.
+#   - Files outside .github/, scripts/, prompts/, ai-memory/ are
+#     skipped (binary-prone, generated, or out-of-scope for resolver
+#     edits).
+#   - Patterns shorter than FINGERPRINT_MIN_PATTERN_CHARS (after trim)
+#     are skipped — too generic to fingerprint reliably.
+#   - Patterns containing only whitespace, only braces/brackets, or
+#     bash conflict-marker characters are skipped.
+#
+# Usage: capture_intent_fingerprints_for_merged_subissue <issue_num> <pr_num>
+FINGERPRINT_PER_FILE_CAP="${FINGERPRINT_PER_FILE_CAP:-12}"
+FINGERPRINT_MIN_PATTERN_CHARS="${FINGERPRINT_MIN_PATTERN_CHARS:-12}"
+capture_intent_fingerprints_for_merged_subissue() {
+  local issue_num="$1"
+  local pr_num="$2"
+  [ -f "${STATE_FILE}" ] || return 0
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 0
+  [[ "${pr_num}" =~ ^[0-9]+$ ]] || return 0
+  ensure_integration_conflict_state_fields
+
+  # Skip if state already has fingerprints for this issue (idempotent).
+  local existing
+  existing="$(jq -r --arg k "${issue_num}" '.merged_issue_fingerprints[$k] // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  if [ -n "${existing}" ]; then
+    return 0
+  fi
+
+  local diff_file
+  diff_file="$(mktemp "${TMPDIR:-/tmp}/intent_fp_diff.XXXXXX")"
+  if ! gh api -H 'Accept: application/vnd.github.diff' \
+    "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" > "${diff_file}" 2>/dev/null; then
+    echo "::warning::[intent-fp] Failed to fetch diff for PR #${pr_num} (issue #${issue_num}); fingerprint capture skipped."
+    rm -f "${diff_file}"
+    return 0
+  fi
+  if [ ! -s "${diff_file}" ]; then
+    rm -f "${diff_file}"
+    return 0
+  fi
+
+  local fp_json
+  fp_json="$(FINGERPRINT_PER_FILE_CAP="${FINGERPRINT_PER_FILE_CAP}" \
+    FINGERPRINT_MIN_PATTERN_CHARS="${FINGERPRINT_MIN_PATTERN_CHARS}" \
+    python3 - "${diff_file}" <<'PY' 2>/dev/null || true
+import json, os, re, sys
+
+cap = int(os.environ.get("FINGERPRINT_PER_FILE_CAP", "12"))
+minlen = int(os.environ.get("FINGERPRINT_MIN_PATTERN_CHARS", "12"))
+
+ALLOWED_PREFIXES = (
+    ".github/", "scripts/", "prompts/", "ai-memory/",
+    "tests/", "workflow-templates/", "docs/", "db/contracts/",
+    "agents.md", "README.md", "CLAUDE.md",
+)
+SKIP_RE = re.compile(r"^[\s{}\[\]()<>=+\-*]*$")
+
+def acceptable(path: str) -> bool:
+    return any(path.startswith(p) or path == p.rstrip("/") for p in ALLOWED_PREFIXES)
+
+def cleanup(line: str) -> str:
+    return line.rstrip("\n").rstrip("\r")
+
+def is_useful(line: str) -> bool:
+    stripped = line.strip()
+    if len(stripped) < minlen:
+        return False
+    if SKIP_RE.match(stripped):
+        return False
+    # Skip lines that look like raw conflict markers (paranoia).
+    if stripped.startswith(("<<<<<<<", "=======", ">>>>>>>")):
+        return False
+    return True
+
+per_file_added: dict[str, list[str]] = {}
+per_file_removed: dict[str, list[str]] = {}
+
+current = None
+diff_path = sys.argv[1]
+try:
+    with open(diff_path, "r", encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            line = cleanup(raw)
+            if line.startswith("diff --git "):
+                current = None
+                continue
+            if line.startswith("+++ b/"):
+                current = line[6:].strip()
+                continue
+            if line.startswith("--- a/"):
+                continue
+            if current is None or current == "/dev/null":
+                continue
+            if not acceptable(current):
+                continue
+            if line.startswith("+") and not line.startswith("+++"):
+                content = line[1:]
+                if is_useful(content):
+                    per_file_added.setdefault(current, []).append(content)
+            elif line.startswith("-") and not line.startswith("---"):
+                content = line[1:]
+                if is_useful(content):
+                    per_file_removed.setdefault(current, []).append(content)
+except Exception:
+    print("{}")
+    sys.exit(0)
+
+def to_patterns(by_file: dict[str, list[str]]) -> list[dict]:
+    out: list[dict] = []
+    for path, lines in by_file.items():
+        seen = set()
+        kept: list[str] = []
+        for raw in lines:
+            stripped = raw.strip()
+            if stripped in seen:
+                continue
+            seen.add(stripped)
+            kept.append(stripped)
+            if len(kept) >= cap:
+                break
+        for stripped in kept:
+            out.append({"file": path, "regex": re.escape(stripped)})
+    return out
+
+result = {
+    "must_contain": to_patterns(per_file_added),
+    "must_not_contain": to_patterns(per_file_removed),
+}
+print(json.dumps(result))
+PY
+  )"
+  rm -f "${diff_file}"
+
+  if [ -z "${fp_json}" ]; then
+    return 0
+  fi
+  if ! printf '%s' "${fp_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local mc_count nmc_count
+  mc_count="$(printf '%s' "${fp_json}" | jq -r '.must_contain | length' 2>/dev/null || echo 0)"
+  nmc_count="$(printf '%s' "${fp_json}" | jq -r '.must_not_contain | length' 2>/dev/null || echo 0)"
+  if [ "${mc_count}" -eq 0 ] && [ "${nmc_count}" -eq 0 ]; then
+    return 0
+  fi
+
+  local now_iso
+  now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq --arg k "${issue_num}" \
+     --argjson issue "${issue_num}" \
+     --argjson pr "${pr_num}" \
+     --arg ts "${now_iso}" \
+     --argjson fp "${fp_json}" \
+     '.merged_issue_fingerprints[$k] = {
+        issue: $issue,
+        pr: $pr,
+        captured_at: $ts,
+        must_contain: $fp.must_contain,
+        must_not_contain: $fp.must_not_contain
+      }' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  echo "  [intent-fp] Captured fingerprints for issue #${issue_num} (PR #${pr_num}): must_contain=${mc_count} must_not_contain=${nmc_count}"
 }
 
 # Create (or discover) the integration->default PR eagerly so that the
@@ -1531,9 +1745,23 @@ heal_integration_branch_conflict() {
     '.integration_sync_status = "conflict" |
      .integration_sync_last_error = $err' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  # Pick the effective retry budget. For integration-branch sync
+  # conflicts (head ref matches orchestrator/project-*) the first-line
+  # resolver lacks merged-sub-issue intent context, so we honour the
+  # tighter INTEGRATION_SYNC_CONFLICT_MAX_RETRIES knob (default 1) to
+  # escalate to the integration judge sooner. For all other dispatch
+  # paths we keep the historical INTEGRATION_CONFLICT_MAX_RETRIES
+  # behaviour so non-integration-sync callers are unaffected.
+  local effective_max_retries="${INTEGRATION_CONFLICT_MAX_RETRIES}"
+  case "${integration_branch}" in
+    orchestrator/project-*)
+      effective_max_retries="${INTEGRATION_SYNC_CONFLICT_MAX_RETRIES}"
+      ;;
+  esac
   # Circuit breaker: after MAX retries, escalate to judge instead of
   # dispatching one more resolver run.
-  if [ "${unresolved_ticks}" -ge "${INTEGRATION_CONFLICT_MAX_RETRIES}" ]; then
+  if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then
     if invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}"; then
       # Reset unresolved ticks so the resolver loop can resume after
       # the judge's push. Keep dispatch_count as audit trail.
@@ -1541,7 +1769,7 @@ heal_integration_branch_conflict() {
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_tracking_comment "## 🛠️ Integration judge invoked
 
-Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${INTEGRATION_CONFLICT_MAX_RETRIES} automated resolver attempts. The judge has been invoked with full PR context to resolve conflicts. The poller will retry merge on the next tick."
+Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${effective_max_retries} automated resolver attempts. The judge has been invoked with full PR context to resolve conflicts. The poller will retry merge on the next tick."
       return 0
     fi
     jq --arg err "judge escalation failed: ${error_msg}" \
@@ -1553,7 +1781,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did n
     post_state_comment
     post_tracking_comment "## ❌ Integration self-healing exhausted
 
-Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could not be made mergeable after ${INTEGRATION_CONFLICT_MAX_RETRIES} automated attempts AND a judge escalation that itself failed. Manual intervention required."
+Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could not be made mergeable after ${effective_max_retries} automated attempts AND a judge escalation that itself failed. Manual intervention required."
     tg_notify "❌ Integration self-healing exhausted for #${TRACKING_NUM} (PR #${final_pr}). Manual intervention required."
     return 1
   fi
@@ -1597,7 +1825,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could
       if [ "${unresolved_ticks}" -eq 1 ]; then
         post_tracking_comment "## 🔧 Integration self-healing started
 
-Detected a real merge conflict while syncing \`${default_branch}\` into \`${integration_branch}\`. Dispatched the review/autofix workflow against final PR #${final_pr} for automated resolution. Will retry up to ${INTEGRATION_CONFLICT_MAX_RETRIES} times before escalating to the judge."
+Detected a real merge conflict while syncing \`${default_branch}\` into \`${integration_branch}\`. Dispatched the review/autofix workflow against final PR #${final_pr} for automated resolution. Will retry up to ${effective_max_retries} times before escalating to the judge."
       fi
       tg_notify "🔧 Integration conflict on #${TRACKING_NUM}: dispatched resolver for PR #${final_pr} (attempt ${dispatch_count}, unresolved_ticks=${unresolved_ticks})." "WARNING"
       ;;
@@ -4546,6 +4774,19 @@ The poller will resume processing on the next cycle."
             '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum)).status = "merged"' \
             "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
           PRIOR_WAVE_REMEDIATED="true"
+          # Capture intent fingerprints for the late-detected merged
+          # sub-issue (going-forward only — see capture helper docs).
+          _bws_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+          if [ -n "${_bws_integ}" ]; then
+            _bws_pr="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/timeline" \
+              --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+              2>/dev/null || echo "")"
+            if [[ "${_bws_pr}" =~ ^[0-9]+$ ]]; then
+              capture_intent_fingerprints_for_merged_subissue "${pw_inum}" "${_bws_pr}" || true
+            fi
+            unset _bws_pr
+          fi
+          unset _bws_integ
         elif echo "${PW_LABELS}" | jq -e 'index("ai:closed")' >/dev/null 2>&1; then
           echo "  [backward-scan] #${pw_inum} is now ai:closed. Updating state."
           jq --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
@@ -4906,6 +5147,24 @@ json.dump(result, sys.stdout)
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       RECONCILE_STATE_CHANGED=true
       add_healing_note "Issue #${_ws_gh}: state ${_old_status:-pending} -> ${_ws_status} (${_ws_source})"
+      # Capture intent fingerprints for sub-issues that just transitioned
+      # to merged on a project with an integration branch, so the
+      # integration-sync conflict resolver can verify it preserved the
+      # sub-issue's intent. Going-forward only (Q4:A): no backfill of
+      # already-merged sub-issues from prior poll cycles.
+      if [ "${_ws_status}" = "merged" ] && [[ "${_ws_gh}" =~ ^[0-9]+$ ]]; then
+        _intent_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+        if [ -n "${_intent_integ}" ]; then
+          _intent_pr="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${_ws_gh}/timeline" \
+            --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+            2>/dev/null || echo "")"
+          if [[ "${_intent_pr}" =~ ^[0-9]+$ ]]; then
+            capture_intent_fingerprints_for_merged_subissue "${_ws_gh}" "${_intent_pr}" || true
+          fi
+          unset _intent_pr
+        fi
+        unset _intent_integ
+      fi
     fi
   done < <(echo "${WAVE_STATUS}" | jq -c '.issues[]')
 

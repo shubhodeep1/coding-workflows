@@ -153,6 +153,11 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Preserve all existing env var names.
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
 - Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
+- Integration-sync conflict knobs (see also section 18 below):
+  - `INTEGRATION_CONFLICT_MAX_RETRIES` (default `3`) — global resolver-retry budget for non-orchestrator integration branches.
+  - `INTEGRATION_SYNC_CONFLICT_MAX_RETRIES` (default `1`) — tighter budget applied **only** when the head ref matches `orchestrator/project-*`. One resolver shot, then escalate to the integration judge.
+  - `FINGERPRINT_PER_FILE_CAP` (default `12`) — cap on captured patterns per file per direction.
+  - `FINGERPRINT_MIN_PATTERN_CHARS` (default `12`) — minimum trimmed-line length for a captured fingerprint pattern.
 
 ---
 
@@ -339,6 +344,26 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
   up immediately. Only run `test-and-mark-stable.yml` when promoting the
   fix to the `@stable` channel for consumer repos — it is not on the
   critical path for recovering this repo's own runtime.
+
+---
+
+## 18. Orchestrator Integration-Sync Auto-Heal Hardening
+
+When a sub-issue PR merges into an orchestrator integration branch (head matches `orchestrator/project-*`), the poller captures intent fingerprints from the merged diff and persists them under the new top-level state field `merged_issue_fingerprints` (object keyed by GitHub issue number). Each entry stores `must_contain` and `must_not_contain` regex pattern lists derived from added/removed lines in the PR diff.
+
+When a `main → integration_branch` sync conflict subsequently triggers `heal_integration_branch_conflict`:
+
+- The resolver dispatch uses `prompts/integration-sync-conflict-resolver.txt` (rendered by `.github/workflows/review_autofix.yml` when the head ref matches `orchestrator/project-*`) instead of the generic `prompts/conflict-resolver.txt`. The integration template injects the tracking-issue title/body, the merged sub-issues list, and the full `merged_issue_fingerprints` JSON, and instructs the model to synthesise rather than pick a side when both sides of a hunk carry merged sub-issue intent.
+- After the codex resolver writes the working tree but **before** the `[ai-merge-resolve]` commit lands, the resolver step calls `scripts/verify_integration_fingerprints.py` against the captured fingerprints. A `must_contain` regex that no longer matches, or a `must_not_contain` regex that reappears, hard-fails the resolver step with `::error::` annotations. The merge state is left intact so the next poll tick re-enters healing and escalates to the integration judge (per `INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1` default).
+- The retry budget is **branch-aware** in `heal_integration_branch_conflict`: orchestrator integration branches honour the tighter `INTEGRATION_SYNC_CONFLICT_MAX_RETRIES` (default 1), all other dispatch sites honour the historical `INTEGRATION_CONFLICT_MAX_RETRIES` (default 3).
+
+Operational rules:
+
+- The fingerprint capture helper (`capture_intent_fingerprints_for_merged_subissue`) is **going-forward only** — sub-issues merged before this hardening landed have no fingerprints and are silently skipped by the verifier.
+- `verify_integration_fingerprints.py` lives in `OPTIONAL_BOOTSTRAP_SCRIPTS` so older consumer-repo `script_ref` pins bootstrap cleanly with a fail-open warning rather than a hard error. Do **not** promote it to `REQUIRED_BOOTSTRAP_SCRIPTS` until the next stable channel cut, otherwise consumer repos pinned to the prior `@stable` will break on bootstrap.
+- The verifier exits 0 on success, 1 on hard violation (resolver step aborts, no commit), 2 on plumbing failures (file missing or unparseable JSON — fail-open warn). Do not change those exit codes — `review_autofix.yml` keys its `case` on them.
+- New state field `merged_issue_fingerprints` must be seeded by `ensure_integration_conflict_state_fields` on every poll tick so jq arithmetic over it is safe.
+- All renames of the new env vars and new state field are **breaking changes** per CLAUDE.md §6 (Naming Immutability) and require an explicit alongside-old shim.
 
 ---
 
