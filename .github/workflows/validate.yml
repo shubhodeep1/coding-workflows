@@ -168,7 +168,10 @@ jobs:
               if [ -e "${target_path}" ] && [ "$(realpath -m "${source_path}")" = "$(realpath -m "${target_path}")" ]; then
                 return 0
               fi
-              cp "${source_path}" "${target_path}"
+              cp "${source_path}" "${target_path}" || {
+                echo "Failed to copy ${repo_path} from ${source_path} to ${target_path}" >&2
+                return 1
+              }
               return 0
             fi
 
