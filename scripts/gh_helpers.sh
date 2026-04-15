@@ -582,6 +582,8 @@ _gh_issue_timeline_with_cross_refs_rest()
 	local pr_url
 	local pr_json
 	local pr_lookup_json='{}'
+	local github_api_base="${GITHUB_API_URL:-https://api.github.com}"
+	local pr_api_prefix="${github_api_base}/repos/${owner}/${repo}/pulls/"
 
 	if ! timeline_json="$(gh_retry gh api --paginate "repos/${owner}/${repo}/issues/${issue_number}/timeline" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
 		return 1
@@ -591,6 +593,9 @@ _gh_issue_timeline_with_cross_refs_rest()
 	if [ -n "${pr_urls}" ]; then
 		while IFS= read -r pr_url; do
 			[ -n "${pr_url}" ] || continue
+			if [[ "${pr_url}" != "${pr_api_prefix}"* ]]; then
+				continue
+			fi
 			if pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)" && printf '%s' "${pr_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
 				pr_lookup_json="$(jq -c --arg url "${pr_url}" --argjson pr "${pr_json}" '. + {($url): {ok: true, number: ($pr.number // null), state: ($pr.state // null), merged_at: ($pr.merged_at // null), merged: (($pr.merged_at != null) or ($pr.merged == true))}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
 			else
@@ -696,6 +701,12 @@ gh_issue_timeline_with_cross_refs()
 		return $?
 	fi
 
+	if printf '%s' "${graphql_json}" | jq -e '.errors? | (type == "array" and length > 0)' >/dev/null 2>&1; then
+		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=graphql_errors owner=${owner} repo=${repo} issue=${issue_number}" >&2
+		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
+		return $?
+	fi
+
 	has_next_page="$(printf '%s' "${graphql_json}" | jq -r '.data.repository.issue.timelineItems.pageInfo.hasNextPage // false' 2>/dev/null || echo "true")"
 	if [ "${has_next_page}" = "true" ]; then
 		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=timeline_has_next_page owner=${owner} repo=${repo} issue=${issue_number}" >&2
@@ -703,7 +714,7 @@ gh_issue_timeline_with_cross_refs()
 		return $?
 	fi
 
-	if ! transformed_json="$(printf '%s' "${graphql_json}" | jq -c --arg api_base "${GITHUB_API_URL:-https://api.github.com}" '
+	if ! transformed_json="$(printf '%s' "${graphql_json}" | jq -c --arg api_base "${GITHUB_API_URL:-https://api.github.com}" --arg owner "${owner}" --arg repo "${repo}" '
 		def source_issue($source):
 			if ($source | type) != "object" then
 				{
@@ -718,9 +729,9 @@ gh_issue_timeline_with_cross_refs()
 				{
 					number: ($source.number // null),
 					pull_request: (
-						if ($source.number != null) and ($source.repository.owner.login? != null) and ($source.repository.name? != null) then
-							{url: ($api_base + "/repos/" + $source.repository.owner.login + "/" + $source.repository.name + "/pulls/" + ($source.number | tostring))}
-						else
+					if ($source.number != null) and ($source.repository.owner.login? != null) and ($source.repository.name? != null) and ($source.repository.owner.login == $owner) and ($source.repository.name == $repo) then
+						{url: ($api_base + "/repos/" + $source.repository.owner.login + "/" + $source.repository.name + "/pulls/" + ($source.number | tostring))}
+					else
 							null
 						end
 					),
