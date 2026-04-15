@@ -583,6 +583,7 @@ _gh_issue_timeline_with_cross_refs_rest()
 	local pr_json
 	local pr_lookup_json='{}'
 	local github_api_base="${GITHUB_API_URL:-https://api.github.com}"
+	github_api_base="${github_api_base%/}"
 	local pr_api_prefix="${github_api_base}/repos/${owner}/${repo}/pulls/"
 
 	if ! timeline_json="$(gh_retry gh api --paginate "repos/${owner}/${repo}/issues/${issue_number}/timeline" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
