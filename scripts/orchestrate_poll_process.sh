@@ -2190,7 +2190,8 @@ extract_fix_issues_from_comment() {
 
 extract_implement_fixup_blockers_from_comment() {
   local comment_body="$1"
-  printf '%s' "${comment_body}" | sed -n '/^<!-- IMPLEMENT_FIXUP_BLOCKERS_V1$/,/^IMPLEMENT_FIXUP_BLOCKERS_V1 -->$/p' | sed '1d;$d'
+  # Normalise literal \n sequences so marker lines are anchored to real lines.
+  printf '%s' "${comment_body}" | sed 's/\\n/\n/g' | sed -n '/^<!-- IMPLEMENT_FIXUP_BLOCKERS_V1$/,/^IMPLEMENT_FIXUP_BLOCKERS_V1 -->$/p' | sed '1d;$d'
 }
 
 sync_implementation_fixup_blockers() {
