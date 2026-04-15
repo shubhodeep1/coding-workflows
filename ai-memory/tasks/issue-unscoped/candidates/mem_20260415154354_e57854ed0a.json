@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\ntests/test_implement_post_codex_recovery.py\n\nLow confidence files (mentioned by 1 reviewer):\ntests/test_orchestrate_poll_process.py\ntests/test_orchestrate_poll_process.py",
+  "fingerprint": "206e5f8abf0d2ce7282a75682dc1418794da63bf51583335f8601a5f807e2044",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1101,
+    "run_id": "24463382728",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24463382728",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415154354_e57854ed0a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1101,
+    "run_id": "24463382728"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T15:43:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
