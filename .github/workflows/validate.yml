@@ -179,11 +179,11 @@ jobs:
 
             if [ "${require_remote}" = "true" ]; then
               echo "Missing required remote file: ${repo_path} (${script_ref}); local fallback is disabled for this file." >&2
-              exit 1
+              return 1
             fi
 
             echo "Missing required file: ${repo_path} (${script_ref}) and local fallback ${target_path}" >&2
-            exit 1
+            return 1
           }
 
           _fetched_scripts=()
