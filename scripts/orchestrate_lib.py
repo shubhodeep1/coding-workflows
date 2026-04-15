@@ -479,13 +479,16 @@ def resolve_stall_recovery_action(
 
 	action_idx = min(recovery_count, len(actions) - 1)
 	fallback_action = actions[action_idx]
-	allowed_actions = set(actions)
 
 	if judged_action is None:
 		return fallback_action
 
 	candidate = str(judged_action).strip()
-	if candidate in VALID_STALL_RECOVERY_ACTIONS and candidate in allowed_actions:
+	if not candidate:
+		return fallback_action
+	if candidate == "escalate_human" and not allow_human_terminalization:
+		return fallback_action
+	if candidate in VALID_STALL_RECOVERY_ACTIONS or candidate == "resolve_merge_conflict":
 		return candidate
 	return fallback_action
 
