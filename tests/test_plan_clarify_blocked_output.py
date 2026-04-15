@@ -66,7 +66,7 @@ def test_clarify_workflow_detects_and_escalates_blocked_output() -> None:
 	assert "--add-label 'ai:blocked'" in wf
 	assert "--remove-label 'ai:clarification'" in wf
 	assert "--remove-label 'ai:planning'" in wf
-	assert "steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'" in wf
+	assert "steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'" in wf
 	assert "OUTCOME=\"blocked\"" in wf
 
 

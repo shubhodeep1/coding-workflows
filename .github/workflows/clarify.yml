@@ -993,7 +993,7 @@ jobs:
           tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "CRITICAL"
 
       - name: Post clarification questions
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1014,7 +1014,7 @@ jobs:
             -f body="$(cat "${RUNTIME_DIR}/clarification_comment.md")"
 
       - name: Record clarification candidate (needs clarification)
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1036,7 +1036,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Post clear-to-proceed comment
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1055,7 +1055,7 @@ jobs:
             -f body=$'/answer [auto-answered-by-clarify]\n\nAuto answer was posted because no human clarification was required.'
 
       - name: Record clarification candidate (clear)
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1075,7 +1075,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Telegram clarification notification
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
