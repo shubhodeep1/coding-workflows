@@ -282,8 +282,14 @@ fi
 # Accept a/, b/ prefixes and optional trailing whitespace+timestamp.
 # (/dev/null is excluded here because the earlier guard rejects it.)
 # Escape regex metacharacters so only the exact allowed target filename
-# is accepted in ---/+++ headers.
-_escaped_target="$(printf '%s' "${DECISION_TARGET}" | sed 's/[][\\.^$*+?(){}|]/\\\\&/g')"
+# is accepted in ---/+++ headers. The sed replacement is `\\&` — in sed
+# replacement syntax, `\\` is ONE literal backslash and `&` is the
+# matched text, producing output like `discover\.txt` (one backslash,
+# one dot). A previous revision used `\\\\&` (two backslashes) which
+# made the resulting ERE `discover\\.txt` — ERE interprets `\\` as a
+# literal backslash and `.` as any char, so every benign patch was
+# falsely rejected. See PR #1009 autofix d060ad0 regression.
+_escaped_target="$(printf '%s' "${DECISION_TARGET}" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
 _expected_re="(a/|b/)?prompts/${_escaped_target}([[:space:]]|$)"
 if grep -E '^(\+\+\+|---) ' "${SELF_HEAL_PATCH_TMP}" | grep -vE "${_expected_re}" >/dev/null 2>&1; then
 	echo "self-heal: refusing — patch touches files outside prompts/${DECISION_TARGET}" >&2
