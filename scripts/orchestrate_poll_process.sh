@@ -4186,7 +4186,11 @@ recover_stalled_issue() {
           --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
           2>/dev/null || echo "")"
         if [[ "${_lpr_num}" =~ ^[0-9]+$ ]]; then
-          _lpr_state="$(_jq_field "$(_fetch_pr_json "${_lpr_num}")" '.state' 'open|closed|merged')"
+          local _lpr_json=""
+          local _lpr_merged=""
+          _lpr_json="$(_fetch_pr_json "${_lpr_num}")"
+          _lpr_state="$(_jq_field "${_lpr_json}" '.state' 'open|closed')"
+          _lpr_merged="$(_jq_field "${_lpr_json}" '.merged_at != null' 'true|false')"
           # REST-fallback merged-PR sub-guard: catches merged PRs that
           # the batched GraphQL prefetch missed or failed to fetch
           # (transient network error, partial batch, issue number that
@@ -4197,9 +4201,9 @@ recover_stalled_issue() {
           # as the cache-hit path at the top of this guard, and
           # respects ENABLE_STALL_MERGED_PR_GUARD so disabling the
           # flag still gives full opt-out.  No extra API calls — the
-          # REST fallback has already fetched the PR state on the
+          # REST fallback has already fetched the PR payload on the
           # preceding line.
-          if [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ] && [ "${_lpr_state}" = "merged" ]; then
+          if [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ] && [ "${_lpr_merged}" = "true" ]; then
             echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${_lpr_num} phase=${phase} action=${action} source=rest_fallback"
             _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${_lpr_num}"
             STALL_HEALING_CHANGED=true
