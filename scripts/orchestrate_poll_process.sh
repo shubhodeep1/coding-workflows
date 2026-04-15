@@ -369,7 +369,9 @@ fi
 # posted on issues whose work is already merged but whose phase label
 # got stripped (or whose "Closes #N" autolink never fired).  The
 # linked-PR state is prefetched in a single batched GraphQL call per
-# stall path so the guard adds 0 additional per-issue REST calls.
+# stall path, so the guard adds 0 additional per-issue REST calls on
+# successful prefetch, but may fall back to per-issue REST (timeline
+# + PR payload) on cache/prefetch miss.
 # Default true; set to false to disable the guard entirely.
 ENABLE_STALL_MERGED_PR_GUARD="${ENABLE_STALL_MERGED_PR_GUARD:-true}"
 if is_truthy "${ENABLE_STALL_MERGED_PR_GUARD}"; then
