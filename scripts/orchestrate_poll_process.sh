@@ -4153,7 +4153,10 @@ recover_stalled_issue() {
   # Both sub-guards first consult STALL_MANAGED_LINKED_PR_CACHE, which is
   # populated once per stall loop via a single batched GraphQL call
   # (_fetch_linked_pr_status_graphql).  On cache miss they fall back to the
-  # legacy per-issue REST lookup — fail-open behaviour preserved.
+  # legacy per-issue REST lookup — and the REST fallback also short-circuits
+  # on merged PRs, so a GraphQL/prefetch failure cannot silently regress
+  # the merged-PR guard back into the /reclarify loop.  Fail-open behaviour
+  # preserved: when REST also fails, the stall action runs as before.
   case "${action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement)
       local _lpr_cache_entry=""
@@ -4184,6 +4187,24 @@ recover_stalled_issue() {
           2>/dev/null || echo "")"
         if [[ "${_lpr_num}" =~ ^[0-9]+$ ]]; then
           _lpr_state="$(_jq_field "$(_fetch_pr_json "${_lpr_num}")" '.state' 'open|closed|merged')"
+          # REST-fallback merged-PR sub-guard: catches merged PRs that
+          # the batched GraphQL prefetch missed or failed to fetch
+          # (transient network error, partial batch, issue number that
+          # wasn't in the stalls list, etc.).  Without this, the
+          # merged-PR short-circuit silently regresses on any cache
+          # miss and the /reclarify loop from GH issue #1074 could
+          # recur.  Uses the same _reconcile_merged_pr_issue helper
+          # as the cache-hit path at the top of this guard, and
+          # respects ENABLE_STALL_MERGED_PR_GUARD so disabling the
+          # flag still gives full opt-out.  No extra API calls — the
+          # REST fallback has already fetched the PR state on the
+          # preceding line.
+          if [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ] && [ "${_lpr_state}" = "merged" ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${_lpr_num} phase=${phase} action=${action} source=rest_fallback"
+            _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${_lpr_num}"
+            STALL_HEALING_CHANGED=true
+            return 1  # Signal: no action taken (caller should not increment counter)
+          fi
         fi
       fi
       if [[ "${_lpr_num}" =~ ^[0-9]+$ ]] && [ "${_lpr_state}" = "open" ]; then
