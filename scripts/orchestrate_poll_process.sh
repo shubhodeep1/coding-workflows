@@ -2213,7 +2213,7 @@ sync_implementation_fixup_blockers() {
     return 0
   fi
 
-  latest_blocker_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("IMPLEMENT_FIXUP_BLOCKERS_V1"))] | last // empty')"
+  latest_blocker_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("IMPLEMENT_FIXUP_BLOCKERS_V1"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty')"
   if [ -z "${latest_blocker_comment_json}" ]; then
     return 0
   fi
@@ -2250,7 +2250,7 @@ sync_implementation_fixup_blockers() {
 
   existing_source_issue="$(jq -r --arg local_id "${issue_local_id}" --argjson wave_idx "${wave_idx}" '
     .waves[$wave_idx].issues[] | select(.id == $local_id) | .blocks_source_issue // empty
-  ' "${STATE_FILE}" | head -n1)"
+  ' "${STATE_FILE}" 2>/dev/null | head -n1 || echo "")"
   existing_fixups="$(jq -c --arg local_id "${issue_local_id}" --argjson wave_idx "${wave_idx}" '
     .waves[$wave_idx].issues[] | select(.id == $local_id) | (.fixup_issue_numbers // [])
     | if type == "array" then map(select(type == "number")) | map(if floor == . then . else empty end) | unique else [] end
@@ -6245,7 +6245,7 @@ ${RB_FIX_DESC}
     # Read the original issue to preserve its content
     IF_TITLE="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
     IF_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
-    IF_COMMENTS_JSON="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments?per_page=100" || echo '[]')"
+    IF_COMMENTS_JSON="$(_safe_gh_jq --paginate "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments?per_page=100" | jq -cs 'add // []' 2>/dev/null || echo '[]')"
 
     sync_implementation_fixup_blockers "${if_issue}" "${IF_LOCAL_ID}" "${WAVE_IDX}" "${IF_COMMENTS_JSON}" || true
     if [ "${SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED:-false}" = "true" ]; then
