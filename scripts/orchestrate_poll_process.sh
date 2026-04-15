@@ -331,6 +331,13 @@ else
   ENABLE_STALL_JUDGE="false"
 fi
 
+ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
+if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
+  ENABLE_STALL_HUMAN_TERMINALIZATION="true"
+else
+  ENABLE_STALL_HUMAN_TERMINALIZATION="false"
+fi
+
 ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
 if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
   ENABLE_STANDALONE_STALL_RECOVERY="true"
@@ -5914,12 +5921,12 @@ sys.exit(1)
                 else
                   # Keep workflow-edit guard exclusions while avoiding brittle
                   # tracked/untracked split staging pathspec failures.
-                  git add -A -- . ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  git add -A -- . ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.github/workflows' ':!.serena' ':!.github/prompts' ':!.github/scripts'
                 fi
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
-                if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/)'; then
-                  echo "Error: scripts/, prompts/, or .github/ai is staged while ALLOW_WORKFLOW_EDITS=false"
+                if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then
+                  echo "Error: scripts/, prompts/, .github/ai/, or .github/workflows is staged while ALLOW_WORKFLOW_EDITS=false"
                   exit 1
                 fi
                 if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
