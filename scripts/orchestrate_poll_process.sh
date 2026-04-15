@@ -5257,18 +5257,29 @@ json.dump(result, sys.stdout)
         # late to correct the branch-prep decision. Keep _rb_pr_json in
         # sync so downstream consumers (e.g. RB_PR_MERGEABLE_STATE) see
         # the same snapshot.
+        # Snapshot the pre-refetch derived flags so we can roll back if the
+        # refreshed payload is invalid. _rb_pr_json itself is only replaced
+        # on success, so downstream consumers of _rb_pr_json stay in sync
+        # with RB_PR_STATE/RB_PR_MERGED regardless of which path we take.
         _rb_prev_pr_state="${RB_PR_STATE:-}"
         _rb_prev_pr_merged="${RB_PR_MERGED:-false}"
-        _rb_pr_json="$(_fetch_pr_json "${RB_PR}")"
-        RB_PR_STATE="$(_jq_field "${_rb_pr_json}" '.state' 'open|closed|merged')"
-        RB_PR_MERGED="$(_jq_field "${_rb_pr_json}" '.merged_at != null' 'true|false')"
-        [ -n "${RB_PR_MERGED}" ] || RB_PR_MERGED="false"
-        if [ "${_rb_pr_json}" = "{}" ] && [ "${_rb_prev_pr_merged}" = "true" ]; then
-          echo "::warning::[review-blocked] PR #${RB_PR} state refresh failed during branch prep; preserving earlier merged state to avoid misrouting follow-up preparation."
+        _rb_pr_json_refetched="$(_fetch_pr_json "${RB_PR}")"
+        if printf '%s' "${_rb_pr_json_refetched}" | jq -e 'type == "object" and ((.state // "") | IN("open","closed","merged"))' >/dev/null 2>&1; then
+          _rb_pr_json="${_rb_pr_json_refetched}"
+          RB_PR_STATE="$(_jq_field "${_rb_pr_json}" '.state' 'open|closed|merged')"
+          RB_PR_MERGED="$(_jq_field "${_rb_pr_json}" '.merged_at != null' 'true|false')"
+          : "${RB_PR_MERGED:=false}"
+        else
+          # Transient API failure or malformed response: keep the earlier
+          # snapshot entirely (both the JSON blob and the derived flags) so
+          # downstream consumers of _rb_pr_json — mergeable_state, head.sha,
+          # etc. — stay in sync with RB_PR_STATE/RB_PR_MERGED instead of
+          # getting a `{}` payload while the flags still say "merged".
+          echo "::warning::[review-blocked] Failed to refresh PR #${RB_PR} state with a valid payload during branch prep; keeping earlier snapshot."
           RB_PR_STATE="${_rb_prev_pr_state}"
           RB_PR_MERGED="${_rb_prev_pr_merged}"
         fi
-        unset _rb_prev_pr_state _rb_prev_pr_merged
+        unset _rb_prev_pr_state _rb_prev_pr_merged _rb_pr_json_refetched
 
         if [ "${RB_PR_MERGED}" = "true" ]; then
           RB_TARGET_MERGED="true"
@@ -5331,24 +5342,32 @@ ${FOLLOWUP_BLOCK_REASON}"
             #      so the resulting PR diff may be larger than intended.
             #      A warning is emitted so operators can intervene.
             _rb_co_src=""
+            _rb_co_src_desc=""
             if git fetch --no-tags origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" 2>/dev/null \
               && git rev-parse --verify "refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1; then
               _rb_co_src="refs/remotes/origin/${BASE_REF}"
+              _rb_co_src_desc="${BASE_REF} (fetched from origin)"
             elif git rev-parse --verify "refs/heads/${BASE_REF}" >/dev/null 2>&1; then
               _rb_co_src="refs/heads/${BASE_REF}"
+              _rb_co_src_desc="${BASE_REF} (existing local ref)"
               echo "  [follow-up] Using existing local ref for ${BASE_REF} (fetch from origin did not produce a fresh remote-tracking ref)."
             elif git rev-parse --verify HEAD >/dev/null 2>&1; then
               _rb_co_src="HEAD"
+              _rb_co_src_desc="current HEAD (NOT ${BASE_REF}; fetch and local lookup both failed)"
               echo "::warning::Could not fetch or locate base ref '${BASE_REF}' for issue #${rb_issue}; creating follow-up branch from current HEAD as a best-effort fallback. The resulting PR diff may be larger than intended."
             fi
             if [ -n "${_rb_co_src}" ] \
               && git checkout -B "${FOLLOWUP_BRANCH}" "${_rb_co_src}" 2>/dev/null; then
               RB_COMBINED_MODE="true"
-              RB_COMBINED_BRANCH_INFO="You are on a follow-up branch (${FOLLOWUP_BRANCH}) based on ${BASE_REF}. The original PR #${RB_PR} was already merged. If you choose action=\"fix\", apply ONLY the fixes identified during review — do not re-apply the original PR's changes."
+              # Reflect the *actual* checkout source in the judge prompt
+              # context. When the HEAD fallback fires, the follow-up branch
+              # is NOT based on ${BASE_REF}; saying otherwise misleads the
+              # judge into applying fixes on a wrong base.
+              RB_COMBINED_BRANCH_INFO="You are on a follow-up branch (${FOLLOWUP_BRANCH}) based on ${_rb_co_src_desc}. The original PR #${RB_PR} was already merged. If you choose action=\"fix\", apply ONLY the fixes identified during review — do not re-apply the original PR's changes."
             else
               echo "::warning::Could not prepare follow-up branch ${FOLLOWUP_BRANCH} for issue #${rb_issue}; combined-mode fix not possible."
             fi
-            unset _rb_co_src
+            unset _rb_co_src _rb_co_src_desc
           fi
         elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
           if git fetch --no-tags origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null \

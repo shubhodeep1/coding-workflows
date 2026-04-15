@@ -1186,7 +1186,14 @@ jobs:
             # a `.jobs` array. This catches (a) all-retries-failed with an empty
             # JOBS_JSON, (b) error-body responses that happen to parse, and
             # (c) any future accidental multi-doc concatenation.
-            if ! printf '%s' "$JOBS_JSON" | jq -e 'type == "object" and (.jobs | type == "array")' >/dev/null 2>&1; then
+            # Use `jq -se` (slurp + exit-status) so multi-document input
+            # (concatenated objects) fails the predicate. Without `-s`,
+            # `jq -e` evaluates each document independently and exits with
+            # the truthiness of the *last* document, so a multi-doc blob
+            # whose tail happens to satisfy the schema would pass through
+            # and break downstream `jq '.jobs | length'` with mixed-line
+            # output.
+            if ! printf '%s' "$JOBS_JSON" | jq -se 'length == 1 and (.[0] | type == "object" and (.jobs | type == "array"))' >/dev/null 2>&1; then
               JOBS_JSON='{"jobs":[]}'
             fi
 
@@ -1211,7 +1218,9 @@ jobs:
                   JOBS_JSON='{"jobs":[]}'
                 fi
                 unset _JOBS_OUT
-                if ! printf '%s' "$JOBS_JSON" | jq -e 'type == "object" and (.jobs | type == "array")' >/dev/null 2>&1; then
+                # Slurp + length==1 (see outer retry comment) so multi-doc
+                # blobs don't pass the per-document evaluation of `jq -e`.
+                if ! printf '%s' "$JOBS_JSON" | jq -se 'length == 1 and (.[0] | type == "object" and (.jobs | type == "array"))' >/dev/null 2>&1; then
                   JOBS_JSON='{"jobs":[]}'
                 fi
                 TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
