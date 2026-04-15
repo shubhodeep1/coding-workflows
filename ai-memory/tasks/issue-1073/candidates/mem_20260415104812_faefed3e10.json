@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue: restore default backward-compatible autonomous stall recovery with an explicit human-terminalization gate.\n\nClarification mapping:\n- Auto-answer received: `[auto-answered-by-clarify]`.\n- No unresolved clarification QIDs; scope is sufficiently defined.\n\nRepresentative pattern to follow:\n- Reuse existing env wiring pattern used by `ENABLE_STALL_JUDGE` (`.github/workflows/orchestrate_poll.yml` -> `scripts/orchestrate_poll_process.sh` normalization).\n- Reuse current judged-vs-fallback handling structure in `invoke_stall_judge` to preserve diagnostics while changing effective action resolution.\n\nFiles likely to change:\n- `.github/workflows/orchestrate_poll.yml`\n- `scripts/orchestrate_lib.py`\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_lib.py`\n- `tests/test_orchestrate_poll_process.py`\n- `README.md`\n- `agents.md`\n\nFunctions/modules to implement:\n- In `scripts/orchestrate_lib.py`:\n  - Add centralized stall action resolver API for declarative ladders.\n  - Add normalization helper for effective action selection when candidate action is judge-provided.\n  - Add gate input (`enable_stall_human_terminalization`) through `check-stalls` CLI path (`build_parser` + `cmd_check_stalls` + `detect_stalls` call chain).\n  - Resolver behavior:\n    - `run_stall_judge` override behavior unchanged.\n    - If gate is `false`, suppress terminal `escalate_human` and return nearest prior non-human action.\n    - If ladder is malformed, fail-open to a safe non-human fallback.\n- In `scripts/orchestrate_poll_process.sh`:\n  - Parse `ENABLE_STALL_HUMAN_TERMINALIZATION` with default `false`.\n  - Pass gate flag into `python3 scripts/orchestrate_lib.py check-stalls`.\n  - Update `recovery_action_for_phase` to call centralized resolver instead of indexing `STALL_RECOVERY_ACTIONS` directly.\n  - In `invoke_stall_judge`, keep judge decision telemetry, but compute and execute effective action via the same resolver policy.\n  - Keep `resolve_merge_conflict` behavior unchanged (still `update-branch` + `_dispatch_review_for_conflicts`).\n  - Ensure standalone stall recovery uses identical gate policy.\n- In `.github/workflows/orchestrate_poll.yml`:\n  - Wire `ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}` into the poller step env.\n\nData structures affected:\n- `STALL_RECOVERY_ACTIONS` remains source declarative ladder.\n- New resolver helpers in `orchestrate_lib` become the single action-policy entry point.\n- No tracking-state schema migration required.\n\nAPI/interface changes:\n- New env var: `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`).\n- New/extended orchestrate_lib CLI argument for `check-stalls` to receive that gate.\n- No renames/removals of existing env vars or actions.\n\nRisks and edge cases:\n- Malformed ladder definitions (missing phase, empty list, terminal-only list) must not crash and must fail-open safely.\n- Judge returns `escalate_human` with gate `false`: must downgrade to non-human fallback and avoid `ai:needs-human`.\n- Unknown judge action: keep fallback behavior, now gate-aware.\n- Preserve bounded recovery (`skip` at max) and avoid introducing retry loops.\n- Preserve merge-conflict routing path exactly.\n\nTesting considerations:\n- `tests/test_orchestrate_lib.py`:\n  - Gate `false`: declarative terminal `escalate_human` is suppressed to nearest prior non-human.\n  - Gate `true`: `escalate_human` remains valid.\n  - Malformed ladder fail-open behavior.\n  - `detect_stalls` still honors `run_stall_judge` trigger semantics.\n- `tests/test_orchestrate_poll_process.py`:\n  - Judged `escalate_human` downgraded when gate `false`.\n  - Judged `escalate_human` allowed when gate `true`.\n  - Unknown judge action falls back to declarative action with gate policy applied.\n  - Standalone path parity with managed path.\n  - Regression assertion for `resolve_merge_conflict` routing through `update-branch` and `_dispatch_review_for_conflicts`.\n  - Optional workflow contract assertion for env mapping presence.\n\nDocs sync:\n- Update `README.md` variable table and stall recovery behavior notes with the new gate/default and compatibility semantics.\n- Update `agents.md` env-var and stall-recovery sections with matching semantics.\n\nConflict detection:\n- No factual conflict found. Current code matches the issue evidence: terminal `escalate_human` is in ladders and there is no existing gate wiring.\n\nImplementation checklist:\n- [ ] Add `ENABLE_STALL_HUMAN_TERMINALIZATION` env wiring (default `false`) in workflow + poller parsing.\n- [ ] Centralize declarative stall action resolution in `orchestrate_lib`.\n- [ ] Apply gate-aware downgrade to judged `escalate_human`, preserving judged vs effective diagnostics.\n- [ ] Preserve merge-conflict routing behavior unchanged.\n- [ ] Enforce identical gate behavior in standalone stall recovery.\n- [ ] Add/adjust tests in `test_orchestrate_lib.py` and `test_orchestrate_poll_process.py` (optional workflow contract test).\n- [ ] Update `README.md` and `agents.md` docs.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "75a686ec6c9da0ce86b6c4eae08af996ff079d28a92166fa5f3cbe2acd898ceb",
+  "lineage": {
+    "issue_number": 1073,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24450085551",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24450085551",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1073"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415104812_faefed3e10",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1073,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24450085551"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1073",
+  "timestamps": {
+    "created_at": "2026-04-15T10:48:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
