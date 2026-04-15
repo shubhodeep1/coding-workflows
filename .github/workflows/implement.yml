@@ -401,12 +401,15 @@ jobs:
             # rationale as serena-efficiency-block.txt above.
           fi
           if [ ! -f prompts/mode-implement-repair.txt ]; then
-            if ! _gh_api_fetch "prompts/mode-implement-repair.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-implement-repair.txt?ref=${SCRIPT_REF}"; then
-              echo "::warning::mode-implement-repair.txt not found on ${SCRIPT_REF}; falling back to main"
-              _gh_api_fetch "prompts/mode-implement-repair.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/mode-implement-repair.txt?ref=main"
+            src=".codex-workflow-src/prompts/mode-implement-repair.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-implement-repair.txt" ]; then
+              src=".codex-workflow-src-main/prompts/mode-implement-repair.txt"
             fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Failed to stage required file prompts/mode-implement-repair.txt"
+              exit 1
+            fi
+            install -m 0644 "${src}" prompts/mode-implement-repair.txt
             if [ "${is_self_repo}" = "false" ]; then
               echo "prompts/mode-implement-repair.txt" >> "${FETCHED_MANIFEST}"
             fi
@@ -2824,6 +2827,9 @@ jobs:
             mkdir -p scripts
             for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
               src=".codex-workflow-src/scripts/${f}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+                src=".codex-workflow-src-main/scripts/${f}"
+              fi
               if [ ! -f "${src}" ]; then
                 continue
               fi
