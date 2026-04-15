@@ -338,13 +338,6 @@ else
   ENABLE_STALL_JUDGE="false"
 fi
 
-ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
-if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
-  ENABLE_STALL_HUMAN_TERMINALIZATION="true"
-else
-  ENABLE_STALL_HUMAN_TERMINALIZATION="false"
-fi
-
 ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
 if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
   ENABLE_STANDALONE_STALL_RECOVERY="true"
@@ -6363,7 +6356,6 @@ fi
       --allow-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
       --stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}"
       --enable-stall-judge "${ENABLE_STALL_JUDGE}"
-      --allow-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
     )
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")

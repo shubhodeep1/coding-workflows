@@ -3336,9 +3336,13 @@ def test_stall_judge_escalate_human_falls_back_when_human_terminalization_disabl
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
-	assert issue_entry["stall_recovery_count"] == 3
+	assert issue_entry["github_issue"] != 10
+	assert issue_entry["status"] == "pending"
+	assert issue_entry["stall_recovery_count"] == 0
 	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
-	assert any("/approved" in body for body in issue_comments)
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"]["closed"] is True
+	assert not any("/approved" in body for body in issue_comments)
 
 
 def test_stall_judge_escalate_human_issue_not_redetected_after_needs_human():
@@ -3478,7 +3482,7 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 	assert issue_entry["stall_recovery_count"] == 3
 
 
-def test_stall_judge_escalate_human_falls_back_when_human_terminalization_disabled():
+def test_stall_judge_escalate_human_falls_back_to_close_when_human_terminalization_disabled():
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
 	issue["status"] = "in_progress"

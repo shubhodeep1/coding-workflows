@@ -513,7 +513,12 @@ def resolve_declarative_stall_recovery_action(
 	If the phase ladder is malformed (e.g. all entries are
 	``escalate_human``), fail open to a safe declarative fallback.
 	"""
-	actions = STALL_RECOVERY_ACTIONS.get(phase, [DEFAULT_STALL_RECOVERY_FALLBACK_ACTION])
+	actions_source = (
+		STALL_RECOVERY_ACTIONS_HUMAN_TERMINALIZATION
+		if allow_human_terminalization
+		else STALL_RECOVERY_ACTIONS
+	)
+	actions = actions_source.get(phase, [DEFAULT_STALL_RECOVERY_FALLBACK_ACTION])
 	if not actions:
 		return DEFAULT_STALL_RECOVERY_FALLBACK_ACTION
 

@@ -578,7 +578,6 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 		captured["allow_human_terminalization"] = allow_human_terminalization
 		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
 		captured["enable_stall_judge"] = enable_stall_judge
-		captured["allow_human_terminalization"] = allow_human_terminalization
 		return []
 
 	orchestrate_lib.detect_stalls = _fake_detect_stalls
@@ -725,7 +724,6 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 		captured["allow_human_terminalization"] = allow_human_terminalization
 		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
 		captured["enable_stall_judge"] = enable_stall_judge
-		captured["allow_human_terminalization"] = allow_human_terminalization
 		return []
 
 	orchestrate_lib.detect_stalls = _fake_detect_stalls
