@@ -387,6 +387,23 @@ def compute_fingerprint(category: str, summary: str, details: str, issue_number:
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()
 
 
+def normalize_text_for_hash(text: str) -> str:
+    """Normalize free-form text for stable loop-detection hashing.
+
+    The normalizer intentionally strips markdown punctuation, lowercases the
+    content, and collapses whitespace so semantically identical clarify prompts
+    hash to the same value across minor formatting drift.
+    """
+
+    lowered = (text or "").lower()
+    without_markdown = re.sub(r"[*_`>#~\[\]()|:-]", " ", lowered)
+    return re.sub(r"\s+", " ", without_markdown).strip()
+
+
+def compute_normalized_sha256(text: str) -> str:
+    return hashlib.sha256(normalize_text_for_hash(text).encode("utf-8")).hexdigest()
+
+
 def make_record_id(prefix: str = "mem") -> str:
     return f"{sanitize_segment(prefix, 'mem')}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:10]}"
 
@@ -483,6 +500,105 @@ def get_processed_command_entry(
     payload = _load_json(entry_path)
     validate_processed_command_entry(payload, memory_root)
     return payload
+
+
+def list_processed_command_entries(
+    memory_root: Path,
+    *,
+    issue_number: int,
+    command: str | None = None,
+    workflow: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    ensure_memory_layout(memory_root)
+    processed_dir = memory_root / "tasks" / f"issue-{int(issue_number)}" / "processed_commands"
+    entries: list[dict[str, Any]] = []
+    command_filter = command.strip().lower() if command else None
+    workflow_filter = workflow.strip().lower() if workflow else None
+    status_filter = status.strip().lower() if status else None
+    for entry_path in _iter_json_files(processed_dir):
+        try:
+            payload = _load_json(entry_path)
+            validate_processed_command_entry(payload, memory_root)
+        except (MemoryValidationError, OSError, ValueError) as exc:
+            _log.warning("Skipping invalid processed command entry %s: %s", entry_path, exc)
+            continue
+        if command and str(payload.get("command") or "").strip().lower() != command_filter:
+            continue
+        if workflow and str(payload.get("workflow") or "").strip().lower() != workflow_filter:
+            continue
+        if status and str(payload.get("status") or "").strip().lower() != status_filter:
+            continue
+        entries.append(payload)
+    return sorted(entries, key=lambda item: (str(item.get("timestamp") or ""), int(item.get("comment_id") or 0)))
+
+
+def evaluate_clarify_loop_guard(
+    entries: list[dict[str, Any]],
+    *,
+    clarify_hash: str,
+    max_cycles: int,
+    current_comment_id: int | None = None,
+) -> dict[str, Any]:
+    normalized_hash = sanitize_segment((clarify_hash or "").strip().lower(), "")
+    if not normalized_hash:
+        raise MemoryValidationError("clarify_hash is required for loop guard evaluation")
+
+    cycle_limit = max(1, int(max_cycles))
+    prior_entries: list[dict[str, Any]] = []
+    for entry in entries:
+        if current_comment_id is not None and int(entry.get("comment_id") or 0) == int(current_comment_id):
+            continue
+        prior_entries.append(entry)
+
+    answered_entries = [entry for entry in prior_entries if str(entry.get("status") or "").strip().lower() == "answered"]
+    answered_entries.sort(key=lambda item: (str(item.get("timestamp") or ""), int(item.get("comment_id") or 0)))
+    next_cycle = len(answered_entries) + 1
+
+    same_hash_entries = []
+    for entry in answered_entries:
+        metadata = entry.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        existing_hash = str(metadata.get("clarify_hash") or "").strip().lower()
+        if existing_hash == normalized_hash:
+            same_hash_entries.append(entry)
+
+    if same_hash_entries:
+        previous_entry = same_hash_entries[-1]
+        return {
+            "blocked": True,
+            "reason": "repeat_clarify_hash",
+            "cycle": next_cycle,
+            "max_cycles": cycle_limit,
+            "previous_clarify_comment_id": int(previous_entry.get("comment_id") or 0),
+            "previous_answer_comment_id": int((previous_entry.get("metadata") or {}).get("answer_comment_id") or 0),
+            "prior_answer_count": len(answered_entries),
+        }
+
+    if next_cycle > cycle_limit:
+        previous_entry = answered_entries[-1] if answered_entries else None
+        previous_comment_id = int(previous_entry.get("comment_id") or 0) if previous_entry else 0
+        previous_answer_id = int((previous_entry.get("metadata") or {}).get("answer_comment_id") or 0) if previous_entry else 0
+        return {
+            "blocked": True,
+            "reason": "max_cycles_exceeded",
+            "cycle": next_cycle,
+            "max_cycles": cycle_limit,
+            "previous_clarify_comment_id": previous_comment_id,
+            "previous_answer_comment_id": previous_answer_id,
+            "prior_answer_count": len(answered_entries),
+        }
+
+    return {
+        "blocked": False,
+        "reason": "none",
+        "cycle": next_cycle,
+        "max_cycles": cycle_limit,
+        "previous_clarify_comment_id": 0,
+        "previous_answer_comment_id": 0,
+        "prior_answer_count": len(answered_entries),
+    }
 
 
 def claim_processed_command(
