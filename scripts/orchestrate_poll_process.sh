@@ -2719,10 +2719,12 @@ PY
 )" || true
 
   if [ -z "${action}" ]; then
-    echo "retrigger_pipeline"
-  else
-    echo "${action}"
+    action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+    if [ -z "${action}" ]; then
+      action="retrigger_pipeline"
+    fi
   fi
+  echo "${action}"
 }
 
 stall_recovery_action_is_terminal() {
