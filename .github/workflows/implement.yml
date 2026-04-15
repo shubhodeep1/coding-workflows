@@ -398,8 +398,6 @@ jobs:
             install -m 0644 .codex-workflow-src/agents.md "${RUNTIME_DIR}/agents_canonical.md"
           fi
 
-          rm -rf .codex-workflow-src-main
-
       - name: Fetch issue metadata
         if: env.SKIP_IMPLEMENT != 'true'
         env:
@@ -1581,6 +1579,9 @@ jobs:
             exit 1
           fi
           src=".codex-workflow-src/scripts/git_ref_health_check.sh"
+          if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/git_ref_health_check.sh" ]; then
+            src=".codex-workflow-src-main/scripts/git_ref_health_check.sh"
+          fi
           if [ ! -f "${src}" ]; then
             echo "::error::Missing required support script git_ref_health_check.sh in staged support source"
             exit 1
@@ -2608,6 +2609,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          rm -rf .codex-workflow-src-main
           if [[ "${RUNTIME_DIR:-}" =~ ^/tmp/codex-implement-[0-9]+$ ]]; then
             rm -rf "${RUNTIME_DIR}"
           else

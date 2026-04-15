@@ -309,8 +309,6 @@ jobs:
             fi
           fi
 
-          rm -rf .codex-workflow-src-main
-
       - name: Validate PR number input
         run: |
           set -euo pipefail
@@ -1881,7 +1879,7 @@ jobs:
           # Use -ffdx: double-force clears nested git repos (-ff), and -x also
           # removes files matching .gitignore (e.g. .serena/) so nothing
           # ignored can survive to block the upcoming merge simulation.
-          git clean -ffdx -e .codex-workflow-src
+          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main
 
           # The scripts may have been removed during artifact cleanup in the
           # commit step (caller repos delete fetched scripts before committing)
@@ -1891,6 +1889,9 @@ jobs:
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               src=".codex-workflow-src/scripts/${f}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+                src=".codex-workflow-src-main/scripts/${f}"
+              fi
               if [ ! -f "${src}" ]; then
                 echo "::warning::${f} not found in checked-out support source; downstream steps that need it will fail with a specific error."
                 rm -f "${SUPPORT_SCRIPTS_DIR}/${f}"
@@ -1946,7 +1947,7 @@ jobs:
           # git merge refuses to proceed when an untracked working-tree file
           # would be overwritten; this ensures the tree is fully clean before
           # the merge simulation.  Tracked files are never removed by git clean.
-          git clean -ffdx -e .codex-workflow-src 2>/dev/null || true
+          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main 2>/dev/null || true
 
           # Guardrail diagnostics: emit working tree state before merge so any
           # future untracked-file collision is immediately obvious in CI logs.
@@ -2112,7 +2113,7 @@ jobs:
           # Safety net: remove any remaining untracked files (including
           # .gitignore'd ones) that the loop above may have missed, preventing
           # "Untracked working tree file … would be overwritten by merge."
-          git clean -ffdx -e .codex-workflow-src 2>/dev/null || true
+          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main 2>/dev/null || true
 
           # Capture the merge exit code explicitly rather than swallowing
           # it with `|| true`.  We must distinguish:
@@ -3216,6 +3217,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          rm -rf .codex-workflow-src-main
 
           # Guard: RUNTIME_DIR is only written to $GITHUB_ENV by the
           # Create runtime workspace step.  If an earlier step failed
