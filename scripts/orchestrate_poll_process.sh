@@ -499,7 +499,7 @@ ensure_label_exists() {
   # returns a non-zero exit code for existing labels, which is not transient).
   local encoded_name
   encoded_name="$(printf '%s' "${label_name}" | jq -sRr @uri)"
-  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
     _ENSURED_LABELS_CACHE[${label_name}]=1
     return 0
   fi
@@ -514,7 +514,7 @@ ensure_label_exists() {
 
   # Creation can fail if another concurrent actor created the label first.
   # Cache only when a follow-up read confirms the label now exists.
-  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
     _ENSURED_LABELS_CACHE[${label_name}]=1
   fi
 }
@@ -1301,7 +1301,7 @@ ensure_eager_final_pr() {
   fi
 
   local discovered
-  discovered="$(gh pr list \
+  discovered="$(gh_retry gh pr list \
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --base "${default_branch}" \
@@ -1311,7 +1311,7 @@ ensure_eager_final_pr() {
 
   if [ -z "${discovered}" ]; then
     local pr_url
-    pr_url="$(gh pr create \
+    pr_url="$(gh_retry gh pr create \
       --repo "${GITHUB_REPOSITORY}" \
       --base "${default_branch}" \
       --head "${integration_branch}" \
@@ -1396,7 +1396,7 @@ invoke_judge_for_integration_conflict() {
 
   local pr_diff
   local pr_files
-  pr_diff="$(gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}" 2>/dev/null | head -c 120000 || true)"
+  pr_diff="$(gh_retry gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}" 2>/dev/null | head -c 120000 || true)"
   pr_files="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}/files" --jq '[.[] | {filename, status, additions, deletions}]' 2>/dev/null || echo "[]")"
   local retries
   retries="$(jq -r '.integration_conflict_dispatch_count // 0' "${STATE_FILE}")"
@@ -1799,7 +1799,7 @@ finalize_integration_merge_if_needed() {
   fi
 
   if [ -z "${final_pr}" ] || [ "${final_pr}" = "null" ]; then
-    final_pr="$(gh pr list \
+    final_pr="$(gh_retry gh pr list \
       --repo "${GITHUB_REPOSITORY}" \
       --state open \
       --base "${default_branch}" \
@@ -1810,7 +1810,7 @@ finalize_integration_merge_if_needed() {
 
   if [ -z "${final_pr}" ]; then
     local final_pr_url
-    final_pr_url="$(gh pr create \
+    final_pr_url="$(gh_retry gh pr create \
       --repo "${GITHUB_REPOSITORY}" \
       --base "${default_branch}" \
       --head "${integration_branch}" \
@@ -1866,7 +1866,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     return 1
   fi
 
-  if gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch >/dev/null 2>&1; then
+  if gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch >/dev/null 2>&1; then
     jq --argjson final_pr "${final_pr}" \
       '.final_merge_pr = $final_pr |
        .final_merge_status = "merged" |
@@ -1967,7 +1967,7 @@ has_active_validation_run() {
   local wf_name="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
   local active_count
 
-  active_count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
+  active_count="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
     --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo '0')"
   if [ "${active_count}" -gt 0 ]; then
     return 0
@@ -1975,7 +1975,7 @@ has_active_validation_run() {
 
   # Fallback: check internal-validate.yml if primary name differs
   if [ "${wf_name}" != "internal-validate.yml" ]; then
-    active_count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
+    active_count="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
       --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null || echo '0')"
     if [ "${active_count}" -gt 0 ]; then
       return 0
@@ -1995,12 +1995,12 @@ get_last_validation_run_conclusion() {
   last_dispatch_ts="$(jq -r '.validation_last_dispatch_ts // 0' "${STATE_FILE}")"
 
   local runs_json
-  runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?status=completed&per_page=5" \
+  runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?status=completed&per_page=5" \
     --jq '.workflow_runs' 2>/dev/null || echo '[]')"
 
   # Fallback to internal-validate.yml if no completed runs found
   if [ "$(echo "${runs_json}" | jq 'length')" -eq 0 ] && [ "${wf_name}" != "internal-validate.yml" ]; then
-    runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?status=completed&per_page=5" \
+    runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?status=completed&per_page=5" \
       --jq '.workflow_runs' 2>/dev/null || echo '[]')"
   fi
 
@@ -2219,10 +2219,10 @@ build_active_issue_set() {
 
   # Fetch in_progress + queued runs (recent, max 50)
   local runs_json
-  runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
+  runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
     --jq '.workflow_runs' 2>/dev/null || echo '[]')"
   local queued_json
-  queued_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
+  queued_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
     --jq '.workflow_runs' 2>/dev/null || echo '[]')"
 
   # Merge both lists
@@ -2294,7 +2294,7 @@ cancel_zombie_runs_for_issue() {
 
   # Re-fetch in_progress runs and find zombies matching this issue
   local runs_json
-  runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
+  runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
     --jq '.workflow_runs' 2>/dev/null || echo '[]')"
 
   local zombie_run_ids
@@ -2311,7 +2311,7 @@ cancel_zombie_runs_for_issue() {
   if [ -n "${zombie_run_ids}" ]; then
     for run_id in ${zombie_run_ids}; do
       echo "  Cancelling zombie workflow run ${run_id} for issue #${issue_num}..."
-      gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" -X POST 2>/dev/null || true
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" -X POST 2>/dev/null || true
     done
   fi
 }
@@ -3541,8 +3541,8 @@ STALL_EOF
           merge_state="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .state?) then .state else empty end' 2>/dev/null | tail -n1)"
           merge_mergeable="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and (.mergeable == true or .mergeable == false)) then .mergeable else empty end' 2>/dev/null | tail -n1)"
           if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && _pr_checks_completed "${merge_pr}"; then
-            gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1 \
-              || gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash >/dev/null 2>&1 \
+            gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1 \
+              || gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash >/dev/null 2>&1 \
               || true
           fi
         fi
@@ -4070,14 +4070,14 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # initial state comment.  Recover by parsing the tracking body
     # and searching for child issues that reference this tracker.
     # ---------------------------------------------------------------
-    TRACKING_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
+    TRACKING_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
     if [ -z "${TRACKING_BODY}" ]; then
       echo "::warning::Could not fetch body for tracking issue #${TRACKING_NUM}, skipping."
       continue
     fi
 
     # Search for child issues whose body contains the tracking reference
-    CHILD_ISSUES="$(gh api "search/issues" \
+    CHILD_ISSUES="$(gh_retry gh api "search/issues" \
       -f q="repo:${GITHUB_REPOSITORY} \"Tracking issue: #${TRACKING_NUM}\" in:body" \
       --jq '.items // []' 2>/dev/null || echo '[]')"
 
@@ -4423,7 +4423,7 @@ The poller will resume processing on the next cycle."
       for pw_inum in ${PRIOR_NON_TERMINAL}; do
         [ -n "${pw_inum}" ] && [ "${pw_inum}" != "null" ] || continue
         echo "  [backward-scan] Prior wave $((prior_idx + 1)) issue #${pw_inum} is non-terminal. Checking labels..."
-        PW_LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" --jq '[.[].name]' || echo '[]')"
+        PW_LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" --jq '[.[].name]' || echo '[]')"
         [ -n "${PW_LABELS}" ] || PW_LABELS='[]'
         PW_LOCAL_ID="$(jq -r --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
           '.waves[$wi].issues[] | select((.github_issue | tostring) == $inum) | .id' "${STATE_FILE}" | head -n 1)"
@@ -4451,10 +4451,10 @@ The poller will resume processing on the next cycle."
             PW_PR_MERGEABLE="$(_jq_field "${_pw_pr_json}" '.mergeable' 'true|false')"
             _pw_head_sha="$(_jq_field "${_pw_pr_json}" '.head.sha')"
 			if [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}" "${_pw_head_sha}"; then
-			  gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
-			    || gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+			  gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
+			    || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
-              gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}/update-branch" \
+              gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}/update-branch" \
                 -X PUT -f expected_head_sha="${_pw_head_sha}" \
                 2>/dev/null || true
             fi
@@ -4522,7 +4522,7 @@ The poller will resume processing on the next cycle."
 - Managed by: AI Orchestrator"
 
       ensure_label_exists "ai:clarification"
-      NEW_URL="$(gh issue create \
+      NEW_URL="$(gh_retry gh issue create \
         --repo "${GITHUB_REPOSITORY}" \
         --title "${DEF_TITLE}" \
         --body "${FULL_BODY}" \
@@ -4657,7 +4657,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 
   if [ "${#_gql_issue_nums[@]}" -gt 0 ]; then
     _gql_query="query { repository(owner: \"${_repo_owner}\", name: \"${_repo_name}\") {${_gql_fields} } }"
-    _labels_result="$(gh api graphql -f query="${_gql_query}" 2>/dev/null || echo '{}')"
+    _labels_result="$(gh_retry gh api graphql -f query="${_gql_query}" 2>/dev/null || echo '{}')"
     LABELS_JSON="$(echo "${_labels_result}" | python3 -c "
 import json, sys
 raw = json.load(sys.stdin)
@@ -4704,7 +4704,7 @@ json.dump(result, sys.stdout)
     LABELS_JSON="{"
     first=true
     for inum in "${_gql_issue_nums[@]}"; do
-      LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
+      LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
       if [ "${first}" = true ]; then
         first=false
       else
@@ -4812,9 +4812,9 @@ json.dump(result, sys.stdout)
       if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
 		if _pr_checks_completed "${RTM_PR}" "${_rtm_head_sha}"; then
 		  echo "  Merging PR #${RTM_PR} (squash)..."
-		  if gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
+		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		    echo "  PR #${RTM_PR} merge initiated."
-		  elif gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+		  elif gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
 		    echo "  PR #${RTM_PR} merged directly."
 		  else
 		    echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
@@ -4822,7 +4822,7 @@ json.dump(result, sys.stdout)
 		fi
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
         echo "  PR #${RTM_PR} is not mergeable (mergeable=${PR_MERGEABLE}). Attempting branch update..."
-        if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}/update-branch" \
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RTM_PR}/update-branch" \
           -X PUT -f expected_head_sha="${_rtm_head_sha}" \
           2>/dev/null; then
           echo "  PR #${RTM_PR} branch updated via API. The synchronize event will re-trigger review (including conflict resolution)."
@@ -4895,7 +4895,7 @@ json.dump(result, sys.stdout)
 
     # Try the GitHub API update-branch first (creates a merge commit
     # if the merge is clean; fails when there are real conflicts).
-    if gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}/update-branch" \
+    if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${IP_PR}/update-branch" \
       -X PUT -f expected_head_sha="${_ip_head_sha}" \
       2>/dev/null; then
       echo "  PR #${IP_PR} branch updated via API. Synchronize event will re-trigger review."
@@ -4942,7 +4942,7 @@ json.dump(result, sys.stdout)
   # This pass is bounded per poll tick via --limit 100 and does not
   # dispatch review workflows; it only attempts update-branch.
   echo "  [feature-sweep] Scanning open ai/issue-* PRs for base-branch drift..."
-  _FEATURE_SWEEP_JSON="$(gh pr list \
+  _FEATURE_SWEEP_JSON="$(gh_retry gh pr list \
     --repo "${GITHUB_REPOSITORY}" \
     --state open \
     --json number,headRefName,baseRefName,mergeable,mergeStateStatus \
@@ -5174,14 +5174,14 @@ json.dump(result, sys.stdout)
       fi
 
       # Collect full PR context for the judge
-      PR_DIFF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
+      PR_DIFF="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
         -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
-      PR_COMMENTS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
+      PR_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
         | jq -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null || echo "[]")"
-      PR_REVIEW_COMMENTS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" \
+      PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" \
         | jq -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo "[]")"
       PR_META="$(echo "${_rb_pr_json}" | jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
-      ISSUE_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' || echo "")"
+      ISSUE_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' || echo "")"
 
       # Determine if this is a final decision (retries exhausted) or a fix attempt
       IS_FINAL="false"
@@ -5439,7 +5439,7 @@ sys.exit(1)
 
 **Remaining issues:** ${RB_REMAINING}"
 
-      gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
         -f body="${RB_COMMENT}" >/dev/null 2>&1 || true
 
       case "${RB_ACTION}" in
@@ -5462,10 +5462,10 @@ sys.exit(1)
           PR_MERGEABLE="$(_jq_field "${_rb_merge_json}" '.mergeable' 'true|false')"
           _rb_merge_sha="$(_jq_field "${_rb_merge_json}" '.head.sha')"
 		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}"; then
-		    if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
+		    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		      echo "  PR #${RB_PR} merge initiated (auto)."
 		      RB_MERGED="true"
-		    elif gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+		    elif gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
 		      echo "  PR #${RB_PR} merged directly."
 		      RB_MERGED="true"
 		    else
@@ -5473,7 +5473,7 @@ sys.exit(1)
 		    fi
           elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
             echo "  PR #${RB_PR} is not mergeable. Attempting branch update..."
-            if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
+            if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
               -X PUT -f expected_head_sha="${_rb_merge_sha}" \
               2>/dev/null; then
               echo "  PR #${RB_PR} branch updated. Synchronize event will re-trigger review + conflict resolution."
@@ -5508,7 +5508,7 @@ sys.exit(1)
           if [ "${IS_FINAL}" = "true" ]; then
             echo "  Judge returned 'fix' but retries exhausted — treating as merge."
             ensure_label_exists "ai:ready-to-merge"
-            gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+            gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             RB_FORCE_MERGED="false"
             _rb_fm_json="$(_fetch_pr_json "${RB_PR}")"
@@ -5516,15 +5516,15 @@ sys.exit(1)
             PR_MERGEABLE="$(_jq_field "${_rb_fm_json}" '.mergeable' 'true|false')"
             _rb_fm_sha="$(_jq_field "${_rb_fm_json}" '.head.sha')"
 				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}"; then
-				  if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
-				    || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+				  if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
+				    || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
 				    RB_FORCE_MERGED="true"
 				  else
 				    echo "::warning::Could not merge PR #${RB_PR} in force-merge path."
 				  fi
             elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
               echo "  PR #${RB_PR} is not mergeable (force-merge path). Attempting branch update..."
-              if gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
+              if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
                 -X PUT -f expected_head_sha="${_rb_fm_sha}" \
                 2>/dev/null; then
                 echo "  PR #${RB_PR} branch updated. Will retry force-merge on next poll cycle."
@@ -5560,7 +5560,7 @@ sys.exit(1)
             if [ "${RB_PR_STATE_NOW}" != "open" ] && [ "${RB_PR_MERGED_NOW}" != "true" ]; then
               # PR was closed without merge — skip
               echo "::warning::PR #${RB_PR} is closed (not merged). Skipping fix application."
-              gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+              gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                 --remove-label 'ai:review-blocked' 2>/dev/null || true
               REVIEW_BLOCKED_STATE_CHANGED=true
             else
@@ -5682,7 +5682,7 @@ ${FOLLOWUP_GUARD_REASON}"
                       TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
                       FOLLOWUP_PR_URL=""
                     else
-                      FOLLOWUP_PR_URL="$(gh pr create \
+                      FOLLOWUP_PR_URL="$(gh_retry gh pr create \
                       --repo "${GITHUB_REPOSITORY}" \
                       --base "${BASE_REF}" \
                       --head "${FOLLOWUP_BRANCH}" \
@@ -5701,7 +5701,7 @@ ${RB_FIX_DESC}
                     fi
                     if [ -n "${FOLLOWUP_PR_URL}" ]; then
                       echo "  Created follow-up PR: ${FOLLOWUP_PR_URL}"
-                      gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                      gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                         --remove-label 'ai:review-blocked' 2>/dev/null || true
                       tg_notify "Orchestrator judge created follow-up PR for merged PR #${RB_PR} (issue #${rb_issue}): ${FOLLOWUP_PR_URL}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                     else
@@ -5716,7 +5716,7 @@ ${RB_FIX_DESC}
                     echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
                     # Remove review-blocked label — the push triggers synchronize
                     # which re-runs review_autofix with a reset autofix counter.
-                    gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                    gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                       --remove-label 'ai:review-blocked' 2>/dev/null || true
                     tg_notify "Orchestrator judge pushed fix for review-blocked PR #${RB_PR} (issue #${rb_issue}, retry $((RETRY_COUNT + 1))/${MAX_REVIEW_BLOCKED_RETRIES})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                   else
@@ -5727,21 +5727,21 @@ ${RB_FIX_DESC}
                 echo "  Judge produced no file changes."
                 if [ "${RB_TARGET_MERGED}" = "true" ]; then
                   echo "  No follow-up needed — merged PR has no outstanding fixes."
-                  gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                  gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' 2>/dev/null || true
                   tg_notify "Orchestrator judge found no fixes needed for merged PR #${RB_PR} (issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                 else
                   echo "  Treating as merge decision."
                   ensure_label_exists "ai:ready-to-merge"
-                  gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                  gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
                   _rb_nofix_json="$(_fetch_pr_json "${RB_PR}")"
                   PR_STATE="$(_jq_field "${_rb_nofix_json}" '.state' 'open|closed|merged')"
                   PR_MERGEABLE="$(_jq_field "${_rb_nofix_json}" '.mergeable' 'true|false')"
                   _rb_nofix_sha="$(_jq_field "${_rb_nofix_json}" '.head.sha')"
                   if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}"; then
-                    if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
-                      || gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+                    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
+                      || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
                       tg_notify "Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                     else
                       echo "::warning::Could not merge PR #${RB_PR} in no-fix merge path."
@@ -5775,7 +5775,7 @@ ${RB_FIX_DESC}
           # judge call; close_and_reissue operates via GitHub API only.
           rb_cleanup_combined_workspace
           # Close the PR
-          gh pr close "${RB_PR}" --repo "${GITHUB_REPOSITORY}" \
+          gh_retry gh pr close "${RB_PR}" --repo "${GITHUB_REPOSITORY}" \
             --comment "Closed by orchestrator judge — the approach needs rework. A new issue will be created with refined guidance." \
             2>/dev/null || true
 
@@ -5801,7 +5801,7 @@ ${RB_FIX_DESC}
 - Managed by: AI Orchestrator"
 
             ensure_label_exists "ai:clarification"
-            NEW_URL="$(gh issue create \
+            NEW_URL="$(gh_retry gh issue create \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${NEW_ISSUE_TITLE}" \
               --body "${FULL_NEW_BODY}" \
@@ -5850,7 +5850,7 @@ ${RB_FIX_DESC}
           continue
         fi
         # Re-read labels since we may have changed them
-        LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
+        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
         if [ "${first}" = true ]; then
           first=false
         else
@@ -5867,7 +5867,7 @@ ${RB_FIX_DESC}
         if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then
           continue
         fi
-        LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
+        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
         [ -z "${LABELS}" ] && LABELS='[]'
         LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}')"
       done
@@ -5906,9 +5906,9 @@ ${RB_FIX_DESC}
     if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
       echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
       bump_impl_noop_count "${IF_LOCAL_ID}"
-      gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+      gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
         --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
-      gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
         -c "Closing: implementation produced no changes ${OBSERVED_NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
       tg_notify "Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${OBSERVED_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
       IMPL_FAILED_STATE_CHANGED=true
@@ -5921,8 +5921,8 @@ ${RB_FIX_DESC}
     bump_impl_noop_count "${IF_LOCAL_ID}"
 
     # Read the original issue to preserve its content
-    IF_TITLE="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
-    IF_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
+    IF_TITLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
+    IF_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
 
     # Close the failed issue
     ensure_label_exists "ai:closed"
@@ -5948,7 +5948,7 @@ REISSUE_EOF
 )"
 
     ensure_label_exists "ai:clarification"
-    NEW_ISSUE_URL="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
+    NEW_ISSUE_URL="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
       --title "${IF_TITLE}" \
       --body "${NEW_BODY}" \
       --label "ai:clarification" 2>/dev/null || echo "")"
@@ -5980,7 +5980,7 @@ if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
   for rnum in ${REISSUED_NUMS}; do
     if [ -z "${rnum}" ] || [ "${rnum}" = "null" ]; then continue; fi
     if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then continue; fi
-    LABELS="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
+    LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
     [ -z "${LABELS}" ] && LABELS='[]'
     LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}')"
   done
@@ -6143,7 +6143,7 @@ with open('${STATE_FILE}', 'w') as f:
     echo "::error::Judge stall cycle limit reached ($((JUDGE_STALL_CYCLES + 1)) > ${MAX_JUDGE}). Marking project as failed."
     jq '.status = "failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
-    gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
       -f body="## Project Failed — Judge stall cycle limit exceeded
 
 Judge has used ${JUDGE_STALL_CYCLES} stall cycle(s) (recovery/fix-ups) out of ${MAX_JUDGE} allowed (total judge evaluations: ${JUDGE_CYCLE}).
@@ -6219,7 +6219,7 @@ Manual intervention required." >/dev/null
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
       || echo "")"
     if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
-      PR_DIFF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
+      PR_DIFF="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
         -H 'Accept: application/vnd.github.diff' 2>/dev/null | head -500 || echo "(diff unavailable)")"
       _issue_status="$(jq -r --arg num "${inum}" --argjson wi "${WAVE_IDX}" \
         '.waves[$wi].issues[] | select((.github_issue | tostring) == $num) | .status // ""' \
@@ -6431,7 +6431,7 @@ ${JUDGE_ASSESSMENT}
 New fix-up issues: ${NEW_ISSUES_COUNT}
 PRs to revert: ${REVERT_COUNT}"
 
-  gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
     -f body="${JUDGE_COMMENT}" >/dev/null
 
   # ---------------------------------------------------------------
@@ -6440,7 +6440,7 @@ PRs to revert: ${REVERT_COUNT}"
   if [ "${JUDGE_STATUS}" = "complete" ] && [ "${PROJECT_COMPLETE}" != "true" ]; then
     echo "::warning::Judge returned 'complete' but project_complete=${PROJECT_COMPLETE} (wave ${CURRENT_WAVE}/${TOTAL_WAVES}). Overriding to 'in_progress'."
     JUDGE_STATUS="in_progress"
-    gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
       -f body="⚠️ Judge verdict overridden: \`complete\` → \`in_progress\` because wave ${CURRENT_WAVE}/${TOTAL_WAVES} is not the final wave. Advancing to next wave." >/dev/null
   fi
 
@@ -6522,7 +6522,7 @@ All waves have merged and the judge is satisfied. Transitioning to runtime valid
 
         post_state_comment
 
-        gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
           -f body="## Project Failed
 
 Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) but the judge still reports failure. Manual intervention required.
@@ -6547,7 +6547,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
           if [[ "${PR_TO_REVERT}" =~ ^[0-9]+$ ]]; then
             echo "  Reverting PR #${PR_TO_REVERT} (issue #${revert_issue})..."
             # Create revert PR via gh
-            gh api "repos/${GITHUB_REPOSITORY}/pulls" \
+            gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls" \
               -f title="Revert PR #${PR_TO_REVERT} (orchestrator auto-recovery)" \
               -f head="revert-${PR_TO_REVERT}-$(date +%s)" \
               -f base="${DEFAULT_BRANCH}" \
@@ -6556,13 +6556,13 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 **Reason:** ${JUDGE_JUSTIFICATION}" >/dev/null 2>&1 || {
               # If API-based revert fails, create a revert via git
               echo "  API revert failed; creating revert commit..."
-              MERGE_SHA="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${PR_TO_REVERT}" --jq '.merge_commit_sha' || echo "")"
+              MERGE_SHA="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${PR_TO_REVERT}" --jq '.merge_commit_sha' || echo "")"
               if [ -n "${MERGE_SHA}" ] && [ "${MERGE_SHA}" != "null" ]; then
                 REVERT_BRANCH="revert-${PR_TO_REVERT}-$(date +%s)"
                 git checkout -b "${REVERT_BRANCH}" "${DEFAULT_BRANCH}"
                 if git revert --no-edit "${MERGE_SHA}"; then
                   git push -u origin "${REVERT_BRANCH}"
-                  gh pr create \
+                  gh_retry gh pr create \
                     --repo "${GITHUB_REPOSITORY}" \
                     --title "Revert PR #${PR_TO_REVERT} (orchestrator auto-recovery)" \
                     --body "Automated revert of PR #${PR_TO_REVERT} by orchestrator judge.
@@ -6615,7 +6615,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Managed by: AI Orchestrator"
 
           ensure_label_exists "ai:clarification"
-          FIX_URL="$(gh issue create \
+          FIX_URL="$(gh_retry gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${FIX_TITLE}" \
             --body "${FULL_FIX_BODY}" \
@@ -6683,7 +6683,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Managed by: AI Orchestrator"
 
           ensure_label_exists "ai:clarification"
-          NEW_URL="$(gh issue create \
+          NEW_URL="$(gh_retry gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${NEW_TITLE}" \
             --body "${FULL_NEW_BODY}" \
@@ -6765,7 +6765,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Managed by: AI Orchestrator"
 
           ensure_label_exists "ai:clarification"
-          NEW_URL="$(gh issue create \
+          NEW_URL="$(gh_retry gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${DEF_TITLE}" \
             --body "${FULL_BODY}" \
@@ -6801,7 +6801,7 @@ $(for inum in ${CREATED_NUMS}; do echo "- #${inum}"; done)
 
 These issues will enter the AI pipeline (clarify → plan → implement → review)."
 
-        gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
           -f body="${WAVE_COMMENT}" >/dev/null
       else
         # All waves dispatched but judge says in_progress with new issues
@@ -6845,7 +6845,7 @@ echo "========================================"
 # Collect open PR candidates with their refs.
 # gh pr list does not expose mergeable, so we fetch the full list and
 # then query each candidate via the REST API.
-STANDALONE_PRS="$(gh pr list \
+STANDALONE_PRS="$(gh_retry gh pr list \
 	--repo "${GITHUB_REPOSITORY}" \
 	--state open \
 	--json number,headRefName,baseRefName \
@@ -6875,7 +6875,7 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 
 	# Check mergeable state via REST API (dirty == merge conflicts)
-	S_PR_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" 2>/dev/null || echo '{}')"
+	S_PR_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" 2>/dev/null || echo '{}')"
 	S_STATE="$(echo "${S_PR_JSON}" | jq -r '.state // ""')"
 	if [ "${S_STATE}" != "open" ]; then
 		continue
@@ -6900,7 +6900,7 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 
 	# Stage 1: Try the GitHub API update-branch endpoint (clean merge)
 	S_HEAD_SHA="$(echo "${S_PR_JSON}" | jq -r '.head.sha // ""')"
-	if [ -n "${S_HEAD_SHA}" ] && gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}/update-branch" \
+	if [ -n "${S_HEAD_SHA}" ] && gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}/update-branch" \
 		-X PUT -f expected_head_sha="${S_HEAD_SHA}" 2>/dev/null; then
 		echo "  PR #${S_PR} branch updated via API. Synchronize event will re-trigger review."
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
