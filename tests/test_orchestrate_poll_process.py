@@ -2849,7 +2849,8 @@ def test_implementation_failed_reissue_persists_fixup_blocker_metadata_from_comm
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		issue_labels={10: ["ai:implementation-failed"]},
+		issue_labels={10: ["ai:implementation-failed"], 901: ["ai:closed"], 902: ["ai:closed"]},
+		issue_closed={901: True, 902: True},
 		issue_comments={10: [comment_body]},
 	)
 
