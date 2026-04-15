@@ -359,6 +359,27 @@ else
   ENABLE_CLOSE_MERGED_ISSUES="false"
 fi
 
+# ENABLE_STALL_MERGED_PR_GUARD — when true, early-phase stall recovery
+# actions (retrigger_pipeline / auto_respond_clarify / retrigger_plan /
+# auto_approve / retrigger_implement) double-check the issue's linked
+# pull request state before firing a command.  If the most recent
+# linked PR is MERGED, the action is skipped and the issue is tagged
+# ai:merged so close_merged_issues_sweep can close it on the next
+# cycle.  Introduced to stop /reclarify (and friends) from being
+# posted on issues whose work is already merged but whose phase label
+# got stripped (or whose "Closes #N" autolink never fired).  The
+# linked-PR state is prefetched in a single batched GraphQL call per
+# stall path, so the guard adds 0 additional per-issue REST calls on
+# successful prefetch, but may fall back to per-issue REST (timeline
+# + PR payload) on cache/prefetch miss.
+# Default true; set to false to disable the guard entirely.
+ENABLE_STALL_MERGED_PR_GUARD="${ENABLE_STALL_MERGED_PR_GUARD:-true}"
+if is_truthy "${ENABLE_STALL_MERGED_PR_GUARD}"; then
+  ENABLE_STALL_MERGED_PR_GUARD="true"
+else
+  ENABLE_STALL_MERGED_PR_GUARD="false"
+fi
+
 MAX_RECOVERY_ATTEMPTS="${MAX_RECOVERY_ATTEMPTS:-3}"
 if ! [[ "${MAX_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_RECOVERY_ATTEMPTS}" -lt 1 ]; then
   echo "::warning::MAX_RECOVERY_ATTEMPTS must be a positive integer; defaulting to 3"
@@ -2248,6 +2269,96 @@ extract_fix_issues_from_comment() {
   echo "${comment_body}" | sed 's/\\n/\n/g' | sed -n 's/^- #\([0-9][0-9]*\).*$/\1/p' | awk '!seen[$0]++'
 }
 
+extract_implement_fixup_blockers_from_comment() {
+  local comment_body="$1"
+  # Normalise literal \n sequences so marker lines are anchored to real lines.
+  printf '%s' "${comment_body}" | sed 's/\\n/\n/g' | sed -n '/^<!-- IMPLEMENT_FIXUP_BLOCKERS_V1$/,/^IMPLEMENT_FIXUP_BLOCKERS_V1 -->$/p' | sed '1d;$d'
+}
+
+sync_implementation_fixup_blockers() {
+  local source_issue_num="$1"
+  local issue_local_id="$2"
+  local wave_idx="$3"
+  local comments_json="$4"
+  local latest_blocker_comment_json
+  local blocker_comment_id
+  local blocker_comment_body
+  local blocker_payload
+  local parsed_source_issue
+  local normalized_fixups
+  local existing_source_issue
+  local existing_fixups
+
+  SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED="false"
+
+  if [ -z "${issue_local_id}" ] || [ "${issue_local_id}" = "null" ]; then
+    return 0
+  fi
+
+  latest_blocker_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("IMPLEMENT_FIXUP_BLOCKERS_V1"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty')"
+  if [ -z "${latest_blocker_comment_json}" ]; then
+    return 0
+  fi
+
+  blocker_comment_id="$(echo "${latest_blocker_comment_json}" | jq -r '.id // 0')"
+  if ! [[ "${blocker_comment_id}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+
+  blocker_comment_body="$(echo "${latest_blocker_comment_json}" | jq -r '.body // ""')"
+  blocker_payload="$(extract_implement_fixup_blockers_from_comment "${blocker_comment_body}")"
+  if [ -z "${blocker_payload}" ]; then
+    return 0
+  fi
+
+  parsed_source_issue="$(printf '%s' "${blocker_payload}" | jq -r '.blocks_source_issue // empty' 2>/dev/null || echo "")"
+  if [ -z "${parsed_source_issue}" ] || ! [[ "${parsed_source_issue}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  if [ "${parsed_source_issue}" != "${source_issue_num}" ]; then
+    return 0
+  fi
+
+  normalized_fixups="$(printf '%s' "${blocker_payload}" | jq -c '
+    if (.fixup_issue_numbers | type) == "array" then
+      .fixup_issue_numbers
+      | map(select(type == "number"))
+      | map(if floor == . then . else empty end)
+      | unique
+    else
+      []
+    end
+  ' 2>/dev/null || echo '[]')"
+
+  existing_source_issue="$(jq -r --arg local_id "${issue_local_id}" --argjson wave_idx "${wave_idx}" '
+    .waves[$wave_idx].issues[] | select(.id == $local_id) | .blocks_source_issue // empty
+  ' "${STATE_FILE}" 2>/dev/null | head -n1 || echo "")"
+  existing_fixups="$(jq -c --arg local_id "${issue_local_id}" --argjson wave_idx "${wave_idx}" '
+    .waves[$wave_idx].issues[] | select(.id == $local_id) | (.fixup_issue_numbers // [])
+    | if type == "array" then map(select(type == "number")) | map(if floor == . then . else empty end) | unique else [] end
+  ' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+
+  if [ "${existing_source_issue}" = "${source_issue_num}" ] && [ "${existing_fixups}" = "${normalized_fixups}" ]; then
+    return 0
+  fi
+
+  jq \
+    --arg local_id "${issue_local_id}" \
+    --argjson wave_idx "${wave_idx}" \
+    --argjson source_issue "${source_issue_num}" \
+    --argjson fixups "${normalized_fixups}" \
+    '(.waves[$wave_idx].issues[] | select(.id == $local_id)) |=
+      (. + {
+        blocks_source_issue: $source_issue,
+        fixup_issue_numbers: ($fixups | if type == "array" then . else [] end)
+      })' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED="true"
+
+  return 0
+}
+
 sync_validation_fix_issues_from_comments() {
   local comments_json="$1"
   local latest_fix_comment_json
@@ -2257,7 +2368,7 @@ sync_validation_fix_issues_from_comments() {
   local new_fix_issues_json
   local new_fix_count
 
-  latest_fix_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select(.body | startswith("## 🧪 Runtime validation found fixable issues"))] | last // empty')"
+  latest_fix_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select((.body // "") | startswith("## 🧪 Runtime validation found fixable issues"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty')"
   if [ -z "${latest_fix_comment_json}" ]; then
     return 0
   fi
@@ -3282,17 +3393,26 @@ _fetch_standalone_marker_issues_graphql() {
     }' 2>/dev/null || echo '{"state":[],"clarify":[]}'
 }
 
-# Batch-fetch labels and recent comments for a list of candidate issue
-# numbers via a single GraphQL query per batch (aliased issue selectors).
-# Replaces the per-candidate REST /labels and /comments round-trips
-# with ceil(N / batch_size) GraphQL calls.  Returns a JSON object keyed
-# by stringified issue number:
+# Batch-fetch labels, recent comments and latest-linked-PR state for a
+# list of candidate issue numbers via a single GraphQL query per batch
+# (aliased issue selectors).  Replaces the per-candidate REST /labels,
+# /comments and /timeline round-trips with ceil(N / batch_size) GraphQL
+# calls.  Returns a JSON object keyed by stringified issue number:
 #   { "123": {"labels": ["ai:clarification"],
-#             "comments": [{"id":N,"body":"...","created_at":"..."},...]},
+#             "comments": [{"id":N,"body":"...","created_at":"..."},...],
+#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool} | null },
 #     ... }
 # Comment shape mirrors the REST response (.id / .body / .created_at)
 # so existing parsers (e.g. _extract_standalone_state_comment_id_from_comments)
 # keep working unchanged.
+#
+# `linked_pr` is derived from the most recent CrossReferencedEvent
+# whose source is a pull request (equivalent to the REST
+# `[.[] | select(.event=="cross-referenced" and .source.issue.pull_request != null)] | last`
+# walk used by the existing open-PR guard).  It is consumed by the
+# merged-PR stall-recovery guard (ENABLE_STALL_MERGED_PR_GUARD) to
+# avoid firing /reclarify (and friends) on issues whose work has
+# already been merged.
 #
 # Trade-off: we fetch `comments(last: 100)` which covers only the 100
 # newest comments rather than the full pagination walk the REST path
@@ -3301,7 +3421,10 @@ _fetch_standalone_marker_issues_graphql() {
 # ai:clarification-questions marker is added near the top of the
 # clarification phase before high comment counts accrue.  If an issue
 # drifts past 100 comments *and* has an ancient marker, the
-# label-based detection path still catches it.
+# label-based detection path still catches it.  Similarly
+# `timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT])` covers
+# the 50 most-recent cross-references, which is plenty for AI pipeline
+# issues that rarely accumulate more than a handful.
 _fetch_candidate_issue_details_graphql() {
   local numbers_json="$1"
   local count
@@ -3336,6 +3459,16 @@ _fetch_candidate_issue_details_graphql() {
           number
           labels(first: 50) { nodes { name } }
           comments(last: 100) { nodes { databaseId body createdAt } }
+          timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
+            nodes {
+              ... on CrossReferencedEvent {
+                source {
+                  __typename
+                  ... on PullRequest { number state merged }
+                }
+              }
+            }
+          }
         }"
     done
 
@@ -3367,7 +3500,15 @@ _fetch_candidate_issue_details_graphql() {
               id: .databaseId,
               body: .body,
               created_at: .createdAt
-            }]
+            }],
+            linked_pr: (
+              [
+                (.value.timelineItems.nodes // [])[]?
+                | (.source // null)
+                | select(. != null and .__typename == "PullRequest")
+                | {number: .number, state: .state, merged: (.merged // false)}
+              ] | last // null
+            )
           }
         }
       ) | from_entries
@@ -3379,6 +3520,180 @@ _fetch_candidate_issue_details_graphql() {
   done
 
   echo "${merged}"
+}
+
+# _fetch_linked_pr_status_graphql — Batch-fetch latest-linked-PR state
+# for a list of issue numbers via a single GraphQL query per batch.
+# Lighter than _fetch_candidate_issue_details_graphql (only timeline
+# items, no labels/comments) and used by the orchestrator-managed
+# stall recovery loop, which already has its own label/state source
+# of truth.
+#
+# Input: JSON array of issue numbers, e.g. "[123, 456]"
+# Output: JSON object keyed by stringified issue number:
+#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool},
+#     "456": null, ... }
+# A value of `null` means the issue has no cross-referenced PR (or the
+# batch call failed for that batch and the issue fell out of the cache).
+# Callers must treat missing/null entries as "no merged PR known" and
+# proceed normally — the guard fails open.
+_fetch_linked_pr_status_graphql() {
+  local numbers_json="$1"
+  local count
+  count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
+  if [ -z "${count}" ] || [ "${count}" -eq 0 ]; then
+    echo '{}'
+    return
+  fi
+
+  local owner="${GITHUB_REPOSITORY%%/*}"
+  local name="${GITHUB_REPOSITORY##*/}"
+  local batch_size=25
+  local merged='{}'
+  local start=0
+  local end
+  local i
+  local n
+  local query
+  local fragment
+  local batch_resp
+  local batch_transformed
+
+  while [ "${start}" -lt "${count}" ]; do
+    end=$(( start + batch_size ))
+    [ "${end}" -gt "${count}" ] && end="${count}"
+
+    fragment=""
+    for ((i=start; i<end; i++)); do
+      n="$(printf '%s' "${numbers_json}" | jq -r ".[${i}]")"
+      [[ "${n}" =~ ^[0-9]+$ ]] || continue
+      fragment+=$'\n'"        i${i}: issue(number: ${n}) {
+          number
+          timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
+            nodes {
+              ... on CrossReferencedEvent {
+                source {
+                  __typename
+                  ... on PullRequest { number state merged }
+                }
+              }
+            }
+          }
+        }"
+    done
+
+    if [ -z "${fragment}" ]; then
+      start="${end}"
+      continue
+    fi
+
+    query="query {
+  repository(owner: \"${owner}\", name: \"${name}\") {${fragment}
+  }
+}"
+
+    if ! batch_resp="$(gh_retry gh api graphql -f query="${query}" 2>/dev/null)"; then
+      # Fail open: leave this batch's issues out of the cache so the
+      # caller treats them as "no merged PR known" and proceeds.
+      start="${end}"
+      continue
+    fi
+
+    batch_transformed="$(printf '%s' "${batch_resp}" | jq -c '
+      (.data.repository // {}) | to_entries | map(
+        select(.value != null and (.value.number? != null)) | {
+          key: (.value.number | tostring),
+          value: (
+            [
+              (.value.timelineItems.nodes // [])[]?
+              | (.source // null)
+              | select(. != null and .__typename == "PullRequest")
+              | {number: .number, state: .state, merged: (.merged // false)}
+            ] | last // null
+          )
+        }
+      ) | from_entries
+    ' 2>/dev/null || echo '{}')"
+
+    merged="$(jq -s '.[0] * .[1]' <(printf '%s\n' "${merged}") <(printf '%s\n' "${batch_transformed}") 2>/dev/null || echo "${merged}")"
+
+    start="${end}"
+  done
+
+  echo "${merged}"
+}
+
+# _check_merged_pr_guard — Shared guard used by both the standalone and
+# orchestrator-managed stall recovery paths.  Given an issue number and
+# a pre-fetched linked-PR JSON object (from either
+# _fetch_candidate_issue_details_graphql or
+# _fetch_linked_pr_status_graphql), returns 0 if the linked PR is
+# merged (caller should skip the stall action) and 1 otherwise.
+#
+# On a hit, exports STALL_MERGED_PR_NUM with the PR number so the
+# caller can log + notify + reconcile labels.
+#
+# The guard is feature-flagged via ENABLE_STALL_MERGED_PR_GUARD and
+# fails open (returns 1) if the guard is disabled or the linked_pr
+# payload is missing/empty — i.e. the guard NEVER causes a stall
+# recovery to fire when it otherwise wouldn't have.
+#
+# Args:
+#   $1 — issue number (for logging only)
+#   $2 — linked_pr JSON (shape: {"number":N,"state":"MERGED","merged":bool} or "null"/empty)
+_check_merged_pr_guard() {
+  local issue_num="$1"
+  local linked_json="$2"
+  STALL_MERGED_PR_NUM=""
+
+  if [ "${ENABLE_STALL_MERGED_PR_GUARD}" != "true" ]; then
+    return 1
+  fi
+
+  if [ -z "${linked_json}" ] || [ "${linked_json}" = "null" ] || [ "${linked_json}" = "{}" ]; then
+    return 1
+  fi
+
+  local merged_flag
+  merged_flag="$(printf '%s' "${linked_json}" | jq -r '.merged // false' 2>/dev/null || echo "false")"
+  if [ "${merged_flag}" != "true" ]; then
+    return 1
+  fi
+
+  local pr_num
+  pr_num="$(printf '%s' "${linked_json}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+  if ! [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  STALL_MERGED_PR_NUM="${pr_num}"
+  return 0
+}
+
+# _reconcile_merged_pr_issue — Tag an issue whose linked PR is merged
+# with ai:merged so close_merged_issues_sweep will close it on the
+# next cycle, and emit a one-line healing note + Telegram alert.  Used
+# by both stall recovery paths when _check_merged_pr_guard fires.
+# Fails open: label-edit errors are swallowed so a transient label
+# hiccup never blocks the stall recovery short-circuit.
+_reconcile_merged_pr_issue() {
+  local issue_num="$1"
+  local phase="$2"
+  local action="$3"
+  local pr_num="$4"
+
+  if declare -F ensure_label_exists >/dev/null 2>&1; then
+    ensure_label_exists "ai:merged" >/dev/null 2>&1 || true
+  fi
+  gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label "ai:merged" >/dev/null 2>&1 || true
+
+  if declare -F add_healing_note >/dev/null 2>&1; then
+    add_healing_note "Issue #${issue_num}: skipped stall recovery '${action}' (phase=${phase}) — linked PR #${pr_num} already merged; tagged ai:merged for close_merged_issues_sweep"
+  fi
+  if declare -F tg_notify >/dev/null 2>&1; then
+    tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because linked PR #${pr_num} is already merged. Tagged ai:merged."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${pr_num}")" "WARNING"
+  fi
 }
 
 run_standalone_stall_recovery() {
@@ -3567,6 +3882,51 @@ PY
       fi
       continue
     fi
+
+    # ---- Merged-PR guard: don't fire early-phase actions on issues whose
+    # linked PR is already merged.  Primary path consumes the linked_pr
+    # payload the batched GraphQL prefetch already put in
+    # _candidate_details_json (0 additional API calls).  On cache miss
+    # (batch failure, partial response, issue not in the cache) it falls
+    # back to a per-issue REST probe — timeline + PR payload — so a
+    # GraphQL/prefetch hiccup cannot silently regress the merged-PR
+    # guard back into the /reclarify loop from GH issue #1074.  Mirrors
+    # the REST-fallback merged handling added to the orchestrator-managed
+    # path in recover_stalled_issue.  Fails open if both cache and REST
+    # are empty — the stall action then runs as before.
+    case "${action}" in
+      retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement)
+        local _std_linked_json
+        _std_linked_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // null' 2>/dev/null || echo "null")"
+        # Cache miss — REST fallback (timeline → PR payload → merged_at).
+        # Two extra API calls per cache-miss issue, bounded by the
+        # rarity of prefetch failures.  Gated on the guard flag so
+        # disabling it still gives full opt-out.
+        if { [ -z "${_std_linked_json}" ] || [ "${_std_linked_json}" = "null" ]; } && [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ]; then
+          local _std_lpr_num _std_lpr_json _std_lpr_merged
+          _std_lpr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+            --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+            2>/dev/null || echo "")"
+          if [[ "${_std_lpr_num}" =~ ^[0-9]+$ ]]; then
+            _std_lpr_json="$(_fetch_pr_json "${_std_lpr_num}")"
+            _std_lpr_merged="$(_jq_field "${_std_lpr_json}" '.merged_at != null' 'true|false')"
+            if [ "${_std_lpr_merged}" = "true" ]; then
+              # Synthesise the same shape the cache would have produced
+              # so _check_merged_pr_guard can consume it uniformly.
+              _std_linked_json="$(jq -cn --argjson n "${_std_lpr_num}" '{number: $n, state: "MERGED", merged: true}' 2>/dev/null || echo "null")"
+            fi
+          fi
+        fi
+        if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
+          echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
+          _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+          if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+            write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          fi
+          continue
+        fi
+        ;;
+    esac
 
     if [ "${action}" != "skip" ] && [ "${action}" != "attempt_merge" ] && [ "${action}" != "escalate_human" ]; then
       cancel_zombie_runs_for_issue "${issue_num}"
@@ -3905,7 +4265,8 @@ extract_recommended_answers() {
           ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required"))
         )
     ]
-    | if length > 0 then .[0].body // "" else "" end
+    | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)])
+    | .body // ""
   ')"
 
   if [ -z "${clarify_body}" ]; then
@@ -4006,31 +4367,90 @@ recover_stalled_issue() {
     return 1  # Signal: no action taken (caller should not increment counter)
   fi
 
-  # ---- Guard: skip pre-implementation recovery when an open linked PR already exists ----
+  # ---- Guard: skip pre-implementation recovery when a linked PR already exists ----
   # Early-phase actions (retrigger_pipeline, auto_respond_clarify, retrigger_plan,
   # auto_approve, retrigger_implement) assume the issue has not yet produced a PR.
   # When phase labels are stale/missing (e.g. issue ends up with no ai:* labels even
   # though implementation already happened) the stall detector can misclassify the
   # phase as "no_labels"/"ai:clarification"/"ai:planning"/"ai:awaiting-approval"/
   # "ai:implementing" and fire /reclarify, /answer, /approved, etc. against an
-  # issue that already has an open PR, triggering a stuck-in-loop scenario.
-  # Consult the linked PR via the GitHub timeline and, if it is still open, bail
-  # out of the early-phase action so the issue can progress on its existing PR.
+  # issue that already has a PR (either still open OR already merged), triggering
+  # a stuck-in-loop scenario like GH issue #1074.
+  #
+  # Two sub-guards:
+  #   1. Merged-PR guard (ENABLE_STALL_MERGED_PR_GUARD): if the latest linked PR
+  #      is MERGED, short-circuit + tag ai:merged so close_merged_issues_sweep
+  #      closes the issue on the next cycle.
+  #   2. Open-PR guard (legacy): if the latest linked PR is OPEN, short-circuit
+  #      so the issue can progress on its existing PR.
+  #
+  # Both sub-guards first consult STALL_MANAGED_LINKED_PR_CACHE, which is
+  # populated once per stall loop via a single batched GraphQL call
+  # (_fetch_linked_pr_status_graphql).  On cache miss they fall back to the
+  # legacy per-issue REST lookup — and the REST fallback also short-circuits
+  # on merged PRs, so a GraphQL/prefetch failure cannot silently regress
+  # the merged-PR guard back into the /reclarify loop.  Fail-open behaviour
+  # preserved: when REST also fails, the stall action runs as before.
   case "${action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement)
-      local _lpr_num
-      _lpr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
-        --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-        2>/dev/null || echo "")"
-      if [[ "${_lpr_num}" =~ ^[0-9]+$ ]]; then
-        local _lpr_state
-        _lpr_state="$(_jq_field "$(_fetch_pr_json "${_lpr_num}")" '.state' 'open|closed|merged')"
-        if [ "${_lpr_state}" = "open" ]; then
-          echo "STALL_SKIP issue=${issue_num} reason=open_linked_pr pr=${_lpr_num} phase=${phase} action=${action}"
-          add_healing_note "Issue #${issue_num}: skipped early-phase stall recovery '${action}' (phase=${phase}) — open linked PR #${_lpr_num} already exists"
-          tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because open linked PR #${_lpr_num} already exists."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
-          return 1  # Signal: no action taken (caller should not increment counter)
+      local _lpr_cache_entry=""
+      if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
+        _lpr_cache_entry="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null")"
+      fi
+
+      # --- Merged-PR sub-guard (uses cache only; fails open on miss) ---
+      if _check_merged_pr_guard "${issue_num}" "${_lpr_cache_entry}"; then
+        echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
+        _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+        STALL_HEALING_CHANGED=true
+        return 1  # Signal: no action taken (caller should not increment counter)
+      fi
+
+      # --- Open-PR sub-guard (uses cache first, falls back to per-issue REST) ---
+      local _lpr_num=""
+      local _lpr_state=""
+      if [ -n "${_lpr_cache_entry}" ] && [ "${_lpr_cache_entry}" != "null" ]; then
+        _lpr_num="$(printf '%s' "${_lpr_cache_entry}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+        # GraphQL PR state is uppercase (OPEN/CLOSED/MERGED); normalize to lower for the legacy compare.
+        _lpr_state="$(printf '%s' "${_lpr_cache_entry}" | jq -r '.state // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+      fi
+      if [ -z "${_lpr_num}" ]; then
+        # Cache miss — fall back to the legacy per-issue REST lookup.
+        _lpr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
+          --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+          2>/dev/null || echo "")"
+        if [[ "${_lpr_num}" =~ ^[0-9]+$ ]]; then
+          local _lpr_json=""
+          local _lpr_merged=""
+          _lpr_json="$(_fetch_pr_json "${_lpr_num}")"
+          _lpr_state="$(_jq_field "${_lpr_json}" '.state' 'open|closed')"
+          _lpr_merged="$(_jq_field "${_lpr_json}" '.merged_at != null' 'true|false')"
+          # REST-fallback merged-PR sub-guard: catches merged PRs that
+          # the batched GraphQL prefetch missed or failed to fetch
+          # (transient network error, partial batch, issue number that
+          # wasn't in the stalls list, etc.).  Without this, the
+          # merged-PR short-circuit silently regresses on any cache
+          # miss and the /reclarify loop from GH issue #1074 could
+          # recur.  Uses the same _reconcile_merged_pr_issue helper
+          # as the cache-hit path at the top of this guard, and
+          # respects ENABLE_STALL_MERGED_PR_GUARD so disabling the
+          # flag still gives full opt-out.  No extra API calls — the
+          # REST fallback has already fetched the PR payload on the
+          # preceding line.
+          if [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ] && [ "${_lpr_merged}" = "true" ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${_lpr_num} phase=${phase} action=${action} source=rest_fallback"
+            _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${_lpr_num}"
+            STALL_HEALING_CHANGED=true
+            return 1  # Signal: no action taken (caller should not increment counter)
+          fi
         fi
+      fi
+      if [[ "${_lpr_num}" =~ ^[0-9]+$ ]] && [ "${_lpr_state}" = "open" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=open_linked_pr pr=${_lpr_num} phase=${phase} action=${action}"
+        add_healing_note "Issue #${issue_num}: skipped early-phase stall recovery '${action}' (phase=${phase}) — open linked PR #${_lpr_num} already exists"
+        STALL_HEALING_CHANGED=true
+        tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because open linked PR #${_lpr_num} already exists."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
+        return 1  # Signal: no action taken (caller should not increment counter)
       fi
       ;;
   esac
@@ -4380,7 +4800,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       # "Runtime validation failed", "Runtime validation harness error",
       # "Runtime validation infeasible", or "Runtime validation found fixable issues").
       VALIDATION_FAIL_BODY="$(echo "${COMMENTS}" | jq -r '
-        [.[] | select(.body | test("## [❌🧪⚠️]+ Runtime validation"))] | last | .body // ""
+        [.[] | select((.body // "") | test("## [❌🧪⚠️]+ Runtime validation"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) | .body // ""
       ')"
       if [ -n "${VALIDATION_FAIL_BODY}" ] && [ "${VALIDATION_FAIL_BODY}" != "" ]; then
         mark_validation_failed "${VALIDATION_FAIL_BODY}"
@@ -6290,51 +6710,218 @@ ${RB_FIX_DESC}
   while read -r if_issue; do
     [[ "${if_issue}" =~ ^[0-9]+$ ]] || continue
 
-    # Look up local_id for this issue so we can track no-op count
-    IF_LOCAL_ID="$(jq -r --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" \
-      '.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue) | .id' \
+    # Look up the wave issue entry for this source issue.
+    IF_ENTRY_JSON="$(jq -c --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" \
+      '.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue) | .' \
       "${STATE_FILE}" | head -n 1)"
+    IF_LOCAL_ID="$(echo "${IF_ENTRY_JSON}" | jq -r '.id // ""' 2>/dev/null || echo "")"
 
-    # ---- No-op loop guard: if this task has already been re-issued
-    # MAX_IMPL_NOOP_REISSUES times without producing changes, the code
-    # likely already exists on main.  Close the issue and let the
-    # wave-completion judge verify instead of looping forever.
-    NOOP_COUNT="$(get_impl_noop_count "${IF_LOCAL_ID}")"
-    # The current failure is itself a no-op, so the observed count
-    # includes this cycle even though we haven't bumped yet.
-    OBSERVED_NOOP_COUNT=$((NOOP_COUNT + 1))
-    # Cap semantics: MAX_IMPL_NOOP_REISSUES controls how many re-issues
-    # are allowed after prior no-op failures.
-    if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
-      echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
-      bump_impl_noop_count "${IF_LOCAL_ID}"
-      gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-        --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
-      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-        -c "Closing: implementation produced no changes ${OBSERVED_NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
-      tg_notify "Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${OBSERVED_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
-      IMPL_FAILED_STATE_CHANGED=true
+    IF_MODE="no-op-implementation"
+    IF_BLOCKERS_JSON='[]'
+    IF_BLOCKERS_SOURCE="none"
+    IF_DEFER_REISSUE="false"
+    IF_DEFER_REASON=""
+
+    IF_STORED_BLOCKERS_JSON="$(echo "${IF_ENTRY_JSON}" | jq -c '
+      if type == "object" then
+        (
+          ((if (.depends_on | type) == "array" then .depends_on else [] end)
+           +
+           (if (.reissue_depends_on | type) == "array" then .reissue_depends_on else [] end))
+          | map(tostring | ltrimstr("#") | tonumber?)
+          | map(select(. != null))
+          | unique
+        )
+      else
+        []
+      end
+    ' 2>/dev/null || echo '[]')"
+
+    IF_COMMENTS_JSON='[]'
+    if IF_COMMENTS_JSON="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments?sort=created&direction=desc&per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+      && echo "${IF_COMMENTS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      :
+    else
+      IF_COMMENTS_JSON='[]'
+      IF_MODE="post-codex-validation"
+      IF_DEFER_REISSUE="true"
+      IF_DEFER_REASON="unable to fetch issue comments for post-codex blocker detection"
+    fi
+
+    IF_POST_CODEX_ANY_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | test("^## Post-Codex validation"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty' 2>/dev/null || true)"
+    IF_POST_CODEX_FIX_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | startswith("## Post-Codex validation diagnosed follow-up fixes"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty' 2>/dev/null || true)"
+
+    IF_PARSED_BLOCKERS_JSON='[]'
+    IF_PARSED_BLOCKER_COUNT=0
+    IF_STORED_BLOCKER_COUNT="$(echo "${IF_STORED_BLOCKERS_JSON}" | jq 'length' 2>/dev/null || echo "0")"
+    IF_HAS_POST_CODEX_CONTEXT="false"
+    if [ -n "${IF_POST_CODEX_ANY_COMMENT_JSON}" ]; then
+      IF_HAS_POST_CODEX_CONTEXT="true"
+    fi
+
+    if [ -n "${IF_POST_CODEX_FIX_COMMENT_JSON}" ]; then
+      IF_FIX_COMMENT_BODY="$(echo "${IF_POST_CODEX_FIX_COMMENT_JSON}" | jq -r '.body // ""')"
+      IF_PARSED_BLOCKERS_JSON="$(extract_fix_issues_from_comment "${IF_FIX_COMMENT_BODY}" | jq -R 'select(length > 0) | tonumber' | jq -s 'unique')"
+      IF_PARSED_BLOCKER_COUNT="$(echo "${IF_PARSED_BLOCKERS_JSON}" | jq 'length' 2>/dev/null || echo "0")"
+    fi
+
+    if [ "${IF_PARSED_BLOCKER_COUNT}" -gt 0 ]; then
+      IF_MODE="post-codex-validation"
+      IF_BLOCKERS_JSON="${IF_PARSED_BLOCKERS_JSON}"
+      IF_BLOCKERS_SOURCE="post-codex-comment"
+    elif [ "${IF_STORED_BLOCKER_COUNT}" -gt 0 ]; then
+      IF_MODE="post-codex-validation"
+      IF_BLOCKERS_JSON="${IF_STORED_BLOCKERS_JSON}"
+      IF_BLOCKERS_SOURCE="state"
+    elif [ "${IF_HAS_POST_CODEX_CONTEXT}" = "true" ]; then
+      IF_MODE="post-codex-validation"
+      IF_DEFER_REISSUE="true"
+      IF_DEFER_REASON="post-codex blocker metadata missing or malformed"
+    fi
+
+    IF_BLOCKER_COUNT="$(echo "${IF_BLOCKERS_JSON}" | jq 'length' 2>/dev/null || echo "0")"
+    if [ "${IF_BLOCKER_COUNT}" -gt 0 ] && [[ -n "${IF_LOCAL_ID}" && "${IF_LOCAL_ID}" != "null" ]]; then
+      IF_STATE_TMP="${STATE_FILE}.impl_dep.tmp"
+      if jq --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" --argjson blockers "${IF_BLOCKERS_JSON}" '
+        (.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)) |= (
+          if (.depends_on | type) == "array" then
+            .depends_on = ((.depends_on + $blockers) | unique)
+          else
+            .reissue_depends_on = (((.reissue_depends_on // []) + $blockers) | unique)
+          end
+        )
+      ' "${STATE_FILE}" > "${IF_STATE_TMP}"; then
+        if ! cmp -s "${STATE_FILE}" "${IF_STATE_TMP}"; then
+          mv "${IF_STATE_TMP}" "${STATE_FILE}"
+          IMPL_FAILED_STATE_CHANGED=true
+        else
+          rm -f "${IF_STATE_TMP}"
+        fi
+      else
+        rm -f "${IF_STATE_TMP}" 2>/dev/null || true
+      fi
+    fi
+
+    if [ "${IF_MODE}" = "post-codex-validation" ] && [ "${IF_BLOCKER_COUNT}" -gt 0 ]; then
+      IF_BLOCKER_OPEN_COUNT=0
+      IF_BLOCKER_UNKNOWN_COUNT=0
+      IF_BLOCKER_STATUS_SUMMARY=""
+
+      while IFS= read -r blocker_issue; do
+        [ -n "${blocker_issue}" ] || continue
+        BLOCKER_STATE="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${blocker_issue}" --jq '.state' || echo "")"
+        case "${BLOCKER_STATE}" in
+          open)
+            IF_BLOCKER_OPEN_COUNT=$((IF_BLOCKER_OPEN_COUNT + 1))
+            IF_BLOCKER_STATUS_SUMMARY+="#${blocker_issue}=open "
+            ;;
+          closed)
+            IF_BLOCKER_STATUS_SUMMARY+="#${blocker_issue}=closed "
+            ;;
+          *)
+            IF_BLOCKER_UNKNOWN_COUNT=$((IF_BLOCKER_UNKNOWN_COUNT + 1))
+            IF_BLOCKER_STATUS_SUMMARY+="#${blocker_issue}=unknown "
+            ;;
+        esac
+      done < <(echo "${IF_BLOCKERS_JSON}" | jq -r '.[]')
+
+      if [ "${IF_BLOCKER_UNKNOWN_COUNT}" -gt 0 ]; then
+        IF_DEFER_REISSUE="true"
+        IF_DEFER_REASON="blocker status lookup incomplete"
+      elif [ "${IF_BLOCKER_OPEN_COUNT}" -gt 0 ]; then
+        IF_DEFER_REISSUE="true"
+        IF_DEFER_REASON="blocker fix-up issue(s) still open"
+      fi
+
+      if [ "${IF_DEFER_REISSUE}" = "true" ]; then
+        IF_BLOCKERS_CSV="$(echo "${IF_BLOCKERS_JSON}" | jq -r 'map("#" + tostring) | join(", ")')"
+        echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; blockers=${IF_BLOCKERS_CSV}; statuses=${IF_BLOCKER_STATUS_SUMMARY}; reason=${IF_DEFER_REASON}."
+        tg_notify "Deferred implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID})."$'\n'"Mode: ${IF_MODE}"$'\n'"Blockers: ${IF_BLOCKERS_CSV}"$'\n'"Statuses: ${IF_BLOCKER_STATUS_SUMMARY}"$'\n'"Reason: ${IF_DEFER_REASON}"$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
+        continue
+      fi
+    elif [ "${IF_MODE}" = "post-codex-validation" ] && [ "${IF_DEFER_REISSUE}" = "true" ]; then
+      echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; reason=${IF_DEFER_REASON}."
+      tg_notify "Deferred implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID})."$'\n'"Mode: ${IF_MODE}"$'\n'"Reason: ${IF_DEFER_REASON}"$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
       continue
     fi
 
-    echo "  Issue #${if_issue} has implementation-failed (no-op ${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
+    if [ "${IF_MODE}" = "no-op-implementation" ]; then
+      # ---- No-op loop guard: if this task has already been re-issued
+      # MAX_IMPL_NOOP_REISSUES times without producing changes, the code
+      # likely already exists on main.  Close the issue and let the
+      # wave-completion judge verify instead of looping forever.
+      NOOP_COUNT="$(get_impl_noop_count "${IF_LOCAL_ID}")"
+      # The current failure is itself a no-op, so the observed count
+      # includes this cycle even though we haven't bumped yet.
+      OBSERVED_NOOP_COUNT=$((NOOP_COUNT + 1))
+      # Cap semantics: MAX_IMPL_NOOP_REISSUES controls how many re-issues
+      # are allowed after prior no-op failures.
+      if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+        echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
+        bump_impl_noop_count "${IF_LOCAL_ID}"
+        gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+        gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation produced no changes ${OBSERVED_NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
+        tg_notify "Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${OBSERVED_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
+        IMPL_FAILED_STATE_CHANGED=true
+        continue
+      fi
 
-    # Increment no-op counter before re-issuing
-    bump_impl_noop_count "${IF_LOCAL_ID}"
+      echo "  Issue #${if_issue} has implementation-failed (no-op ${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
+
+      # Increment no-op counter before re-issuing
+      bump_impl_noop_count "${IF_LOCAL_ID}"
+    else
+      echo "  Issue #${if_issue} has implementation-failed (${IF_MODE}; blockers resolved). Closing and re-issuing..."
+    fi
 
     # Read the original issue to preserve its content
     IF_TITLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
     IF_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
 
+    sync_implementation_fixup_blockers "${if_issue}" "${IF_LOCAL_ID}" "${WAVE_IDX}" "${IF_COMMENTS_JSON}" || true
+    if [ "${SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED:-false}" = "true" ]; then
+      IMPL_FAILED_STATE_CHANGED=true
+    fi
+
     # Close the failed issue
     ensure_label_exists "ai:closed"
     gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
       --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
-    gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-      -c "Closing: implementation produced no changes. Re-issuing with additional guidance." 2>/dev/null || true
+    if [ "${IF_MODE}" = "post-codex-validation" ]; then
+      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+        -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this source task is being re-issued with blocker-sequenced guidance." 2>/dev/null || true
+    else
+      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+        -c "Closing: implementation produced no changes. Re-issuing with additional guidance." 2>/dev/null || true
+    fi
 
     # Create replacement issue with extra guidance
-    NEW_BODY="$(cat <<REISSUE_EOF
+    if [ "${IF_MODE}" = "post-codex-validation" ]; then
+      IF_BLOCKERS_MD="$(echo "${IF_BLOCKERS_JSON}" | jq -r '.[] | "- #\(.)"')"
+      if [ -z "${IF_BLOCKERS_MD}" ]; then
+        IF_BLOCKERS_MD="- (none recorded)"
+      fi
+      NEW_BODY="$(cat <<REISSUE_EOF
+${IF_BODY}
+
+---
+
+**⚠️ Re-issued from #${if_issue}** — the previous implementation attempt failed during post-Codex syntax/validation checks.
+
+**Post-Codex blocker context:**
+${IF_BLOCKERS_MD}
+
+**Guidance for the implementation model:**
+- Review and respect the blocker fix-up outcomes listed above before re-implementing this source task.
+- Preserve compatibility with those blocker fixes; do not undo or duplicate them.
+- Run syntax/validation checks for changed files before finishing to avoid another post-Codex failure.
+- You MUST create or modify files as described in the approved plan. Do NOT only describe changes.
+REISSUE_EOF
+)"
+    else
+      NEW_BODY="$(cat <<REISSUE_EOF
 ${IF_BODY}
 
 ---
@@ -6348,6 +6935,7 @@ ${IF_BODY}
 - If the task genuinely requires no code changes, explain why in a comment instead of silently producing no output.
 REISSUE_EOF
 )"
+    fi
 
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
@@ -6465,6 +7053,34 @@ fi
       if [ -n "${ACTIVE_WORKFLOW_ISSUES}" ]; then
         echo "Issues with active workflow runs: $(echo "${ACTIVE_WORKFLOW_ISSUES}" | tr '\n' ' ')"
       fi
+
+      # Prefetch linked-PR state for every stalled issue in batched
+      # GraphQL calls, so recover_stalled_issue's merged-PR and open-PR
+      # sub-guards both consume the data from an in-memory cache
+      # instead of hitting the GitHub API per issue.  The prefetch is
+      # intentionally NOT gated on ENABLE_STALL_MERGED_PR_GUARD: the
+      # open-PR sub-guard is pre-existing and always benefits from the
+      # batched lookup, so we always populate the cache whenever there
+      # are stalled issues to inspect.  When ENABLE_STALL_MERGED_PR_GUARD
+      # is false, _check_merged_pr_guard itself short-circuits (see its
+      # feature-flag check), but the cache still serves the open-PR
+      # sub-guard.  Fails open: an empty/failed prefetch leaves the
+      # legacy per-issue REST lookup in place as a fallback.
+      # _fetch_linked_pr_status_graphql batches at batch_size=25 so
+      # larger stall sets produce multiple calls.
+      STALL_MANAGED_LINKED_PR_CACHE='{}'
+      _stall_issue_nums_json="$(echo "${STALLS_JSON}" | jq -c '[.stalls[].github_issue | select(type == "number")] | unique')"
+      _stall_issue_count="$(printf '%s' "${_stall_issue_nums_json}" | jq 'length' 2>/dev/null || echo 0)"
+      if [ "${_stall_issue_count}" -gt 0 ]; then
+        STALL_MANAGED_LINKED_PR_CACHE="$(_fetch_linked_pr_status_graphql "${_stall_issue_nums_json}")"
+        _stall_graphql_batches="$(( ( _stall_issue_count + 24 ) / 25 ))"
+        _stall_graphql_call_label="calls"
+        if [ "${_stall_graphql_batches}" -eq 1 ]; then
+          _stall_graphql_call_label="call"
+        fi
+        echo "Prefetched linked-PR state for $(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq 'length' 2>/dev/null || echo 0) stalled issue(s) (${_stall_graphql_batches} batched GraphQL ${_stall_graphql_call_label})."
+      fi
+      export STALL_MANAGED_LINKED_PR_CACHE
 
       while IFS= read -r stall_entry; do
         [ -n "${stall_entry}" ] || continue

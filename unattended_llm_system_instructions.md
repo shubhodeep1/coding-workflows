@@ -143,3 +143,19 @@ PR feedback is not permission to reinterpret the project. Maintain original inte
 - Never write into `.git/**`.
 - Set `PYTHONDONTWRITEBYTECODE=1` for Python tooling on repo files.
 - Treat `__pycache__`/`*.pyc` under `.git/` as invalid state.
+
+---
+
+## 14) GitHub API Call Hygiene (MANDATORY)
+
+GitHub REST and GraphQL rate limits are a shared resource across every automated run. Before adding **any** new `gh api`, `gh_retry`, `_safe_gh_jq`, `gh issue ... --json`, `gh pr ... --json`, `gh run list`, or direct `curl https://api.github.com/...` call to a fix, you MUST check whether the data can be obtained from an existing call in the same code path and merged or batched with it.
+
+Rules:
+
+- **Check first, add second.** Search the surrounding function and file for existing `gh` invocations hitting the same issue/PR/repo scope. If one exists, extend it (add a JSON field, add a GraphQL alias, reuse its cached result) instead of creating a new call.
+- **Prefer batched GraphQL over per-item REST.** For N-item data needs (issues, PRs, comments, labels, timeline events), use aliased GraphQL queries (see `_fetch_candidate_issue_details_graphql` and `_fetch_linked_pr_status_graphql` in `scripts/orchestrate_poll_process.sh`).
+- **Cycle-local caches are first-class.** Do not add a per-iteration `gh api` call inside a loop that already has a prefetched cache (`ACTIVE_WORKFLOW_ISSUES`, `STALL_MANAGED_LINKED_PR_CACHE`, `_candidate_details_json`). Read from the cache.
+- **Fail open on cache miss.** A cache/prefetch failure must never block the caller.
+- **Document the batching contract** on any new batched helper: input shape, output shape, number of API calls, fail-open behaviour.
+
+Under the unattended decision policy (§4), if a reviewer suggestion would add a new per-item API call that could be satisfied by an existing batched helper, classify it as "ignored — conflicts with GitHub API hygiene" and document the existing helper in the ignore reason.
