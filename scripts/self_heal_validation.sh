@@ -222,9 +222,34 @@ fi
 # Write patch to a tmp file and validate.
 printf '%s\n' "${DECISION_PATCH}" > "${SELF_HEAL_PATCH_TMP}"
 
+# Reject non-additive diffs explicitly before any dry-run/apply.
+# The self-heal prompt's hard constraints require patches to be additive
+# clarifications only: no deletions, no renames, no schema/identifier
+# changes, no file deletions via /dev/null headers. We enforce the
+# syntactic parts of that contract here so a misbehaving self-heal LLM
+# cannot remove "Hard constraints" blocks, rename JSON schema fields, or
+# delete the target prompt file wholesale.
+if grep -Eq '^(---|\+\+\+) /dev/null([[:space:]]|$)' "${SELF_HEAL_PATCH_TMP}"; then
+	echo "self-heal: refusing — patch uses /dev/null headers (file add/delete not allowed)" >&2
+	exit 2
+fi
+if grep -Eq '^(deleted file mode|new file mode|rename from |rename to |copy from |copy to )' "${SELF_HEAL_PATCH_TMP}"; then
+	echo "self-heal: refusing — patch includes non-additive file operations (rename/copy/delete/new)" >&2
+	exit 2
+fi
+# Reject any deletion lines. Unified diff deletion lines start with a
+# single '-' followed by a non-'-' char (or end of line). The file
+# header '--- path' starts with three dashes and is NOT matched by
+# '^-[^-]'. We also reject bare '--' lines as a defensive measure.
+if grep -Eq '^-[^-]|^--$' "${SELF_HEAL_PATCH_TMP}"; then
+	echo "self-heal: refusing — patch contains deletion lines; self-heal patches must be additive-only" >&2
+	exit 2
+fi
+
 # Reject obvious out-of-scope diffs: patch must only touch prompts/<target>.
 # Accept a/, b/ prefixes and optional trailing whitespace+timestamp.
-_expected_re="(/dev/null|(a/|b/)?prompts/${DECISION_TARGET}([[:space:]]|\$))"
+# (/dev/null is excluded here because the earlier guard rejects it.)
+_expected_re="(a/|b/)?prompts/${DECISION_TARGET}([[:space:]]|\$)"
 if grep -E '^(\+\+\+|---) ' "${SELF_HEAL_PATCH_TMP}" | grep -vE "${_expected_re}" >/dev/null 2>&1; then
 	echo "self-heal: refusing — patch touches files outside prompts/${DECISION_TARGET}" >&2
 	exit 2

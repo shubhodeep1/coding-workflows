@@ -191,6 +191,20 @@ attempt_self_heal_and_reexec()
     echo "::warning::self-heal helper scripts/self_heal_validation.sh not found; skipping self-heal." >&2
     return 0
   fi
+  # Self-heal is designed to be opt-in: workflow-templates/ai-validate.yml
+  # and .github/workflows/validate.yml fetch the prompt and helper script
+  # with require_remote=false, so older @stable tags can be missing one or
+  # both. Fail-closed here rather than letting self_heal_validation.sh exit
+  # with a misleading "no patch proposed" code, which would look like the
+  # LLM chose not to self-heal when in fact a dependency was missing.
+  if [ ! -f "prompts/mode-validate-self-heal.txt" ]; then
+    echo "::warning::self-heal prompt prompts/mode-validate-self-heal.txt not found; skipping self-heal." >&2
+    return 0
+  fi
+  if [ ! -f "scripts/render_prompt.sh" ]; then
+    echo "::warning::self-heal dependency scripts/render_prompt.sh not found; skipping self-heal." >&2
+    return 0
+  fi
 
   local heal_exit=0
   SELF_HEAL_FAILURE_PHASE="${phase}" \

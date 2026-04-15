@@ -106,16 +106,20 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Create improvement branch
+        id: branch
         if: steps.payload.outputs.skip != 'true'
         env:
-          BRANCH_NAME: ${{ steps.payload.outputs.branch_name }}
+          INITIAL_BRANCH_NAME: ${{ steps.payload.outputs.branch_name }}
         run: |
           set -euo pipefail
+          BRANCH_NAME="${INITIAL_BRANCH_NAME}"
           if git ls-remote --exit-code --heads origin "${BRANCH_NAME}" >/dev/null 2>&1; then
             echo "::warning::branch ${BRANCH_NAME} already exists on origin; appending run_attempt suffix"
             BRANCH_NAME="${BRANCH_NAME}-${GITHUB_RUN_ATTEMPT}"
-            echo "branch_name=${BRANCH_NAME}" >> "${GITHUB_OUTPUT}"
           fi
+          # Canonical output: downstream steps must read steps.branch.outputs.branch_name
+          # (not steps.payload.outputs.branch_name) so that the suffixed name is used.
+          echo "branch_name=${BRANCH_NAME}" >> "${GITHUB_OUTPUT}"
           git checkout -b "${BRANCH_NAME}"
 
       - name: Apply patches
@@ -213,7 +217,7 @@ jobs:
           ATTEMPTS: ${{ steps.payload.outputs.attempts }}
           APPLIED: ${{ steps.apply.outputs.applied }}
           SKIPPED: ${{ steps.apply.outputs.skipped }}
-          BRANCH_NAME: ${{ steps.payload.outputs.branch_name }}
+          BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
         run: |
           set -euo pipefail
           ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -257,7 +261,7 @@ jobs:
           RUN_URL: ${{ steps.payload.outputs.run_url }}
           APPLIED: ${{ steps.apply.outputs.applied }}
           SKIPPED: ${{ steps.apply.outputs.skipped }}
-          BRANCH_NAME: ${{ steps.payload.outputs.branch_name }}
+          BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
         run: |
           set -euo pipefail
           git add docs/validation-improvements.md prompts/mode-validate-*.txt
