@@ -3089,7 +3089,11 @@ ${diagnostics}
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${judge_comment}" >/dev/null 2>&1 || true
   fi
-  tg_notify "Stall judge evaluated issue #${issue_num}: ${effective_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+  local tg_action_summary="${effective_action}"
+  if [ "${judge_action}" != "${effective_action}" ]; then
+    tg_action_summary="judge=${judge_action}, effective=${effective_action}"
+  fi
+  tg_notify "Stall judge evaluated issue #${issue_num}: ${tg_action_summary}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
 
   case "${effective_action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human)
