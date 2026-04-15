@@ -29,7 +29,7 @@ if [ -n "${CAPTURE_FILE}" ]; then
 fi
 
 while IFS= read -r -d '' f; do
-  if [ -f "${f}" ]; then
+  if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     checker_stderr="$(mktemp)"
     if ! python3 -m py_compile "${f}" 2>"${checker_stderr}"; then
       echo "::error file=${f}::Syntax error in ${f}"
@@ -42,7 +42,7 @@ while IFS= read -r -d '' f; do
 done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.py'; git ls-files --others --exclude-standard -z -- '*.py'; })
 
 while IFS= read -r -d '' f; do
-  if [ -f "${f}" ]; then
+  if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     checker_stderr="$(mktemp)"
     if ! node --check "${f}" 2>"${checker_stderr}"; then
       echo "::error file=${f}::Syntax error in ${f}"
@@ -55,7 +55,7 @@ while IFS= read -r -d '' f; do
 done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.js'; git ls-files --others --exclude-standard -z -- '*.js'; })
 
 while IFS= read -r -d '' f; do
-  if [ -f "${f}" ]; then
+  if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     checker_stderr="$(mktemp)"
     if ! bash -n "${f}" 2>"${checker_stderr}"; then
       echo "::error file=${f}::Shell syntax error in ${f}"
@@ -68,7 +68,7 @@ while IFS= read -r -d '' f; do
 done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.sh'; git ls-files --others --exclude-standard -z -- '*.sh'; })
 
 while IFS= read -r -d '' f; do
-  if [ -f "${f}" ]; then
+  if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     checker_stderr="$(mktemp)"
     if ! python3 -c "import yaml, sys; f=open(sys.argv[1], 'rb'); list(yaml.safe_load_all(f)); f.close()" "${f}" 2>"${checker_stderr}"; then
       echo "::error file=${f}::YAML syntax error in ${f}"
