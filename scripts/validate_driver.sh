@@ -37,12 +37,15 @@ APP_SERVICE="${APP_SERVICE:-app}"
 # solely on Docker container state (Running + Health in {healthy,none}). This
 # prevents library-type consumers with no real HTTP service from timing out
 # on a stale default probe URL while the container is otherwise healthy.
+# Use the non-`:-` form so an explicitly empty APP_URL (`APP_URL=`) is
+# preserved as the consumer's "disable probe" signal rather than being
+# overwritten by the fallback default.
 if [ -n "${APP_URL+x}" ]; then
 	APP_URL_EXPLICIT=1
 else
 	APP_URL_EXPLICIT=0
 fi
-APP_URL="${APP_URL:-http://localhost:8080/health}"
+APP_URL="${APP_URL-http://localhost:8080/health}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 HEALTH_POLL_INTERVAL="${HEALTH_POLL_INTERVAL:-2}"
 PHASE="${PHASE:-runtime_validation}"
