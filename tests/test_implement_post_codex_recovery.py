@@ -351,6 +351,7 @@ def _copy_diagnose_assets(repo_dir: Path) -> None:
 	for rel in (
 		"scripts/gh_helpers.sh",
 		"scripts/render_prompt.sh",
+		"scripts/validate_changed_files_syntax.sh",
 		"prompts/mode-implement-diagnose.txt",
 		"prompts/serena-efficiency-block.txt",
 	):
@@ -495,6 +496,33 @@ def test_failure_comment_step_skips_destructive_blocked_runs() -> None:
 	)
 
 
+def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
+	validate_block = _step_block_text("Validate syntax of changed files")
+	assert "continue-on-error: true" in validate_block
+	assert "bash scripts/validate_changed_files_syntax.sh" in validate_block
+
+
+def test_post_codex_syntax_repair_step_contract() -> None:
+	wf = _workflow_text()
+	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '1' }}" in wf
+
+	repair_block = _step_block_text("Attempt post-Codex syntax repair")
+	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
+	assert "prompts/mode-implement-repair.txt" in repair_block
+	assert "scripts/validate_changed_files_syntax.sh" in repair_block
+	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS" in repair_block
+	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
+	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
+	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
+
+
+def test_syntax_failure_requires_successful_repair_before_commit_path() -> None:
+	enforce_block = _step_block_text("Enforce syntax validation outcome")
+	assert "steps.validate_syntax_changed_files.outcome" in enforce_block
+	assert "steps.post_codex_syntax_repair.outputs.repaired" in enforce_block
+	assert "Syntax validation failed and post-Codex repair did not recover." in enforce_block
+
+
 def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
 	telegram_block = _step_block_text("Telegram failure notification")
 	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''" in telegram_block, (
@@ -603,6 +631,12 @@ def test_validator_capture_aggregates_multiple_files_before_nonzero_exit():
 		tmp_path = Path(td)
 		repo_dir = tmp_path / "validate-repo"
 		_bootstrap_git_repo(repo_dir)
+
+		validator_src = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst = repo_dir / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(validator_src, validator_dst)
+		validator_dst.chmod(0o755)
 
 		(runtime_py := repo_dir / "broken.py").write_text("x = 1\n", encoding="utf-8")
 		(runtime_yaml := repo_dir / "broken.yml").write_text("a: 1\n", encoding="utf-8")
