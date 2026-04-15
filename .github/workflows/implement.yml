@@ -16,6 +16,7 @@ env:
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'high' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+  MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '1' }}
 
 jobs:
   implement:
@@ -249,7 +250,7 @@ jobs:
             done; return 1
           }
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
             if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
               "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
               echo "::warning::${f} not found on ${script_ref}; falling back to main"
@@ -332,15 +333,15 @@ jobs:
               echo "prompts/mode-implement-diagnose.txt" >> "${FETCHED_MANIFEST}"
             fi
           fi
-          if [ ! -f prompts/mode-implement-repair-syntax.txt ]; then
-            if ! _gh_api_fetch "prompts/mode-implement-repair-syntax.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-implement-repair-syntax.txt?ref=${script_ref}"; then
-              echo "::warning::mode-implement-repair-syntax.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "prompts/mode-implement-repair-syntax.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/mode-implement-repair-syntax.txt?ref=main"
+          if [ ! -f prompts/mode-implement-repair.txt ]; then
+            if ! _gh_api_fetch "prompts/mode-implement-repair.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/mode-implement-repair.txt?ref=${script_ref}"; then
+              echo "::warning::mode-implement-repair.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/mode-implement-repair.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/mode-implement-repair.txt?ref=main"
             fi
             if [ "${is_self_repo}" = "false" ]; then
-              echo "prompts/mode-implement-repair-syntax.txt" >> "${FETCHED_MANIFEST}"
+              echo "prompts/mode-implement-repair.txt" >> "${FETCHED_MANIFEST}"
             fi
           fi
 
@@ -1027,129 +1028,227 @@ jobs:
           fi
           git checkout -B "${TARGET_BRANCH}"
 
-      - name: Check syntax of changed files (non-fatal)
+      - name: Validate syntax of changed files
         if: env.SKIP_IMPLEMENT != 'true'
         id: validate_syntax_changed_files
+        continue-on-error: true
         run: |
           set -euo pipefail
-          ERRORS=0
-
           CAPTURE_FILE=""
           if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
             CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
           fi
+          CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash scripts/validate_changed_files_syntax.sh
 
-          append_checker_error() {
-            local file="$1"
-            local checker="$2"
-            local stderr_file="$3"
-            [ -n "${CAPTURE_FILE}" ] || return 0
-            {
-              printf '===== %s (%s) =====\n' "${file}" "${checker}"
-              if [ -s "${stderr_file}" ]; then
-                cat "${stderr_file}"
-              else
-                echo "(no stderr output)"
-              fi
-              printf '\n'
-            } >> "${CAPTURE_FILE}" || true
-          }
-
-          # Check all modified/added Python files for syntax errors
-          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.py'); do
-            if [ -f "$f" ]; then
-              checker_stderr="$(mktemp)"
-              if ! python3 -m py_compile "$f" 2>"${checker_stderr}"; then
-                echo "::warning file=${f}::Syntax error in ${f}"
-                cat "${checker_stderr}" >&2
-                append_checker_error "${f}" "python3 -m py_compile" "${checker_stderr}"
-                ERRORS=$((ERRORS + 1))
-              fi
-              rm -f "${checker_stderr}"
-            fi
-          done
-
-          # Check all modified/added JS files for syntax errors
-          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.js'); do
-            if [ -f "$f" ]; then
-              checker_stderr="$(mktemp)"
-              if ! node --check "$f" 2>"${checker_stderr}"; then
-                echo "::warning file=${f}::Syntax error in ${f}"
-                cat "${checker_stderr}" >&2
-                append_checker_error "${f}" "node --check" "${checker_stderr}"
-                ERRORS=$((ERRORS + 1))
-              fi
-              rm -f "${checker_stderr}"
-            fi
-          done
-
-          # Check all modified/added shell scripts for syntax errors
-          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.sh'); do
-            if [ -f "$f" ]; then
-              checker_stderr="$(mktemp)"
-              if ! bash -n "$f" 2>"${checker_stderr}"; then
-                echo "::warning file=${f}::Shell syntax error in ${f}"
-                cat "${checker_stderr}" >&2
-                append_checker_error "${f}" "bash -n" "${checker_stderr}"
-                ERRORS=$((ERRORS + 1))
-              fi
-              rm -f "${checker_stderr}"
-            fi
-          done
-
-          # Check all modified/added YAML files for syntax errors using a YAML
-          # parser - bash -n must NOT be used on YAML files as it parses them
-          # as shell and produces false failures (e.g. 'name: foo (bar)').
-          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.yml' '*.yaml'); do
-            if [ -f "$f" ]; then
-              checker_stderr="$(mktemp)"
-              if ! python3 -c "import yaml, sys; f=open(sys.argv[1]); yaml.safe_load(f); f.close()" "$f" 2>"${checker_stderr}"; then
-                echo "::warning file=${f}::YAML syntax error in ${f}"
-                cat "${checker_stderr}" >&2
-                append_checker_error "${f}" "python3 yaml.safe_load" "${checker_stderr}"
-                ERRORS=$((ERRORS + 1))
-              fi
-              rm -f "${checker_stderr}"
-            fi
-          done
-
-          if [ -n "${GITHUB_OUTPUT:-}" ]; then
-            echo "syntax_error_count=${ERRORS}" >> "$GITHUB_OUTPUT"
-            if [ "${ERRORS}" -gt 0 ]; then
-              echo "has_syntax_errors=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "has_syntax_errors=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
-          if [ "${ERRORS}" -gt 0 ]; then
-            echo "::warning::${ERRORS} file(s) failed syntax validation during check phase."
-          else
-            echo "All changed files passed syntax validation."
-          fi
-
-      - name: Validate syntax of changed files
-        if: env.SKIP_IMPLEMENT != 'true'
-        id: validate_syntax_gate
+      - name: Attempt post-Codex syntax repair
+        if: env.SKIP_IMPLEMENT != 'true' && steps.validate_syntax_changed_files.outcome == 'failure'
+        id: post_codex_syntax_repair
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
-          HAS_SYNTAX_ERRORS="${{ steps.validate_syntax_changed_files.outputs.has_syntax_errors }}"
-          SYNTAX_ERROR_COUNT="${{ steps.validate_syntax_changed_files.outputs.syntax_error_count }}"
+          echo "repaired=false" >> "$GITHUB_OUTPUT"
 
-          if [ -z "${HAS_SYNTAX_ERRORS}" ]; then
-            echo "::error::Syntax check step did not report status."
+          REPAIR_PROMPT_TEMPLATE="prompts/mode-implement-repair.txt"
+          REPAIR_VALIDATOR_SCRIPT="scripts/validate_changed_files_syntax.sh"
+          CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+          INITIAL_CHANGED_FILE="${RUNTIME_DIR}/post_codex_initial_changed_files.txt"
+          CAPTURED_FILES_FILE="${RUNTIME_DIR}/post_codex_captured_files.txt"
+          ALLOW_LIST_FILE="${RUNTIME_DIR}/post_codex_repair_allow_list.txt"
+
+          if [ ! -s "${REPAIR_PROMPT_TEMPLATE}" ] || [ ! -s "${REPAIR_VALIDATOR_SCRIPT}" ]; then
+            echo "::error::Required repair artifacts are missing from repair-prompt-and-validator-split dependency."
+            echo "Expected prompt: ${REPAIR_PROMPT_TEMPLATE} (non-empty)"
+            echo "Expected validator: ${REPAIR_VALIDATOR_SCRIPT} (non-empty)"
             exit 1
           fi
 
-          if [ "${HAS_SYNTAX_ERRORS}" = "true" ]; then
-            if [ -z "${SYNTAX_ERROR_COUNT}" ]; then
-              SYNTAX_ERROR_COUNT="unknown"
+          max_attempts_raw="${MAX_POST_CODEX_REPAIR_ATTEMPTS:-1}"
+          if ! [[ "${max_attempts_raw}" =~ ^[0-9]+$ ]] || [ "${max_attempts_raw}" -lt 1 ]; then
+            echo "::warning::Invalid MAX_POST_CODEX_REPAIR_ATTEMPTS='${max_attempts_raw}'. Falling back to 1."
+            max_attempts=1
+          else
+            max_attempts="${max_attempts_raw}"
+          fi
+
+          : > "${INITIAL_CHANGED_FILE}"
+          while IFS= read -r -d '' path; do
+            printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"
+          done < <(git diff --name-only --diff-filter=ACMR -z HEAD)
+          while IFS= read -r -d '' path; do
+            printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"
+          done < <(git ls-files --others --exclude-standard -z -- '*.py' '*.js' '*.sh' '*.yml' '*.yaml')
+          sort -u "${INITIAL_CHANGED_FILE}" -o "${INITIAL_CHANGED_FILE}" || true
+
+          : > "${CAPTURED_FILES_FILE}"
+          if [ -s "${CAPTURE_FILE}" ]; then
+            awk '/^===== / && / \([^)]*\) =====$/ { line=$0; sub(/^===== /, "", line); sub(/ \([^)]*\) =====$/, "", line); print line }' "${CAPTURE_FILE}" > "${CAPTURED_FILES_FILE}" || true
+            sort -u "${CAPTURED_FILES_FILE}" -o "${CAPTURED_FILES_FILE}" || true
+          fi
+
+          : > "${ALLOW_LIST_FILE}"
+          if [ -s "${CAPTURED_FILES_FILE}" ]; then
+            comm -12 "${INITIAL_CHANGED_FILE}" "${CAPTURED_FILES_FILE}" > "${ALLOW_LIST_FILE}" || true
+          else
+            cp "${INITIAL_CHANGED_FILE}" "${ALLOW_LIST_FILE}"
+          fi
+
+          if [ ! -s "${ALLOW_LIST_FILE}" ]; then
+            echo "::error::Effective post-Codex repair allow-list is empty. Failing repair path deterministically."
+            exit 1
+          fi
+
+          is_allowed_path() {
+            local p="$1"
+            grep -Fqx -- "${p}" "${ALLOW_LIST_FILE}" 2>/dev/null
+          }
+
+          repair_succeeded=false
+          for attempt in $(seq 1 "${max_attempts}"); do
+            echo "Post-Codex syntax repair attempt ${attempt}/${max_attempts}"
+
+            BASELINE_COMMIT="$(git stash create "post-codex-repair-attempt-${attempt}" || true)"
+            if [ -z "${BASELINE_COMMIT}" ]; then
+              BASELINE_COMMIT="HEAD"
             fi
-            echo "::error::${SYNTAX_ERROR_COUNT} file(s) failed syntax validation."
+
+            PRE_UNTRACKED_FILE="${RUNTIME_DIR}/post_codex_pre_untracked_attempt_${attempt}.txt"
+            : > "${PRE_UNTRACKED_FILE}"
+            while IFS= read -r -d '' pre_untracked; do
+              [ -n "${pre_untracked}" ] || continue
+              if ! is_allowed_path "${pre_untracked}"; then
+                printf '%s\n' "${pre_untracked}" >> "${PRE_UNTRACKED_FILE}"
+              fi
+            done < <(git ls-files --others --exclude-standard -z)
+            sort -u "${PRE_UNTRACKED_FILE}" -o "${PRE_UNTRACKED_FILE}" || true
+
+            get_blob_for_source() {
+              local source_ref="$1"
+              local file_path="$2"
+              if git cat-file -e "${source_ref}:${file_path}" >/dev/null 2>&1; then
+                git rev-parse "${source_ref}:${file_path}" 2>/dev/null || true
+              else
+                echo "__MISSING__"
+              fi
+            }
+
+            REPAIR_PROMPT_FILE="${RUNTIME_DIR}/mode-implement-repair-attempt-${attempt}.txt"
+            {
+              cat "${REPAIR_PROMPT_TEMPLATE}"
+              echo
+              echo "=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ==="
+              if [ -s "${CAPTURE_FILE}" ]; then
+                cat "${CAPTURE_FILE}"
+              else
+                echo "(capture file missing or empty)"
+              fi
+              echo
+              echo "=== INITIAL POST-CODEX CHANGED FILES ==="
+              cat "${INITIAL_CHANGED_FILE}"
+              echo
+              echo "=== EFFECTIVE REPAIR ALLOW-LIST ==="
+              cat "${ALLOW_LIST_FILE}"
+              echo
+              echo "=== CURRENT DIFF FOR ALLOW-LIST FILES ==="
+              while IFS= read -r allowed_file; do
+                [ -n "${allowed_file}" ] || continue
+                echo "----- ${allowed_file} -----"
+                if git ls-files --error-unmatch -- "${allowed_file}" >/dev/null 2>&1; then
+                  git diff -- "${allowed_file}" || true
+                elif [ -f "${allowed_file}" ]; then
+                  git diff --no-index -- /dev/null "${allowed_file}" || true
+                else
+                  echo "(file not found in working tree)"
+                fi
+              done < "${ALLOW_LIST_FILE}"
+            } > "${REPAIR_PROMPT_FILE}"
+
+            REPAIR_OUTPUT_FILE="${RUNTIME_DIR}/post_codex_repair_output_attempt_${attempt}.txt"
+            REPAIR_LOG_FILE="${RUNTIME_DIR}/post_codex_repair_log_attempt_${attempt}.txt"
+            if ! codex exec --model "${MODEL_EDITOR}" --full-auto < "${REPAIR_PROMPT_FILE}" > "${REPAIR_OUTPUT_FILE}" 2> >(tee -a "${REPAIR_LOG_FILE}" >&2); then
+              echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
+              continue
+            fi
+
+            tracked_strays=()
+            while IFS= read -r -d '' changed_path; do
+              [ -n "${changed_path}" ] || continue
+              if ! is_allowed_path "${changed_path}"; then
+                baseline_blob="$(get_blob_for_source "${BASELINE_COMMIT}" "${changed_path}")"
+                if [ -f "${changed_path}" ]; then
+                  current_blob="$(git hash-object -- "${changed_path}" 2>/dev/null || echo "__MISSING__")"
+                else
+                  current_blob="__MISSING__"
+                fi
+                if [ "${baseline_blob}" != "${current_blob}" ]; then
+                  tracked_strays+=("${changed_path}")
+                fi
+              fi
+            done < <(git diff --name-only -z HEAD)
+
+            untracked_strays=()
+            while IFS= read -r -d '' untracked_path; do
+              [ -n "${untracked_path}" ] || continue
+              if ! is_allowed_path "${untracked_path}"; then
+                if ! grep -Fqx -- "${untracked_path}" "${PRE_UNTRACKED_FILE}" 2>/dev/null; then
+                  untracked_strays+=("${untracked_path}")
+                fi
+              fi
+            done < <(git ls-files --others --exclude-standard -z)
+
+            if [ "${#tracked_strays[@]}" -gt 0 ] || [ "${#untracked_strays[@]}" -gt 0 ]; then
+              echo "::warning::Repair attempt ${attempt} produced out-of-scope edits. Rolling back stray files."
+              if [ "${#tracked_strays[@]}" -gt 0 ]; then
+                restore_from_baseline=()
+                remove_from_baseline=()
+                for stray_tracked in "${tracked_strays[@]}"; do
+                  if git cat-file -e "${BASELINE_COMMIT}:${stray_tracked}" >/dev/null 2>&1; then
+                    restore_from_baseline+=("${stray_tracked}")
+                  else
+                    remove_from_baseline+=("${stray_tracked}")
+                  fi
+                done
+                if [ "${#restore_from_baseline[@]}" -gt 0 ]; then
+                  git restore --source="${BASELINE_COMMIT}" --staged --worktree -- "${restore_from_baseline[@]}"
+                fi
+                if [ "${#remove_from_baseline[@]}" -gt 0 ]; then
+                  git rm -r -f --ignore-unmatch -- "${remove_from_baseline[@]}"
+                fi
+              fi
+              if [ "${#untracked_strays[@]}" -gt 0 ]; then
+                safe_untracked=()
+                for stray in "${untracked_strays[@]}"; do
+                  case "${stray}" in
+                    /*|../*|*/../*|*/..)
+                      echo "::error::Refusing to delete unsafe untracked stray path: ${stray}"
+                      ;;
+                    *)
+                      safe_untracked+=("${stray}")
+                      ;;
+                  esac
+                done
+                if [ "${#safe_untracked[@]}" -gt 0 ]; then
+                  rm -rf -- "${safe_untracked[@]}"
+                fi
+              fi
+              continue
+            fi
+
+            rm -f "${CAPTURE_FILE}"
+            if CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash "${REPAIR_VALIDATOR_SCRIPT}"; then
+              repair_succeeded=true
+              break
+            fi
+          done
+
+          if [ "${repair_succeeded}" != 'true' ]; then
+            echo "::error::Post-Codex syntax repair did not succeed after ${max_attempts} attempt(s)."
             exit 1
           fi
 
-          echo "Syntax validation gate passed."
+          rm -f "${CAPTURE_FILE}"
+          echo "repaired=true" >> "$GITHUB_OUTPUT"
 
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1209,6 +1308,15 @@ jobs:
               git restore --source=HEAD --staged --worktree .github/workflows || true
             fi
             git clean -fd -- .github/workflows
+          fi
+
+      - name: Enforce syntax validation outcome
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.validate_syntax_changed_files.outcome }}" = "failure" ] && [ "${{ steps.post_codex_syntax_repair.outputs.repaired || 'false' }}" != "true" ]; then
+            echo "::error::Syntax validation failed and post-Codex repair did not recover."
+            exit 1
           fi
 
       - name: Commit changes

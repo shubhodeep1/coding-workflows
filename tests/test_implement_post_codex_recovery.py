@@ -351,6 +351,7 @@ def _copy_diagnose_assets(repo_dir: Path) -> None:
 	for rel in (
 		"scripts/gh_helpers.sh",
 		"scripts/render_prompt.sh",
+		"scripts/validate_changed_files_syntax.sh",
 		"prompts/mode-implement-diagnose.txt",
 		"prompts/mode-implement-repair-syntax.txt",
 		"prompts/serena-efficiency-block.txt",
@@ -496,6 +497,33 @@ def test_failure_comment_step_skips_destructive_blocked_runs() -> None:
 	)
 
 
+def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
+	validate_block = _step_block_text("Validate syntax of changed files")
+	assert "continue-on-error: true" in validate_block
+	assert "bash scripts/validate_changed_files_syntax.sh" in validate_block
+
+
+def test_post_codex_syntax_repair_step_contract() -> None:
+	wf = _workflow_text()
+	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '1' }}" in wf
+
+	repair_block = _step_block_text("Attempt post-Codex syntax repair")
+	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
+	assert "prompts/mode-implement-repair.txt" in repair_block
+	assert "scripts/validate_changed_files_syntax.sh" in repair_block
+	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS" in repair_block
+	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
+	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
+	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
+
+
+def test_syntax_failure_requires_successful_repair_before_commit_path() -> None:
+	enforce_block = _step_block_text("Enforce syntax validation outcome")
+	assert "steps.validate_syntax_changed_files.outcome" in enforce_block
+	assert "steps.post_codex_syntax_repair.outputs.repaired" in enforce_block
+	assert "Syntax validation failed and post-Codex repair did not recover." in enforce_block
+
+
 def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
 	telegram_block = _step_block_text("Telegram failure notification")
 	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''" in telegram_block, (
@@ -623,6 +651,12 @@ def test_syntax_check_step_captures_multiple_files_without_failing():
 		repo_dir = tmp_path / "validate-repo"
 		_bootstrap_git_repo(repo_dir)
 
+		validator_src = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst = repo_dir / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(validator_src, validator_dst)
+		validator_dst.chmod(0o755)
+
 		(runtime_py := repo_dir / "broken.py").write_text("x = 1\n", encoding="utf-8")
 		(runtime_yaml := repo_dir / "broken.yml").write_text("a: 1\n", encoding="utf-8")
 		_git(["git", "add", "broken.py", "broken.yml"], cwd=repo_dir)
@@ -634,7 +668,7 @@ def test_syntax_check_step_captures_multiple_files_without_failing():
 		runtime_dir = tmp_path / "runtime"
 		runtime_dir.mkdir(parents=True, exist_ok=True)
 
-		script = _extract_run_script("Check syntax of changed files (non-fatal)")
+		script = _extract_run_script("Validate syntax of changed files")
 		env = os.environ.copy()
 		github_output = runtime_dir / "github_output.txt"
 		env.update(
@@ -646,7 +680,7 @@ def test_syntax_check_step_captures_multiple_files_without_failing():
 		)
 
 		proc = _run_shell_script(script, cwd=repo_dir, env=env)
-		assert proc.returncode == 0, "expected zero exit for non-fatal syntax check step"
+		assert proc.returncode != 0, "expected syntax validator step script to fail on syntax errors"
 
 		capture_file = runtime_dir / "post_codex_validation_errors.txt"
 		assert capture_file.exists(), "expected capture file to be written"
@@ -656,10 +690,6 @@ def test_syntax_check_step_captures_multiple_files_without_failing():
 		assert "broken.yml" in capture
 		assert "python3 yaml.safe_load" in capture
 
-		outputs = github_output.read_text(encoding="utf-8")
-		assert "has_syntax_errors=true" in outputs
-		assert "syntax_error_count=2" in outputs
-
 
 def test_syntax_gate_step_fails_when_check_reports_unresolved_errors():
 	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
@@ -668,10 +698,10 @@ def test_syntax_gate_step_fails_when_check_reports_unresolved_errors():
 		_bootstrap_git_repo(repo_dir)
 
 		script = _render_github_expressions(
-			_extract_run_script("Validate syntax of changed files"),
+			_extract_run_script("Enforce syntax validation outcome"),
 			overrides={
-				"steps.validate_syntax_changed_files.outputs.has_syntax_errors": "true",
-				"steps.validate_syntax_changed_files.outputs.syntax_error_count": "2",
+				"steps.validate_syntax_changed_files.outcome": "failure",
+				"steps.post_codex_syntax_repair.outputs.repaired || 'false'": "false",
 			},
 		)
 		env = os.environ.copy()
@@ -682,8 +712,8 @@ def test_syntax_gate_step_fails_when_check_reports_unresolved_errors():
 		)
 
 		proc = _run_shell_script(script, cwd=repo_dir, env=env)
-		assert proc.returncode != 0, "expected syntax gate to fail when unresolved errors remain"
-		assert "failed syntax validation" in (proc.stderr + proc.stdout)
+		assert proc.returncode != 0, "expected syntax-enforcement step to fail when repair did not recover"
+		assert "Syntax validation failed and post-Codex repair did not recover" in (proc.stderr + proc.stdout)
 
 
 def test_syntax_gate_step_fails_when_check_did_not_report_status():
@@ -693,10 +723,10 @@ def test_syntax_gate_step_fails_when_check_did_not_report_status():
 		_bootstrap_git_repo(repo_dir)
 
 		script = _render_github_expressions(
-			_extract_run_script("Validate syntax of changed files"),
+			_extract_run_script("Enforce syntax validation outcome"),
 			overrides={
-				"steps.validate_syntax_changed_files.outputs.has_syntax_errors": "",
-				"steps.validate_syntax_changed_files.outputs.syntax_error_count": "",
+				"steps.validate_syntax_changed_files.outcome": "success",
+				"steps.post_codex_syntax_repair.outputs.repaired || 'false'": "false",
 			},
 		)
 		env = os.environ.copy()
@@ -707,8 +737,7 @@ def test_syntax_gate_step_fails_when_check_did_not_report_status():
 		)
 
 		proc = _run_shell_script(script, cwd=repo_dir, env=env)
-		assert proc.returncode != 0, "expected syntax gate to fail when check status output is missing"
-		assert "Syntax check step did not report status" in (proc.stderr + proc.stdout)
+		assert proc.returncode == 0, "expected syntax-enforcement step to pass when syntax validation succeeded"
 
 
 def test_needs_fixes_labels_source_issue_and_generic_failure_step_is_bypassed():
