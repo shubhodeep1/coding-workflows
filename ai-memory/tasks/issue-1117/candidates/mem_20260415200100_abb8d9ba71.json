@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan (based on clarification answers)\n\nClarification mapping:\n- Q1: A \u2014 Source of truth is currently implemented behavior in this repo state.\n- Q2: A \u2014 \u201cDesign Z\u201d maps to existing `orchestrate_clarify_respond` auto-answer flow, not a new mode.\n- Q3: A \u2014 Do not document `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` or `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` unless runtime support exists.\n\nFactual conflicts detected:\n- The issue requests documenting `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` and `THINKING_LEVEL_CLARIFY_ORCHESTRATOR`, but these identifiers are not present in current workflow/script runtime wiring. Per Q1/Q3, they must be omitted for now.\n- The issue asks for specific short-circuit docs (\u201cpre-LLM plain issue path\u201d, \u201cpost-LLM single-issue standalone path\u201d), but those exact named behaviors/knobs are not present under those names in current runtime; docs must describe only currently implemented equivalent flows.\n\n1. Files likely to change\n- `README.md`\n- `agents.md`\n- `CHANGELOG.md`\n\n2. Modules/sections to implement (documentation scope)\n- `README.md` variable tables and orchestrator behavior sections:\n  - Ensure `THINKING_LEVEL_ORCHESTRATE` default is documented as `medium` (already true; keep consistent in all duplicated tables).\n  - Keep/align `ENABLE_CLEAN_WAVE_JUDGE_SKIP` behavior text with runtime condition (clean completed wave, no failures, project incomplete, not stuck-wave).\n  - Add explicit label documentation for `ai:orchestrator-managed` and `ai:orchestrator-validate-required` in the labels section (currently label contract exists, but README label narrative is too narrow).\n  - Document existing auto-answer behavior for orchestrator-managed clarify flow (`orchestrate_clarify_respond`) and clarify clear-path auto `/answer` behavior where applicable.\n  - Do not add unsupported env vars from the issue if runtime wiring is absent.\n- `agents.md` runtime/system behavior section:\n  - Mirror README-level operational docs for the above implemented behaviors (labels + clean-wave skip + clarify auto-answer behavior scope).\n  - Keep env-var guidance aligned with current runtime only; omit unsupported vars.\n- `CHANGELOG.md` (`[Unreleased]`):\n  - Add a concise entry summarizing documentation alignment for orchestrator cost/safety behavior now reflected in docs (clean-wave skip, orchestrator-managed labeling, validate-required label coverage, default `THINKING_LEVEL_ORCHESTRATE=medium` consistency).\n\n3. Data structures affected\n- Documentation contract only:\n  - Env-var documentation tables in README/agents.\n  - Label contract description surface in README/agents (backed by `.github/ai/label_contract.v1.json`).\n- No MongoDB collections/index contracts are affected.\n\n4. API or interface changes\n- No runtime API/CLI/schema changes.\n- Public documentation interface changes only (what operators read/configure).\n\n5. Potential risks and edge cases\n- Drift risk across duplicate README variable tables (same var documented in multiple sections).\n- Drift risk between README and `agents.md` wording for the same behavior.\n- Risk of documenting non-existent knobs if issue text is followed literally without Q1/Q3 gating.\n- Terminology mismatch risk: \u201cDesign Z\u201d and \u201cshort-circuit\u201d labels in issue vs actual runtime naming.\n\n6. Testing considerations\n- Verification-by-source checks before finalizing docs:\n  - Confirm defaults from workflows/scripts for `THINKING_LEVEL_ORCHESTRATE` and `ENABLE_CLEAN_WAVE_JUDGE_SKIP`.\n  - Confirm label existence and semantics from label contract + orchestrate workflow label creation.\n  - Confirm auto-answer behavior from `clarify.yml` and `orchestrate_clarify_respond.yml`.\n- Consistency checks:\n  - README and agents must say the same default values and behavior scope.\n  - CHANGELOG entry must describe only implemented behavior, not planned behavior.\n- Negative check:\n  - Ensure docs do not introduce `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` or `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` unless code support is added first.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0f1d2a921be664bed3f2153ee11a8df08b6130be61fa22f5c089313415e98c10",
+  "lineage": {
+    "issue_number": 1117,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24475160353",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24475160353",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1117"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415200100_abb8d9ba71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1117,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24475160353"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1117",
+  "timestamps": {
+    "created_at": "2026-04-15T20:01:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
