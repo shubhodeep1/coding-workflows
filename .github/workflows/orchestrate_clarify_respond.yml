@@ -593,17 +593,22 @@ jobs:
             exit 1
           fi
 
-          # Build the /answer comment
+          ANSWER_COMMENT_FILE="${RUNTIME_DIR}/answer_comment.md"
+          ANSWER_COMMENT_JSON="${RUNTIME_DIR}/answer_comment.json"
+
+          # Build and post the /answer comment using JSON input to keep multiline content stable.
           {
             echo "/answer [auto-answered-by-orchestrator]"
             echo
             echo "Auto-answered by the orchestrator clarify-respond workflow."
             echo
             echo "${ANSWERS_BODY}"
-          } > "${RUNTIME_DIR}/answer_comment.md"
+          } > "${ANSWER_COMMENT_FILE}"
 
+          jq -Rs '{body: .}' < "${ANSWER_COMMENT_FILE}" > "${ANSWER_COMMENT_JSON}"
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="$(cat "${RUNTIME_DIR}/answer_comment.md")"
+            --method POST \
+            --input "${ANSWER_COMMENT_JSON}"
 
           echo "Posted auto-answer on issue #${ISSUE_NUMBER}"
 
