@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nClarification mapping\n- No Q-ID questions were issued in clarify.\n- Interpreted answer `/answer [auto-answered-by-clarify]` as: scope is fully defined by the issue text, no unresolved ambiguity blockers.\n\nConflict check\n- Minor location drift: issue cites `scripts/validate_process.sh` around `~1785-1804`; current consolidated fix-up creation is around `~2021-2037`. Target behavior is still the same block, so no scope conflict.\n\n1. Files likely to change\n- `.github/workflows/implement.yml`\n- `scripts/validate_process.sh`\n- `tests/test_implement_post_codex_recovery.py`\n- `tests/test_validate_process_fixup_labels.py` (new focused test for validate path)\n\n2. Functions/modules to implement\n- `implement.yml` step `diagnose_post_codex_failure`:\n  - Add label existence prep for `ai:clarification` and `ai:orchestrator-managed` using existing helper/fallback pattern already used in the workflow.\n  - Update `gh issue create` in the fix-up loop to pass both labels at creation time.\n- `validate_process.sh` `needs_fixes)` branch:\n  - Before consolidated `gh issue create`, call existing local `ensure_label_exists` for both required labels.\n  - Update consolidated `gh issue create` to include both labels.\n- Keep standalone/non-orchestrator flows unchanged.\n\n3. Data structures affected\n- GitHub issue label set at creation for orchestrator-managed fix-up issues:\n  - Add `ai:clarification`\n  - Add `ai:orchestrator-managed`\n- Test mock state structures capturing CLI args:\n  - `created_issues[].args`\n  - optional label creation tracking in mock state where applicable\n\n4. API/interface changes\n- External behavior change is limited to CLI invocation details:\n  - `gh issue create ... --label ai:clarification --label ai:orchestrator-managed`\n- No schema, env var, or DB contract changes.\n\n5. Potential risks / edge cases\n- If label creation fails and labels are absent, `gh issue create --label ...` may fail; existing error-handling paths should remain intact.\n- Must avoid touching other `gh issue create` paths (reissue/standalone/stall flows) to preserve current behavior.\n- Keep orchestrator metadata/body formatting exactly unchanged for backward compatibility.\n\n6. Testing considerations\n- Extend implement recovery tests to assert fix-up creation includes both labels in mocked `gh issue create` args.\n- Add a validate-path unit test that exercises the consolidated `needs_fixes` creation path with mocked `gh` and asserts both labels are passed on creation.\n- Run targeted tests:\n  - `python3 tests/test_implement_post_codex_recovery.py`\n  - `python3 tests/test_validate_process_fixup_labels.py`\n- Confirm no regressions in unrelated issue-creation paths by keeping assertions scoped to these two orchestrator-managed paths only.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4aa8ece4b803e35498677e33a8ac1e119156dca61c72beee855660b66749e948",
+  "lineage": {
+    "issue_number": 1043,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24440717692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24440717692",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1043"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415070200_154ff53a99",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1043,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24440717692"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1043",
+  "timestamps": {
+    "created_at": "2026-04-15T07:02:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
