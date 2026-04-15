@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-/tmp/codex-support}"
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 # Fallback: if gh_helpers.sh was not sourced (missing file), define a
 # pass-through so subsequent `gh_retry gh ...` calls still execute —
