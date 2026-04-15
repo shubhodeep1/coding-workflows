@@ -2923,8 +2923,8 @@ jobs:
               echo "Push complete."
               break
             fi
-            if ! grep -qE '\[rejected\].*\(fetch first\)|non-fast-forward' "${push_stderr_file}"; then
-              echo "::error::git push failed (exit ${push_exit}) for a reason other than non-fast-forward; not retrying."
+            if ! grep -qE '\[rejected\].*\((fetch first|non-fast-forward)\)' "${push_stderr_file}"; then
+              echo "::error::git push failed (exit ${push_exit}) for a reason other than [rejected] (fetch first/non-fast-forward); not retrying."
               exit "${push_exit}"
             fi
             if [ "${push_attempt}" -ge "${max_push_attempts}" ]; then
