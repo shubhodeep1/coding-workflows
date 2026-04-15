@@ -563,6 +563,26 @@ def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow
 	)
 
 
+def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
+	commit_block = _step_block_text("Commit changes")
+	assert "canonical_deletions" in commit_block
+	assert "ALLOW_WORKFLOW_EDITS" in commit_block
+	assert "destructive_commit_blocked=canonical-source" in commit_block
+
+	protect_block = _step_block_text("Protect workflow files from implementation edits")
+	assert "git restore --source=HEAD --staged --worktree .github/workflows" in protect_block
+	assert "git clean -fd -- .github/workflows" in protect_block
+
+
+def test_successful_repair_path_still_flows_into_commit_gated_push_and_pr_steps() -> None:
+	push_block = _step_block_text("Push branch")
+	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'" in push_block
+	assert "bash \"${health_script}\" repair" in push_block
+
+	create_pr_block = _step_block_text("Create Pull Request")
+	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'" in create_pr_block
+
+
 
 def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
@@ -647,7 +667,64 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert "ai:awaiting-approval" not in labels
 
 
-def test_syntax_check_step_captures_multiple_files_without_failing():
+def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_failed():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, _state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0
+		assert "handled=true" in _read_file(paths["github_output"])
+		call_lines = [line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]
+		assert len(call_lines) == 1
+		call_args = json.loads(call_lines[0])
+		assert "exec" in call_args
+		assert "--model" in call_args
+
+
+def test_diagnose_posts_dependency_notes_for_fix_issue_edges():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, state, _runtime_dir, _paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"fix_issues": [
+					{"id": "fix-a", "title": "Fix A", "body": "Body A", "priority": 1, "depends_on": []},
+					{"id": "fix-b", "title": "Fix B", "body": "Body B", "priority": 2, "depends_on": ["fix-a"]},
+				],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0
+		created_issues = state.get("created_issues", [])
+		assert len(created_issues) == 2
+		dep_comment = next((x for x in state.get("issue_comments", []) if x.get("issue") == "1002"), None)
+		assert dep_comment is not None
+		assert "Dependency Notes" in dep_comment.get("body", "")
+		assert "#1001 (from fix-a)" in dep_comment.get("body", "")
+
+
+def test_validator_capture_aggregates_multiple_files_before_nonzero_exit():
 	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
 		tmp_path = Path(td)
 		repo_dir = tmp_path / "validate-repo"
@@ -801,8 +878,10 @@ def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid
 			assert "The diagnose step could not produce a valid JSON contract" in created["body"]
 			assert "yaml parse failed on alpha.yml" in created["body"]
 			assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
+			assert "Tracking issue: #829" in created["body"]
 			assert "ai:clarification" in created["args"]
 			assert "ai:implement-fix-up" in created["args"]
+			assert "ai:implementation-failed" in state.get("issue_labels", [])
 
 
 def test_out_of_scope_noop_when_capture_file_missing():
