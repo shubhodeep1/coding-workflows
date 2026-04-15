@@ -11,6 +11,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = REPO_ROOT / "scripts" / "ai_memory_lib.py"
 
+if str(REPO_ROOT) not in sys.path:
+	sys.path.insert(0, str(REPO_ROOT))
+
 spec = importlib.util.spec_from_file_location("ai_memory_lib", MODULE_PATH)
 assert spec is not None and spec.loader is not None
 ai_memory_lib = importlib.util.module_from_spec(spec)
@@ -88,3 +91,25 @@ def test_normalization_is_stable_for_whitespace_and_markdown_drift() -> None:
 	drifted = "clarification required target region is us-east"
 
 	assert ai_memory_lib.compute_normalized_sha256(base) == ai_memory_lib.compute_normalized_sha256(drifted)
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

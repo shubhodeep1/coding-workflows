@@ -675,7 +675,10 @@ jobs:
               LOOP_BLOCKED="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.blocked // false' 2>/dev/null || echo "false")"
               LOOP_REASON="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.reason // "none"' 2>/dev/null || echo "none")"
               CYCLE="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.cycle // 1' 2>/dev/null || echo "1")"
-              MAX_CYCLES="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.max_cycles // 1' 2>/dev/null || echo "1")"
+              LOOP_MAX_CYCLES="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.max_cycles // empty' 2>/dev/null || echo "")"
+              if [[ "${LOOP_MAX_CYCLES}" =~ ^[1-9][0-9]*$ ]]; then
+                MAX_CYCLES="${LOOP_MAX_CYCLES}"
+              fi
               PREVIOUS_CLARIFY_COMMENT_ID="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.previous_clarify_comment_id // 0' 2>/dev/null || echo "0")"
               PREVIOUS_ANSWER_COMMENT_ID="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.previous_answer_comment_id // 0' 2>/dev/null || echo "0")"
             fi
