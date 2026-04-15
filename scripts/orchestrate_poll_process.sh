@@ -5723,8 +5723,10 @@ ${RB_FIX_DESC}
                 fi
               fi
 
-              # Switch back to default branch for remaining processing
-              git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
+              # Switch back to default branch for remaining processing,
+              # discarding any unstaged tracked edits that were not
+              # included in the fix commit (e.g., excluded paths).
+              rb_cleanup_combined_workspace
             fi
 
             # Increment retry counter (skipped when the merge-race path
