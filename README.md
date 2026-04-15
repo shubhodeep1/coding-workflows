@@ -63,6 +63,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | review_autofix, orchestrate_poll | Maximum judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). Used by both the review_autofix judge (counts `[judge-fix]` commits) and the orchestrator poller. |
 | `ENABLE_VALIDATION` | No | `true` | orchestrate_poll | When true, a `complete` judge verdict transitions the tracking issue into runtime validation (`ai:validating`) and completion occurs only after validation passes. |
 | `MAX_VALIDATE_CYCLES` | No | `3` | orchestrate_poll | Maximum runtime validation cycles (initial run + fix/revalidate loops) before forcing `ai:validation-failed`. |
+| `MAX_SELF_HEAL_ATTEMPTS` | No | `2` | validate | Maximum in-process self-heal attempts per `validate_process.sh` invocation. Self-heal patches one of the four validation prompt files locally and re-execs the pipeline, and does NOT increment `MAX_VALIDATE_CYCLES`. Set to `0` to disable. See [Validation self-healing](#validation-self-healing). |
 | `VALIDATE_WORKFLOW_NAME` | No | `ai-validate.yml` | orchestrate_poll | Workflow filename to dispatch for runtime validation. Override to `internal-validate.yml` for repos using the internal naming convention. Falls back to `internal-validate.yml` automatically if the primary name fails. |
 | `MAX_JUDGE_CYCLES` | No | `25` | orchestrate_poll | Maximum judge evaluation cycles per project before forcing failure. Prevents infinite fix-up loops when the judge repeatedly returns `in_progress`. |
 | `ENABLE_CLEAN_WAVE_JUDGE_SKIP` | No | `true` | orchestrate_poll | When true, a completed clean wave (no failures, no pending issue definitions, not project-complete, not stuck-wave) advances mechanically without invoking the judge; set to `false` to force judge execution on every wave completion. |
@@ -646,6 +647,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum judge retries for review-blocked PRs (both review_autofix and orchestrate_poll) |
 | `ENABLE_VALIDATION` | `true` | Enable post-judge runtime validation gate in orchestrator poller |
 | `MAX_VALIDATE_CYCLES` | `3` | Maximum runtime validation cycles before terminal validation failure |
+| `MAX_SELF_HEAL_ATTEMPTS` | `2` | Maximum in-process self-heal attempts per `validate_process.sh` invocation (self-heal re-execs do not burn cycles) |
 | `ENABLE_CLEAN_WAVE_JUDGE_SKIP` | `true` | Skip judge on clean completed waves (no failures + no pending issue defs) and advance to next wave mechanically |
 | `STALL_THRESHOLD_MINUTES` | `120` | Fallback minutes before a stalled issue triggers auto-recovery |
 | `STALL_THRESHOLD_NO_LABELS_MINUTES` | `60` | Stall threshold for pre-pipeline (no labels) phase |
@@ -978,6 +980,100 @@ Use this after manual intervention (e.g. fixing a problematic issue, merging a s
 |---|---|---|
 | `ENABLE_VALIDATION` | `true` | Truthy values (`1/true/yes/on`, case-insensitive) enable the validation gate. Any other value disables it, so judge `complete` closes immediately without runtime validation. |
 | `MAX_VALIDATE_CYCLES` | `3` | Maximum cycles across initial validation plus fix/revalidate loops. Must be a positive integer; invalid values are coerced to `3`. Exceeding the limit forces `ai:validation-failed`. |
+| `MAX_SELF_HEAL_ATTEMPTS` | `2` | Maximum in-process self-heal attempts per validate_process.sh invocation. Self-heal attempts patch one of the four validation prompts locally and re-exec the validation pipeline; they do NOT increment `MAX_VALIDATE_CYCLES`. Set to `0` to disable self-healing entirely. See [Validation self-healing](#validation-self-healing). |
+
+### Validation self-healing
+
+Validation can self-heal transient prompt-wording defects in the four
+validation prompts (`mode-validate-discover.txt`, `mode-validate-generate.txt`,
+`mode-validate-fix-harness.txt`, `mode-validate-diagnose.txt`) without
+burning a validation cycle. This is useful when a prompt defect causes the
+LLM to emit malformed JSON, the wrong harness shape, or an incorrect
+classification — failures that a human would normally have to fix by
+editing the prompt and re-running.
+
+**How it works**
+
+1. When any phase of `scripts/validate_process.sh` is about to fail hard
+   (generate parse failure, preflight failure, canary failure, diagnose
+   decision point), it invokes `scripts/self_heal_validation.sh`.
+2. The helper renders `prompts/mode-validate-self-heal.txt` with the full
+   failure context and the current text of the four validation prompts,
+   and asks the LLM to propose a minimal unified diff against exactly one
+   of those four files — or an empty patch if the failure is a real app
+   bug, real infrastructure bug, or otherwise not prompt-attributable.
+3. If a patch is proposed, it is validated (allow-list of target files,
+   clean apply) and applied to the runtime copy of `prompts/`. The helper
+   appends the patch to `${RUNTIME_DIR}/self_heal_patches.jsonl` and
+   `validate_process.sh` re-execs itself with `SELF_HEAL_ATTEMPT`
+   incremented — the validation cycle counter is not touched.
+4. Self-heal attempts are capped at `MAX_SELF_HEAL_ATTEMPTS` (default 2)
+   per `validate_process.sh` invocation. After that, the original failure
+   falls through to the normal hard-fail path and burns a validation
+   cycle as today.
+5. If the pipeline eventually passes after one or more successful self-
+   heal attempts, `validate_process.sh` sends a `repository_dispatch`
+   event of type `validation-prompt-self-heal` to
+   `shubhodeep1/coding-workflows` carrying the accumulated patches and
+   run metadata.
+
+**Intake on coding-workflows**
+
+`.github/workflows/validation-improvements-intake.yml` receives the
+dispatch and:
+
+1. Applies each patch to the allow-listed prompts on a new branch
+   `validation-improvements/<consumer-slug>-<run-id>`.
+2. Appends a dated entry to [`docs/validation-improvements.md`](docs/validation-improvements.md)
+   with the run metadata, rationale, and the exact diff(s) applied.
+3. Opens a **draft** pull request against `main` with a `[skip ai]`
+   title token and the `ai:needs-prompt-review` label.
+4. Sends a Telegram notification to the admin via
+   `tg_send_msg` (severity `WARNING`).
+
+**Why draft PRs?**
+
+Draft PRs are already opted out of the auto-review/auto-autofix/
+auto-merge pipeline at `.github/workflows/review_autofix.yml` — the
+review gate short-circuits on `pr_is_draft == true`. This means the
+self-heal patches cannot be merged without explicit human action.
+
+**Unlock procedure (admin)**
+
+1. Review the draft PR. Confirm the patch is additive, does not rename
+   or remove any identifier, does not change any declared JSON schema
+   field name, and respects every hard constraint in the target prompt.
+2. If you are satisfied, click **"Ready for review"** in the GitHub UI.
+   This fires a `pull_request.ready_for_review` event which the AI
+   review wrapper ([`workflow-templates/ai-review.yml`](workflow-templates/ai-review.yml))
+   now listens for, so the normal `review_autofix` flow engages.
+3. If you are not satisfied, close the PR. The consumer's next
+   validation cycle will re-dispatch a fresh patch if the same defect
+   still reproduces.
+
+**Prerequisites**
+
+- The `GH_PAT` secret used by the consumer's validation workflow must
+  have `repo` scope on `shubhodeep1/coding-workflows` in order for the
+  `repository_dispatch` call to succeed. If it does not, the self-heal
+  still works locally for the current run — the pipeline will pass —
+  but the improvement will not be propagated upstream. The patches are
+  preserved in the consumer run's `ai-validation-*` artifact
+  (`self_heal_patches.jsonl`) for manual forwarding.
+- If `TG_BOT_SECRET` / `TG_ADMIN_CHAT_ID` are not set on
+  `shubhodeep1/coding-workflows`, the admin Telegram alert is skipped
+  silently but the PR is still opened.
+
+**Known limitations**
+
+- Self-heal patches are only dispatched upstream when the pipeline
+  reaches a final `pass` in the same `validate_process.sh` invocation.
+  If self-heal fixes a prompt but validation still exits with
+  `needs_fixes` (legitimate app bugs), the patches are not dispatched —
+  they are only retained in the run artifact.
+- Self-heal never patches files other than the four allow-listed
+  validation prompts. Harness shell scripts, workflow YAML, and other
+  prompts are out of scope by design.
 
 ### Wrapper Setup and Reusable Workflow Relationship
 
