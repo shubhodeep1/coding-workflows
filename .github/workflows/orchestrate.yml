@@ -681,6 +681,7 @@ jobs:
           python3 scripts/orchestrate_lib.py compute-waves --input-file "${DECOMPOSITION_FILE}"
 
       - name: Detect decomposition execution mode
+        if: steps.evaluate_short_circuit.outputs.short_circuit != 'true'
         id: decomposition_mode
         run: |
           set -euo pipefail
