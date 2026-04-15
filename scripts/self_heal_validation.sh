@@ -237,11 +237,15 @@ if grep -Eq '^(deleted file mode|new file mode|rename from |rename to |copy from
 	echo "self-heal: refusing — patch includes non-additive file operations (rename/copy/delete/new)" >&2
 	exit 2
 fi
-# Reject any deletion lines. Unified diff deletion lines start with a
-# single '-' followed by a non-'-' char (or end of line). The file
-# header '--- path' starts with three dashes and is NOT matched by
-# '^-[^-]'. We also reject bare '--' lines as a defensive measure.
-if grep -Eq '^-[^-]|^--$' "${SELF_HEAL_PATCH_TMP}"; then
+# Reject any deletion lines inside hunks. This catches *all* deletions,
+# including lines whose original content begins with '-' (e.g. '--foo'),
+# while ignoring file header lines outside hunks.
+if awk '
+  /^diff --git / { in_hunk=0; next }
+  /^@@ / { in_hunk=1; next }
+  in_hunk && /^-/ { found=1; exit }
+  END { exit(found ? 0 : 1) }
+' "${SELF_HEAL_PATCH_TMP}"; then
 	echo "self-heal: refusing — patch contains deletion lines; self-heal patches must be additive-only" >&2
 	exit 2
 fi
