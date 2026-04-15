@@ -5635,11 +5635,13 @@ sys.exit(1)
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
                 if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-                  git add -u -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts'
-                  git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+                  # Use a single add call so empty/minimal repos do not fail on
+                  # exclude-only pathspecs (e.g. ':!node_modules').
+                  git add -A -- . ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts'
                 else
-                  git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
-                  git ls-files --others --exclude-standard -z -- ':!node_modules' ':!.serena' ':!scripts' ':!prompts' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+                  # Keep workflow-edit guard exclusions while avoiding brittle
+                  # tracked/untracked split staging pathspec failures.
+                  git add -A -- . ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.serena' ':!.github/prompts' ':!.github/scripts'
                 fi
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
