@@ -2550,12 +2550,14 @@ def test_stall_judge_escalate_human_with_gate_disabled_falls_back_to_non_human_a
 		},
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
-	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
 	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
-	assert issue_entry["stall_recovery_count"] == 3
+	assert issue_entry["github_issue"] != 10
+	assert issue_entry["status"] == "pending"
+	assert issue_entry["stall_recovery_count"] == 0
 	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
-	assert any("/approved" in body for body in issue_comments)
-	assert any("**Effective action:** retrigger_implement" in body for body in tracking_comments)
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"]["closed"] is True
+	assert any("**Effective action:** close_and_reissue" in body for body in tracking_comments)
 
 
 def test_stall_judge_escalate_human_with_gate_enabled_preserves_escalation_behavior():
