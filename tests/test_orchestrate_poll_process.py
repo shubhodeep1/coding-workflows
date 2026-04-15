@@ -217,6 +217,11 @@ def test_judge_reasoning_effort_logic_is_adaptive_after_cycle_three():
 	assert 'EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE' in script
 
 
+def test_orchestrate_poll_workflow_declares_human_terminalization_env_default() -> None:
+	wf = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}" in wf
+
+
 def _base_state(status: str = "in_progress") -> dict:
 	return {
 		"schema_version": "orchestrate_state.v1",
@@ -3231,8 +3236,8 @@ def test_stall_judge_escalate_human_adds_needs_human_label_and_increments_counte
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		issue_labels={10: ["ai:implementing"]},
 		enable_stall_human_terminalization="true",
+		issue_labels={10: ["ai:implementing"]},
 		mock_stall_judge_json={
 			"action": "escalate_human",
 			"justification": "needs operator",
@@ -3299,6 +3304,33 @@ def test_stall_judge_escalate_human_with_gate_enabled_preserves_escalation_behav
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 3
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_escalate_human_falls_back_when_human_terminalization_disabled():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_stall_human_terminalization="false",
+		issue_labels={10: ["ai:implementing"]},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert issue_entry["stall_recovery_count"] == 3
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert any("/approved" in body for body in issue_comments)
 
 
 def test_stall_judge_escalate_human_issue_not_redetected_after_needs_human():

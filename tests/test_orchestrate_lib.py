@@ -418,7 +418,47 @@ def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_implementing_ph
 	)
 
 	assert len(stalls) == 1
-	assert stalls[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][2]
+	assert stalls[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][1]
+
+
+def test_detect_stalls_allows_human_terminalization_when_explicitly_enabled():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=False,
+		allow_human_terminalization=True,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "escalate_human"
+
+
+def test_resolve_effective_stall_recovery_action_defaults_to_safe_allowed_actions():
+	unknown_action = orchestrate_lib.resolve_effective_stall_recovery_action(
+		phase="ai:implementing",
+		recovery_count=2,
+		allow_human_terminalization=False,
+		judged_action="unsupported_action",
+	)
+	assert unknown_action == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][1]
+
+	conflict_action = orchestrate_lib.resolve_effective_stall_recovery_action(
+		phase="ai:implementing",
+		recovery_count=2,
+		allow_human_terminalization=False,
+		judged_action="resolve_merge_conflict",
+	)
+	assert conflict_action == "resolve_merge_conflict"
 
 
 def test_detect_stalls_disables_human_terminalization_by_default():
@@ -516,11 +556,11 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 		threshold_minutes: int,
 		now_ts: int,
 		max_recoveries: int = 5,
-			phase_thresholds: dict[str, int] | None = None,
-			allow_human_terminalization: bool = False,
-			stall_judge_trigger_count: int = 2,
-			enable_stall_judge: bool = True,
-		) -> list[dict[str, object]]:
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 2,
+		enable_stall_judge: bool = True,
+		allow_human_terminalization: bool = False,
+	) -> list[dict[str, object]]:
 		captured["state"] = state
 		captured["issue_labels"] = issue_labels
 		captured["threshold_minutes"] = threshold_minutes
@@ -530,6 +570,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 		captured["allow_human_terminalization"] = allow_human_terminalization
 		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
 		captured["enable_stall_judge"] = enable_stall_judge
+		captured["allow_human_terminalization"] = allow_human_terminalization
 		return []
 
 	orchestrate_lib.detect_stalls = _fake_detect_stalls
@@ -662,11 +703,11 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 		threshold_minutes: int,
 		now_ts: int,
 		max_recoveries: int = 5,
-			phase_thresholds: dict[str, int] | None = None,
-			allow_human_terminalization: bool = False,
-			stall_judge_trigger_count: int = 0,
-			enable_stall_judge: bool = False,
-		) -> list[dict[str, object]]:
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 0,
+		enable_stall_judge: bool = False,
+		allow_human_terminalization: bool = False,
+	) -> list[dict[str, object]]:
 		captured["state"] = state
 		captured["issue_labels"] = issue_labels
 		captured["threshold_minutes"] = threshold_minutes
@@ -676,6 +717,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 		captured["allow_human_terminalization"] = allow_human_terminalization
 		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
 		captured["enable_stall_judge"] = enable_stall_judge
+		captured["allow_human_terminalization"] = allow_human_terminalization
 		return []
 
 	orchestrate_lib.detect_stalls = _fake_detect_stalls
@@ -691,7 +733,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 			phase_thresholds_json='{"ai:planning": 90}',
 			stall_judge_trigger_count=3,
 			enable_stall_judge="true",
-			allow_human_terminalization="true",
+			allow_human_terminalization="false",
 		)
 	finally:
 		orchestrate_lib.detect_stalls = original_detect_stalls
@@ -702,7 +744,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 	assert captured["phase_thresholds"] == {"ai:planning": 90}
 	assert captured["stall_judge_trigger_count"] == 3
 	assert captured["enable_stall_judge"] is True
-	assert captured["allow_human_terminalization"] is True
+	assert captured["allow_human_terminalization"] is False
 
 
 # ---------------------------------------------------------------------------
