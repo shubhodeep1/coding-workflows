@@ -736,7 +736,7 @@ if args[0] == 'api':
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
 
-	m = re.search(r'/issues/(\d+)/comments(?:\?per_page=100)?$', path)
+	m = re.search(r'/issues/(\d+)/comments(?:\?.*)?$', path)
 	if m and method == 'GET' and not fields:
 		num = m.group(1)
 		fail_after = store.get('fail_issue_comment_get_after', {}).get(num)
@@ -2250,6 +2250,21 @@ def test_implementation_failed_post_codex_unknown_blocker_state_defers_reissue()
 	assert result.get("created_issues", []) == []
 	assert result["closed_issues"] == []
 	assert "blocker status lookup incomplete" in result["stdout"]
+
+
+def test_implementation_failed_comment_lookup_failure_defers_reissue():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "implementation-failed"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementation-failed"]},
+		fail_issue_comment_get_after={10: 0},
+	)
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	assert "unable to fetch issue comments for post-codex blocker detection" in result["stdout"]
 
 
 def test_review_blocked_merged_fix_followup_retargets_base_to_integration_branch():

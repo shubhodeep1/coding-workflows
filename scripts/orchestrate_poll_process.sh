@@ -5957,13 +5957,19 @@ ${RB_FIX_DESC}
       end
     ' 2>/dev/null || echo '[]')"
 
-    IF_COMMENTS_JSON="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments?per_page=100" || echo "[]")"
-    if ! echo "${IF_COMMENTS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    IF_COMMENTS_JSON='[]'
+    if IF_COMMENTS_JSON="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments?sort=created&direction=desc&per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+      && echo "${IF_COMMENTS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      :
+    else
       IF_COMMENTS_JSON='[]'
+      IF_MODE="post-codex-validation"
+      IF_DEFER_REISSUE="true"
+      IF_DEFER_REASON="unable to fetch issue comments for post-codex blocker detection"
     fi
 
-    IF_POST_CODEX_ANY_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | test("^## Post-Codex validation"))] | last // empty' 2>/dev/null || true)"
-    IF_POST_CODEX_FIX_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | startswith("## Post-Codex validation diagnosed follow-up fixes"))] | last // empty' 2>/dev/null || true)"
+    IF_POST_CODEX_ANY_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | test("^## Post-Codex validation"))] | .[0] // empty' 2>/dev/null || true)"
+    IF_POST_CODEX_FIX_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | startswith("## Post-Codex validation diagnosed follow-up fixes"))] | .[0] // empty' 2>/dev/null || true)"
 
     IF_PARSED_BLOCKERS_JSON='[]'
     IF_PARSED_BLOCKER_COUNT=0
