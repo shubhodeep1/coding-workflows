@@ -5,15 +5,32 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 
 class OrchestrateError(ValueError):
 	"""Raised when orchestrator data is invalid."""
+
+
+class IntegrationBranchMissingError(OrchestrateError):
+	"""Raised when integration metadata points to a missing branch ref."""
+
+
+INTEGRATION_BRANCH_LINE_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$",
+	re.MULTILINE,
+)
+TRACKING_ISSUE_LINE_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$",
+	re.MULTILINE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -672,12 +689,120 @@ def get_impl_noop_count(
 # State reconstruction (recovery from missing initial state)
 # ---------------------------------------------------------------------------
 
+def extract_integration_branch(body: str) -> str:
+	"""Extract integration-branch metadata from markdown body text."""
+	if not body:
+		return ""
+	match = INTEGRATION_BRANCH_LINE_RE.search(body)
+	if not match:
+		return ""
+	return match.group(1).strip()
+
+
+def extract_tracking_issue_number(body: str) -> int | None:
+	"""Extract the first tracking-issue number from markdown body text."""
+	if not body:
+		return None
+	match = TRACKING_ISSUE_LINE_RE.search(body)
+	if not match:
+		return None
+	return int(match.group(1))
+
+
+def _gh_api_json(endpoint: str) -> dict[str, Any]:
+	env = os.environ.copy()
+	token = env.get("GH_TOKEN", "")
+	if token and not env.get("GITHUB_TOKEN"):
+		env["GITHUB_TOKEN"] = token
+
+	try:
+		proc = subprocess.run(
+			["gh", "api", endpoint],
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+	except OSError as exc:
+		raise OrchestrateError(f"gh api failed for {endpoint}: {exc}") from exc
+	if proc.returncode != 0:
+		error_text = (proc.stderr or proc.stdout).strip()
+		raise OrchestrateError(f"gh api failed for {endpoint}: {error_text}")
+
+	try:
+		payload = json.loads(proc.stdout or "{}")
+	except json.JSONDecodeError as exc:
+		raise OrchestrateError(f"Invalid JSON from gh api ({endpoint}): {exc}") from exc
+	if not isinstance(payload, dict):
+		raise OrchestrateError(f"Expected JSON object from gh api ({endpoint})")
+	return payload
+
+
+def _gh_ref_exists(repo: str, ref_name: str) -> bool:
+	encoded_ref = quote(ref_name, safe="")
+	endpoint = f"repos/{repo}/git/ref/heads/{encoded_ref}"
+	env = os.environ.copy()
+	token = env.get("GH_TOKEN", "")
+	if token and not env.get("GITHUB_TOKEN"):
+		env["GITHUB_TOKEN"] = token
+
+	try:
+		proc = subprocess.run(
+			["gh", "api", endpoint],
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+	except OSError as exc:
+		raise OrchestrateError(f"gh api failed while checking branch ref {ref_name!r}: {exc}") from exc
+	if proc.returncode == 0:
+		return True
+
+	error_text = (proc.stderr or proc.stdout).strip()
+	if "404" in error_text or "Not Found" in error_text:
+		return False
+
+	raise OrchestrateError(f"gh api failed while checking branch ref {ref_name!r}: {error_text}")
+
+
+def resolve_integration_ref(repo: str, issue: int) -> str:
+	"""Resolve integration branch from child issue, falling back to tracking issue."""
+	repo_name = (repo or "").strip()
+	if not repo_name:
+		raise OrchestrateError("REPO (or GITHUB_REPOSITORY) is required")
+
+	child_payload = _gh_api_json(f"repos/{repo_name}/issues/{issue}")
+	child_body = str(child_payload.get("body", "") or "")
+	child_branch = extract_integration_branch(child_body)
+	if child_branch:
+		if not _gh_ref_exists(repo_name, child_branch):
+			raise IntegrationBranchMissingError(
+				f"Integration branch {child_branch!r} declared in child issue #{issue} does not exist"
+			)
+		return child_branch
+
+	tracking_issue = extract_tracking_issue_number(child_body)
+	if tracking_issue is None:
+		return ""
+
+	tracking_payload = _gh_api_json(f"repos/{repo_name}/issues/{tracking_issue}")
+	tracking_body = str(tracking_payload.get("body", "") or "")
+	tracking_branch = extract_integration_branch(tracking_body)
+	if not tracking_branch:
+		return ""
+	if not _gh_ref_exists(repo_name, tracking_branch):
+		raise IntegrationBranchMissingError(
+			f"Integration branch {tracking_branch!r} declared in tracking issue #{tracking_issue} does not exist"
+		)
+	return tracking_branch
+
 def parse_tracking_body(body: str) -> dict[str, Any]:
 	"""Parse a tracking issue markdown body to extract wave structure.
 
 	Returns a dict with keys:
 		project_title, waves (list of lists of {id, title, priority}),
-		dependency_edges (list of {from, to}).
+		dependency_edges (list of {from, to}), integration_branch.
 	"""
 	result: dict[str, Any] = {
 		"project_title": "",
@@ -690,9 +815,7 @@ def parse_tracking_body(body: str) -> dict[str, Any]:
 	if title_match:
 		result["project_title"] = title_match.group(1).strip()
 
-	integration_match = re.search(r"^\*\*Integration branch:\*\*\s*`?([^`\n]+)`?$", body, re.MULTILINE)
-	if integration_match:
-		result["integration_branch"] = integration_match.group(1).strip()
+	result["integration_branch"] = extract_integration_branch(body)
 
 	# Split on wave headers and parse each section
 	wave_sections = re.split(r"### Wave \d+", body)
@@ -1024,6 +1147,19 @@ def cmd_rebuild_state(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_print_integration_ref(args: argparse.Namespace) -> int:
+	"""Resolve and print integration branch metadata for a child issue."""
+	repo = (args.repo or os.getenv("REPO") or os.getenv("GITHUB_REPOSITORY") or "").strip()
+	issue = int(args.print_integration_ref)
+	try:
+		ref = resolve_integration_ref(repo=repo, issue=issue)
+	except IntegrationBranchMissingError as exc:
+		print(f"::error::{exc}", file=sys.stderr)
+		raise
+	print(ref)
+	return 0
+
+
 def cmd_check_stalls(args: argparse.Namespace) -> int:
 	"""Detect stalled issues and return recommended recovery actions."""
 	path = Path(args.state_file).resolve()
@@ -1083,7 +1219,17 @@ def cmd_update_timestamps(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description="Orchestrator helper utilities")
-	subparsers = parser.add_subparsers(dest="command", required=True)
+	parser.add_argument(
+		"--print-integration-ref",
+		dest="print_integration_ref",
+		help="Resolve integration branch for child issue number",
+	)
+	parser.add_argument(
+		"--repo",
+		default="",
+		help="GitHub repository owner/name (defaults to REPO or GITHUB_REPOSITORY)",
+	)
+	subparsers = parser.add_subparsers(dest="command")
 
 	p_validate = subparsers.add_parser("validate", help="Validate decomposition JSON")
 	p_validate.add_argument("--input-file", required=True)
@@ -1138,6 +1284,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
 	parser = build_parser()
 	args = parser.parse_args(argv)
+	if args.print_integration_ref and getattr(args, "command", None):
+		parser.error("--print-integration-ref cannot be combined with a subcommand")
+	if args.print_integration_ref:
+		try:
+			return int(cmd_print_integration_ref(args))
+		except IntegrationBranchMissingError:
+			return 1
+		except (OrchestrateError, ValueError, json.JSONDecodeError) as exc:
+			print(f"ORCHESTRATE_ERROR: {exc}", file=sys.stderr)
+			return 2
+	if not hasattr(args, "func"):
+		parser.error("a command is required unless --print-integration-ref is used")
 
 	try:
 		return int(args.func(args))
