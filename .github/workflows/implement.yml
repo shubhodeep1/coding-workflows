@@ -149,12 +149,24 @@ jobs:
 
       - name: Checkout support source fallback for duplicate PR notice
         if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true' && steps.checkout_support_source_duplicate_notice.outcome == 'failure'
+        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/coding-workflows
           ref: main
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Checkout support source main snapshot for duplicate PR notice
+        if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true' && env.DUPLICATE_NOTICE_SCRIPT_REF != 'main'
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository_owner }}/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src-main
           fetch-depth: 1
 
       - name: Telegram duplicate PR notification
@@ -167,10 +179,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p scripts
-          if [ -f .codex-workflow-src/scripts/tg_helpers.sh ]; then
-            install -m 0755 .codex-workflow-src/scripts/tg_helpers.sh scripts/tg_helpers.sh
+          tg_helper_src=".codex-workflow-src/scripts/tg_helpers.sh"
+          if [ ! -f "${tg_helper_src}" ] && [ -f ".codex-workflow-src-main/scripts/tg_helpers.sh" ]; then
+            tg_helper_src=".codex-workflow-src-main/scripts/tg_helpers.sh"
+          fi
+          if [ -f "${tg_helper_src}" ]; then
+            install -m 0755 "${tg_helper_src}" scripts/tg_helpers.sh
             source scripts/tg_helpers.sh
           fi
+          rm -rf .codex-workflow-src-main
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MSG="Skipping implementation for issue #${ISSUE_NUMBER} — PR already exists."
@@ -251,6 +268,17 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout workflow support source main snapshot
+        if: env.SKIP_IMPLEMENT != 'true' && env.SCRIPT_REF != 'main'
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository_owner }}/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src-main
+          fetch-depth: 1
+
       - name: Stage workflow support files
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -270,6 +298,9 @@ jobs:
           _fetched_scripts=()
           for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
             src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
               exit 1
@@ -290,6 +321,9 @@ jobs:
           fi
 
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
+          if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
+            catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
+          fi
           if [ -f "${catalog_src}" ]; then
             install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
             if [ "${is_self_repo}" = "false" ]; then
@@ -302,6 +336,9 @@ jobs:
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json; do
             src=".codex-workflow-src/ai-memory/schemas/${sf}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
+              src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
+            fi
             if [ ! -f "ai-memory/schemas/${sf}" ] && [ -f "${src}" ]; then
               install -m 0644 "${src}" "ai-memory/schemas/${sf}"
               if [ "${is_self_repo}" = "false" ]; then
@@ -313,6 +350,9 @@ jobs:
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
+                src=".codex-workflow-src-main/${f}"
+              fi
               if [ ! -f "${src}" ]; then
                 echo "::error::Failed to stage required file ${f}"
                 exit 1
@@ -327,6 +367,9 @@ jobs:
           mkdir -p prompts
           if [ ! -f prompts/serena-efficiency-block.txt ]; then
             src=".codex-workflow-src/prompts/serena-efficiency-block.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/serena-efficiency-block.txt" ]; then
+              src=".codex-workflow-src-main/prompts/serena-efficiency-block.txt"
+            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Failed to stage required file prompts/serena-efficiency-block.txt"
               exit 1
@@ -338,6 +381,9 @@ jobs:
           fi
           if [ ! -f prompts/mode-implement-diagnose.txt ]; then
             src=".codex-workflow-src/prompts/mode-implement-diagnose.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-implement-diagnose.txt" ]; then
+              src=".codex-workflow-src-main/prompts/mode-implement-diagnose.txt"
+            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Failed to stage required file prompts/mode-implement-diagnose.txt"
               exit 1
@@ -351,6 +397,8 @@ jobs:
           if [ -f .codex-workflow-src/agents.md ]; then
             install -m 0644 .codex-workflow-src/agents.md "${RUNTIME_DIR}/agents_canonical.md"
           fi
+
+          rm -rf .codex-workflow-src-main
 
       - name: Fetch issue metadata
         if: env.SKIP_IMPLEMENT != 'true'

@@ -136,6 +136,17 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout workflow support source main snapshot
+        if: ${{ env.SCRIPT_REF != 'main' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository_owner }}/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src-main
+          fetch-depth: 1
+
       - name: Stage workflow support files
         run: |
           set -euo pipefail
@@ -145,6 +156,9 @@ jobs:
           _fetched_scripts=()
           for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
             src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
               exit 1
@@ -164,6 +178,9 @@ jobs:
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json; do
             src=".codex-workflow-src/ai-memory/schemas/${sf}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
+              src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
+            fi
             if [ ! -f "ai-memory/schemas/${sf}" ] && [ -f "${src}" ]; then
               install -m 0644 "${src}" "ai-memory/schemas/${sf}"
             fi
@@ -172,6 +189,9 @@ jobs:
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
+                src=".codex-workflow-src-main/${f}"
+              fi
               if [ ! -f "${src}" ]; then
                 echo "::error::Failed to stage required file ${f}"
                 exit 1
@@ -183,12 +203,17 @@ jobs:
           mkdir -p prompts
           if [ ! -f prompts/serena-efficiency-block.txt ]; then
             src=".codex-workflow-src/prompts/serena-efficiency-block.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/serena-efficiency-block.txt" ]; then
+              src=".codex-workflow-src-main/prompts/serena-efficiency-block.txt"
+            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Failed to stage required file prompts/serena-efficiency-block.txt"
               exit 1
             fi
             install -m 0644 "${src}" prompts/serena-efficiency-block.txt
           fi
+
+          rm -rf .codex-workflow-src-main
 
       - name: Create runtime workspace
         run: |
