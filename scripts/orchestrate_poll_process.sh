@@ -6600,18 +6600,25 @@ fi
         echo "Issues with active workflow runs: $(echo "${ACTIVE_WORKFLOW_ISSUES}" | tr '\n' ' ')"
       fi
 
-      # Prefetch linked-PR state for every stalled issue in a single
-      # batched GraphQL call, so recover_stalled_issue's merged-PR and
-      # open-PR sub-guards consume the data from an in-memory cache
-      # instead of hitting the GitHub API per issue.  Fails open: an
-      # empty/failed prefetch leaves the legacy per-issue REST lookup
-      # in place as a fallback.
+      # Prefetch linked-PR state for every stalled issue in batched
+      # GraphQL calls, so recover_stalled_issue's merged-PR and open-PR
+      # sub-guards consume the data from an in-memory cache instead of
+      # hitting the GitHub API per issue.  Fails open: an empty/failed
+      # prefetch leaves the legacy per-issue REST lookup in place as a
+      # fallback.  _fetch_linked_pr_status_graphql batches at
+      # batch_size=25 so larger stall sets produce multiple calls.
       STALL_MANAGED_LINKED_PR_CACHE='{}'
       if [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ]; then
         _stall_issue_nums_json="$(echo "${STALLS_JSON}" | jq -c '[.stalls[].github_issue | select(type == "number")] | unique')"
-        if [ "$(printf '%s' "${_stall_issue_nums_json}" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ]; then
+        _stall_issue_count="$(printf '%s' "${_stall_issue_nums_json}" | jq 'length' 2>/dev/null || echo 0)"
+        if [ "${_stall_issue_count}" -gt 0 ]; then
           STALL_MANAGED_LINKED_PR_CACHE="$(_fetch_linked_pr_status_graphql "${_stall_issue_nums_json}")"
-          echo "Prefetched linked-PR state for $(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq 'length' 2>/dev/null || echo 0) stalled issue(s) (1 batched GraphQL call)."
+          _stall_graphql_batches="$(( ( _stall_issue_count + 24 ) / 25 ))"
+          _stall_graphql_call_label="calls"
+          if [ "${_stall_graphql_batches}" -eq 1 ]; then
+            _stall_graphql_call_label="call"
+          fi
+          echo "Prefetched linked-PR state for $(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq 'length' 2>/dev/null || echo 0) stalled issue(s) (${_stall_graphql_batches} batched GraphQL ${_stall_graphql_call_label})."
         fi
       fi
       export STALL_MANAGED_LINKED_PR_CACHE
