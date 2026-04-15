@@ -66,6 +66,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `MAX_SELF_HEAL_ATTEMPTS` | No | `2` | validate | Maximum in-process self-heal attempts per `validate_process.sh` invocation. Self-heal patches one of the four validation prompt files locally and re-execs the pipeline, and does NOT increment `MAX_VALIDATE_CYCLES`. Set to `0` to disable. See [Validation self-healing](#validation-self-healing). |
 | `VALIDATE_WORKFLOW_NAME` | No | `ai-validate.yml` | orchestrate_poll | Workflow filename to dispatch for runtime validation. Override to `internal-validate.yml` for repos using the internal naming convention. Falls back to `internal-validate.yml` automatically if the primary name fails. |
 | `MAX_JUDGE_CYCLES` | No | `25` | orchestrate_poll | Maximum judge evaluation cycles per project before forcing failure. Prevents infinite fix-up loops when the judge repeatedly returns `in_progress`. |
+| `ENABLE_CLEAN_WAVE_JUDGE_SKIP` | No | `true` | orchestrate_poll | When true, a completed clean wave (no failures, not project-complete, not stuck-wave) advances mechanically without invoking the judge; set to `false` to force judge execution on every wave completion. |
 | `STALL_THRESHOLD_MINUTES` | No | `120` | orchestrate_poll | Fallback minutes an issue can remain in the same pipeline phase before auto-recovery. Used when no per-phase override is set. |
 | `STALL_THRESHOLD_NO_LABELS_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for issues with no AI pipeline labels (pre-pipeline). |
 | `STALL_THRESHOLD_CLARIFICATION_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for `ai:clarification` phase. |
@@ -116,7 +117,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `high` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
-| `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | orchestrate | Reasoning effort for project decomposition |
+| `THINKING_LEVEL_ORCHESTRATE` | `medium` | orchestrate | Reasoning effort for project decomposition |
 | `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation (`xhigh` for cycles 1-3, automatically `high` from cycle 4 onward) |
 | `THINKING_LEVEL_CLARIFY_RESPOND` | `low` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
 | `THINKING_LEVEL_VALIDATE` | `high` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
@@ -648,6 +649,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ENABLE_VALIDATION` | `true` | Enable post-judge runtime validation gate in orchestrator poller |
 | `MAX_VALIDATE_CYCLES` | `3` | Maximum runtime validation cycles before terminal validation failure |
 | `MAX_SELF_HEAL_ATTEMPTS` | `2` | Maximum in-process self-heal attempts per `validate_process.sh` invocation (self-heal re-execs do not burn cycles) |
+| `ENABLE_CLEAN_WAVE_JUDGE_SKIP` | `true` | Skip judge on clean completed waves (no failures) and advance to next wave mechanically |
 | `STALL_THRESHOLD_MINUTES` | `120` | Fallback minutes before a stalled issue triggers auto-recovery |
 | `STALL_THRESHOLD_NO_LABELS_MINUTES` | `60` | Stall threshold for pre-pipeline (no labels) phase |
 | `STALL_THRESHOLD_CLARIFICATION_MINUTES` | `60` | Stall threshold for clarification phase |
@@ -689,7 +691,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `TOKEN_WARN_THRESHOLD_PLAN` | `200000` | Token warning threshold for planning |
 | `TOKEN_WARN_THRESHOLD_IMPLEMENT` | `200000` | Token warning threshold for implementation |
 | `WORKFLOW_ORCHESTRATE_MODEL` | (falls back to `WORKFLOW_EDITOR_MODEL`) | Model override for orchestrator/judge |
-| `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | Reasoning effort for project decomposition |
+| `THINKING_LEVEL_ORCHESTRATE` | `medium` | Reasoning effort for project decomposition |
 | `THINKING_LEVEL_JUDGE` | `xhigh` | Reasoning effort for judge evaluation (`xhigh` for cycles 1-3, automatically `high` from cycle 4 onward) |
 | `ORCHESTRATE_POLL_INTERVAL` | `5` | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
 | `ORCHESTRATE_POLL_CALLER_WORKFLOW` | `ai-orchestrate-poll.yml` | Caller workflow filename for self-retrigger; empty string disables |
@@ -848,6 +850,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 4. **In-progress conflict resolution:** When the base branch advances and creates merge conflicts on open PRs whose tracking issue is in the `in_progress` or `done` wave status (still going through the review/autofix cycle, or sitting in `ai:done` awaiting promotion to `ai:ready-to-merge`), the poller detects the conflict (`mergeable == false`). It first tries a GitHub API branch update; if that fails (real conflicts), it dispatches the review workflow via `workflow_dispatch`. The review workflow's built-in Codex conflict resolver then handles the resolution on a dedicated runner with a clean environment.
 5. **Polling:** Every 5 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
 6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with adaptive thinking (`xhigh` for cycles 1-3, then `high`). Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
+6a. **Clean-wave skip (flagged):** When `ENABLE_CLEAN_WAVE_JUDGE_SKIP=true`, and the completed wave has no failed issues, project is not complete, and it is not a stuck-wave invocation, the poller advances `current_wave` and increments `judge_cycle` without calling Codex judge. `judge_stall_cycles` is unchanged.
 7. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
 8. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge makes autonomous architectural and security trade-off decisions — it does not defer to humans. It can: (a) merge the PR as-is if remaining issues are cosmetic or low-risk, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts.
 9. **Implementation-failed recovery:** When the implementation phase reaches the post-Codex pre-commit path with no committable file changes despite an approved plan (e.g. workflow edits stripped without `ALLOW_WORKFLOW_EDITS=true`, or model failure), `implement.yml` labels the source issue `ai:implementation-failed`. The poller automatically closes that issue and creates a replacement with additional diagnostic guidance, so the pipeline retries without manual intervention.
@@ -967,7 +970,7 @@ When a tracking issue reaches terminal `failed` status due to judge stall cycle 
 3. Transition the project status from `failed` to `in_progress`.
 4. Resume normal wave processing immediately.
 
-This does **not** reset the total `judge_cycle` counter (which is informational only — it tracks how many times the judge has been invoked overall). Only the stall and recovery counters that gate the failure limits are reset.
+This does **not** reset the total `judge_cycle` counter (which is informational only — it tracks wave-advance/judge-cycle progression, including clean-wave skips where the judge is intentionally not invoked). Only the stall and recovery counters that gate the failure limits are reset.
 
 Use this after manual intervention (e.g. fixing a problematic issue, merging a stuck PR, or adjusting `MAX_JUDGE_CYCLES`/`MAX_RECOVERY_ATTEMPTS` variables). There is no limit on how many times `/judge_resume` can be used.
 

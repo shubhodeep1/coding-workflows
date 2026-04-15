@@ -312,6 +312,7 @@ def _run_poller(
 	mock_git_push_success: bool = False,
 	enable_stall_judge: str = "true",
 	stall_judge_trigger_count: str = "2",
+	enable_clean_wave_judge_skip: str = "true",
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -666,6 +667,7 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'close':
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
 	title = ''
 	body = ''
+	labels = []
 	i = 2
 	while i < len(args):
 		if args[i] == '--title' and i + 1 < len(args):
@@ -676,11 +678,15 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
 			body = args[i + 1]
 			i += 2
 			continue
+		if args[i] == '--label' and i + 1 < len(args):
+			labels.append(args[i + 1])
+			i += 2
+			continue
 		i += 1
 	next_num = store.get('next_issue_number', 900)
 	store['next_issue_number'] = next_num + 1
-	store['issues'][str(next_num)] = {'labels': [], 'comments': [], 'body': body, 'closed': False, 'title': title}
-	store.setdefault('created_issues', []).append({'number': next_num, 'title': title})
+	store['issues'][str(next_num)] = {'labels': list(labels), 'comments': [], 'body': body, 'closed': False, 'title': title}
+	store.setdefault('created_issues', []).append({'number': next_num, 'title': title, 'labels': list(labels)})
 	save()
 	print(f'https://github.com/owner/repo/issues/{next_num}')
 	sys.exit(0)
@@ -1107,6 +1113,7 @@ print(json.dumps(parsed))
 				"MAX_VALIDATION_RECOVERY_ATTEMPTS": "0",
 				"ENABLE_STALL_JUDGE": enable_stall_judge,
 				"STALL_JUDGE_TRIGGER_COUNT": stall_judge_trigger_count,
+				"ENABLE_CLEAN_WAVE_JUDGE_SKIP": enable_clean_wave_judge_skip,
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"GH_MOCK_STORE": str(store_file),
@@ -2716,6 +2723,262 @@ def test_in_progress_judge_recreates_closed_fixup_id_stays_on_current_wave():
 	wave1 = {i["id"]: i for i in ls["waves"][0]["issues"]}
 	assert wave1["fixup-1"]["status"] == "pending", f"Expected recreated fixup-1 status=pending, got {wave1['fixup-1']['status']}"
 	assert str(wave1["fixup-1"]["github_issue"]) != "35", f"Expected fixup-1 github_issue to be replaced, got {wave1['fixup-1']['github_issue']}"
+	created_issue = next((item for item in result.get("created_issues", []) if item.get("number") == 900), None)
+	assert created_issue is not None, f"Expected created issue #900 in mock store, got {result.get('created_issues', [])}"
+	assert "ai:clarification" in created_issue.get("labels", [])
+	assert "ai:orchestrator-managed" in created_issue.get("labels", [])
+
+
+def test_standalone_close_and_reissue_keeps_clarification_only_label():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	anchor = "This issue was re-created by standalone stall recovery."
+	assert anchor in script, "Could not locate standalone close_and_reissue guidance block"
+	window = script[script.index(anchor):script.index(anchor) + 1200]
+	assert '--label "ai:clarification"' in window
+	assert '--label "ai:orchestrator-managed"' not in window
+
+
+def test_clean_wave_skip_advances_without_judge_call():
+	"""A clean wave with no pending definitions should advance without invoking judge."""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"judge_stall_cycles": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": None, "status": "not_created"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10},
+		"pending_issue_defs": {},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		enable_clean_wave_judge_skip="true",
+	)
+	ls = result["latest_state"]
+	assert ls["current_wave"] == 2
+	assert ls["judge_cycle"] == 1
+	assert ls["judge_stall_cycles"] == 0
+	assert "Running judge evaluation" not in result["stdout"]
+
+
+def test_clean_wave_skip_disabled_keeps_judge_invocation():
+	"""Disabling the skip flag should keep the existing judge invocation path."""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"judge_stall_cycles": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": None, "status": "not_created"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10},
+		"pending_issue_defs": {},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		enable_clean_wave_judge_skip="false",
+		codex_json={
+			"status": "in_progress",
+			"justification": "advance",
+			"assessment": "Proceed",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	assert "Running judge evaluation" in result["stdout"]
+	ls = result["latest_state"]
+	assert ls["judge_cycle"] == 1
+
+
+
+def test_clean_wave_skip_advances_when_pending_issue_defs_exist():
+	"""Deferred later-wave definitions should not block clean-wave judge skip."""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"judge_stall_cycles": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": None, "status": "not_created"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10},
+		"pending_issue_defs": {
+			"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 5},
+		},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		enable_clean_wave_judge_skip="true",
+	)
+	ls = result["latest_state"]
+	assert ls["current_wave"] == 2
+	assert ls["judge_cycle"] == 1
+	assert "Running judge evaluation" not in result["stdout"]
+
+
+def test_clean_wave_skip_does_not_run_when_wave_has_failures():
+	"""Failed issues in a completed wave must still invoke judge."""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"judge_stall_cycles": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "closed"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": None, "status": "not_created"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10},
+		"pending_issue_defs": {},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:closed"]},
+		enable_clean_wave_judge_skip="true",
+		codex_json={
+			"status": "in_progress",
+			"justification": "needs attention",
+			"assessment": "Wave has failures",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	assert "Running judge evaluation" in result["stdout"]
+
+
+def test_clean_wave_skip_does_not_run_on_stuck_wave():
+	"""Stuck-wave judge invocations must not be bypassed by clean-wave skip."""
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"judge_stall_cycles": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+					{"id": "issue-2", "github_issue": None, "status": "not_created"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10},
+		"pending_issue_defs": {},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		enable_clean_wave_judge_skip="true",
+		codex_json={
+			"status": "in_progress",
+			"justification": "stuck",
+			"assessment": "Need intervention",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	assert "Wave 1 is stuck" in result["stdout"]
+	assert "Running judge evaluation" in result["stdout"]
 
 
 # ---------------------------------------------------------------------------

@@ -338,6 +338,13 @@ else
   ENABLE_STANDALONE_STALL_RECOVERY="false"
 fi
 
+ENABLE_CLEAN_WAVE_JUDGE_SKIP="${ENABLE_CLEAN_WAVE_JUDGE_SKIP:-true}"
+if is_truthy "${ENABLE_CLEAN_WAVE_JUDGE_SKIP}"; then
+  ENABLE_CLEAN_WAVE_JUDGE_SKIP="true"
+else
+  ENABLE_CLEAN_WAVE_JUDGE_SKIP="false"
+fi
+
 ENABLE_CLOSE_MERGED_ISSUES="${ENABLE_CLOSE_MERGED_ISSUES:-true}"
 if is_truthy "${ENABLE_CLOSE_MERGED_ISSUES}"; then
   ENABLE_CLOSE_MERGED_ISSUES="true"
@@ -2760,10 +2767,12 @@ REISSUE_EOF
 
       local new_url new_url_clean new_num
       ensure_label_exists "ai:clarification"
+      ensure_label_exists "ai:orchestrator-managed"
       new_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" \
-        --label "ai:clarification" 2>/dev/null || echo "")"
+        --label "ai:clarification" \
+        --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
       if [ -n "${new_url}" ]; then
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
@@ -4616,11 +4625,13 @@ The poller will resume processing on the next cycle."
 - Managed by: AI Orchestrator"
 
       ensure_label_exists "ai:clarification"
+      ensure_label_exists "ai:orchestrator-managed"
       NEW_URL="$(gh issue create \
         --repo "${GITHUB_REPOSITORY}" \
         --title "${DEF_TITLE}" \
         --body "${FULL_BODY}" \
-        --label "ai:clarification" 2>/dev/null || echo "")"
+        --label "ai:clarification" \
+        --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
 
       if [ -z "${NEW_URL}" ]; then
         echo "::warning::Failed to create issue for ${local_id}; will retry next poll cycle."
@@ -5936,11 +5947,13 @@ ${RB_FIX_DESC}
 - Managed by: AI Orchestrator"
 
             ensure_label_exists "ai:clarification"
+            ensure_label_exists "ai:orchestrator-managed"
             NEW_URL="$(gh issue create \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${NEW_ISSUE_TITLE}" \
               --body "${FULL_NEW_BODY}" \
-              --label "ai:clarification")"
+              --label "ai:clarification" \
+              --label "ai:orchestrator-managed")"
             NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
             NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
             echo "  Created replacement issue #${NEW_NUM}: ${NEW_ISSUE_TITLE}"
@@ -6083,10 +6096,12 @@ REISSUE_EOF
 )"
 
     ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
     NEW_ISSUE_URL="$(gh issue create --repo "${GITHUB_REPOSITORY}" \
       --title "${IF_TITLE}" \
       --body "${NEW_BODY}" \
-      --label "ai:clarification" 2>/dev/null || echo "")"
+      --label "ai:clarification" \
+      --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
     if [ -n "${NEW_ISSUE_URL}" ]; then
       NEW_ISSUE_URL_CLEAN="$(printf '%s\n' "${NEW_ISSUE_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
       NEW_ISSUE_NUM="$(basename "${NEW_ISSUE_URL_CLEAN%%[?#]*}")"
@@ -6256,6 +6271,21 @@ with open('${STATE_FILE}', 'w') as f:
     echo "Wave ${CURRENT_WAVE} stuck — invoking judge to define missing issues or decide next action..."
   else
     echo "Wave ${CURRENT_WAVE} complete!"
+  fi
+
+  if [ "${WAVE_COMPLETE}" = "true" ] \
+    && [ "${ANY_FAILED}" = "false" ] \
+    && [ "${PROJECT_COMPLETE}" = "false" ] \
+    && [ "${INVOKE_JUDGE_FOR_STUCK}" = "false" ] \
+    && [ "${ENABLE_CLEAN_WAVE_JUDGE_SKIP}" = "true" ]; then
+    NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
+    if [ "${NEXT_WAVE}" -le "${TOTAL_WAVES}" ]; then
+      echo "Clean-wave advance: skipping judge for wave ${CURRENT_WAVE} (no failures, project incomplete)."
+      jq ".current_wave = ${NEXT_WAVE} | .judge_cycle += 1" \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment
+      continue
+    fi
   fi
 
   # ---------------------------------------------------------------
@@ -6751,11 +6781,13 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Managed by: AI Orchestrator"
 
           ensure_label_exists "ai:clarification"
+          ensure_label_exists "ai:orchestrator-managed"
           FIX_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${FIX_TITLE}" \
             --body "${FULL_FIX_BODY}" \
-            --label "ai:clarification")"
+            --label "ai:clarification" \
+            --label "ai:orchestrator-managed")"
           echo "  Created fix-up: ${FIX_URL}"
 
           # Record in state so subsequent cycles/iterations won't recreate,
@@ -6819,11 +6851,13 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Managed by: AI Orchestrator"
 
           ensure_label_exists "ai:clarification"
+          ensure_label_exists "ai:orchestrator-managed"
           NEW_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${NEW_TITLE}" \
             --body "${FULL_NEW_BODY}" \
-            --label "ai:clarification")"
+            --label "ai:clarification" \
+            --label "ai:orchestrator-managed")"
           echo "  Created: ${NEW_URL}"
 
           # Record in state so subsequent cycles/iterations won't recreate,
@@ -6901,11 +6935,13 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 - Managed by: AI Orchestrator"
 
           ensure_label_exists "ai:clarification"
+          ensure_label_exists "ai:orchestrator-managed"
           NEW_URL="$(gh issue create \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${DEF_TITLE}" \
             --body "${FULL_BODY}" \
-            --label "ai:clarification")"
+            --label "ai:clarification" \
+            --label "ai:orchestrator-managed")"
 
           NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
           NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
