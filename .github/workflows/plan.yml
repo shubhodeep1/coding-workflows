@@ -307,6 +307,7 @@ jobs:
           ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
+          ISSUE_BODY_DELIM="EOF_$(date +%s%N)_$RANDOM"
 
           # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
           # issue. It is passed via heredoc (not shell expansion) to prevent injection
@@ -314,9 +315,9 @@ jobs:
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
-            echo 'ISSUE_BODY<<EOF'
-            echo "${ISSUE_BODY}"
-            echo 'EOF'
+            printf 'ISSUE_BODY<<%s\n' "${ISSUE_BODY_DELIM}"
+            printf '%s\n' "${ISSUE_BODY}"
+            printf '%s\n' "${ISSUE_BODY_DELIM}"
           } >> "$GITHUB_ENV"
 
       - name: Detect smoke test and tune LLM settings
