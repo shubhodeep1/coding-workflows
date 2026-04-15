@@ -1077,7 +1077,7 @@ jobs:
           done < <(git diff --name-only --diff-filter=ACMR -z HEAD)
           while IFS= read -r -d '' path; do
             printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"
-          done < <(git ls-files --others --exclude-standard -z)
+          done < <(git ls-files --others --exclude-standard -z -- '*.py' '*.js' '*.sh' '*.yml' '*.yaml')
           sort -u "${INITIAL_CHANGED_FILE}" -o "${INITIAL_CHANGED_FILE}" || true
 
           : > "${CAPTURED_FILES_FILE}"
@@ -1153,7 +1153,13 @@ jobs:
               while IFS= read -r allowed_file; do
                 [ -n "${allowed_file}" ] || continue
                 echo "----- ${allowed_file} -----"
-                git diff -- "${allowed_file}" || true
+                if git ls-files --error-unmatch -- "${allowed_file}" >/dev/null 2>&1; then
+                  git diff -- "${allowed_file}" || true
+                elif [ -f "${allowed_file}" ]; then
+                  git diff --no-index -- /dev/null "${allowed_file}" || true
+                else
+                  echo "(file not found in working tree)"
+                fi
               done < "${ALLOW_LIST_FILE}"
             } > "${REPAIR_PROMPT_FILE}"
 
@@ -1194,26 +1200,26 @@ jobs:
               echo "::warning::Repair attempt ${attempt} produced out-of-scope edits. Rolling back stray files."
               if [ "${#tracked_strays[@]}" -gt 0 ]; then
                 restore_from_baseline=()
-                restore_from_head=()
+                remove_from_baseline=()
                 for stray_tracked in "${tracked_strays[@]}"; do
                   if git cat-file -e "${BASELINE_COMMIT}:${stray_tracked}" >/dev/null 2>&1; then
                     restore_from_baseline+=("${stray_tracked}")
                   else
-                    restore_from_head+=("${stray_tracked}")
+                    remove_from_baseline+=("${stray_tracked}")
                   fi
                 done
                 if [ "${#restore_from_baseline[@]}" -gt 0 ]; then
                   git restore --source="${BASELINE_COMMIT}" --staged --worktree -- "${restore_from_baseline[@]}"
                 fi
-                if [ "${#restore_from_head[@]}" -gt 0 ]; then
-                  git restore --source=HEAD --staged --worktree -- "${restore_from_head[@]}"
+                if [ "${#remove_from_baseline[@]}" -gt 0 ]; then
+                  git rm -r -f --ignore-unmatch -- "${remove_from_baseline[@]}"
                 fi
               fi
               if [ "${#untracked_strays[@]}" -gt 0 ]; then
                 safe_untracked=()
                 for stray in "${untracked_strays[@]}"; do
                   case "${stray}" in
-                    /*|../*|*/../*|*"/..")
+                    /*|../*|*/../*|*/..)
                       echo "::error::Refusing to delete unsafe untracked stray path: ${stray}"
                       ;;
                     *)
