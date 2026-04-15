@@ -331,6 +331,13 @@ else
   ENABLE_STALL_JUDGE="false"
 fi
 
+ENABLE_STALL_HUMAN_TERMINALIZATION="${ENABLE_STALL_HUMAN_TERMINALIZATION:-false}"
+if is_truthy "${ENABLE_STALL_HUMAN_TERMINALIZATION}"; then
+  ENABLE_STALL_HUMAN_TERMINALIZATION="true"
+else
+  ENABLE_STALL_HUMAN_TERMINALIZATION="false"
+fi
+
 ENABLE_STANDALONE_STALL_RECOVERY="${ENABLE_STANDALONE_STALL_RECOVERY:-true}"
 if is_truthy "${ENABLE_STANDALONE_STALL_RECOVERY}"; then
   ENABLE_STANDALONE_STALL_RECOVERY="true"
@@ -2452,16 +2459,15 @@ recovery_action_for_phase() {
   fi
 
   local action
-  action="$(python3 - "$phase" "$recovery_count" <<'PY'
+  action="$(python3 - "$phase" "$recovery_count" "${ENABLE_STALL_HUMAN_TERMINALIZATION}" <<'PY'
 import sys
 sys.path.insert(0, 'scripts')
-from orchestrate_lib import STALL_RECOVERY_ACTIONS
+from orchestrate_lib import resolve_declarative_stall_recovery_action
 
 phase = sys.argv[1]
 recovery_count = int(sys.argv[2])
-actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
-idx = min(recovery_count, len(actions) - 1)
-print(actions[idx])
+allow_human_terminalization = sys.argv[3].strip().lower() == "true"
+print(resolve_declarative_stall_recovery_action(phase, recovery_count, allow_human_terminalization))
 PY
 )"
   if [ -z "${action}" ]; then
@@ -3035,6 +3041,11 @@ ${diagnostics}
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${judge_comment}" >/dev/null 2>&1 || true
   fi
   tg_notify "Stall judge evaluated issue #${issue_num}: ${judge_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+
+  if [ "${judge_action}" = "escalate_human" ] && [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ]; then
+    echo "::notice::Stall judge returned escalate_human for issue #${issue_num}, but ENABLE_STALL_HUMAN_TERMINALIZATION=false; falling back to ${fallback_action}."
+    judge_action="${fallback_action}"
+  fi
 
   case "${judge_action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human)
@@ -6080,6 +6091,7 @@ fi
       --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}"
       --stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}"
       --enable-stall-judge "${ENABLE_STALL_JUDGE}"
+      --allow-human-terminalization "${ENABLE_STALL_HUMAN_TERMINALIZATION}"
     )
     if [ -n "${PHASE_THRESHOLDS_JSON:-}" ]; then
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
