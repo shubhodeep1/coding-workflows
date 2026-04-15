@@ -287,6 +287,7 @@ def _run_poller(
 	tracking_labels: list[str] | None = None,
 	tracking_comments: list[str] | None = None,
 	issue_labels: dict[int, list[str]] | None = None,
+	issue_comments: dict[int, list[str]] | None = None,
 	gql_mode: str = "full",
 	gql_labels: dict[int, list[str]] | None = None,
 	codex_json: dict | None = None,
@@ -305,6 +306,7 @@ def _run_poller(
 	active_autofix_runs: list[dict] | None = None,
 	mock_stall_judge_json: dict | None = None,
 	enable_stall_judge: str = "true",
+	enable_stall_human_terminalization: str = "false",
 	stall_judge_trigger_count: str = "2",
 ) -> dict:
 	tracking_num = 192
@@ -312,6 +314,7 @@ def _run_poller(
 	tracking_comments = tracking_comments or []
 	if issue_labels is None:
 		issue_labels = {10: ["ai:merged"]}
+	issue_comments = issue_comments or {}
 	gql_labels = gql_labels or {}
 	prs = prs or []
 	existing_branches = existing_branches or ["main"]
@@ -357,17 +360,23 @@ def _run_poller(
 				"closed": False,
 			}
 		}
+		next_comment_id = 2 + len(tracking_comments)
 		for inum, labels in issue_labels.items():
+			raw_comments = issue_comments.get(inum, [])
+			issue_comment_entries = []
+			for comment_body in raw_comments:
+				issue_comment_entries.append({"id": next_comment_id, "body": comment_body})
+				next_comment_id += 1
 			issues[str(inum)] = {
 				"labels": list(labels),
-				"comments": [],
+				"comments": issue_comment_entries,
 				"body": f"Issue {inum}",
 				"closed": bool(issue_closed.get(inum, False)),
 			}
 
 		store = {
 			"issues": issues,
-			"next_comment_id": 2 + len(tracking_comments),
+			"next_comment_id": next_comment_id,
 			"validation_dispatches": [],
 			"review_dispatches": [],
 			"closed_issues": [],
@@ -469,7 +478,32 @@ if args[0] == 'label' and len(args) >= 3 and args[1] == 'create':
 	sys.exit(0)
 
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
-	print('[]')
+	label = None
+	state = 'open'
+	for i, arg in enumerate(args):
+		if arg == '--label' and i + 1 < len(args):
+			label = args[i + 1]
+		if arg == '--state' and i + 1 < len(args):
+			state = args[i + 1]
+	pipeline_labels = {
+		'ai:clarification',
+		'ai:planning',
+		'ai:awaiting-approval',
+		'ai:implementing',
+		'ai:done',
+		'ai:ready-to-merge',
+	}
+	results = []
+	if label in pipeline_labels:
+		for issue_num, issue in store.get('issues', {}).items():
+			is_closed = bool(issue.get('closed'))
+			if state == 'open' and is_closed:
+				continue
+			if state == 'closed' and not is_closed:
+				continue
+			if label in issue.get('labels', []):
+				results.append({'number': int(issue_num)})
+	print(json.dumps(results))
 	sys.exit(0)
 
 if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
@@ -707,12 +741,25 @@ if args[0] == 'api':
 		for num in aliases:
 			if mode == 'partial' and aliases and num == aliases[-1]:
 				continue
-			labels = store.get('graphql_labels', {}).get(str(num), get_issue(num).get('labels', []))
-			repo[f'i{num}'] = {'labels': {'nodes': [{'name': label} for label in labels]}}
+			issue = get_issue(num)
+			labels = store.get('graphql_labels', {}).get(str(num), issue.get('labels', []))
+			comment_nodes = []
+			if 'comments(last:' in query:
+				for comment in issue.get('comments', [])[-100:]:
+					comment_nodes.append({
+						'databaseId': comment.get('id'),
+						'body': comment.get('body', ''),
+						'createdAt': comment.get('created_at', '2026-01-01T00:00:00Z'),
+					})
+			repo[f'i{num}'] = {
+				'number': num,
+				'labels': {'nodes': [{'name': label} for label in labels]},
+				'comments': {'nodes': comment_nodes},
+			}
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
 
-	m = re.search(r'/issues/(\d+)/comments(?:\?per_page=100)?$', path)
+	m = re.search(r'/issues/(\d+)/comments(?:\?.*)?$', path)
 	if m and method == 'GET' and not fields:
 		issue = get_issue(m.group(1))
 		print(json.dumps(issue['comments']))
@@ -1017,6 +1064,7 @@ print(json.dumps(parsed))
 				"MAX_REVIEW_BLOCKED_RETRIES": "2",
 				"MAX_VALIDATION_RECOVERY_ATTEMPTS": "0",
 				"ENABLE_STALL_JUDGE": enable_stall_judge,
+				"ENABLE_STALL_HUMAN_TERMINALIZATION": enable_stall_human_terminalization,
 				"STALL_JUDGE_TRIGGER_COUNT": stall_judge_trigger_count,
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
@@ -2468,6 +2516,63 @@ def test_stall_judge_escalate_human_adds_needs_human_label_and_increments_counte
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="true",
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_escalate_human_with_gate_disabled_falls_back_to_non_human_action():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="false",
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert issue_entry["github_issue"] != 10
+	assert issue_entry["status"] == "pending"
+	assert issue_entry["stall_recovery_count"] == 0
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"]["closed"] is True
+	assert any("**Effective action:** close_and_reissue" in body for body in tracking_comments)
+
+
+def test_stall_judge_escalate_human_with_gate_enabled_preserves_escalation_behavior():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="true",
 		mock_stall_judge_json={
 			"action": "escalate_human",
 			"justification": "needs operator",
@@ -2499,6 +2604,92 @@ def test_stall_judge_escalate_human_issue_not_redetected_after_needs_human():
 	assert not any("Stall Judge — Issue #10" in body for body in tracking_comments)
 
 
+def test_stall_recovery_disables_human_terminalization_by_default():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_judge="false",
+		stall_judge_trigger_count="9",
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["github_issue"] != 10
+	assert issue_entry["status"] == "pending"
+	assert issue_entry["stall_recovery_count"] == 0
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"]["closed"] is True
+
+
+def test_stall_recovery_allows_human_terminalization_when_enabled():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_judge="false",
+		stall_judge_trigger_count="9",
+		enable_stall_human_terminalization="true",
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_standalone_stall_recovery_disables_human_terminalization_by_default():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	standalone_state_comment = """<!-- AI_STANDALONE_STALL_STATE_V1
+{"schema_version":1,"last_seen_phase":"ai:implementing","status_since_ts":1,"stall_recovery_count":2}
+AI_STANDALONE_STALL_STATE_V1 -->"""
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		gql_mode="partial",
+		issue_labels={42: ["ai:implementing"]},
+		issue_comments={42: [standalone_state_comment]},
+		enable_stall_judge="false",
+		stall_judge_trigger_count="9",
+	)
+	assert "ai:needs-human" not in result["issues"]["42"]["labels"]
+	assert "ai:closed" in result["issues"]["42"]["labels"]
+	assert result["issues"]["42"]["closed"] is True
+
+
+def test_standalone_stall_recovery_allows_human_terminalization_when_enabled():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	standalone_state_comment = """<!-- AI_STANDALONE_STALL_STATE_V1
+{"schema_version":1,"last_seen_phase":"ai:implementing","status_since_ts":1,"stall_recovery_count":2}
+AI_STANDALONE_STALL_STATE_V1 -->"""
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		gql_mode="partial",
+		issue_labels={42: ["ai:implementing"]},
+		issue_comments={42: [standalone_state_comment]},
+		enable_stall_judge="false",
+		stall_judge_trigger_count="9",
+		enable_stall_human_terminalization="true",
+	)
+	assert "ai:needs-human" in result["issues"]["42"]["labels"]
+
+
 
 def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 	state = _base_state(status="in_progress")
@@ -2523,12 +2714,38 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Stall Judge — Issue #10" in body for body in tracking_comments)
 	# At stall_recovery_count=2 for phase ai:awaiting-approval, the declarative
-	# ladder (STALL_RECOVERY_ACTIONS) selects escalate_human at index 2, so the
-	# fallback adds the ai:needs-human label and does not post /approved.
-	assert "ai:needs-human" in result["issues"]["10"]["labels"]
-	assert not any("/approved" in body for body in issue_comments)
+	# fallback action is auto_approve (human terminalization ladder is not used
+	# in this test), so /approved is posted and ai:needs-human is not added.
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert any("/approved" in body for body in issue_comments)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 3
+
+
+def test_stall_judge_escalate_human_falls_back_when_human_terminalization_disabled():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"]["closed"] is True
+	assert not any("/approved" in body for body in issue_comments)
 
 
 
