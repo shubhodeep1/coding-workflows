@@ -2506,7 +2506,14 @@ def test_validation_active_run_prevents_redispatch():
 def test_in_progress_judge_does_not_advance_when_fixups_added_to_current_wave():
 	"""When the judge returns in_progress with new issues, those issues are
 	added to the current wave. The poller must NOT advance current_wave
-	because the newly-added issues are still pending (non-terminal)."""
+	because the newly-added issues are still pending (non-terminal).
+
+	Clean-wave judge skip is explicitly disabled for this test: the
+	behavior under test is the judge-invoked in_progress branch that
+	consumes ``codex_json`` and appends new_issues to the current wave.
+	With clean_wave_judge_skip enabled (the default), the poller would
+	advance without calling the judge at all and this fix-up path would
+	never be exercised."""
 	state = _base_state(status="in_progress")
 	state["total_waves"] = 2
 	state["waves"].append({
@@ -2533,6 +2540,7 @@ def test_in_progress_judge_does_not_advance_when_fixups_added_to_current_wave():
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:merged"]},
 		codex_json=codex_json,
+		enable_clean_wave_judge_skip="false",
 	)
 	ls = result["latest_state"]
 	# Must NOT have advanced to wave 2 — fix-up is still pending in wave 1
