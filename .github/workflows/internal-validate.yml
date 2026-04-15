@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   validate:
-    uses: ./.github/workflows/validate.yml
+    uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@main
     with:
       tracking_issue: ${{ inputs.tracking_issue || '0' }}
       compose_file: ${{ inputs.compose_file || 'docker-compose.yml' }}

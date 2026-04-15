@@ -9,5 +9,5 @@ permissions:
 
 jobs:
   sync-status:
-    uses: ./.github/workflows/issue_pr_status.yml
+    uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@main
     secrets: inherit

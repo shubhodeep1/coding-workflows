@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   orchestrate:
-    uses: ./.github/workflows/orchestrate.yml
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@main
     with:
       project_description: ${{ inputs.project_description }}
     secrets: inherit

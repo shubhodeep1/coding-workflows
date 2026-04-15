@@ -154,6 +154,7 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
 - Stall recovery controls include `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`): legacy autonomous ladder remains default; stall-judge `escalate_human` outputs are terminalization-gated to the non-human fallback action unless explicitly enabled.
 - Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
+- GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
 
 ---
 
@@ -301,6 +302,45 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 - Draft PRs are already skipped by `review_autofix.yml` (gate at line ~87), so the automated review/autofix/automerge pipeline cannot merge a self-heal PR without a human marking it "Ready for review". That event is handled by `workflow-templates/ai-review.yml` on the `ready_for_review` trigger.
 - Admin alerts for each intake are sent via `tg_send_msg` (severity `WARNING`). See README.md section "Validation self-healing" for the full flow and the unlock procedure.
 - Before changing any of the self-heal wiring or touching `prompts/mode-validate-self-heal.txt`, re-read the hard constraints section of that prompt — the allow-list of four target files, the no-rename rule, and the no-schema-change rule are all required for correctness.
+
+---
+
+## 17. Internal Wrapper Pin Policy
+
+- The `.github/workflows/internal-*.yml` wrappers in this repo MUST pin
+  `uses:` to `shubhodeep1/coding-workflows/.github/workflows/<wf>.yml@main`.
+  Do NOT revert them to local refs (`./.github/workflows/<wf>.yml`) and do
+  NOT flip them to `@stable`. The `@main` pin is required for two reasons:
+  (a) it makes orchestrator runs immune to stale reusable-workflow copies
+  on feature branches (which previously caused hangs that were hard to
+  fix mid-run), and (b) it still lets `test-and-mark-stable.yml`'s E2E
+  smoke test validate main HEAD — because `issues:[opened]` events fire
+  the default-branch wrapper, which then fetches the reusable body from
+  `@main` (= main HEAD = the candidate about to be tagged).
+- Consumer templates under `workflow-templates/ai-*.yml` MUST stay pinned
+  to `@stable`. Do not unify the two pin targets.
+- `ai-update-workflows.yml` must NOT be installed into `.github/workflows/`
+  in this repo. The self-updater in `update_workflows.yml` copies files
+  from `workflow-templates/*.yml` into `.github/workflows/` keyed by exact
+  filename, so the current `internal-*.yml` filenames are not directly
+  overwritten. The hazard is different: on first run the self-updater
+  would **create** new `ai-*.yml` wrappers pinned `@stable` (because
+  those filenames are absent today), which would then auto-fire on the
+  same issue/PR events as the `internal-*.yml` wrappers and cause
+  duplicate runs and racing state writes. Keeping the self-updater
+  uninstalled prevents that creation path entirely. Do not rename
+  `internal-*.yml` to `ai-*.yml` without first removing this risk.
+- PR-time dogfood gate: `ci.yml` runs `yamllint` and `actionlint` across
+  `.github/workflows/*.yml` and `workflow-templates/*.yml` on
+  `pull_request` against `main`. Any change that breaks YAML or GitHub
+  Actions schema must be caught here before landing on `main`, because a
+  broken merge to `main` immediately breaks all in-flight orchestrator
+  runs (accepted trade-off for fast recovery).
+- Recovery procedure for a broken `main` reusable: push the fix directly
+  to `main` (or merge a hotfix PR). The next wrapper invocation picks it
+  up immediately. Only run `test-and-mark-stable.yml` when promoting the
+  fix to the `@stable` channel for consumer repos — it is not on the
+  critical path for recovering this repo's own runtime.
 
 ---
 
