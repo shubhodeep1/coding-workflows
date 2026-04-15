@@ -142,7 +142,7 @@ jobs:
             -f name="${REPOSITORY#*/}" \
             -F number="${PR_NUMBER}" \
             -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | .[].number' || true)"
 
           if [ -z "${issue_numbers}" ]; then
             pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
