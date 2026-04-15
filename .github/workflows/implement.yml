@@ -1136,6 +1136,11 @@ jobs:
           HAS_SYNTAX_ERRORS="${{ steps.validate_syntax_changed_files.outputs.has_syntax_errors }}"
           SYNTAX_ERROR_COUNT="${{ steps.validate_syntax_changed_files.outputs.syntax_error_count }}"
 
+          if [ -z "${HAS_SYNTAX_ERRORS}" ]; then
+            echo "::error::Syntax check step did not report status."
+            exit 1
+          fi
+
           if [ "${HAS_SYNTAX_ERRORS}" = "true" ]; then
             if [ -z "${SYNTAX_ERROR_COUNT}" ]; then
               SYNTAX_ERROR_COUNT="unknown"

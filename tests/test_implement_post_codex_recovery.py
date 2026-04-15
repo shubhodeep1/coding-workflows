@@ -668,6 +668,31 @@ def test_syntax_gate_step_fails_when_check_reports_unresolved_errors():
 		assert "failed syntax validation" in (proc.stderr + proc.stdout)
 
 
+def test_syntax_gate_step_fails_when_check_did_not_report_status():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "validate-repo"
+		_bootstrap_git_repo(repo_dir)
+
+		script = _render_github_expressions(
+			_extract_run_script("Validate syntax of changed files"),
+			overrides={
+				"steps.validate_syntax_changed_files.outputs.has_syntax_errors": "",
+				"steps.validate_syntax_changed_files.outputs.syntax_error_count": "",
+			},
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"RUNTIME_DIR": str(tmp_path / "runtime"),
+			}
+		)
+
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0, "expected syntax gate to fail when check status output is missing"
+		assert "Syntax check step did not report status" in (proc.stderr + proc.stdout)
+
+
 def test_needs_fixes_labels_source_issue_and_generic_failure_step_is_bypassed():
 	wf = _workflow_text()
 	assert "--add-label 'ai:implementation-failed'" in wf
