@@ -5245,6 +5245,23 @@ json.dump(result, sys.stdout)
         BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
         : "${BASE_REF:=${DEFAULT_BRANCH:-main}}"
 
+        # Re-fetch PR state just before branch prep: the initial check at
+        # line 5054 and the auto-unstick block above can together span
+        # several seconds worth of gh API calls, during which an external
+        # actor (or a human merging via the GitHub UI) may have merged the
+        # PR. Without this re-check, a merge that lands between the initial
+        # fetch and this branch-prep decision sends us down the open-PR
+        # HEAD_REF checkout path instead of the merged-PR follow-up branch
+        # path, so the judge's fixes never produce a follow-up PR. The
+        # race-check at line 5614 catches the same race later but is too
+        # late to correct the branch-prep decision. Keep _rb_pr_json in
+        # sync so downstream consumers (e.g. RB_PR_MERGEABLE_STATE) see
+        # the same snapshot.
+        _rb_pr_json="$(_fetch_pr_json "${RB_PR}")"
+        RB_PR_STATE="$(_jq_field "${_rb_pr_json}" '.state' 'open|closed|merged')"
+        RB_PR_MERGED="$(_jq_field "${_rb_pr_json}" '.merged_at != null' 'true|false')"
+        [ -n "${RB_PR_MERGED}" ] || RB_PR_MERGED="false"
+
         if [ "${RB_PR_MERGED}" = "true" ]; then
           RB_TARGET_MERGED="true"
           resolve_active_orchestrator_context_for_issue "${rb_issue}" "${TRACKING_NUM:-}"
@@ -5257,7 +5274,12 @@ json.dump(result, sys.stdout)
             if [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
               BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
               echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
-            else
+            elif [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+              # Integration branch NAME is present in the orchestrator state
+              # but the branch itself is not reachable (deleted externally or
+              # transient API failure). Block the follow-up PR — creating it
+              # against the default branch would bypass the integration-branch
+              # safety check (see PR #1016).
               FOLLOWUP_PR_BLOCKED="true"
               FOLLOWUP_BLOCK_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}), but integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}."
               echo "::warning::${FOLLOWUP_BLOCK_REASON}"
@@ -5270,19 +5292,55 @@ json.dump(result, sys.stdout)
 ${FOLLOWUP_BLOCK_REASON}"
               tg_notify "${FOLLOWUP_BLOCK_REASON}" "WARNING"
               TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
+            else
+              # No integration branch context at all — the orchestrator state
+              # does not track this work under an integration branch. Keep the
+              # default base (${BASE_REF} was initialised from PR_META at the
+              # top of this block, which falls back to ${DEFAULT_BRANCH:-main}).
+              # This path is exercised when a review-blocked merged PR is
+              # orchestrator-managed but the project was never set up with an
+              # integration branch (e.g. single-wave project) — the follow-up
+              # still needs to land against whatever the original PR targeted.
+              echo "  Follow-up PR for issue #${rb_issue}: orchestrator state has no integration branch context; keeping default base '${BASE_REF}'."
             fi
           fi
 
           if [ "${FOLLOWUP_PR_BLOCKED}" != "true" ]; then
             FOLLOWUP_BRANCH="fix/${rb_issue}-followup-$(date +%s)"
             echo "  PR already merged. Creating follow-up branch ${FOLLOWUP_BRANCH} from ${BASE_REF}."
+            # Try three strategies in order to obtain a checkout source for
+            # the follow-up branch:
+            #   1. Fetch ${BASE_REF} from origin and use the remote-tracking ref.
+            #      This is the production-preferred path — it guarantees the
+            #      follow-up branch is based on the current upstream tip.
+            #   2. If the fetch fails or the remote ref didn't land, fall back
+            #      to a pre-existing local ref for ${BASE_REF}. This covers
+            #      (a) test harnesses whose origin URL is not real and
+            #      (b) production runs where the base branch was already
+            #      fetched earlier in the same poll cycle.
+            #   3. Last-resort fallback: current HEAD. In this mode the
+            #      follow-up branch's content may not be based on ${BASE_REF},
+            #      so the resulting PR diff may be larger than intended.
+            #      A warning is emitted so operators can intervene.
+            _rb_co_src=""
             if git fetch --no-tags origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" 2>/dev/null \
-              && git checkout -B "${FOLLOWUP_BRANCH}" "refs/remotes/origin/${BASE_REF}" 2>/dev/null; then
+              && git rev-parse --verify "refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1; then
+              _rb_co_src="refs/remotes/origin/${BASE_REF}"
+            elif git rev-parse --verify "refs/heads/${BASE_REF}" >/dev/null 2>&1; then
+              _rb_co_src="refs/heads/${BASE_REF}"
+              echo "  [follow-up] Using existing local ref for ${BASE_REF} (fetch from origin did not produce a fresh remote-tracking ref)."
+            elif git rev-parse --verify HEAD >/dev/null 2>&1; then
+              _rb_co_src="HEAD"
+              echo "::warning::Could not fetch or locate base ref '${BASE_REF}' for issue #${rb_issue}; creating follow-up branch from current HEAD as a best-effort fallback. The resulting PR diff may be larger than intended."
+            fi
+            if [ -n "${_rb_co_src}" ] \
+              && git checkout -B "${FOLLOWUP_BRANCH}" "${_rb_co_src}" 2>/dev/null; then
               RB_COMBINED_MODE="true"
               RB_COMBINED_BRANCH_INFO="You are on a follow-up branch (${FOLLOWUP_BRANCH}) based on ${BASE_REF}. The original PR #${RB_PR} was already merged. If you choose action=\"fix\", apply ONLY the fixes identified during review — do not re-apply the original PR's changes."
             else
               echo "::warning::Could not prepare follow-up branch ${FOLLOWUP_BRANCH} for issue #${rb_issue}; combined-mode fix not possible."
             fi
+            unset _rb_co_src
           fi
         elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
           if git fetch --no-tags origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null \
