@@ -306,8 +306,8 @@ def _run_poller(
 	active_autofix_runs: list[dict] | None = None,
 	mock_stall_judge_json: dict | None = None,
 	enable_stall_judge: str = "true",
-	stall_judge_trigger_count: str = "2",
 	enable_stall_human_terminalization: str = "false",
+	stall_judge_trigger_count: str = "2",
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -1064,8 +1064,8 @@ print(json.dumps(parsed))
 				"MAX_REVIEW_BLOCKED_RETRIES": "2",
 				"MAX_VALIDATION_RECOVERY_ATTEMPTS": "0",
 				"ENABLE_STALL_JUDGE": enable_stall_judge,
-				"STALL_JUDGE_TRIGGER_COUNT": stall_judge_trigger_count,
 				"ENABLE_STALL_HUMAN_TERMINALIZATION": enable_stall_human_terminalization,
+				"STALL_JUDGE_TRIGGER_COUNT": stall_judge_trigger_count,
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"GH_MOCK_STORE": str(store_file),
@@ -2529,6 +2529,62 @@ def test_stall_judge_escalate_human_adds_needs_human_label_and_increments_counte
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
 
 
+def test_stall_judge_escalate_human_with_gate_disabled_falls_back_to_non_human_action():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="false",
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert issue_entry["github_issue"] != 10
+	assert issue_entry["status"] == "pending"
+	assert issue_entry["stall_recovery_count"] == 0
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"]["closed"] is True
+	assert any("**Effective action:** close_and_reissue" in body for body in tracking_comments)
+
+
+def test_stall_judge_escalate_human_with_gate_enabled_preserves_escalation_behavior():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="true",
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
 def test_stall_judge_escalate_human_issue_not_redetected_after_needs_human():
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
@@ -2657,8 +2713,9 @@ def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
 	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
 	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Stall Judge — Issue #10" in body for body in tracking_comments)
-	# At stall_recovery_count=2 for phase ai:awaiting-approval, the default
-	# declarative ladder repeats auto_approve as the bounded fallback.
+	# At stall_recovery_count=2 for phase ai:awaiting-approval, the declarative
+	# fallback action is auto_approve (human terminalization ladder is not used
+	# in this test), so /approved is posted and ai:needs-human is not added.
 	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
 	assert any("/approved" in body for body in issue_comments)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]

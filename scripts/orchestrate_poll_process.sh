@@ -2483,6 +2483,30 @@ PY
   fi
 }
 
+non_human_recovery_action_for_phase() {
+  local phase="$1"
+  local recovery_count="$2"
+  local action
+
+  action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+  if [ "${action}" != "escalate_human" ]; then
+    echo "${action}"
+    return
+  fi
+
+  local idx="${recovery_count}"
+  while [ "${idx}" -gt 0 ]; do
+    idx=$((idx - 1))
+    action="$(recovery_action_for_phase "${phase}" "${idx}")"
+    if [ "${action}" != "escalate_human" ]; then
+      echo "${action}"
+      return
+    fi
+  done
+
+  echo "retrigger_pipeline"
+}
+
 stall_recovery_action_is_terminal() {
   local action="$1"
   case "${action}" in
@@ -2838,6 +2862,9 @@ invoke_stall_judge() {
 
   local fallback_action
   fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
+  if [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ] && [ "${fallback_action}" = "escalate_human" ]; then
+    fallback_action="$(non_human_recovery_action_for_phase "${phase}" "${recovery_count}")"
+  fi
 
   local comments_issue_num="${issue_num}"
   if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
@@ -3017,12 +3044,16 @@ invoke_stall_judge() {
   fi
 
   local judge_action
+  local effective_action
   local judge_justification
+  local judge_effective_note=""
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
-  if [ "${judge_action}" = "escalate_human" ] && [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ]; then
-    echo "::warning::Stall judge returned escalate_human while ENABLE_STALL_HUMAN_TERMINALIZATION=false; falling back to ${fallback_action}."
-    judge_action="${fallback_action}"
+  effective_action="${judge_action}"
+  if [ "${ENABLE_STALL_HUMAN_TERMINALIZATION}" != "true" ] && [ "${effective_action}" = "escalate_human" ]; then
+    effective_action="${fallback_action}"
+    judge_effective_note="**Effective action:** ${effective_action} (human terminalization disabled)"
+    echo "::warning::Stall judge returned escalate_human for issue #${issue_num} while ENABLE_STALL_HUMAN_TERMINALIZATION is disabled; using ${effective_action}."
   fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
@@ -3038,6 +3069,7 @@ invoke_stall_judge() {
 
 **Decision:** ${judge_action}
 **Justification:** ${judge_justification}
+${judge_effective_note}
 
 **Diagnostics snapshot:**
 
@@ -3050,11 +3082,15 @@ ${diagnostics}
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${judge_comment}" >/dev/null 2>&1 || true
   fi
-  tg_notify "Stall judge evaluated issue #${issue_num}: ${judge_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+  local tg_action_summary="${effective_action}"
+  if [ "${judge_action}" != "${effective_action}" ]; then
+    tg_action_summary="judge=${judge_action}, effective=${effective_action}"
+  fi
+  tg_notify "Stall judge evaluated issue #${issue_num}: ${tg_action_summary}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
 
-  case "${judge_action}" in
+  case "${effective_action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human)
-      execute_stall_recovery_action "${issue_num}" "${phase}" "${judge_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
+      execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
       return $?
       ;;
     resolve_merge_conflict)
@@ -3879,6 +3915,7 @@ recover_stalled_issue() {
         if [ "${_lpr_state}" = "open" ]; then
           echo "STALL_SKIP issue=${issue_num} reason=open_linked_pr pr=${_lpr_num} phase=${phase} action=${action}"
           add_healing_note "Issue #${issue_num}: skipped early-phase stall recovery '${action}' (phase=${phase}) — open linked PR #${_lpr_num} already exists"
+          STALL_HEALING_CHANGED=true
           tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because open linked PR #${_lpr_num} already exists."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
           return 1  # Signal: no action taken (caller should not increment counter)
         fi
