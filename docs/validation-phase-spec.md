@@ -181,7 +181,7 @@ Instructs the LLM to:
      }
      ```
    - Exit 0 on pass, 1 on fail
-   - Loads optional `validation/validate.env` and applies conservative defaults for supported knobs (`APP_SERVICE`, `APP_URL`, `HEALTH_TIMEOUT`, `PHASE`, plus existing test credentials/paths)
+   - Loads optional `validation/validate.env` and applies conservative defaults for supported knobs (`APP_SERVICE`, `APP_URL`, `HEALTH_TIMEOUT`, `PHASE`, plus existing test credentials/paths). `APP_URL` is opt-in: the host-side HTTP probe only runs when the consumer explicitly sets `APP_URL`. When unset, the health gate relies solely on Docker container state (Running + Health in {healthy, none}).
 
    **`validation/tests/*.sh`**: Individual test scripts. Each outputs TAP-like lines (`ok N description` / `not ok N description`). Which scripts to generate depends on project type — the prompt must list all categories from the "Scope" section above and instruct the LLM to generate every test that applies.
 
