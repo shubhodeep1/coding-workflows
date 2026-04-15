@@ -820,7 +820,7 @@ jobs:
             } >> "$GITHUB_ENV"
             # Patch the already-written codex config to use low reasoning (if present)
             if [ -f "${HOME}/.codex/config.toml" ]; then
-              sed -i 's/model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
+              sed -i 's/^[[:space:]]*model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
             fi
           else
             echo "REVIEW_SMOKE_OVERRIDE_ACTIVE=false" >> "$GITHUB_ENV"
