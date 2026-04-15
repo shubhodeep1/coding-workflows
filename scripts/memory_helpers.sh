@@ -227,5 +227,8 @@ memory_processed_command_complete()
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-complete "$@"
+	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-complete "$@" || {
+		_memory_warn "processed-command-complete failed (fail-open)"
+		return 0
+	}
 }
