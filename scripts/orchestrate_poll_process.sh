@@ -5206,6 +5206,106 @@ json.dump(result, sys.stdout)
         echo "  Retries exhausted — judge will make final decision (merge or close+reissue)."
       fi
 
+      # ------------------------------------------------------------------
+      # Pre-judge branch preparation for combined decide + apply path
+      # ------------------------------------------------------------------
+      # The review-blocked judge originally ran in two sequential codex
+      # calls: the first decided merge|fix|close_and_reissue (read-only),
+      # then — for the "fix" branch — a second call re-ingested the
+      # identical ~30 KB of PR diff / comments / review findings plus an
+      # "APPLY FIXES NOW" suffix and applied fixes on the checked-out
+      # branch. Both calls consumed the same large context.
+      #
+      # Combine them: check out the target branch BEFORE the judge call
+      # and instruct the judge to apply fixes directly if it chooses
+      # action="fix". When action is merge/close_and_reissue, any
+      # accidental file modifications are discarded by
+      # rb_cleanup_combined_workspace below.
+      #
+      #   RB_COMBINED_MODE="true"  → branch checked out, judge may apply fixes
+      #   RB_COMBINED_MODE="false" → no branch prep (IS_FINAL, or prep failed);
+      #                              fix application is skipped the same way
+      #                              the old two-call flow skipped when it
+      #                              could not determine a target branch.
+      RB_COMBINED_MODE="false"
+      RB_COMBINED_BRANCH_INFO=""
+      RB_TARGET_MERGED="false"
+      HEAD_REF=""
+      BASE_REF=""
+      FOLLOWUP_BRANCH=""
+      ORCH_FOLLOWUP_OWNED="false"
+      ORCH_FOLLOWUP_TRACKING_NUM=""
+      ORCH_FOLLOWUP_INTEGRATION_BRANCH=""
+      ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
+      FOLLOWUP_PR_BLOCKED="false"
+
+      if [ "${IS_FINAL}" != "true" ]; then
+        HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
+        BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
+        : "${BASE_REF:=${DEFAULT_BRANCH:-main}}"
+
+        if [ "${RB_PR_MERGED}" = "true" ]; then
+          RB_TARGET_MERGED="true"
+          resolve_active_orchestrator_context_for_issue "${rb_issue}" "${TRACKING_NUM:-}"
+          ORCH_FOLLOWUP_OWNED="${RESOLVED_ORCHESTRATOR_OWNED}"
+          ORCH_FOLLOWUP_TRACKING_NUM="${RESOLVED_TRACKING_ISSUE}"
+          ORCH_FOLLOWUP_INTEGRATION_BRANCH="${RESOLVED_INTEGRATION_BRANCH}"
+          ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="${RESOLVED_INTEGRATION_BRANCH_EXISTS}"
+
+          if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
+            if [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+              BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
+              echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
+            else
+              FOLLOWUP_PR_BLOCKED="true"
+              FOLLOWUP_BLOCK_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}), but integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}."
+              echo "::warning::${FOLLOWUP_BLOCK_REASON}"
+              ORIGINAL_TRACKING_NUM="${TRACKING_NUM:-}"
+              if [ -n "${ORCH_FOLLOWUP_TRACKING_NUM:-}" ]; then
+                TRACKING_NUM="${ORCH_FOLLOWUP_TRACKING_NUM}"
+              fi
+              post_tracking_comment "## ⚠️ Follow-up PR blocked
+
+${FOLLOWUP_BLOCK_REASON}"
+              tg_notify "${FOLLOWUP_BLOCK_REASON}" "WARNING"
+              TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
+            fi
+          fi
+
+          if [ "${FOLLOWUP_PR_BLOCKED}" != "true" ]; then
+            FOLLOWUP_BRANCH="fix/${rb_issue}-followup-$(date +%s)"
+            echo "  PR already merged. Creating follow-up branch ${FOLLOWUP_BRANCH} from ${BASE_REF}."
+            if git fetch --no-tags origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" 2>/dev/null \
+              && git checkout -B "${FOLLOWUP_BRANCH}" "refs/remotes/origin/${BASE_REF}" 2>/dev/null; then
+              RB_COMBINED_MODE="true"
+              RB_COMBINED_BRANCH_INFO="You are on a follow-up branch (${FOLLOWUP_BRANCH}) based on ${BASE_REF}. The original PR #${RB_PR} was already merged. If you choose action=\"fix\", apply ONLY the fixes identified during review — do not re-apply the original PR's changes."
+            else
+              echo "::warning::Could not prepare follow-up branch ${FOLLOWUP_BRANCH} for issue #${rb_issue}; combined-mode fix not possible."
+            fi
+          fi
+        elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
+          if git fetch --no-tags origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null \
+            && git checkout -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}" 2>/dev/null; then
+            RB_COMBINED_MODE="true"
+            RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF})."
+          else
+            echo "::warning::Could not check out PR branch ${HEAD_REF} for issue #${rb_issue}; combined-mode fix not possible."
+          fi
+        else
+          echo "::warning::Cannot determine PR head branch for #${RB_PR}; combined-mode fix not possible."
+        fi
+      fi
+
+      # Reset workspace state (tracked files only) after a combined judge
+      # call whose decision was NOT fix. Untracked files are left alone so
+      # pre-fetched scripts and artifacts are not swept.
+      rb_cleanup_combined_workspace() {
+        if [ "${RB_COMBINED_MODE}" = "true" ]; then
+          git reset --hard HEAD 2>/dev/null || true
+          git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
+        fi
+      }
+
       # Build the judge prompt for review-blocked evaluation
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
@@ -5254,6 +5354,20 @@ json.dump(result, sys.stdout)
           echo "the project: merge if the PR is good enough, or close and reissue if the"
           echo "approach is fundamentally wrong."
         fi
+        if [ "${RB_COMBINED_MODE}" = "true" ]; then
+          echo
+          echo "=== COMBINED DECIDE + APPLY INSTRUCTIONS ==="
+          echo "${RB_COMBINED_BRANCH_INFO}"
+          echo
+          echo "This is a single combined judge call: decide AND (if fix) apply in one session."
+          echo "- If you choose action=\"fix\": apply the fixes directly to the repository files"
+          echo "  in this session. Do not defer to a follow-up step. Focus only on the issues"
+          echo "  that blocked the review. Do not create new files unless absolutely required."
+          echo "  After applying fixes, emit the JSON with action=\"fix\" and fix_description"
+          echo "  describing what you changed."
+          echo "- If you choose action=\"merge\" or action=\"close_and_reissue\": DO NOT modify"
+          echo "  any files. Emit the JSON with the chosen action and an empty fix_description."
+        fi
       } > "${RB_JUDGE_PROMPT_FILE}"
 
       # Run the judge
@@ -5273,6 +5387,10 @@ json.dump(result, sys.stdout)
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
         echo "::warning::Review-blocked judge failed for issue #${rb_issue}"
         tg_notify "Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+        # Reset worktree + switch back to default branch if we entered
+        # combined mode — otherwise the next rb_issue iteration could
+        # fail to check out its target branch.
+        rb_cleanup_combined_workspace
         continue
       fi
 
@@ -5316,6 +5434,7 @@ sys.exit(1)
 
       if [ -z "${RB_JUDGE_JSON}" ]; then
         echo "::warning::Could not parse review-blocked judge output for #${rb_issue}"
+        rb_cleanup_combined_workspace
         continue
       fi
 
@@ -5342,6 +5461,10 @@ sys.exit(1)
       case "${RB_ACTION}" in
         merge)
           echo "  Judge says merge PR #${RB_PR} as-is."
+          # Discard any accidental file modifications the combined call
+          # made on the pre-checked-out branch; merge path operates via
+          # GitHub API only.
+          rb_cleanup_combined_workspace
           # Remove review-blocked, set ready-to-merge
           ensure_label_exists "ai:ready-to-merge"
           gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
@@ -5457,97 +5580,41 @@ sys.exit(1)
                 --remove-label 'ai:review-blocked' 2>/dev/null || true
               REVIEW_BLOCKED_STATE_CHANGED=true
             else
-            # Determine target: push to PR branch (open) or create follow-up PR (merged)
-            RB_TARGET_MERGED="false"
-            if [ "${RB_PR_MERGED}" = "true" ] || [ "${RB_PR_MERGED_NOW}" = "true" ]; then
-              RB_TARGET_MERGED="true"
-            fi
-
-            HEAD_REF="$(echo "${PR_META}" | jq -r '.head_ref')"
-            BASE_REF="$(echo "${PR_META}" | jq -r '.base_ref')"
-            : "${BASE_REF:=${DEFAULT_BRANCH:-main}}"
-
-            ORCH_FOLLOWUP_OWNED="false"
-            ORCH_FOLLOWUP_TRACKING_NUM=""
-            ORCH_FOLLOWUP_INTEGRATION_BRANCH=""
-            ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
-            FOLLOWUP_PR_BLOCKED="false"
-
-            if [ "${RB_TARGET_MERGED}" = "true" ]; then
-              resolve_active_orchestrator_context_for_issue "${rb_issue}" "${TRACKING_NUM:-}"
-              ORCH_FOLLOWUP_OWNED="${RESOLVED_ORCHESTRATOR_OWNED}"
-              ORCH_FOLLOWUP_TRACKING_NUM="${RESOLVED_TRACKING_ISSUE}"
-              ORCH_FOLLOWUP_INTEGRATION_BRANCH="${RESOLVED_INTEGRATION_BRANCH}"
-              ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="${RESOLVED_INTEGRATION_BRANCH_EXISTS}"
-
-              if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
-                if [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
-                  BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
-                  echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
-                else
-                  FOLLOWUP_PR_BLOCKED="true"
-                  FOLLOWUP_BLOCK_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}), but integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}."
-                  echo "::warning::${FOLLOWUP_BLOCK_REASON}"
-                  ORIGINAL_TRACKING_NUM="${TRACKING_NUM:-}"
-                  if [ -n "${ORCH_FOLLOWUP_TRACKING_NUM:-}" ]; then
-                    TRACKING_NUM="${ORCH_FOLLOWUP_TRACKING_NUM}"
-                  fi
-                  post_tracking_comment "## ⚠️ Follow-up PR blocked
-
-${FOLLOWUP_BLOCK_REASON}"
-                  tg_notify "${FOLLOWUP_BLOCK_REASON}" "WARNING"
-                  TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
-                fi
-              fi
-            fi
-
-            if [ "${RB_TARGET_MERGED}" = "true" ] && [ "${FOLLOWUP_PR_BLOCKED}" != "true" ]; then
-              # PR already merged — work on a follow-up branch from the base branch
-              FOLLOWUP_BRANCH="fix/${rb_issue}-followup-$(date +%s)"
-              echo "  PR already merged. Creating follow-up branch ${FOLLOWUP_BRANCH} from ${BASE_REF}."
-              git fetch --no-tags origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" 2>/dev/null || true
-              git checkout -B "${FOLLOWUP_BRANCH}" "refs/remotes/origin/${BASE_REF}" 2>/dev/null || true
-            elif [ "${RB_TARGET_MERGED}" = "true" ]; then
-              echo "::warning::Skipping follow-up branch creation for issue #${rb_issue}; follow-up PR creation is blocked."
-            elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
-              # PR is open — push to existing PR branch
-              git fetch --no-tags origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null || true
-              git checkout -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}" 2>/dev/null || true
-            else
-              echo "::warning::Cannot determine PR head branch for #${RB_PR}."
+            # Branch was prepared upfront (before the judge call) and the
+            # combined codex call has already applied the fixes in-session
+            # when action=fix. Skip the duplicated branch prep and the
+            # second codex call; proceed straight to commit/push.
+            #
+            # Upfront-set globals still valid here:
+            #   RB_TARGET_MERGED, HEAD_REF, BASE_REF, FOLLOWUP_BRANCH,
+            #   ORCH_FOLLOWUP_OWNED, ORCH_FOLLOWUP_TRACKING_NUM,
+            #   ORCH_FOLLOWUP_INTEGRATION_BRANCH,
+            #   ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS, FOLLOWUP_PR_BLOCKED
+            #
+            # Race edge case: the PR was open when we prepped upfront
+            # (RB_TARGET_MERGED=false, we checked out HEAD_REF) but was
+            # merged during the combined codex call. RB_PR_MERGED_NOW is
+            # the race-check fetch right above us. In that case we skip
+            # commit/push this tick; the next tick sees the merged state
+            # at the top of the loop and prep runs the merged-path
+            # (follow-up branch) cleanly.
+            #
+            # No fix is applied in this path, so skip the retry-counter
+            # increment below — an external merge race must not consume
+            # a review-blocked retry slot.
+            RB_SKIP_RETRY_INCREMENT="false"
+            if [ "${RB_COMBINED_MODE}" = "true" ] \
+               && [ "${RB_TARGET_MERGED}" != "true" ] \
+               && [ "${RB_PR_MERGED_NOW}" = "true" ]; then
+              echo "::warning::Race detected: PR #${RB_PR} merged during combined judge call (prepped as open, now merged). Deferring fix application to the next poll tick."
+              rb_cleanup_combined_workspace
+              REVIEW_BLOCKED_STATE_CHANGED=true
+              RB_SKIP_RETRY_INCREMENT="true"
+            elif [ "${RB_COMBINED_MODE}" != "true" ]; then
+              echo "::warning::Combined-mode branch prep did not succeed for PR #${RB_PR}; cannot apply judge fixes this tick."
               git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
               REVIEW_BLOCKED_STATE_CHANGED=true
-              # Skip to retry counter via nested-fi + fi
-            fi
-
-            if { [ "${RB_TARGET_MERGED}" = "true" ] && [ "${FOLLOWUP_PR_BLOCKED}" != "true" ]; } || { [ "${RB_TARGET_MERGED}" != "true" ] && [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; }; then
-              # Re-run the judge in editing mode on the target branch
-              RB_FIX_PROMPT_FILE="${RUNTIME_DIR}/rb_fix_prompt_${rb_issue}.txt"
-              RB_FIX_OUTPUT_FILE="${RUNTIME_DIR}/rb_fix_output_${rb_issue}.txt"
-              {
-                cat "${RB_JUDGE_PROMPT_FILE}"
-                echo
-                echo "=== APPLY FIXES NOW ==="
-                if [ "${RB_TARGET_MERGED}" = "true" ]; then
-                  echo "You are on a follow-up branch based on ${BASE_REF}."
-                  echo "The original PR #${RB_PR} was already merged."
-                  echo "Apply only the fixes identified during review — do not re-apply the original PR's changes."
-                else
-                  echo "You are now on the PR branch (${HEAD_REF})."
-                fi
-                echo "Apply the fixes you identified directly to the repository files."
-                echo "Focus only on the issues that blocked the review."
-                echo "Do not create new files unless absolutely required."
-                echo "After applying fixes, output the same JSON with action='fix' and"
-                echo "fix_description describing what you changed."
-              } > "${RB_FIX_PROMPT_FILE}"
-
-              if cat "${RB_FIX_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${RB_FIX_OUTPUT_FILE}" 2>/dev/null; then
-                echo "  Fix codex completed."
-              else
-                echo "::warning::Fix codex failed for PR #${RB_PR}."
-              fi
-
+            else
               # Remove workflow-generated/fetched artifacts so they are never
               # committed to caller repos.
               #
@@ -5701,20 +5768,28 @@ ${RB_FIX_DESC}
                 fi
               fi
 
-              # Switch back to default branch for remaining processing
-              git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
+              # Switch back to default branch for remaining processing,
+              # discarding any unstaged tracked edits that were not
+              # included in the fix commit (e.g., excluded paths).
+              rb_cleanup_combined_workspace
             fi
 
-            # Increment retry counter
-            jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
-              "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-            REVIEW_BLOCKED_STATE_CHANGED=true
+            # Increment retry counter (skipped when the merge-race path
+            # above deferred the fix without applying anything).
+            if [ "${RB_SKIP_RETRY_INCREMENT:-false}" != "true" ]; then
+              jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
+                "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+              REVIEW_BLOCKED_STATE_CHANGED=true
+            fi
           fi
           fi
           ;;
 
         close_and_reissue)
           echo "  Judge says close PR #${RB_PR} and reissue."
+          # Discard any accidental file modifications from the combined
+          # judge call; close_and_reissue operates via GitHub API only.
+          rb_cleanup_combined_workspace
           # Close the PR
           gh pr close "${RB_PR}" --repo "${GITHUB_REPOSITORY}" \
             --comment "Closed by orchestrator judge — the approach needs rework. A new issue will be created with refined guidance." \
@@ -5772,6 +5847,7 @@ ${RB_FIX_DESC}
 
         *)
           echo "::warning::Unknown review-blocked judge action: ${RB_ACTION}"
+          rb_cleanup_combined_workspace
           ;;
       esac
     done < <(echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "review-blocked") | .github_issue')
@@ -6134,31 +6210,70 @@ Manual intervention required." >/dev/null
   # Setup Serena for judge
   bash scripts/setup_serena.sh --mode planning --context codex || true
 
-  # Collect merged PR diffs for context
-  PR_SUMMARIES=""
-  ISSUE_MAP="$(jq -r '.issue_number_map // {}' "${STATE_FILE}")"
-  for inum in ${ISSUE_NUMS}; do
+  # Collect PR diffs for context, split by issue status so the
+  # byte-stable "merged PR diffs" block can sit inside the cacheable
+  # prefix of the judge prompt (before the volatile WAVE STATUS).
+  #
+  # Correctness notes:
+  #   - Status is read from STATE_FILE (.waves[WAVE_IDX].issues[].status),
+  #     which is authoritative and set to "merged" by the judge merge-
+  #     recording logic at L4405. No extra GH API call needed.
+  #   - Issue numbers are sorted before iteration so the concatenation
+  #     order is deterministic across ticks even after orphan-sweep
+  #     appends (L4601) or deferred issue creation.
+  #   - Merged PR diffs are byte-stable for a given head SHA: the
+  #     `gh api ... Accept: vnd.github.diff` endpoint returns the same
+  #     bytes on every request. Once all PRs in the current wave are
+  #     merged, this block is stable across ticks and extends the
+  #     cacheable prefix by the sum of the diffs (typically 5-15 K
+  #     tokens for mature projects).
+  MERGED_PR_SUMMARIES=""
+  OPEN_PR_SUMMARIES=""
+  _sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"
+  for inum in ${_sorted_issue_nums}; do
+    [ -n "${inum}" ] || continue
     PR_NUM="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/timeline" \
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
       || echo "")"
     if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
       PR_DIFF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
         -H 'Accept: application/vnd.github.diff' 2>/dev/null | head -500 || echo "(diff unavailable)")"
-      PR_SUMMARIES+="
+      _issue_status="$(jq -r --arg num "${inum}" --argjson wi "${WAVE_IDX}" \
+        '.waves[$wi].issues[] | select((.github_issue | tostring) == $num) | .status // ""' \
+        "${STATE_FILE}" 2>/dev/null | head -n1)"
+      if [ "${_issue_status}" = "merged" ]; then
+        MERGED_PR_SUMMARIES+="
 --- PR #${PR_NUM} (Issue #${inum}) ---
 ${PR_DIFF}
 
 "
+      else
+        OPEN_PR_SUMMARIES+="
+--- PR #${PR_NUM} (Issue #${inum}, status=${_issue_status:-unknown}) ---
+${PR_DIFF}
+
+"
+      fi
     fi
   done
+  unset _sorted_issue_nums _issue_status
 
   # Fetch CI status on default branch
   DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   CI_STATUS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}/check-runs" \
     --jq '[.check_runs[] | {name: .name, conclusion: .conclusion}]' || echo "[]")"
 
-  # Get original project description from tracking issue body
-  PROJECT_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
+  # Get original project description. Prefer the byte-stable snapshot
+  # captured at project creation in orchestrate_lib.build_tracking_state
+  # (state field .project_body_snapshot). Fall back to fetching the live
+  # tracking issue body for projects created before this field existed.
+  # Using the snapshot keeps the judge-prompt prefix byte-stable across
+  # ticks so provider-side prompt caching stays effective, and removes
+  # one GH API call per judge tick.
+  PROJECT_BODY="$(jq -r '.project_body_snapshot // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  if [ -z "${PROJECT_BODY}" ]; then
+    PROJECT_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
+  fi
 
   # Build one stable static prefix per run for provider-side prompt caching.
   assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
@@ -6177,13 +6292,33 @@ ${PR_DIFF}
     echo
     echo "${PROJECT_BODY}"
     echo
+    # Merged PR diffs sit here — BEFORE the volatile WAVE STATUS block —
+    # so the provider-side prompt prefix cache can span them. The block
+    # is byte-stable across consecutive ticks within a wave because:
+    #   (1) merged commit diffs are immutable by head SHA,
+    #   (2) issue numbers are sorted before iteration,
+    #   (3) no new merged PRs appear until the next wave starts.
+    # Open/in-flight PR diffs are moved to the volatile tail because
+    # they change whenever the PR branch advances.
+    echo "=== MERGED PR DIFFS (truncated; cache-stable) ==="
+    echo
+    if [ -n "${MERGED_PR_SUMMARIES}" ]; then
+      echo "${MERGED_PR_SUMMARIES}"
+    else
+      echo "(no merged PRs in current wave yet)"
+    fi
+    echo
     echo "=== WAVE ${CURRENT_WAVE} COMPLETION STATUS ==="
     echo
     echo "${WAVE_STATUS}" | jq '.'
     echo
-    echo "=== MERGED PR DIFFS (truncated) ==="
+    echo "=== OPEN PR DIFFS (truncated; in-flight) ==="
     echo
-    echo "${PR_SUMMARIES}"
+    if [ -n "${OPEN_PR_SUMMARIES}" ]; then
+      echo "${OPEN_PR_SUMMARIES}"
+    else
+      echo "(no open PRs in current wave)"
+    fi
     echo
     echo "=== CI STATUS ON ${DEFAULT_BRANCH} ==="
     echo

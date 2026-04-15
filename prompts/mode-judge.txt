@@ -3,7 +3,11 @@ You are executing the JUDGE phase of the AI orchestration pipeline.
 All context is inlined directly into the prompt for efficiency:
 - System instructions, AI pipeline spec, agents.md, and README.md appear above
   (constant across all runs, cached by the LLM provider).
-- The project spec, wave history, and merged PR summaries appear below.
+- The project spec and merged PR summaries appear immediately below them and
+  are also cache-stable within a wave.
+- Wave status, open/in-flight PR diffs, CI status, and orchestrator state
+  appear after that — these change every judge tick and are intentionally
+  placed after the cacheable prefix.
 
 Do NOT read pre_assembled_static.txt or any of the individual source files —
 they are already loaded.
