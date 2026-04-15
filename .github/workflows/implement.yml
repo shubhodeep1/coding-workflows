@@ -1056,10 +1056,10 @@ jobs:
           CAPTURED_FILES_FILE="${RUNTIME_DIR}/post_codex_captured_files.txt"
           ALLOW_LIST_FILE="${RUNTIME_DIR}/post_codex_repair_allow_list.txt"
 
-          if [ ! -s "${REPAIR_PROMPT_TEMPLATE}" ] || [ ! -x "${REPAIR_VALIDATOR_SCRIPT}" ]; then
+          if [ ! -s "${REPAIR_PROMPT_TEMPLATE}" ] || [ ! -s "${REPAIR_VALIDATOR_SCRIPT}" ]; then
             echo "::error::Required repair artifacts are missing from repair-prompt-and-validator-split dependency."
             echo "Expected prompt: ${REPAIR_PROMPT_TEMPLATE} (non-empty)"
-            echo "Expected validator: ${REPAIR_VALIDATOR_SCRIPT} (executable)"
+            echo "Expected validator: ${REPAIR_VALIDATOR_SCRIPT} (non-empty)"
             exit 1
           fi
 
@@ -1074,7 +1074,7 @@ jobs:
           : > "${INITIAL_CHANGED_FILE}"
           while IFS= read -r -d '' path; do
             printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"
-          done < <(git diff --name-only --diff-filter=ACM -z HEAD)
+          done < <(git diff --name-only --diff-filter=ACMR -z HEAD)
           sort -u "${INITIAL_CHANGED_FILE}" -o "${INITIAL_CHANGED_FILE}" || true
 
           : > "${CAPTURED_FILES_FILE}"
