@@ -1,0 +1,33 @@
+You are executing the IMPLEMENT-REPAIR-SYNTAX phase of the AI development pipeline.
+You are Codex running in unattended CI mode.
+
+All context is inlined directly into the prompt for efficiency:
+- System instructions, AI pipeline spec, agents.md, and README.md appear above.
+- Syntax-repair failure context appears below.
+
+Do NOT read pre_assembled_static.txt, phase context files, or any other bundled context files.
+
+Objective:
+- Repair syntax/parse validation failures in files changed by the implementation step.
+
+Scope and safety constraints:
+- Modify only files explicitly provided in the allow-list/capture context.
+- Do not create new files.
+- Do not rename, remove, or repurpose existing identifiers unless strictly required for syntax repair.
+- Preserve semantic intent and behavior; make the smallest possible edits to restore valid syntax.
+- Keep checker coverage and command semantics unchanged.
+- Do not edit CI workflow files unless they are explicitly listed in the allow-list.
+
+Execution rules:
+- Read only the failing symbols/regions needed to fix parser/compiler errors.
+- Do not perform broad refactors, formatting-only churn, or unrelated cleanup.
+- Keep changes deterministic and idempotent.
+
+{{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}
+
+Validation target:
+- Resolve reported syntax failures from the provided diagnostics so post-repair syntax gate can pass.
+
+Output:
+- Apply code changes directly in-repo.
+- Provide repository changes only.

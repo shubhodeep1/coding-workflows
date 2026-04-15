@@ -376,13 +376,13 @@ def _run_poller(
 		for inum, labels in issue_labels.items():
 			issues[str(inum)] = {
 				"labels": list(labels),
-				"comments": [
-					{"id": idx + 1, "body": comment_body}
-					for idx, comment_body in enumerate(issue_comments.get(inum, []))
-				],
-				"body": issue_bodies.get(inum, f"Issue {inum}"),
-				"closed": bool(issue_closed.get(inum, False)),
-			}
+			"comments": [
+				{"id": idx + 1, "body": comment_body}
+				for idx, comment_body in enumerate(issue_comments.get(inum, []))
+			],
+			"body": issue_bodies.get(inum, f"Issue {inum}"),
+			"closed": bool(issue_closed.get(inum, False)),
+		}
 
 		store = {
 			"issues": issues,
@@ -676,6 +676,7 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'close':
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
 	title = ''
 	body = ''
+	labels = []
 	i = 2
 	while i < len(args):
 		if args[i] == '--title' and i + 1 < len(args):
@@ -686,10 +687,14 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
 			body = args[i + 1]
 			i += 2
 			continue
+		if args[i] == '--label' and i + 1 < len(args):
+			labels.append(args[i + 1])
+			i += 2
+			continue
 		i += 1
 	next_num = store.get('next_issue_number', 900)
 	store['next_issue_number'] = next_num + 1
-	store['issues'][str(next_num)] = {'labels': [], 'comments': [], 'body': body, 'closed': False, 'title': title}
+	store['issues'][str(next_num)] = {'labels': labels, 'comments': [], 'body': body, 'closed': False, 'title': title}
 	store.setdefault('created_issues', []).append({'number': next_num, 'title': title})
 	save()
 	print(f'https://github.com/owner/repo/issues/{next_num}')
@@ -2823,6 +2828,61 @@ def test_in_progress_judge_recreates_closed_fixup_id_stays_on_current_wave():
 	wave1 = {i["id"]: i for i in ls["waves"][0]["issues"]}
 	assert wave1["fixup-1"]["status"] == "pending", f"Expected recreated fixup-1 status=pending, got {wave1['fixup-1']['status']}"
 	assert str(wave1["fixup-1"]["github_issue"]) != "35", f"Expected fixup-1 github_issue to be replaced, got {wave1['fixup-1']['github_issue']}"
+
+
+def test_implementation_failed_reissue_persists_fixup_blocker_metadata_from_comment():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "implementation-failed"
+	issue["github_issue"] = 10
+	issue["id"] = "issue-1"
+
+	comment_body = (
+		"## Post-Codex validation diagnosed follow-up fixes\n\n"
+		"Created fix-up issues:\n- #901\n- #902\n\n"
+		"<!-- IMPLEMENT_FIXUP_BLOCKERS_V1\n"
+		"{\"fixup_issue_numbers\":[901,902,902],\"blocks_source_issue\":10}\n"
+		"IMPLEMENT_FIXUP_BLOCKERS_V1 -->"
+	)
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementation-failed"]},
+		issue_comments={10: [comment_body]},
+	)
+
+	entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert entry.get("blocks_source_issue") == 10
+	assert entry.get("fixup_issue_numbers") == [901, 902]
+ 
+	state_comments = _extract_state_payloads(result["issues"]["192"]["comments"])
+	assert state_comments, "expected state comments to be present"
+	latest_payload = json.loads(state_comments[-1])
+	latest_entry = latest_payload["waves"][0]["issues"][0]
+	assert latest_entry.get("fixup_issue_numbers") == [901, 902]
+
+	new_issue_num = str(entry.get("github_issue"))
+	assert "ai:clarification" in result["issues"][new_issue_num]["labels"]
+
+
+def test_implementation_failed_reissue_without_blocker_metadata_keeps_state_compatible():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "implementation-failed"
+	issue["github_issue"] = 10
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementation-failed"]},
+	)
+
+	entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert "blocks_source_issue" not in entry
+	assert "fixup_issue_numbers" not in entry
 
 
 # ---------------------------------------------------------------------------
