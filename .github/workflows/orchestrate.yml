@@ -1167,7 +1167,7 @@ jobs:
                 fi
               fi
               echo "| Issues created | ${ISSUE_COUNT} |"
-              if [ -n "${TRACKING_ISSUE_NUMBER:-}" ]; then
+              if [ -n "${TRACKING_ISSUE_NUMBER:-}" ] && [ "${TRACKING_ISSUE_NUMBER}" != "0" ]; then
                 echo "| Tracking issue | #${TRACKING_ISSUE_NUMBER} |"
               fi
               if [ "${SINGLE_ISSUE_MODE:-false}" = "true" ]; then
