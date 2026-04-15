@@ -182,6 +182,8 @@ jobs:
             prompts/mode-plan.txt
             prompts/mode-implement.txt
             prompts/mode-implement-diagnose.txt
+            prompts/mode-implement-repair.txt
+            prompts/mode-implement-repair-syntax.txt
             prompts/mode-orchestrate.txt
             prompts/mode-workflow-analysis.txt
             prompts/mode-judge.txt

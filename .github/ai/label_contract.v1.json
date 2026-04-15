@@ -65,6 +65,10 @@
       "color": "e11d48",
       "description": "Implementation produced no changes despite an approved plan — will be re-issued"
     },
+    "ai:implement-fix-up": {
+      "color": "d4c5f9",
+      "description": "Implement-phase post-Codex fix-up issue"
+    },
     "ai:destructive-blocked": {
       "color": "b60205",
       "description": "Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review"
