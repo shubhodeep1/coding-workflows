@@ -795,7 +795,7 @@ def parse_tracking_body(body: str) -> dict[str, Any]:
 
 	Returns a dict with keys:
 		project_title, waves (list of lists of {id, title, priority}),
-		dependency_edges (list of {from, to}).
+		dependency_edges (list of {from, to}), integration_branch.
 	"""
 	result: dict[str, Any] = {
 		"project_title": "",
@@ -1277,6 +1277,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
 	parser = build_parser()
 	args = parser.parse_args(argv)
+	if args.print_integration_ref and getattr(args, "command", None):
+		parser.error("--print-integration-ref cannot be combined with a subcommand")
 	if args.print_integration_ref:
 		try:
 			return int(cmd_print_integration_ref(args))
