@@ -305,6 +305,7 @@ def _run_poller(
 	active_autofix_runs: list[dict] | None = None,
 	mock_stall_judge_json: dict | None = None,
 	enable_stall_judge: str = "true",
+	enable_stall_human_terminalization: str = "false",
 	stall_judge_trigger_count: str = "2",
 ) -> dict:
 	tracking_num = 192
@@ -1017,6 +1018,7 @@ print(json.dumps(parsed))
 				"MAX_REVIEW_BLOCKED_RETRIES": "2",
 				"MAX_VALIDATION_RECOVERY_ATTEMPTS": "0",
 				"ENABLE_STALL_JUDGE": enable_stall_judge,
+				"ENABLE_STALL_HUMAN_TERMINALIZATION": enable_stall_human_terminalization,
 				"STALL_JUDGE_TRIGGER_COUNT": stall_judge_trigger_count,
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
@@ -2468,6 +2470,61 @@ def test_stall_judge_escalate_human_adds_needs_human_label_and_increments_counte
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="true",
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_escalate_human_with_gate_disabled_falls_back_to_non_human_action():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="false",
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	tracking_comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert issue_entry["stall_recovery_count"] == 3
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert any("/approved" in body for body in issue_comments)
+	assert any("**Effective action:** retrigger_implement" in body for body in tracking_comments)
+
+
+def test_stall_judge_escalate_human_with_gate_enabled_preserves_escalation_behavior():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="true",
 		mock_stall_judge_json={
 			"action": "escalate_human",
 			"justification": "needs operator",
