@@ -2912,7 +2912,12 @@ jobs:
           trap 'rm -f "${push_stderr_file}"' EXIT
           while :; do
             push_exit=0
-            git push origin "HEAD:${TARGET_BRANCH}" 2>"${push_stderr_file}" || push_exit=$?
+            # Capture BOTH stdout and stderr: `git push` normally emits
+            # rejection details on stderr, but remote helpers and some
+            # git versions can surface `! [rejected]` / `non-fast-forward`
+            # on stdout, which would cause stderr-only classification to
+            # mis-route a retryable failure to the hard-fail branch.
+            git push origin "HEAD:${TARGET_BRANCH}" >"${push_stderr_file}" 2>&1 || push_exit=$?
             cat "${push_stderr_file}" >&2
             if [ "${push_exit}" -eq 0 ]; then
               echo "Push complete."
