@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which code location should be treated as the source of truth for this fix, given the mismatch between the issue description and current repo state?**\nChoices:\n- **A** \u2014 Use the current `in_progress` wave-advance path in `scripts/orchestrate_poll_process.sh` (around the `PENDING_IN_WAVE` guard) as the target and implement the clean-wave skip behavior there.  \n- **B** \u2014 Provide the exact branch/commit/file snippet where `ENABLE_CLEAN_WAVE_JUDGE_SKIP` and the `pending_issue_defs` guard currently exist, and implement against that location. **(RECOMMENDED)**\n- **C** \u2014 Keep current behavior and treat this issue as stale/no-op.\nReply: `Q1: A`",
+  "fingerprint": "00cd1a32248075581cc406dd1a6aa5e6b698b1423a9c0ee0db2c6532283297f8",
+  "lineage": {
+    "issue_number": 1042,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24440635191",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24440635191",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260415065305_ce3242e92d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1042,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24440635191"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1042 needs clarification",
+  "timestamps": {
+    "created_at": "2026-04-15T06:53:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
