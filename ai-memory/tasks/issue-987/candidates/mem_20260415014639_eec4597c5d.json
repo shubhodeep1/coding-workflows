@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- No `Q<ID>` clarification questions were asked in this issue thread.\n- `/answer [auto-answered-by-clarify]` indicates the scope is accepted as fully clear, so planning proceeds with the issue\u2019s required changes as written.\n\nFactual conflicts detected in repo vs issue description:\n- `ENABLE_STALL_HUMAN_TERMINALIZATION` is not currently present in the codebase search results.\n- The referenced \u201cnon-human fallback gate block\u201d around `invoke_stall_judge` is not present in current [scripts/orchestrate_poll_process.sh](scripts/orchestrate_poll_process.sh); `judge_action=escalate_human` still dispatches directly.\n- Plan implication: implement the missing gate behavior directly in `invoke_stall_judge`, and document the env var behavior explicitly.\n\nImplementation plan\n\n1. Files likely to change\n- [scripts/orchestrate_poll_process.sh](scripts/orchestrate_poll_process.sh)\n- [tests/test_orchestrate_poll_process.py](tests/test_orchestrate_poll_process.py)\n- [README.md](README.md) (env var behavior/default documentation)\n- [agents.md](agents.md) (if env control section needs parity with runtime behavior docs)\n\n2. Functions/modules to implement\n- In `scripts/orchestrate_poll_process.sh`:\n  - Add/normalize `ENABLE_STALL_HUMAN_TERMINALIZATION` parsing with default `false` (truthy handling consistent with existing env parsing style).\n  - In `invoke_stall_judge`, introduce an \u201ceffective action\u201d normalization step before dispatch:\n    - If judge returns `escalate_human` and gate is not `true`, convert to the same non-human fallback action path used for stall fallback execution.\n    - Keep malformed/unknown judge output fail-open behavior (fallback action still used).\n  - Ensure the dispatch `case` executes the normalized effective action, not raw `judge_action`, so both managed and standalone paths are covered via shared `invoke_stall_judge`.\n  - Keep `STALL_RECOVERY_EFFECTIVE_ACTION` and increment semantics intact.\n\n3. Data structures affected\n- Runtime env/config surface:\n  - `ENABLE_STALL_HUMAN_TERMINALIZATION` (boolean-like, normalized to `true|false`).\n- In-memory action variables in `invoke_stall_judge`:\n  - `judge_action`, `fallback_action`, and new normalized/effective action variable.\n- No state schema or DB contract changes.\n\n4. API/interface changes\n- No external API contract changes.\n- Operational interface behavior change:\n  - With gate `false`, stall-judge-produced `escalate_human` is suppressed and mapped to non-human fallback.\n  - With gate `true`, existing `escalate_human` behavior is preserved.\n\n5. Potential risks and edge cases\n- Fallback selection must never re-resolve to `escalate_human` when gate is disabled.\n- Must preserve existing fail-open behavior for judge failures/parsing errors/unsupported actions.\n- Must avoid regressions in counter increment and stall state transitions.\n- Must not alter existing env names/defaults outside this specific gate behavior.\n\n6. Testing considerations\n- Use existing stall-judge test pattern as representative:\n  - `test_stall_judge_escalate_human_adds_needs_human_label_and_increments_counter`\n  - `test_stall_judge_unknown_action_falls_back_to_declarative_recovery`\n- In [tests/test_orchestrate_poll_process.py](tests/test_orchestrate_poll_process.py):\n  - Add test: judge returns `escalate_human` + gate `false` => no `ai:needs-human`, executes non-human fallback path, counter behavior remains valid.\n  - Add test: judge returns `escalate_human` + gate `true` => `ai:needs-human` escalation preserved.\n  - Extend `_run_poller` test harness env injection to control `ENABLE_STALL_HUMAN_TERMINALIZATION` per test.\n- Run targeted stall tests first, then broader poller suite to catch regressions in managed and standalone flows.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "cec0b5f455c4ee17eb12b1088b7e26d165076c8e6f8788cc3c714102daa7526f",
+  "lineage": {
+    "issue_number": 987,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24431983158",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24431983158",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/987"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415014639_eec4597c5d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 987,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24431983158"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #987",
+  "timestamps": {
+    "created_at": "2026-04-15T01:46:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
