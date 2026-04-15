@@ -203,7 +203,7 @@ jobs:
           fi
 
       - name: Checkout workflow support source
-        continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
+        continue-on-error: true
         id: checkout_support_source
         uses: actions/checkout@v5
         with:
@@ -215,7 +215,7 @@ jobs:
 
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
-        continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
+        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/coding-workflows
@@ -235,7 +235,7 @@ jobs:
 
       - name: Checkout workflow support source main snapshot
         if: ${{ env.SCRIPT_REF != 'main' }}
-        continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
+        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/coding-workflows
