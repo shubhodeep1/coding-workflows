@@ -697,7 +697,7 @@ gh_issue_timeline_with_cross_refs()
   }
 }'
 
-	if ! graphql_json="$(gh_retry gh api graphql -f query="${graphql_query}" -f owner="${owner}" -f repo="${repo}" -F issue_number="${issue_number}" 2>/dev/null)"; then
+	if ! graphql_json="$(gh_retry gh api graphql -f query="${graphql_query}" -f owner="${owner}" -f repo="${repo}" -f issue_number="${issue_number}" 2>/dev/null)"; then
 		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=graphql_failed owner=${owner} repo=${repo} issue=${issue_number}" >&2
 		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
 		return $?

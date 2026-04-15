@@ -140,7 +140,7 @@ jobs:
           issue_nodes_json="$(gh api graphql \
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
-            -F number="${PR_NUMBER}" \
+            -f number="${PR_NUMBER}" \
             -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }' \
             --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
 
@@ -2023,7 +2023,7 @@ jobs:
           # "Entry … not uptodate. Cannot merge." errors and prevents
           # git merge --abort from resetting cleanly afterward.
           MERGE_STASH="$(mktemp -d)"
-          for d in scripts .serena prompts ai-memory; do
+          for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
             if [ -d "${d}" ]; then
               if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
                 # Directory contains tracked files — move only the untracked
@@ -2066,7 +2066,7 @@ jobs:
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || merge_exit=$?
 
           # Restore the stashed dirs so later steps have them available.
-          for d in scripts .serena prompts ai-memory; do
+          for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
             if [ -d "${MERGE_STASH}/${d}" ]; then
               # Use cp + rm instead of mv to handle the case where the merge
               # already created the directory (e.g. scripts/ from main).
@@ -2192,7 +2192,7 @@ jobs:
             rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh 2>/dev/null || true
           fi
           RESOLVE_STASH="$(mktemp -d)"
-          for d in scripts .serena prompts ai-memory; do
+          for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
             if [ -d "${d}" ]; then
               if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
                 # Directory contains tracked files — move only the untracked
@@ -2280,7 +2280,7 @@ jobs:
               if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
                 git merge --abort 2>/dev/null || true
               fi
-              for d in scripts .serena prompts ai-memory; do
+              for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
                 if [ -d "${RESOLVE_STASH}/${d}" ]; then
                   cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
                 fi
@@ -2313,7 +2313,7 @@ jobs:
           fi
 
           # Restore stashed dirs so Codex has its full environment.
-          for d in scripts .serena prompts ai-memory; do
+          for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
             if [ -d "${RESOLVE_STASH}/${d}" ]; then
               cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
             fi
@@ -2705,12 +2705,14 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set +e
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
+            source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          fi
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           LINKED_ISSUES_JSON="$(gh_retry gh api graphql \
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
-            -F number="${PR_NUMBER}" \
+            -f number="${PR_NUMBER}" \
             -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
             --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null || echo '[]')"
           LINKED_ISSUES_JSON="$(printf '%s' "${LINKED_ISSUES_JSON}" | jq -c '.' 2>/dev/null || echo '[]')"
