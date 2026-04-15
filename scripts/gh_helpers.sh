@@ -169,7 +169,7 @@ _gh_ratelimit_tg_alert()
 		| jq -r '.result.pinned_message.message_id // ""' 2>/dev/null) || return 0
 
 	_last_epoch=$(printf '%s' "${_pinned_text}" \
-		| sed -n 's/.*<!-- gh_rl_ts:\([0-9]\{1,\}\) -->.*/\1/p' | head -1)
+		| sed -n 's/.*<!-- gh_rl_ts:\([0-9]\{1,\}\) -->.*/\1/p' | tail -1)
 
 	_now=$(date +%s)
 	if [ -n "${_last_epoch}" ] && [ "${_last_epoch}" -gt 0 ] 2>/dev/null; then
@@ -246,7 +246,7 @@ _gh_ratelimit_tg_alert()
 	# leave it alone — the new rate-limit pin will still be the
 	# most-recent pin returned by `getChat` for cooldown reads,
 	# which is all we need. ---
-	if [ -n "${_last_epoch}" ] \
+	if [ -n "${_last_epoch}" ] && [ "${_last_epoch}" -gt 0 ] 2>/dev/null \
 		&& [ -n "${_prev_pin_id}" ] \
 		&& [ "${_prev_pin_id}" != "${_new_msg_id}" ]; then
 		curl -sS --max-time 10 -X POST \
