@@ -318,12 +318,16 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 - Consumer templates under `workflow-templates/ai-*.yml` MUST stay pinned
   to `@stable`. Do not unify the two pin targets.
 - `ai-update-workflows.yml` must NOT be installed into `.github/workflows/`
-  in this repo. If installed, its daily self-update loop would overwrite
-  `internal-*.yml` files keyed by filename — but it only touches files
-  whose names match `workflow-templates/*.yml`, so keeping the
-  `internal-*.yml` filenames (rather than renaming to `ai-*.yml`) insulates
-  them. Do not rename `internal-*.yml` to `ai-*.yml` without first removing
-  the self-updater exposure.
+  in this repo. The self-updater in `update_workflows.yml` copies files
+  from `workflow-templates/*.yml` into `.github/workflows/` keyed by exact
+  filename, so the current `internal-*.yml` filenames are not directly
+  overwritten. The hazard is different: on first run the self-updater
+  would **create** new `ai-*.yml` wrappers pinned `@stable` (because
+  those filenames are absent today), which would then auto-fire on the
+  same issue/PR events as the `internal-*.yml` wrappers and cause
+  duplicate runs and racing state writes. Keeping the self-updater
+  uninstalled prevents that creation path entirely. Do not rename
+  `internal-*.yml` to `ai-*.yml` without first removing this risk.
 - PR-time dogfood gate: `ci.yml` runs `yamllint` and `actionlint` across
   `.github/workflows/*.yml` and `workflow-templates/*.yml` on
   `pull_request` against `main`. Any change that breaks YAML or GitHub
