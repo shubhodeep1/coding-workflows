@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `phase-b-pre-llm-shortcircuit`\n\nClarification interpretation\n- No `Q<ID>` items were asked in clarify; `/answer [auto-answered-by-clarify]` indicates the task is clear and planning can proceed.\n\nRepresentative implementation pattern\n- Reuse the existing robust issue-creation pattern in `.github/workflows/orchestrate.yml` (`gh_retry gh issue create` + number extraction) from the `Create Wave 1 issues only` step.\n\n1. Files likely to change\n- `.github/workflows/orchestrate.yml`\n- `README.md` (document new env var/default and short-circuit behavior)\n- `agents.md` (update env/default behavior docs if this repo\u2019s copy contains the env catalog)\n\n2. Functions/modules/steps to implement\n- Add job env var: `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS: ${{ vars.ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS || '1200' }}`.\n- Insert a new step immediately after `Pre-assemble static context` to evaluate:\n  - description character count vs `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS`\n  - no multi-step marker match using regex: `step\\s*\\d|phase\\s*\\d|wave\\s*\\d|\\bthen\\b|\\bafter\\b|and\\s+then|multi[- ]?step`\n  - emit outputs/env: short-circuit flag + explicit reason fields.\n- Add a short-circuit step to create one plain GitHub issue from the project description (title from first non-empty line with fallback; body from full description).\n- Gate decomposer/orchestrator path steps with the short-circuit flag so they do not run on short-circuit:\n  - `Retrieve memory context`\n  - `Build Codex prompt`\n  - `Run Codex (decomposer)`\n  - `Extract and validate decomposition JSON`\n  - `Ensure orchestrator labels exist`\n  - `Create tracking issue`\n  - `Create integration branch`\n  - `Create Wave 1 issues only`\n  - `Build and post initial state`\n  - `Record decomposition candidate`\n  - `Dispatch Wave 1`\n- Keep always-on terminal steps active in both paths:\n  - `Write run summary`\n  - `Record orchestration run end`\n  - `Notify via Telegram`\n- Update summary/notification content to report short-circuit mode and reason (instead of decomposition metrics) when short-circuit is taken.\n\n3. Data structures affected\n- New workflow env var: `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` (default `1200`).\n- New step outputs/env keys (example): `short_circuit`, `short_circuit_reason`, `short_circuit_length`, `short_circuit_marker_found`, `plain_issue_number`, `plain_issue_url`.\n- No schema/db contract changes.\n\n4. API/interface changes\n- Workflow behavior becomes bifurcated:\n  - Short-circuit path: creates one plain issue only.\n  - Existing path: full decomposer + orchestrator flow unchanged.\n- No external API interface change beyond one new configurable repo variable.\n\n5. Risks and edge cases\n- Regex false positives/negatives (mitigate with case-insensitive match and explicit logging of match result).\n- Non-numeric `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` value (sanitize/fallback to `1200` and log warning).\n- Empty/whitespace description first line (fallback title required).\n- Ensure plain issue receives no `ai:orchestrator-managed` / `ai:orchestrator-validate-required`, no tracking metadata block, no integration branch/state comment.\n- Ensure no `codex exec` invocation in short-circuit path.\n- Ensure end-of-workflow steps handle missing decomposition/tracking artifacts safely.\n\n6. Testing considerations\n- Path A (short-circuit): description length < threshold and no markers.\n  - Expect exactly one plain issue created.\n  - Confirm decomposer/orchestrator steps are skipped.\n  - Confirm logs include explicit short-circuit reason.\n  - Confirm no `codex exec` in logs.\n- Path B (no short-circuit by marker): short description containing marker (e.g., \u201cstep 1\u201d).\n  - Expect normal decomposer path.\n- Path C (no short-circuit by length): description > threshold without markers.\n  - Expect normal decomposer path.\n- For Path A, verify no tracking issue/integration branch/state comment/wave dispatch artifacts.\n- Run workflow lint checks (`yamllint`, `actionlint`) after edits.\n\nConflict detection\n- No factual repo-vs-issue conflicts found.  \n- Sequencing note: existing `Retrieve memory context` currently sits between `Pre-assemble static context` and `Build Codex prompt`; the short-circuit evaluator can still be inserted in that interval and should gate `Retrieve memory context` + all decomposer steps to fully avoid decomposer-path cost.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "16762db7df590efc5cca9e15df6b23d9a781ff6e9c4718cac439dde1b66eb6bd",
+  "lineage": {
+    "issue_number": 1090,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24461009249",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24461009249",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1090"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415145332_72172d5daa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1090,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24461009249"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1090",
+  "timestamps": {
+    "created_at": "2026-04-15T14:53:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
