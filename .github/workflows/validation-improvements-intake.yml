@@ -1,0 +1,405 @@
+---
+name: Validation Improvements Intake
+
+# Receives prompt-self-heal patches dispatched from consumer (or self-test)
+# validation runs via scripts/validate_process.sh::dispatch_self_heal_improvements.
+# See docs/validation-improvements.md and prompts/mode-validate-self-heal.txt.
+#
+# Each accepted dispatch:
+#   1. Appends a dated entry to docs/validation-improvements.md
+#   2. Applies the patches to prompts/mode-validate-*.txt on a dedicated branch
+#   3. Opens a DRAFT pull request (drafts are already opted out of
+#      review_autofix via the gate at review_autofix.yml:87)
+#   4. Labels the PR ai:needs-prompt-review
+#   5. Sends a Telegram notification to the admin
+#
+# Admin unlock procedure: review the PR, click "Ready for review" in the
+# GitHub UI. That fires the pull_request "ready_for_review" event which is
+# now on the ai-review wrapper trigger list, so the normal review/automerge
+# pipeline engages. See README.md section "Validation self-healing".
+
+"on":
+  repository_dispatch:
+    types:
+      - validation-prompt-self-heal
+  workflow_dispatch:
+    inputs:
+      payload_json:
+        description: "Raw client_payload JSON (for manual re-runs or testing)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Configure git identity
+        run: |
+          set -euo pipefail
+          git config user.name "coding-workflows[bot]"
+          git config user.email "coding-workflows-bot@users.noreply.github.com"
+
+      - name: Extract payload
+        id: payload
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CLIENT_PAYLOAD_JSON: ${{ toJson(github.event.client_payload) }}
+          MANUAL_PAYLOAD: ${{ github.event.inputs.payload_json }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            printf '%s' "${MANUAL_PAYLOAD}" > /tmp/payload.json
+          else
+            printf '%s' "${CLIENT_PAYLOAD_JSON}" > /tmp/payload.json
+          fi
+          jq -e . /tmp/payload.json > /dev/null || { echo "::error::payload is not valid JSON"; exit 1; }
+
+          consumer_repo="$(jq -r '.consumer_repo // ""' /tmp/payload.json)"
+          tracking_issue="$(jq -r '.tracking_issue // "0"' /tmp/payload.json)"
+          validation_cycle="$(jq -r '.validation_cycle // "1"' /tmp/payload.json)"
+          run_id="$(jq -r '.run_id // "0"' /tmp/payload.json)"
+          run_url="$(jq -r '.run_url // ""' /tmp/payload.json)"
+          final_status="$(jq -r '.final_status // "unknown"' /tmp/payload.json)"
+          attempts="$(jq -r '.self_heal_attempts // 0' /tmp/payload.json)"
+          patches_count="$(jq -r '.patches | length' /tmp/payload.json)"
+
+          if [ -z "${consumer_repo}" ]; then
+            echo "::error::consumer_repo is required"
+            exit 1
+          fi
+          if [ "${patches_count}" -le 0 ]; then
+            echo "::warning::no patches in payload; nothing to do"
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # Sanitize consumer_repo for use in a branch name.
+          consumer_slug="$(printf '%s' "${consumer_repo}" | tr '/A-Z' '-a-z' | tr -cs 'a-z0-9-' '-')"
+          consumer_slug="${consumer_slug#-}"
+          consumer_slug="${consumer_slug%-}"
+          branch_name="validation-improvements/${consumer_slug}-${run_id}"
+
+          {
+            echo "skip=false"
+            echo "consumer_repo=${consumer_repo}"
+            echo "consumer_slug=${consumer_slug}"
+            echo "tracking_issue=${tracking_issue}"
+            echo "validation_cycle=${validation_cycle}"
+            echo "run_id=${run_id}"
+            echo "run_url=${run_url}"
+            echo "final_status=${final_status}"
+            echo "attempts=${attempts}"
+            echo "patches_count=${patches_count}"
+            echo "branch_name=${branch_name}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Create improvement branch
+        id: branch
+        if: steps.payload.outputs.skip != 'true'
+        env:
+          INITIAL_BRANCH_NAME: ${{ steps.payload.outputs.branch_name }}
+        run: |
+          set -euo pipefail
+          BRANCH_NAME="${INITIAL_BRANCH_NAME}"
+          if git ls-remote --exit-code --heads origin "${BRANCH_NAME}" >/dev/null 2>&1; then
+            echo "::warning::branch ${BRANCH_NAME} already exists on origin; appending run_attempt suffix"
+            BRANCH_NAME="${BRANCH_NAME}-${GITHUB_RUN_ATTEMPT}"
+          fi
+          # Canonical output: downstream steps must read steps.branch.outputs.branch_name
+          # (not steps.payload.outputs.branch_name) so that the suffixed name is used.
+          echo "branch_name=${BRANCH_NAME}" >> "${GITHUB_OUTPUT}"
+          git checkout -b "${BRANCH_NAME}"
+
+      - name: Apply patches
+        if: steps.payload.outputs.skip != 'true'
+        id: apply
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/self-heal-patches
+          : > /tmp/self-heal-patches/summary.md
+
+          # Allow-list of prompt filenames that the intake workflow will accept.
+          allowed=(
+            "mode-validate-discover.txt"
+            "mode-validate-generate.txt"
+            "mode-validate-fix-harness.txt"
+            "mode-validate-diagnose.txt"
+          )
+
+          total="$(jq '.patches | length' /tmp/payload.json)"
+          applied=0
+          skipped=0
+          for i in $(seq 0 $((total - 1))); do
+            entry_json="$(jq -c ".patches[$i]" /tmp/payload.json)"
+            target="$(printf '%s' "${entry_json}" | jq -r '.target_prompt // ""')"
+            patch_body="$(printf '%s' "${entry_json}" | jq -r '.patch // ""')"
+            attempt="$(printf '%s' "${entry_json}" | jq -r '.attempt // 0')"
+            rationale="$(printf '%s' "${entry_json}" | jq -r '.rationale // ""')"
+
+            if [ -z "${target}" ] || [ -z "${patch_body}" ]; then
+              echo "::warning::patch ${i} missing target or body; skipping"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            allowed_ok=false
+            for a in "${allowed[@]}"; do
+              if [ "${target}" = "${a}" ]; then
+                allowed_ok=true
+                break
+              fi
+            done
+            if [ "${allowed_ok}" != "true" ]; then
+              echo "::warning::patch ${i} target '${target}' is not in the intake allow-list; skipping"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            patch_file="/tmp/self-heal-patches/patch-${i}.diff"
+            printf '%s' "${patch_body}" > "${patch_file}"
+            # Ensure trailing newline.
+            if [ "$(tail -c1 "${patch_file}" | od -An -c | tr -d ' ')" != '\n' ]; then
+              printf '\n' >> "${patch_file}"
+            fi
+
+            # Intake-side patch validation (defense-in-depth against a
+            # forged repository_dispatch payload). The earlier
+            # target-allow-list check only validates the payload
+            # metadata; the diff BODY could still touch arbitrary files
+            # or delete content. Enforce additive-only + target-path-
+            # locked semantics directly on the diff body before running
+            # git apply. This mirrors the guards in
+            # scripts/self_heal_validation.sh but runs in the upstream
+            # repo context where only an attacker with write access to
+            # shubhodeep1/coding-workflows could bypass — we still
+            # refuse to apply a non-conforming patch.
+            expected_path="prompts/${target}"
+            validate_log="/tmp/self-heal-patches/validate-${i}.log"
+            if ! awk -v expected="${expected_path}" '
+              BEGIN { in_hunk = 0; saw_minus_header = 0; saw_plus_header = 0 }
+              function fail(msg) { print msg > "/dev/stderr"; exit 1 }
+              /^new file mode( |$)/       { fail("new file patches are not allowed") }
+              /^deleted file mode( |$)/   { fail("deleted file patches are not allowed") }
+              /^rename from /             { fail("rename patches are not allowed") }
+              /^rename to /               { fail("rename patches are not allowed") }
+              /^copy from /               { fail("copy patches are not allowed") }
+              /^copy to /                 { fail("copy patches are not allowed") }
+              /^--- / {
+                in_hunk = 0
+                path = $2
+                if (path == "/dev/null") { fail("--- /dev/null is not allowed") }
+                sub(/^a\//, "", path)
+                if (path != expected) { fail("--- path must be a/" expected) }
+                saw_minus_header = 1
+                next
+              }
+              /^\+\+\+ / {
+                in_hunk = 0
+                path = $2
+                if (path == "/dev/null") { fail("+++ /dev/null is not allowed") }
+                sub(/^b\//, "", path)
+                if (path != expected) { fail("+++ path must be b/" expected) }
+                saw_plus_header = 1
+                next
+              }
+              /^@@ / {
+                if (!saw_minus_header || !saw_plus_header) { fail("hunk encountered before full file headers") }
+                in_hunk = 1
+                next
+              }
+              {
+                if (in_hunk && /^-/) { fail("deletion lines are not allowed in hunks") }
+              }
+              END {
+                if (!saw_minus_header || !saw_plus_header) { fail("patch must contain both --- and +++ file headers") }
+              }
+            ' "${patch_file}" 2>"${validate_log}"; then
+              echo "::warning::patch ${i} failed intake validation; skipping"
+              {
+                printf '### Patch %d — prompts/%s (REJECTED)\n\n' "$((i + 1))" "${target}"
+                printf '**Reason:** failed intake patch validation.\n\n'
+                printf '```\n'
+                cat "${validate_log}" 2>/dev/null || true
+                printf '```\n\n'
+              } >> /tmp/self-heal-patches/summary.md
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            if git apply --check "${patch_file}" 2>/tmp/self-heal-patches/err-${i}.log; then
+              git apply "${patch_file}"
+              applied=$((applied + 1))
+              {
+                printf '### Patch %d — prompts/%s (attempt %s)\n\n' "$((i + 1))" "${target}" "${attempt}"
+                if [ -n "${rationale}" ]; then
+                  printf '**Rationale:** %s\n\n' "${rationale}"
+                fi
+                printf '```diff\n'
+                cat "${patch_file}"
+                printf '```\n\n'
+              } >> /tmp/self-heal-patches/summary.md
+            else
+              echo "::warning::patch ${i} does not apply cleanly; skipping (see err log)"
+              {
+                printf '### Patch %d — prompts/%s (REJECTED)\n\n' "$((i + 1))" "${target}"
+                printf '**Reason:** does not apply cleanly to current prompt text.\n\n'
+                printf '```\n'
+                cat /tmp/self-heal-patches/err-${i}.log 2>/dev/null || true
+                printf '```\n\n'
+              } >> /tmp/self-heal-patches/summary.md
+              skipped=$((skipped + 1))
+            fi
+          done
+
+          echo "applied=${applied}" >> "${GITHUB_OUTPUT}"
+          echo "skipped=${skipped}" >> "${GITHUB_OUTPUT}"
+          if [ "${applied}" -le 0 ]; then
+            echo "::warning::no patches applied cleanly; aborting PR creation"
+            exit 0
+          fi
+
+      - name: Append to docs/validation-improvements.md
+        if: steps.payload.outputs.skip != 'true' && steps.apply.outputs.applied != '0'
+        env:
+          CONSUMER_REPO: ${{ steps.payload.outputs.consumer_repo }}
+          TRACKING_ISSUE: ${{ steps.payload.outputs.tracking_issue }}
+          VALIDATION_CYCLE: ${{ steps.payload.outputs.validation_cycle }}
+          RUN_ID: ${{ steps.payload.outputs.run_id }}
+          RUN_URL: ${{ steps.payload.outputs.run_url }}
+          ATTEMPTS: ${{ steps.payload.outputs.attempts }}
+          APPLIED: ${{ steps.apply.outputs.applied }}
+          SKIPPED: ${{ steps.apply.outputs.skipped }}
+          BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
+        run: |
+          set -euo pipefail
+          ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          doc="docs/validation-improvements.md"
+          mkdir -p docs
+          if [ ! -f "${doc}" ]; then
+            {
+              printf '# Validation Improvements Ledger\n\n'
+              printf 'This file is an append-only ledger of validation-prompt self-heal patches\n'
+              printf 'dispatched by consumer validation runs (or by coding-workflows self-tests).\n'
+              printf 'Each entry records a successful self-heal that produced a passing validation\n'
+              printf 'cycle after patching one of the four validation prompts. Entries are added\n'
+              printf 'automatically by `.github/workflows/validation-improvements-intake.yml`.\n\n'
+              printf 'Every entry corresponds to one draft PR against `main` (labelled\n'
+              printf '`ai:needs-prompt-review`). See README.md section "Validation self-healing"\n'
+              printf 'for the admin review and unlock procedure.\n\n'
+              printf -- '---\n\n'
+            } > "${doc}"
+          fi
+
+          {
+            printf '## %s — %s (cycle %s)\n\n' "${ts}" "${CONSUMER_REPO}" "${VALIDATION_CYCLE}"
+            printf '- Consumer run: %s\n' "${RUN_URL:-(unknown)}"
+            printf '- Tracking issue: #%s\n' "${TRACKING_ISSUE:-0}"
+            printf '- Self-heal attempts in run: %s\n' "${ATTEMPTS}"
+            printf '- Patches applied: %s (skipped: %s)\n' "${APPLIED}" "${SKIPPED}"
+            printf '- Improvement branch: `%s`\n\n' "${BRANCH_NAME}"
+            if [ -s /tmp/self-heal-patches/summary.md ]; then
+              cat /tmp/self-heal-patches/summary.md
+            fi
+            printf -- '---\n\n'
+          } >> "${doc}"
+
+      - name: Commit, push, and open draft PR
+        if: steps.payload.outputs.skip != 'true' && steps.apply.outputs.applied != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          CONSUMER_REPO: ${{ steps.payload.outputs.consumer_repo }}
+          TRACKING_ISSUE: ${{ steps.payload.outputs.tracking_issue }}
+          VALIDATION_CYCLE: ${{ steps.payload.outputs.validation_cycle }}
+          RUN_URL: ${{ steps.payload.outputs.run_url }}
+          APPLIED: ${{ steps.apply.outputs.applied }}
+          SKIPPED: ${{ steps.apply.outputs.skipped }}
+          BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
+        run: |
+          set -euo pipefail
+          git add docs/validation-improvements.md prompts/mode-validate-*.txt
+          git commit -m "[skip ai] validation prompt self-heal from ${CONSUMER_REPO} (${APPLIED} patch(es))"
+
+          push_ok=false
+          for delay in 2 4 8 16; do
+            if git push -u origin "${BRANCH_NAME}"; then
+              push_ok=true
+              break
+            fi
+            echo "::warning::push failed, retrying in ${delay}s"
+            sleep "${delay}"
+          done
+          if [ "${push_ok}" != "true" ]; then
+            echo "::error::could not push improvement branch after retries"
+            exit 1
+          fi
+
+          # Ensure the label exists before we apply it.
+          if ! gh label list --limit 500 | awk '{print $1}' | grep -Fxq "ai:needs-prompt-review"; then
+            gh label create "ai:needs-prompt-review" \
+              --description "Validation prompt self-heal PR awaiting manual review" \
+              --color "fbca04" || true
+          fi
+
+          pr_body_file="$(mktemp)"
+          {
+            printf '## Automated validation-prompt self-heal\n\n'
+            printf '**Source:** consumer run on `%s`\n' "${CONSUMER_REPO}"
+            printf '**Run:** %s\n' "${RUN_URL:-(unknown)}"
+            printf '**Tracking issue:** #%s\n' "${TRACKING_ISSUE:-0}"
+            printf '**Validation cycle:** %s\n' "${VALIDATION_CYCLE}"
+            printf '**Patches applied:** %s (skipped: %s)\n\n' "${APPLIED}" "${SKIPPED}"
+            printf 'This PR was generated automatically by `validation-improvements-intake.yml` in response to a `repository_dispatch` event from a validation run that passed **only after** one of the four validation prompts was patched in-process. The patches are recorded in `docs/validation-improvements.md`.\n\n'
+            printf '### [skip ai]\n\n'
+            printf 'This PR title contains the `[skip ai]` token and the PR is opened as a **draft**, so the automated review/autofix/automerge pipeline is skipped. When you are ready to engage the normal review flow, click **"Ready for review"** in the GitHub UI — that fires a `ready_for_review` event which the review wrapper now listens for, and the normal review/automerge flow will engage.\n\n'
+            printf '### What to check\n\n'
+            printf '- Does the patched prompt wording still respect all hard constraints?\n'
+            printf '- Is the change additive, or does it remove/rename fields or constraints (it should NOT)?\n'
+            printf '- Does the rationale in `docs/validation-improvements.md` justify the change?\n\n'
+            if [ -s /tmp/self-heal-patches/summary.md ]; then
+              printf '### Applied patches\n\n'
+              cat /tmp/self-heal-patches/summary.md
+            fi
+          } > "${pr_body_file}"
+
+          pr_url="$(gh pr create \
+            --draft \
+            --base main \
+            --head "${BRANCH_NAME}" \
+            --title "[skip ai] validation prompt self-heal from ${CONSUMER_REPO} (${APPLIED} patch(es))" \
+            --body-file "${pr_body_file}" \
+            --label "ai:needs-prompt-review")"
+
+          echo "pr_url=${pr_url}" >> "${GITHUB_OUTPUT}"
+          echo "::notice::Opened draft PR ${pr_url}"
+
+      - name: Telegram notify admin
+        if: steps.payload.outputs.skip != 'true' && steps.apply.outputs.applied != '0'
+        continue-on-error: true
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          CONSUMER_REPO: ${{ steps.payload.outputs.consumer_repo }}
+          APPLIED: ${{ steps.apply.outputs.applied }}
+          SKIPPED: ${{ steps.apply.outputs.skipped }}
+          RUN_URL: ${{ steps.payload.outputs.run_url }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "Telegram not configured; skipping admin alert"
+            exit 0
+          fi
+          source scripts/tg_helpers.sh
+          msg="Validation self-heal intake: ${APPLIED} patch(es) from ${CONSUMER_REPO} (skipped: ${SKIPPED}). Draft PR awaiting manual review (label ai:needs-prompt-review). Consumer run: ${RUN_URL:-(unknown)}"
+          tg_send_msg "${msg}" "WARNING" >/dev/null || true

@@ -177,6 +177,14 @@ jobs:
           chmod +x "${canonical_validate_process}"
           _fetched_scripts+=(validate_process.sh)
 
+          # The self-heal helper (scripts/self_heal_validation.sh) is
+          # fetched below using the best-effort gh_retry_to_file pattern,
+          # AFTER gh_helpers.sh has been sourced. fetch_from_ref_or_local
+          # cannot be used here because it exits the step (not returns)
+          # when the file is missing both remotely and locally, which
+          # would break consumer repos on older @stable tags that predate
+          # self-heal — see docs/validation-improvements.md rollout notes.
+
           # Source rate-limit helpers as soon as gh_helpers.sh is available.
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry_to_file >/dev/null 2>&1 || gh_retry_to_file() { local _outfile="$1"; shift; "$@" > "${_outfile}"; }
@@ -205,6 +213,25 @@ jobs:
             rm -f "scripts/codex_model_catalog.json.tmp"
             echo "Model catalog not on ${script_ref} yet; using local copy."
           fi
+
+          # Self-heal helper (optional; self-heal is a no-op if absent on
+          # the selected script_ref, for backward compatibility with older
+          # stable tags during rollout). Best-effort fetch: skip silently
+          # on missing remote, do not overwrite an existing local copy.
+          if [ ! -f "scripts/self_heal_validation.sh" ]; then
+            if gh_retry_to_file "scripts/self_heal_validation.sh.tmp" gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/scripts/self_heal_validation.sh?ref=${script_ref}" 2>/dev/null; then
+              mv "scripts/self_heal_validation.sh.tmp" "scripts/self_heal_validation.sh"
+              chmod +x "scripts/self_heal_validation.sh"
+              _fetched_scripts+=(self_heal_validation.sh)
+            else
+              rm -f "scripts/self_heal_validation.sh.tmp"
+              echo "Self-heal helper not on ${script_ref} yet; self-heal will be a no-op."
+            fi
+          else
+            chmod +x "scripts/self_heal_validation.sh"
+            _fetched_scripts+=(self_heal_validation.sh)
+          fi
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -217,6 +244,21 @@ jobs:
           for pf in mode-validate-generate.txt mode-validate-diagnose.txt mode-validate-discover.txt mode-validate-fix-harness.txt serena-efficiency-block.txt; do
             fetch_from_ref_or_local "prompts/${pf}" "prompts/${pf}"
           done
+          # Self-heal prompt (optional; backward-compatible with older
+          # stable tags that predate self-heal). Best-effort fetch: skip
+          # silently on missing remote, do not overwrite an existing
+          # local copy. We do NOT use fetch_from_ref_or_local here
+          # because it `exit 1`s on missing-both, which `|| true` cannot
+          # intercept (shell exit vs function return).
+          if [ ! -f "prompts/mode-validate-self-heal.txt" ]; then
+            if gh_retry_to_file "prompts/mode-validate-self-heal.txt.tmp" gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/mode-validate-self-heal.txt?ref=${script_ref}" 2>/dev/null; then
+              mv "prompts/mode-validate-self-heal.txt.tmp" "prompts/mode-validate-self-heal.txt"
+            else
+              rm -f "prompts/mode-validate-self-heal.txt.tmp"
+              echo "Self-heal prompt not on ${script_ref} yet; self-heal will be a no-op."
+            fi
+          fi
 
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
@@ -292,6 +334,7 @@ jobs:
           TOOL_CALL_BUDGET_VALIDATE: ${{ vars.TOOL_CALL_BUDGET_VALIDATE || '60' }}
           MODEL_EDITOR: ${{ env.MODEL_EDITOR }}
           MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
+          MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
