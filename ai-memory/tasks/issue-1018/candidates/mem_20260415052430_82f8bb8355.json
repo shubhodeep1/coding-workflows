@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` clarification questions were issued in this run.\n- Interpreted answer: `/answer [auto-answered-by-clarify]` means proceed using the issue description/scope/acceptance criteria as complete.\n\nConflict detection:\n- No factual conflict found between the issue and current code.\n- Implementation nuance: there is one canonical implement workflow body in [`.github/workflows/implement.yml`](.github/workflows/implement.yml); [`.github/workflows/internal-implement.yml`](.github/workflows/internal-implement.yml) and [`workflow-templates/ai-implement.yml`](workflow-templates/ai-implement.yml) are wrappers, so parity is achieved by updating canonical source + template validation/bootstrap paths.\n\n1. Files likely to change\n- [`.github/workflows/implement.yml`](.github/workflows/implement.yml)\n- New prompt file (recommended): [`prompts/mode-implement-repair-syntax.txt`](prompts/mode-implement-repair-syntax.txt)\n- [`.github/workflows/ci.yml`](.github/workflows/ci.yml)\n- [`.github/workflows/test-and-mark-stable.yml`](.github/workflows/test-and-mark-stable.yml)\n- [`tests/test_implement_post_codex_recovery.py`](tests/test_implement_post_codex_recovery.py)\n- Behavior docs: [`README.md`](README.md) and [`agents.md`](agents.md)\n\n2. Functions/modules to implement\n- In `implement.yml`, split current syntax step into:\n  - Non-fatal check step (runs unchanged validators/commands, captures structured diagnostics, sets outputs/flags, does not `exit 1`).\n  - Fatal gate step (fails only when unresolved syntax errors remain, preserving current failure semantics for syntax problems).\n- Keep existing checker coverage/commands unchanged (`py_compile`, `node --check`, `bash -n`, `yaml.safe_load`).\n- Keep downstream diagnose compatibility by preserving `post_codex_validation_errors.txt` path and section format.\n- Add new repair prompt asset with strict constraints (allow-list-only edits, no new files, preserve semantics, Serena-first targeted edits).\n- Register/fetch new prompt artifact in implement bootstrap fetch logic and include it in prompt integrity validation lists.\n\n3. Data structures affected\n- `post_codex_validation_errors.txt` contents (same path/format, still checker-scoped blocks).\n- New step outputs/flags from syntax check step (e.g., error-count/has-errors booleans) consumed by gate step.\n- Prompt asset inventory (`prompts/*.txt`) used by bootstrap and integrity checks.\n\n4. API/interface changes\n- No external API changes.\n- Internal workflow interface change: additional syntax-check outputs used by a new gate step.\n- New prompt artifact path becomes part of bootstrap/fetch and validation surface.\n\n5. Risks/edge cases\n- Step-name compatibility for failure diagnostics: avoid breaking downstream parsing/expectations (keep legacy failure labeling behavior intact).\n- Ensure check step always sets outputs even when no changed files, so gate behavior is deterministic.\n- Prevent non-syntax failure-mode drift: only syntax path should be split; all other failure handling stays unchanged.\n- Preserve exact checker command behavior and capture formatting to avoid diagnose regressions.\n\n6. Testing considerations\n- Update/add tests in `test_implement_post_codex_recovery.py` to cover:\n  - Non-fatal syntax check behavior (captures diagnostics without immediate failure).\n  - Gate failure behavior when unresolved syntax flags indicate errors.\n  - Preservation of `post_codex_validation_errors.txt` compatibility.\n- Extend prompt integrity coverage in CI/stable tests to include the new repair prompt renderability and placeholder resolution.\n- Run targeted tests:\n  - `python3 tests/test_implement_post_codex_recovery.py`\n  - Prompt integrity portions from CI/stable workflow logic (render + placeholder checks) for the new file.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "19dd4b9675c4e221a35143343dd4e1a45a469b7ea44337f8e670a71f0fd78e22",
+  "lineage": {
+    "issue_number": 1018,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24437628939",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24437628939",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1018"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415052430_82f8bb8355",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1018,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24437628939"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1018",
+  "timestamps": {
+    "created_at": "2026-04-15T05:24:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
