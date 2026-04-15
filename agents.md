@@ -156,6 +156,9 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Stall recovery controls include `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`): legacy autonomous ladder remains default; stall-judge `escalate_human` outputs are terminalization-gated to the non-human fallback action unless explicitly enabled.
 - Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
 - Orchestrator clarify loop guard: `ORCHESTRATOR_MAX_CLARIFY_CYCLES` (default `3`) caps auto-answer clarification cycles before escalating to `ai:blocked`.
+- Orchestrator decomposition reasoning default: `THINKING_LEVEL_ORCHESTRATE` defaults to `medium`.
+- Orchestrator label contract includes `ai:orchestrator-managed` (issue is orchestrator-managed) and `ai:orchestrator-validate-required` (validate-phase requirement marker).
+- Clarify auto-answer behavior is split: `orchestrate_clarify_respond` handles orchestrator-managed clarification threads and posts `/answer [auto-answered-by-orchestrator]`; `clarify.yml` handles clear standalone issues by posting `/answer [auto-answered-by-clarify]` when no clarification questions are needed.
 - Implementation no-op reissue cap: `MAX_IMPL_NOOP_REISSUES` (default `2`) limits automatic re-issues for `ai:implementation-failed` before the poller closes the issue and lets the judge verify whether work is already present.
 - GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
 
