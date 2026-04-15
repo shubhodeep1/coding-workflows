@@ -662,7 +662,7 @@ jobs:
 
               LOOP_GUARD_JSON="$(memory_clarify_loop_guard \
                 --issue-number "${ISSUE_NUMBER}" \
-                --clarify-hash "${CLARIFICATION_TEXT}" \
+                --clarify-hash "${CLARIFY_HASH:-${CLARIFICATION_TEXT}}" \
                 --max-cycles "${MAX_CYCLES}" \
                 --current-comment-id "${CLARIFICATION_COMMENT_ID}")"
 

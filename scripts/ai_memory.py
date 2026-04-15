@@ -521,7 +521,12 @@ def cmd_processed_command_list(args: argparse.Namespace) -> int:
 
 def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
     args = _read_env_defaults(args)
-    clarify_hash = compute_normalized_sha256(_require_nonempty(args.clarify_hash, "clarify_hash"))
+    clarify_hash_input = _require_nonempty(args.clarify_hash, "clarify_hash").strip()
+    lowered_clarify_hash_input = clarify_hash_input.lower()
+    if len(lowered_clarify_hash_input) == 64 and all(ch in "0123456789abcdef" for ch in lowered_clarify_hash_input):
+        clarify_hash = lowered_clarify_hash_input
+    else:
+        clarify_hash = compute_normalized_sha256(clarify_hash_input)
     max_cycles = _require_positive_int(args.max_cycles, "max_cycles")
 
     if not args.enabled:
