@@ -177,6 +177,13 @@ jobs:
           chmod +x "${canonical_validate_process}"
           _fetched_scripts+=(validate_process.sh)
 
+          # Self-heal helper (optional; self-heal is a no-op if absent on
+          # the selected script_ref, for backward compatibility with older
+          # stable tags during rollout).
+          canonical_self_heal="scripts/self_heal_validation.sh"
+          fetch_from_ref_or_local "${canonical_self_heal}" "${canonical_self_heal}" "false"
+          [ -f "${canonical_self_heal}" ] && chmod +x "${canonical_self_heal}" && _fetched_scripts+=(self_heal_validation.sh) || true
+
           # Source rate-limit helpers as soon as gh_helpers.sh is available.
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry_to_file >/dev/null 2>&1 || gh_retry_to_file() { local _outfile="$1"; shift; "$@" > "${_outfile}"; }
@@ -217,6 +224,9 @@ jobs:
           for pf in mode-validate-generate.txt mode-validate-diagnose.txt mode-validate-discover.txt mode-validate-fix-harness.txt serena-efficiency-block.txt; do
             fetch_from_ref_or_local "prompts/${pf}" "prompts/${pf}"
           done
+          # Self-heal prompt (optional; backward-compatible with older
+          # stable tags that predate self-heal).
+          fetch_from_ref_or_local "prompts/mode-validate-self-heal.txt" "prompts/mode-validate-self-heal.txt" "false" || true
 
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
@@ -275,6 +285,7 @@ jobs:
           TOOL_CALL_BUDGET_VALIDATE: ${{ vars.TOOL_CALL_BUDGET_VALIDATE || '60' }}
           MODEL_EDITOR: ${{ env.MODEL_EDITOR }}
           MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
+          MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}

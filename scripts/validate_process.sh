@@ -97,6 +97,25 @@ export TEST_API_KEY="${TEST_API_KEY:-${VALIDATION_TEST_API_KEY}}"
 
 CREATED_FIX_ISSUES_JSON='[]'
 
+# ---------------------------------------------------------------
+# Self-heal state (see prompts/mode-validate-self-heal.txt).
+# Self-heal attempts do NOT burn validation cycles: they are re-execs of
+# this process within the same cycle. The counter is passed across execs
+# via SELF_HEAL_ATTEMPT, and the accumulated patches are appended to
+# SELF_HEAL_PATCHES_FILE (JSONL) for later repository_dispatch back to
+# shubhodeep1/coding-workflows.
+# ---------------------------------------------------------------
+SELF_HEAL_ATTEMPT="${SELF_HEAL_ATTEMPT:-0}"
+if ! [[ "${SELF_HEAL_ATTEMPT}" =~ ^[0-9]+$ ]]; then
+  SELF_HEAL_ATTEMPT=0
+fi
+MAX_SELF_HEAL_ATTEMPTS="${MAX_SELF_HEAL_ATTEMPTS:-2}"
+if ! [[ "${MAX_SELF_HEAL_ATTEMPTS}" =~ ^[0-9]+$ ]]; then
+  MAX_SELF_HEAL_ATTEMPTS=2
+fi
+SELF_HEAL_PATCHES_FILE="${SELF_HEAL_PATCHES_FILE:-${RUNTIME_DIR}/self_heal_patches.jsonl}"
+export SELF_HEAL_ATTEMPT MAX_SELF_HEAL_ATTEMPTS SELF_HEAL_PATCHES_FILE
+
 
 # ---------------------------------------------------------------
 # Helpers
@@ -146,6 +165,135 @@ tg_notify()
 if ! type gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+
+# attempt_self_heal_and_reexec — last-chance interception before a hard
+# validation failure. If the self-heal LLM proposes a patch to one of the
+# four validation prompt files and the patch applies cleanly, we re-exec
+# this script (incrementing SELF_HEAL_ATTEMPT, not VALIDATION_CYCLE). If
+# self-heal is not applicable or budget is exhausted, this function
+# returns and the caller proceeds with its normal hard-fail path.
+#
+# Usage: attempt_self_heal_and_reexec "<failure-phase-tag>"
+#   phase tag: generate|preflight|canary|runtime|diagnose|discover
+attempt_self_heal_and_reexec()
+{
+  local phase="${1:-unknown}"
+
+  if [ "${MAX_SELF_HEAL_ATTEMPTS:-0}" -le 0 ]; then
+    return 0
+  fi
+  if [ "${SELF_HEAL_ATTEMPT:-0}" -ge "${MAX_SELF_HEAL_ATTEMPTS}" ]; then
+    tg_notify "Validation self-heal budget exhausted for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS}); falling back to hard-fail." "WARNING"
+    return 0
+  fi
+
+  if [ ! -f "scripts/self_heal_validation.sh" ]; then
+    echo "::warning::self-heal helper scripts/self_heal_validation.sh not found; skipping self-heal." >&2
+    return 0
+  fi
+
+  local heal_exit=0
+  SELF_HEAL_FAILURE_PHASE="${phase}" \
+    STATIC_CONTEXT_FILE="${STATIC_CONTEXT_FILE}" \
+    VALIDATION_RESULT_FILE="${VALIDATION_RESULT_FILE}" \
+    DIAGNOSE_RESULT_FILE="${DIAGNOSE_RESULT_FILE}" \
+    VALIDATION_LOG_TAIL_FILE="${VALIDATION_LOG_TAIL_FILE}" \
+    CONTAINER_LOG_TAIL_FILE="${CONTAINER_LOG_TAIL_FILE}" \
+    VALIDATE_HINTS_FILE="${VALIDATE_HINTS_FILE}" \
+    DISCOVER_OUTPUT_FILE="${DISCOVER_OUTPUT_FILE}" \
+    GENERATE_OUTPUT_FILE="${GENERATE_OUTPUT_FILE}" \
+    DIAGNOSE_OUTPUT_FILE="${DIAGNOSE_OUTPUT_FILE}" \
+    bash scripts/self_heal_validation.sh || heal_exit=$?
+
+  case "${heal_exit}" in
+    0)
+      # Patch applied; re-exec with incremented attempt counter.
+      SELF_HEAL_ATTEMPT=$((SELF_HEAL_ATTEMPT + 1))
+      tg_notify "Validation self-heal attempt ${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS} applied for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (phase=${phase})." "DEBUG"
+      # validate_process.sh takes no positional args; re-exec plain.
+      exec env \
+        SELF_HEAL_ATTEMPT="${SELF_HEAL_ATTEMPT}" \
+        MAX_SELF_HEAL_ATTEMPTS="${MAX_SELF_HEAL_ATTEMPTS}" \
+        SELF_HEAL_PATCHES_FILE="${SELF_HEAL_PATCHES_FILE}" \
+        bash "${BASH_SOURCE[0]:-$0}"
+      ;;
+    1)
+      # No patch proposed — fall through to normal hard-fail path.
+      return 0
+      ;;
+    *)
+      # Hard error inside self-heal helper — fall through to hard-fail.
+      echo "::warning::self-heal helper exited with code ${heal_exit}; falling through to hard-fail." >&2
+      return 0
+      ;;
+  esac
+}
+
+# dispatch_self_heal_improvements — send accumulated self-heal patches
+# back to the upstream coding-workflows repo as a repository_dispatch
+# event. The intake workflow there will open a draft PR, append to
+# docs/validation-improvements.md, and Telegram-alert the admin.
+#
+# No-op if no patches were accumulated or GH_PAT has no dispatch scope.
+dispatch_self_heal_improvements()
+{
+  if [ ! -s "${SELF_HEAL_PATCHES_FILE}" ]; then
+    return 0
+  fi
+
+  local upstream="shubhodeep1/coding-workflows"
+  local patches_json
+  patches_json="$(jq -cs '.' "${SELF_HEAL_PATCHES_FILE}" 2>/dev/null || echo '[]')"
+  if [ "${patches_json}" = "[]" ] || [ -z "${patches_json}" ]; then
+    return 0
+  fi
+
+  local run_url=""
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    run_url="$(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+  fi
+
+  local payload
+  payload="$(jq -cn \
+    --arg consumer_repo "${GITHUB_REPOSITORY}" \
+    --arg tracking_issue "${TRACKING_ISSUE_RAW}" \
+    --arg validation_cycle "${VALIDATION_CYCLE}" \
+    --arg run_id "${GITHUB_RUN_ID:-0}" \
+    --arg run_url "${run_url}" \
+    --arg final_status "pass" \
+    --argjson attempts "${SELF_HEAL_ATTEMPT}" \
+    --argjson patches "${patches_json}" \
+    '{
+      event_type: "validation-prompt-self-heal",
+      client_payload: {
+        consumer_repo: $consumer_repo,
+        tracking_issue: $tracking_issue,
+        validation_cycle: $validation_cycle,
+        run_id: $run_id,
+        run_url: $run_url,
+        final_status: $final_status,
+        self_heal_attempts: $attempts,
+        patches: $patches
+      }
+    }')"
+
+  local dispatch_log="${RUNTIME_DIR}/self_heal_dispatch.log"
+  local dispatch_exit=0
+  echo "${payload}" | gh_retry gh api \
+    -X POST \
+    -H 'Accept: application/vnd.github+json' \
+    "repos/${upstream}/dispatches" \
+    --input - \
+    > "${dispatch_log}" 2>&1 || dispatch_exit=$?
+
+  if [ "${dispatch_exit}" -ne 0 ]; then
+    echo "::warning::Self-heal dispatch to ${upstream} failed (exit ${dispatch_exit}); see ${dispatch_log}. Patches are preserved in ${SELF_HEAL_PATCHES_FILE}." >&2
+    tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} but dispatch back to ${upstream} failed. Patches remain in run artifacts." "WARNING"
+    return 0
+  fi
+
+  tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${SELF_HEAL_ATTEMPT} patch(es)); improvements dispatched to ${upstream}." "WARNING"
+}
 
 is_tracking_run()
 {
@@ -1258,6 +1406,9 @@ done
 
 if [ "${GENERATE_SUCCESS}" != "true" ]; then
   local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum)."
+  # Self-heal interception: if the generate/fix-harness prompt is at fault,
+  # patch it and re-exec before burning a validation cycle.
+  attempt_self_heal_and_reexec "generate"
   post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for generation logs."
   set_tracking_phase_label "ai:validation-failed"
   write_result_files "error" "Validation harness generation failed" "${local_failure_summary}"
@@ -1309,6 +1460,8 @@ if ! run_preflight_checks; then
       harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix validation/docker-compose.test.yml, shell syntax, or build context/dockerfile paths." end)
     }' > "${DIAGNOSE_RESULT_FILE}"
 
+  # Self-heal interception: bad harness is often a prompt-wording defect.
+  attempt_self_heal_and_reexec "preflight"
   post_tracking_comment "## ❌ Runtime validation harness pre-flight failed\n\n${failure_summary}\n\n\`docker compose config\`, shell syntax, or build context/dockerfile path checks failed."
   set_tracking_phase_label "ai:validation-failed"
   write_result_files "fail" "Validation failed due to harness pre-flight error" "${failure_summary}"
@@ -1536,6 +1689,9 @@ if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ] && [ "${PASS_
 
 	write_result_files "pass" "${summary_text}" ""
 	tg_notify "Runtime validation passed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${PASSED_TESTS}/${TOTAL_TESTS})." "DEBUG"
+	# If this pass was reached after one or more self-heal attempts, send
+	# the accumulated prompt patches back to upstream coding-workflows.
+	dispatch_self_heal_improvements
 	exit 0
 fi
 
@@ -1586,6 +1742,9 @@ if [ "${CANARY_ONLY_FAILURE}" = true ]; then
 					harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix canary test infrastructure assumptions (ports/services/tools)." end)
 				}' > "${DIAGNOSE_RESULT_FILE}"
 
+			# Self-heal interception: canary failures are prime candidates
+			# for a bad generate/fix-harness prompt.
+			attempt_self_heal_and_reexec "canary"
 			failure_summary="Validation harness error: ${FIRST_FAILURE}"
 			post_tracking_comment "## ❌ Runtime validation harness error\n\n${failure_summary}\n\nCanary infrastructure check failed and remaining tests were skipped."
 			set_tracking_phase_label "ai:validation-failed"
@@ -1652,6 +1811,15 @@ fi
 
 DIAG_STATUS="$(jq -r '.status // "harness_error"' "${DIAGNOSE_RESULT_FILE}")"
 DIAG_TEXT="$(jq -r '.diagnosis // "Validation failed."' "${DIAGNOSE_RESULT_FILE}")"
+
+# Self-heal interception: the diagnose LLM has classified the failure. If
+# the self-heal LLM determines the classification or the originating phase
+# was driven by a prompt defect and proposes a patch, we re-exec this
+# script (without burning a validation cycle). This hook fires for ALL
+# diagnose outcomes (needs_fixes, harness_error, infeasible, unknown)
+# per Q5=B: any failure where a prompt edit is proposed is self-heal-
+# eligible. The helper short-circuits on an empty-patch proposal.
+attempt_self_heal_and_reexec "diagnose"
 
 case "${DIAG_STATUS}" in
   needs_fixes)

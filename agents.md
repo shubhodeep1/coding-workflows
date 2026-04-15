@@ -290,6 +290,18 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
+## 16. Validation Self-Healing
+
+- `scripts/validate_process.sh` attempts to self-heal prompt-wording defects in the four validation prompts (`mode-validate-{discover,generate,fix-harness,diagnose}.txt`) before burning a `MAX_VALIDATE_CYCLES` cycle. The self-heal flow is driven by `prompts/mode-validate-self-heal.txt` and `scripts/self_heal_validation.sh`.
+- The budget is `MAX_SELF_HEAL_ATTEMPTS` (default `2`) per `validate_process.sh` invocation. Self-heal re-execs do NOT increment `VALIDATION_CYCLE`.
+- Self-heal is ONLY permitted to edit the four validation prompt files. Do not extend it to scripts, workflow YAML, or other prompts without a new ask-first decision.
+- On a successful healed pass, `validate_process.sh` POSTs `repository_dispatch` (event type `validation-prompt-self-heal`) to `shubhodeep1/coding-workflows` with the accumulated patches. The intake workflow `.github/workflows/validation-improvements-intake.yml` opens a **draft** PR with the `[skip ai]` title token and label `ai:needs-prompt-review`, and appends a ledger entry to `docs/validation-improvements.md`.
+- Draft PRs are already skipped by `review_autofix.yml` (gate at line ~87), so the automated review/autofix/automerge pipeline cannot merge a self-heal PR without a human marking it "Ready for review". That event is handled by `workflow-templates/ai-review.yml` on the `ready_for_review` trigger.
+- Admin alerts for each intake are sent via `tg_send_msg` (severity `WARNING`). See README.md section "Validation self-healing" for the full flow and the unlock procedure.
+- Before changing any of the self-heal wiring or touching `prompts/mode-validate-self-heal.txt`, re-read the hard constraints section of that prompt — the allow-list of four target files, the no-rename rule, and the no-schema-change rule are all required for correctness.
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**
