@@ -5473,20 +5473,34 @@ sys.exit(1)
             ORCH_FOLLOWUP_TRACKING_NUM=""
             ORCH_FOLLOWUP_INTEGRATION_BRANCH=""
             ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
+            STATE_FOLLOWUP_INTEGRATION_BRANCH=""
+            STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="false"
+            FOLLOWUP_ACTIVE_INTEGRATION_CONTEXT="false"
             FOLLOWUP_PR_BLOCKED="false"
 
             if [ "${RB_TARGET_MERGED}" = "true" ]; then
+              STATE_FOLLOWUP_INTEGRATION_BRANCH="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+              if [ -n "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+                FOLLOWUP_ACTIVE_INTEGRATION_CONTEXT="true"
+                if integration_branch_exists "${STATE_FOLLOWUP_INTEGRATION_BRANCH}"; then
+                  STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="true"
+                fi
+              fi
+
               resolve_active_orchestrator_context_for_issue "${rb_issue}" "${TRACKING_NUM:-}"
               ORCH_FOLLOWUP_OWNED="${RESOLVED_ORCHESTRATOR_OWNED}"
               ORCH_FOLLOWUP_TRACKING_NUM="${RESOLVED_TRACKING_ISSUE}"
               ORCH_FOLLOWUP_INTEGRATION_BRANCH="${RESOLVED_INTEGRATION_BRANCH}"
               ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="${RESOLVED_INTEGRATION_BRANCH_EXISTS}"
 
-              if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
+              if [ "${STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+                BASE_REF="${STATE_FOLLOWUP_INTEGRATION_BRANCH}"
+                echo "  Follow-up PR for issue #${rb_issue} uses state integration branch ${BASE_REF}."
+              elif [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
                 if [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
                   BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
                   echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
-                else
+                elif [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
                   FOLLOWUP_PR_BLOCKED="true"
                   RB_FOLLOWUP_REFUSED="true"
                   FOLLOWUP_BLOCK_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}), but integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}."
@@ -5501,6 +5515,8 @@ ${FOLLOWUP_BLOCK_REASON}"
                   tg_notify "${FOLLOWUP_BLOCK_REASON}" "WARNING"
                   TRACKING_NUM="${ORIGINAL_TRACKING_NUM}"
                 fi
+              elif [ "${FOLLOWUP_ACTIVE_INTEGRATION_CONTEXT}" = "true" ]; then
+                echo "::warning::Issue #${rb_issue} has integration context '${STATE_FOLLOWUP_INTEGRATION_BRANCH}', but branch validation failed. Follow-up PR creation will be guarded against ${DEFAULT_BRANCH:-main}."
               fi
             fi
 
@@ -5623,15 +5639,20 @@ ${RB_FIX_DESC}" || true
                   elif git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
 
-                    if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ] && [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+                    if [ "${STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+                      if [ "${BASE_REF}" != "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+                        echo "::warning::Detected follow-up PR base '${BASE_REF}' for issue #${rb_issue}; retargeting to state integration branch '${STATE_FOLLOWUP_INTEGRATION_BRANCH}'."
+                        BASE_REF="${STATE_FOLLOWUP_INTEGRATION_BRANCH}"
+                      fi
+                    elif [ "${ORCH_FOLLOWUP_OWNED}" = "true" ] && [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
                       if [ "${BASE_REF}" != "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
                         echo "::warning::Detected follow-up PR base '${BASE_REF}' for orchestrator-owned issue #${rb_issue}; retargeting to '${ORCH_FOLLOWUP_INTEGRATION_BRANCH}'."
                         BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
                       fi
                     fi
 
-                    if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ] && [ "${BASE_REF}" = "${DEFAULT_BRANCH:-main}" ]; then
-                      FOLLOWUP_GUARD_REASON="Issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}); refusing to create follow-up PR against '${BASE_REF}'. Required base is '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}'."
+                    if [ "${FOLLOWUP_ACTIVE_INTEGRATION_CONTEXT}" = "true" ] && { [ "${BASE_REF}" = "${DEFAULT_BRANCH:-main}" ] || [ "${BASE_REF}" = "main" ]; }; then
+                      FOLLOWUP_GUARD_REASON="Issue #${rb_issue} has active integration context ('${STATE_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}'); refusing to create follow-up PR against '${BASE_REF}'."
                       echo "::warning::${FOLLOWUP_GUARD_REASON}"
                       ORIGINAL_TRACKING_NUM="${TRACKING_NUM:-}"
                       if [ -n "${ORCH_FOLLOWUP_TRACKING_NUM:-}" ]; then
