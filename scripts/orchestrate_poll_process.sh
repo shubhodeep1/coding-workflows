@@ -685,6 +685,11 @@ _issue_timeline_with_cross_refs_json() {
     return $?
   fi
 
+  if type _gh_issue_timeline_with_cross_refs_rest >/dev/null 2>&1; then
+    _gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_num}"
+    return $?
+  fi
+
   gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null | jq -s 'add // []' 2>/dev/null
 }
 
