@@ -418,7 +418,11 @@ def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_implementing_ph
 	)
 
 	assert len(stalls) == 1
-	assert stalls[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][1]
+	assert stalls[0]["recovery_action"] == orchestrate_lib.resolve_declarative_stall_recovery_action(
+		phase="ai:implementing",
+		recovery_count=2,
+		allow_human_terminalization=False,
+	)
 
 
 def test_detect_stalls_allows_human_terminalization_when_explicitly_enabled():
@@ -450,7 +454,11 @@ def test_resolve_effective_stall_recovery_action_defaults_to_safe_allowed_action
 		allow_human_terminalization=False,
 		judged_action="unsupported_action",
 	)
-	assert unknown_action == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][1]
+	assert unknown_action == orchestrate_lib.resolve_declarative_stall_recovery_action(
+		phase="ai:implementing",
+		recovery_count=2,
+		allow_human_terminalization=False,
+	)
 
 	conflict_action = orchestrate_lib.resolve_effective_stall_recovery_action(
 		phase="ai:implementing",
