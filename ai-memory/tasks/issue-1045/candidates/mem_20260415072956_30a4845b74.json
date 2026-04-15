@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `implement-repair-step`\n\nClarification mapping\n- Q1: A \u2014 dependency `repair-prompt-and-validator-split` is mandatory; if required repair prompt/validator artifacts are missing, fail this run (no partial fallback implementation).\n- Q2: A \u2014 repair scope allow-list is the initial post-Codex changed-file set, intersected with captured-file list when captured list exists.\n- Q3: A \u2014 out-of-scope untracked files must be deleted during rollback, and the attempt counts as failed.\n\nConflict detected\n- Current branch inspection shows no obvious `post-codex repair` prompt/validator-split artifacts or `MAX_POST_CODEX_REPAIR_ATTEMPTS` wiring yet. This matches the declared dependency; implementation must include a hard dependency gate and fail-fast behavior when artifacts are absent.\n\nRepresentative pattern to follow\n- Reuse the existing `Validate syntax of changed files` + `post_codex_validation_errors.txt` capture flow.\n- Reuse the existing targeted failure routing (`Capture post-Codex validation errors` + `Diagnose post-Codex failure and create fix-up issues`) as the downstream fallback path when repair fails/exhausts attempts.\n\n1) Files likely to change\n- `.github/workflows/implement.yml`\n- `README.md`\n- `agents.md`\n\n2) Functions/modules to implement\n- In `implement.yml`, add repo-level/job env wiring:\n- `MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '1' }}`.\n- Update syntax validation flow so repair can run in the same job:\n- keep `id: validate_syntax_changed_files`,\n- make it non-terminal for immediate recovery (e.g., continue-on-error + explicit outcome handling),\n- preserve current checker behavior and diagnostics capture.\n- Add new post-check repair step gated strictly to syntax-validator failure:\n- run only when `validate_syntax_changed_files` failed,\n- assert dependency artifacts from `repair-prompt-and-validator-split` exist; if missing, exit with failure (Q1),\n- for each attempt up to `MAX_POST_CODEX_REPAIR_ATTEMPTS`:\n- invoke Codex with repair prompt + captured diagnostics + changed-file context,\n- compute allow-list per Q2,\n- detect out-of-scope edits using tracked diff plus untracked files,\n- rollback tracked strays (`git checkout -- <strays>`/equivalent),\n- delete untracked stray files (Q3),\n- mark attempt failed on any scope violation,\n- rerun syntax validation after each attempt.\n- Add repair outcome gating:\n- if repair succeeds, continue normal protect/commit/push/PR path,\n- if repair fails or attempts expire, fail job at this point so existing #829 diagnose/fix-up path runs unchanged.\n- Ensure stale syntax diagnostics do not poison later non-syntax failures after a successful repair (clear or rotate capture data after successful repair).\n\n3) Data structures/state affected\n- New environment variable:\n- `MAX_POST_CODEX_REPAIR_ATTEMPTS` (string/int, default `1`).\n- Runtime artifacts in `RUNTIME_DIR` (new):\n- initial changed-file snapshot,\n- optional captured-file list extracted from diagnostics,\n- effective allow-list file,\n- repair prompt file(s),\n- per-attempt logs/result markers.\n- Existing artifact reused:\n- `post_codex_validation_errors.txt`.\n\n4) API/interface changes\n- Additive repo variable interface only:\n- `MAX_POST_CODEX_REPAIR_ATTEMPTS` (consumer-overridable, default `1`).\n- No changes to issue commands (`/answer`, `/approved`, `/reclarify`) or PR API behavior.\n- No MongoDB/schema/interface contract changes.\n\n5) Risks and edge cases\n- If syntax step recovery gating is wrong, failures may bypass repair or incorrectly continue; must gate strictly on syntax-validator failure outcome.\n- Allow-list intersection can be empty; treat as no-allowed-edits and fail attempts deterministically with clear logs.\n- File names with spaces/newlines can break naive loops; use safe list handling.\n- Stray untracked deletion must be scoped safely to workspace-relative paths only.\n- Invalid `MAX_POST_CODEX_REPAIR_ATTEMPTS` values should fall back safely to `1` with warning.\n- Preserve existing non-syntax failure behavior (protect-workflow-files, commit/push, MCP/runtime errors) by not broadening repair trigger conditions.\n\n6) Testing considerations\n- Scenario 1: syntax failure then successful repair.\n- Expected: commit/push/PR path proceeds; no `ai:implementation-failed`; no fix-up issue.\n- Scenario 2: syntax failure, repair attempts exhausted.\n- Expected: existing diagnose/fix-up flow executes unchanged; `ai:implementation-failed` behavior preserved.\n- Scenario 3: scope violation via tracked out-of-allow-list edit.\n- Expected: tracked stray rollback occurs; attempt marked failed.\n- Scenario 4: scope violation via untracked stray file.\n- Expected: untracked stray is deleted; attempt marked failed.\n- Scenario 5: non-syntax failure (e.g., push failure) with no syntax failure.\n- Expected: repair step does not run; existing failure path unchanged.\n- Scenario 6: dependency artifacts missing while syntax repair is needed.\n- Expected: hard fail (Q1), no partial fallback logic.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "53f5bc77ae3b4e555922e158a625e59ed925cb398f111d7de954c3f722d3b1d1",
+  "lineage": {
+    "issue_number": 1045,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24441020874",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24441020874",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1045"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415072956_30a4845b74",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1045,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24441020874"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1045",
+  "timestamps": {
+    "created_at": "2026-04-15T07:29:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
