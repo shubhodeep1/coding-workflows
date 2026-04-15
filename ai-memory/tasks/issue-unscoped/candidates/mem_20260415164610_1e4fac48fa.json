@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\nscripts/ai_memory.py\nscripts/ai_memory_lib.py\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/memory_helpers.sh",
+  "fingerprint": "02831fa4072d588e2afbdfee4e22918f601302fc3a86104a81ca933a41a326d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1068,
+    "run_id": "24466038996",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24466038996",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415164610_1e4fac48fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1068,
+    "run_id": "24466038996"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T16:46:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
