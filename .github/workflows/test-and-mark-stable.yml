@@ -1159,15 +1159,50 @@ jobs:
             echo ""
             echo "  ┌─ ${phase_name} (run #${run_id})"
 
-            # Fetch all jobs and their steps (retry up to 3 times on transient failures)
+            # Fetch all jobs and their steps (retry up to 3 times on transient failures).
+            #
+            # IMPORTANT: Do NOT use `JOBS_JSON=$(gh api ... || echo fallback)`.
+            # On non-zero exit, `gh api` still writes the API error body (e.g.
+            # `{"message":"Not Found",...}`) to stdout; inside `$(...)`, the
+            # `|| echo` branch runs anyway and its output is *concatenated*
+            # with gh's stdout, producing a multi-document JSON blob. Downstream
+            # `jq '.jobs | length'` then emits multiple lines (one per document),
+            # `[ "$TOTAL_JOBS" -eq 0 ]` trips with "integer expression expected",
+            # and `jq '[.jobs[] | select(...)] | length'` errors with "Cannot
+            # iterate over null (null)" on any error-body document whose .jobs
+            # key is missing. Always assign the fallback outside the command
+            # substitution so the two outputs can't concatenate.
+            #
+            # Single source of truth for the schema predicate. Uses `jq -se`
+            # (slurp + exit-status) so multi-document input fails the
+            # predicate — without `-s`, `jq -e` evaluates each document
+            # independently and exits with the truthiness of the *last*
+            # document, so a multi-doc blob whose tail happens to satisfy
+            # the schema would pass through and break downstream
+            # `jq '.jobs | length'` with mixed-line output. Extracted into a
+            # helper so the outer retry and the indexing-delay recheck stay
+            # in lock-step.
+            _jobs_json_valid() {
+              printf '%s' "$1" \
+                | jq -se 'length == 1 and (.[0] | type == "object" and (.jobs | type == "array"))' \
+                >/dev/null 2>&1
+            }
+
             JOBS_JSON='{"jobs":[]}'
             for _attempt in 1 2 3; do
-              JOBS_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null) && break
+              if _JOBS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null); then
+                JOBS_JSON="$_JOBS_OUT"
+                break
+              fi
               echo "  │  ⚠ API attempt ${_attempt}/3 failed — retrying in 2s..."
               sleep 2
             done
-            # Final fallback if all retries failed
-            if ! echo "$JOBS_JSON" | jq -e '.jobs' >/dev/null 2>&1; then
+            unset _JOBS_OUT
+            # Shape check: reject anything that isn't a single JSON object
+            # with a `.jobs` array. Catches (a) all-retries-failed with an
+            # empty JOBS_JSON, (b) error-body responses that happen to parse,
+            # and (c) any future accidental multi-doc concatenation.
+            if ! _jobs_json_valid "$JOBS_JSON"; then
               JOBS_JSON='{"jobs":[]}'
             fi
 
@@ -1183,7 +1218,18 @@ jobs:
               echo "  │  ⚠ Run has no jobs yet — rechecking for indexing delay..."
               for _jobs_retry in 1 2 3; do
                 sleep $((_jobs_retry * 2))
-                JOBS_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null || echo '{"jobs":[]}')
+                # Same hazard as the outer retry — assign fallback outside the
+                # command substitution so gh's error-body stdout cannot
+                # concatenate with the literal fallback JSON.
+                if _JOBS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null); then
+                  JOBS_JSON="$_JOBS_OUT"
+                else
+                  JOBS_JSON='{"jobs":[]}'
+                fi
+                unset _JOBS_OUT
+                if ! _jobs_json_valid "$JOBS_JSON"; then
+                  JOBS_JSON='{"jobs":[]}'
+                fi
                 TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
                 SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
                 [ "$TOTAL_JOBS" -gt 0 ] && break

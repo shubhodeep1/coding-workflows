@@ -39,6 +39,8 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:destructive-blocked"]="b60205"
 	["ai:closed"]="6a737d"
 	["ai:orchestrator-tracking"]="a2eeef"
+	["ai:orchestrator-managed"]="bfdadc"
+	["ai:orchestrator-validate-required"]="c5def5"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -61,6 +63,8 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:destructive-blocked"]="Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review"
 	["ai:closed"]="Linked PR closed without merge"
 	["ai:orchestrator-tracking"]="Orchestrator project tracking issue"
+	["ai:orchestrator-managed"]="Issue is managed by the AI orchestrator"
+	["ai:orchestrator-validate-required"]="Orchestrator issue requires validate phase before completion"
 )
 
 # ensure_label_exists <label_name> [repo]
