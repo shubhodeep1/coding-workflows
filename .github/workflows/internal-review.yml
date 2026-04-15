@@ -2,7 +2,7 @@ name: "Internal: AI Review & Autofix"
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -22,6 +22,7 @@ permissions:
 
 jobs:
   review:
+    if: ${{ github.event.action != 'closed' || github.event.pull_request.merged == true }}
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@main
     with:
       pr_number: ${{ github.event.inputs.pr_number || '' }}
