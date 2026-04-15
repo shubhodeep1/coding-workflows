@@ -685,8 +685,8 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
 		i += 1
 	next_num = store.get('next_issue_number', 900)
 	store['next_issue_number'] = next_num + 1
-	store['issues'][str(next_num)] = {'labels': labels, 'comments': [], 'body': body, 'closed': False, 'title': title}
-	store.setdefault('created_issues', []).append({'number': next_num, 'title': title, 'labels': labels})
+	store['issues'][str(next_num)] = {'labels': list(labels), 'comments': [], 'body': body, 'closed': False, 'title': title}
+	store.setdefault('created_issues', []).append({'number': next_num, 'title': title, 'labels': list(labels)})
 	save()
 	print(f'https://github.com/owner/repo/issues/{next_num}')
 	sys.exit(0)

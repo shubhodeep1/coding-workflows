@@ -968,7 +968,7 @@ When a tracking issue reaches terminal `failed` status due to judge stall cycle 
 3. Transition the project status from `failed` to `in_progress`.
 4. Resume normal wave processing immediately.
 
-This does **not** reset the total `judge_cycle` counter (which is informational only — it tracks how many times the judge has been invoked overall). Only the stall and recovery counters that gate the failure limits are reset.
+This does **not** reset the total `judge_cycle` counter (which is informational only — it tracks wave-advance/judge-cycle progression, including clean-wave skips where the judge is intentionally not invoked). Only the stall and recovery counters that gate the failure limits are reset.
 
 Use this after manual intervention (e.g. fixing a problematic issue, merging a stuck PR, or adjusting `MAX_JUDGE_CYCLES`/`MAX_RECOVERY_ATTEMPTS` variables). There is no limit on how many times `/judge_resume` can be used.
 
