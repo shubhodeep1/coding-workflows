@@ -2150,6 +2150,95 @@ extract_fix_issues_from_comment() {
   echo "${comment_body}" | sed 's/\\n/\n/g' | sed -n 's/^- #\([0-9][0-9]*\).*$/\1/p' | awk '!seen[$0]++'
 }
 
+extract_implement_fixup_blockers_from_comment() {
+  local comment_body="$1"
+  printf '%s' "${comment_body}" | sed -n '/^<!-- IMPLEMENT_FIXUP_BLOCKERS_V1$/,/^IMPLEMENT_FIXUP_BLOCKERS_V1 -->$/p' | sed '1d;$d'
+}
+
+sync_implementation_fixup_blockers() {
+  local source_issue_num="$1"
+  local issue_local_id="$2"
+  local wave_idx="$3"
+  local comments_json="$4"
+  local latest_blocker_comment_json
+  local blocker_comment_id
+  local blocker_comment_body
+  local blocker_payload
+  local parsed_source_issue
+  local normalized_fixups
+  local existing_source_issue
+  local existing_fixups
+
+  SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED="false"
+
+  if [ -z "${issue_local_id}" ] || [ "${issue_local_id}" = "null" ]; then
+    return 0
+  fi
+
+  latest_blocker_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("IMPLEMENT_FIXUP_BLOCKERS_V1"))] | last // empty')"
+  if [ -z "${latest_blocker_comment_json}" ]; then
+    return 0
+  fi
+
+  blocker_comment_id="$(echo "${latest_blocker_comment_json}" | jq -r '.id // 0')"
+  if ! [[ "${blocker_comment_id}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+
+  blocker_comment_body="$(echo "${latest_blocker_comment_json}" | jq -r '.body // ""')"
+  blocker_payload="$(extract_implement_fixup_blockers_from_comment "${blocker_comment_body}")"
+  if [ -z "${blocker_payload}" ]; then
+    return 0
+  fi
+
+  parsed_source_issue="$(printf '%s' "${blocker_payload}" | jq -r '.blocks_source_issue // empty' 2>/dev/null || echo "")"
+  if [ -z "${parsed_source_issue}" ] || ! [[ "${parsed_source_issue}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  if [ "${parsed_source_issue}" != "${source_issue_num}" ]; then
+    return 0
+  fi
+
+  normalized_fixups="$(printf '%s' "${blocker_payload}" | jq -c '
+    if (.fixup_issue_numbers | type) == "array" then
+      .fixup_issue_numbers
+      | map(select(type == "number"))
+      | map(if floor == . then . else empty end)
+      | unique
+    else
+      []
+    end
+  ' 2>/dev/null || echo '[]')"
+
+  existing_source_issue="$(jq -r --arg local_id "${issue_local_id}" --argjson wave_idx "${wave_idx}" '
+    .waves[$wave_idx].issues[] | select(.id == $local_id) | .blocks_source_issue // empty
+  ' "${STATE_FILE}" | head -n1)"
+  existing_fixups="$(jq -c --arg local_id "${issue_local_id}" --argjson wave_idx "${wave_idx}" '
+    .waves[$wave_idx].issues[] | select(.id == $local_id) | (.fixup_issue_numbers // [])
+    | if type == "array" then map(select(type == "number")) | map(if floor == . then . else empty end) | unique else [] end
+  ' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+
+  if [ "${existing_source_issue}" = "${source_issue_num}" ] && [ "${existing_fixups}" = "${normalized_fixups}" ]; then
+    return 0
+  fi
+
+  jq \
+    --arg local_id "${issue_local_id}" \
+    --argjson wave_idx "${wave_idx}" \
+    --argjson source_issue "${source_issue_num}" \
+    --argjson fixups "${normalized_fixups}" \
+    '(.waves[$wave_idx].issues[] | select(.id == $local_id)) |=
+      (. + {
+        blocks_source_issue: $source_issue,
+        fixup_issue_numbers: ($fixups | if type == "array" then . else [] end)
+      })' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED="true"
+
+  return 0
+}
+
 sync_validation_fix_issues_from_comments() {
   local comments_json="$1"
   local latest_fix_comment_json
@@ -5965,6 +6054,12 @@ ${RB_FIX_DESC}
     # Read the original issue to preserve its content
     IF_TITLE="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
     IF_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
+    IF_COMMENTS_JSON="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments?per_page=100" || echo '[]')"
+
+    sync_implementation_fixup_blockers "${if_issue}" "${IF_LOCAL_ID}" "${WAVE_IDX}" "${IF_COMMENTS_JSON}" || true
+    if [ "${SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED:-false}" = "true" ]; then
+      IMPL_FAILED_STATE_CHANGED=true
+    fi
 
     # Close the failed issue
     ensure_label_exists "ai:closed"
