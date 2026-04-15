@@ -163,6 +163,39 @@ CRITICAL — stdout/stderr capture in existing_test_suite_execution:
 - Apply the wrapper to every entry from `.ai/validate.yml` `custom_tests:` hints and every auto-detected command. Do not special-case Python — pytest/unittest failures surface on stderr and are the most common source of `failed (no stderr)` artifact lines.
 - If a custom test can hang, wrap it in `timeout 120 bash -c "$cmd"` and include the timeout exit code (`124`) in the diagnostic. Do not allow a hung custom test to consume the whole validation budget silently.
 
+CRITICAL — custom_tests external tool dependency analysis (FileNotFoundError in custom tests):
+- Symptom: `03_existing_test_suite_execution.sh` / `06_existing_test_suite_execution.sh` fails with a Python traceback ending in `FileNotFoundError: [Errno 2] No such file or directory: '<bin>'` (canonical case: `'git'`). `00_canary.sh` either never asserted the tool, or the image was built from a `*-slim` base that ships without it. All other phases pass.
+- Root cause: `validation/Dockerfile.app` was generated without installing every external binary that the declared `custom_tests:` files invoke, and `00_canary.sh` was not extended to assert those tools up front. The failure surfaces mid-run as a Python traceback instead of as an early canary `not ok`.
+- Fix: do NOT catch the `FileNotFoundError`, do NOT delete the failing test, do NOT special-case the wrapper. The test is correct; the image is incomplete. Patch the image and the canary together in one change so they stay in lockstep.
+- Static analysis procedure (run for each file listed in `custom_tests:`, plus any helper module it imports from `tests/`):
+  1. Scan for external binary invocations: Python `subprocess.run(["<bin>", ...])`, `subprocess.call/Popen/check_output/check_call([...])`, `os.system("<cmd> ...")`, `os.popen("<cmd> ...")`, `shutil.which("<bin>")`, `sh.<bin>(...)`. Shell `.sh` tests: bare `<bin> ...`, `$(<bin> ...)`, backticks, `command -v <bin>`, `which <bin>`, `type <bin>`, `exec <bin>`.
+  2. Extract the first token of each match. Drop shell builtins and POSIX coreutils (`cd`, `pwd`, `echo`, `printf`, `test`, `[`, `ls`, `cat`, `mv`, `cp`, `rm`, `mkdir`, `rmdir`, `ln`, `touch`, `chmod`, `chown`, `head`, `tail`, `sort`, `uniq`, `wc`, `cut`, `tr`, `sed`, `awk`, `grep`, `find`, `xargs`, `env`, `sh`, `bash`, `dash`, `basename`, `dirname`, `readlink`, `realpath`, `tee`, `date`, `sleep`, `which`, `uname`, `id`). Everything else is a candidate dependency.
+  3. Diff the candidate set against the current apt install list in `validation/Dockerfile.app`. The gap is the set of tools to add.
+- Map each missing binary to its Debian/Ubuntu apt package name. Common mappings: `git` → `git`, `make` → `make`, `gcc`/`cc`/`g++` → `build-essential`, `jq` → `jq`, `curl` → `curl`, `wget` → `wget`, `rsync` → `rsync`, `unzip` → `unzip`, `zip` → `zip`, `openssl` → `openssl`, `ssh`/`scp`/`sftp`/`ssh-keygen` → `openssh-client`, `pkg-config` → `pkg-config`, `xmllint` → `libxml2-utils`, `nc`/`netcat` → `netcat-openbsd`, `ip`/`ss` → `iproute2`, `ping` → `iputils-ping`, `patch` → `patch`, `file` → `file`. Always pair anything that makes HTTPS calls with `ca-certificates`.
+- Patch `validation/Dockerfile.app` by extending (NOT replacing) the existing apt install layer. Keep the single `RUN apt-get update && apt-get install -y --no-install-recommends ... && rm -rf /var/lib/apt/lists/*` layer — adding a second `RUN apt-get` layer bloats the image and breaks caching. Example minimal patch for the `git` case:
+    RUN apt-get update \
+      && apt-get install -y --no-install-recommends \
+          bash \
+          ca-certificates \
+          curl \
+          git \
+          jq \
+      && rm -rf /var/lib/apt/lists/*
+- Patch `00_canary.sh` in the SAME commit to add a tool-presence assertion for every newly installed binary. Use the shell mode that matches the subsequent test invocation (see shell-mode parity rule further down). Recommended pattern:
+    CANARY_TOOLS="${CANARY_TOOLS:-curl jq python3 git}"
+    for tool in $CANARY_TOOLS; do
+      if docker compose -f "$COMPOSE_FILE" exec -T "$APP_SERVICE" /bin/sh -c "command -v $tool >/dev/null 2>&1"; then
+        echo "ok $ASSERTION - $tool is available in $APP_SERVICE"
+      else
+        echo "not ok $ASSERTION - $tool is NOT available in $APP_SERVICE (required by custom_tests)"
+        exit 1
+      fi
+      ASSERTION=$((ASSERTION + 1))
+    done
+- Do NOT add the tool via a second `RUN` layer, do NOT install it via `pip`, do NOT symlink it from the host, do NOT start a sidecar container just to provide the binary. Extend the existing apt install layer and assert it in the canary.
+- Do NOT assume `python:*-slim` ships anything beyond Python, `bash`, coreutils, and a handful of libc utilities. Every other tool — including `git`, `make`, `curl`, `jq`, `openssl`, `rsync` — must be installed explicitly.
+- After patching, verify by re-running validation: the canary must emit one `ok` line per newly asserted tool BEFORE `03_existing_test_suite_execution.sh` runs; the custom test must then pass.
+
 CRITICAL — "command not found" for a tool the canary claims is present:
 - Symptom: `00_canary.sh` passes `ok N - required container CLI tools are present (..., forge)` but a later test fails with `sh: 1: forge: not found` (or the same pattern for `npx`, `hardhat`, `pytest`, etc.) inside `npm run ...` / `npx ...` / similar.
 - Root cause: the canary assertion and the test invocation are using different `docker compose exec` shell modes. On Debian/Ubuntu base images, `/bin/sh -lc 'npm run ...'` is a login shell that sources `/etc/profile` and RESETS PATH to a hard-coded value, dropping any `ENV PATH=/root/.foundry/bin:$PATH` (or equivalent) set in the Dockerfile. npm then spawns the script command via `sh -c`, inheriting the stripped PATH — so the tool appears missing even though the image has it installed.

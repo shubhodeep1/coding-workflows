@@ -343,6 +343,41 @@ CRITICAL — stdout/stderr capture in existing_test_suite_execution:
 - Apply this wrapper to every entry in `custom_tests:` from `.ai/validate.yml` hints and to every auto-detected test command. Do NOT special-case Python: Python unittest/pytest failures surface on stderr and are the most common source of `failed (no stderr)` artifact lines.
 - If the command is expected to be long-running or interactive, wrap it with a bounded timeout (for example `timeout 120 bash -c "$cmd"`) and include the exit code in the diagnostic. Do NOT allow a hung custom test to consume the whole validation budget silently.
 
+CRITICAL — custom_tests external tool dependency analysis (prevents FileNotFoundError in custom tests):
+- When `.ai/validate.yml` hints declare `custom_tests:` (or you auto-detect a project-specific test suite), the declared test files often invoke external binaries that are NOT part of the base image. The canonical failure mode is `FileNotFoundError: [Errno 2] No such file or directory: 'git'` surfacing as a Python traceback inside `03_existing_test_suite_execution.sh` / `06_existing_test_suite_execution.sh`, because `python:3.12-slim` (and most `*-slim` base images) ship without `git`, `make`, `rsync`, `unzip`, `openssl`, `jq`, and friends. The harness must detect these needs up front instead of crashing mid-run.
+- Hard rule: before writing `validation/Dockerfile.app`, statically scan every file referenced by `custom_tests:` (AND every `.sh` script the harness generates that invokes tools not already on the base image) for external binary invocations. Emit a union set of tools and install ALL of them via `apt-get` in a single `RUN` layer. Then extend `00_canary.sh` with a tool-presence assertion for each tool so the image fails fast with a clear TAP diagnostic instead of a Python traceback mid-run.
+- Patterns to scan for in each custom test file:
+  - Python: `subprocess.run(["<bin>", ...])`, `subprocess.call([...])`, `subprocess.Popen([...])`, `subprocess.check_output([...])`, `subprocess.check_call([...])`, `os.system("<cmd> ...")`, `os.popen("<cmd> ...")`, `shutil.which("<bin>")`, `sh.<bin>(...)` (if the `sh` package is imported).
+  - Shell: bare `<bin> ...` at line start, `$(<bin> ...)`, backticks `` `<bin> ...` ``, `command -v <bin>`, `which <bin>`, `type <bin>`, `exec <bin>`, `hash <bin>`.
+  - Makefiles / pyproject / package.json scripts referenced by the custom tests: recursively walk one level of indirection (`make <target>`, `npm run <script>`, `pnpm <script>`) and scan those targets too.
+- Extract the FIRST token of each match as the binary name. Discard shell builtins and POSIX coreutils that are present on every base image (`cd`, `pwd`, `echo`, `printf`, `test`, `[`, `[[`, `read`, `set`, `export`, `unset`, `true`, `false`, `exit`, `return`, `shift`, `ls`, `cat`, `mv`, `cp`, `rm`, `mkdir`, `rmdir`, `ln`, `touch`, `chmod`, `chown`, `head`, `tail`, `sort`, `uniq`, `wc`, `cut`, `tr`, `sed`, `awk`, `grep`, `find`, `xargs`, `env`, `sh`, `bash`, `dash`, `basename`, `dirname`, `readlink`, `realpath`, `tee`, `date`, `sleep`, `which`, `uname`, `id`). Everything else is a candidate dependency.
+- Map each candidate to its Debian/Ubuntu apt package name. Common mappings: `git` → `git`, `make` → `make`, `gcc`/`cc` → `build-essential`, `g++` → `build-essential`, `jq` → `jq`, `curl` → `curl`, `wget` → `wget`, `rsync` → `rsync`, `unzip` → `unzip`, `zip` → `zip`, `openssl` → `openssl`, `ssh` → `openssh-client`, `scp`/`sftp` → `openssh-client`, `ssh-keygen` → `openssh-client`, `pkg-config` → `pkg-config`, `xmllint` → `libxml2-utils`, `netcat`/`nc` → `netcat-openbsd`, `ip`/`ss` → `iproute2`, `ping` → `iputils-ping`, `ca-certificates` → `ca-certificates`, `patch` → `patch`, `file` → `file`. If a tool has no obvious mapping, emit a `blockers[]` entry explaining the gap rather than silently dropping it.
+- Always install `ca-certificates` alongside anything that makes HTTPS calls (`git`, `curl`, `wget`). Always combine installs into a single `RUN apt-get update && apt-get install -y --no-install-recommends ... && rm -rf /var/lib/apt/lists/*` layer to keep the image lean.
+- After regenerating `validation/Dockerfile.app`, update `00_canary.sh` to include one TAP assertion per installed tool using the robust pattern:
+    CANARY_TOOLS="${CANARY_TOOLS:-curl jq python3 git}"
+    for tool in $CANARY_TOOLS; do
+      if docker compose -f "$COMPOSE_FILE" exec -T "$APP_SERVICE" /bin/sh -c "command -v $tool >/dev/null 2>&1"; then
+        echo "ok $ASSERTION - $tool is available in $APP_SERVICE"
+      else
+        echo "not ok $ASSERTION - $tool is NOT available in $APP_SERVICE (required by custom_tests)"
+        exit 1
+      fi
+      ASSERTION=$((ASSERTION + 1))
+    done
+  Respect the shell-mode parity rule at the top of this prompt: the canary tool-check MUST use the same `/bin/sh -c` (or `/bin/sh -lc`) form as the subsequent test invocations.
+- Worked example. Given `.ai/validate.yml`:
+    custom_tests:
+      - python3 tests/test_validate_process_driver_guard_scope.py
+  and `tests/test_validate_process_driver_guard_scope.py` contains:
+    subprocess.run(["git", "init", "--quiet"], cwd=repo_dir, check=True)
+  the generator MUST:
+  1. Detect `git` from the `subprocess.run` token.
+  2. Add `git` and `ca-certificates` to the `validation/Dockerfile.app` apt install list.
+  3. Add `git` to the canary's `CANARY_TOOLS` list so `ok N - git is available in app` precedes any custom test execution.
+- Do NOT "fix" a missing tool failure by catching `FileNotFoundError` in the test, by deleting the failing test, or by special-casing the test wrapper. The test is correct; the image lacks the tool. Fix the image + canary.
+- Do NOT assume `python:*-slim` has any of these tools. `python:3.12-slim` ships only Python, `bash`, coreutils, and a handful of libc utilities. Every other tool must be installed explicitly.
+- Do NOT rely on the stdout/stderr capture wrapper in `existing_test_suite_execution` as a substitute for this check. The wrapper surfaces the failure; it does not prevent it. Apply BOTH rules: static dependency analysis here, plus stdout/stderr capture in the existing_test_suite_execution section above.
+
 CRITICAL — robust synthetic env-var assertions in env_var_validation tests:
 - Docker Compose services declare synthetic test credentials with an override-or-default expression:
     environment:
