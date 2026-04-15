@@ -2047,15 +2047,30 @@ has_active_validation_run() {
   local wf_name="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
   local active_count
 
-  active_count="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
+  # Single-attempt probe (no gh_retry): the primary wf_name is almost
+  # always absent in this repo — the default `ai-validate.yml` does
+  # not exist here (only `validate.yml` / `internal-validate.yml`
+  # ship in-tree) — so wrapping with gh_retry would burn ~31 s of
+  # exponential backoff on a 404 every single poll cycle before
+  # falling through to the internal-validate fallback path below.
+  # _safe_gh_jq captures stdout to a tempfile and emits empty on
+  # non-2xx, so the `|| echo '0'` fallback stays clean.  Rate-limit
+  # (403/429) during this probe degrades to a one-cycle miss, which
+  # is acceptable because the poll cycle retries on the next tick
+  # and the actual dispatch/mutation calls still go through
+  # gh_retry.  (Copilot review on PR #1044.)
+  active_count="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
     --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
   if [ "${active_count}" -gt 0 ]; then
     return 0
   fi
 
-  # Fallback: check internal-validate.yml if primary name differs
+  # Fallback: check internal-validate.yml if primary name differs.
+  # Same single-attempt rationale — on this repo the fallback is the
+  # one that actually resolves, so we want it to fire fast without
+  # retry backoff on the preceding 404.
   if [ "${wf_name}" != "internal-validate.yml" ]; then
-    active_count="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
+    active_count="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
       --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
     if [ "${active_count}" -gt 0 ]; then
       return 0
@@ -2074,14 +2089,20 @@ get_last_validation_run_conclusion() {
   local last_dispatch_ts
   last_dispatch_ts="$(jq -r '.validation_last_dispatch_ts // 0' "${STATE_FILE}")"
 
+  # Single-attempt probe (no gh_retry): same 404-hot-loop concern as
+  # has_active_validation_run above — the default wf_name
+  # (`ai-validate.yml`) is absent in this repo, so gh_retry would
+  # burn ~31 s per poll cycle before the internal-validate fallback.
+  # See has_active_validation_run for the full rationale.
+  # (Copilot review on PR #1044.)
   local runs_json
-  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?status=completed&per_page=5" \
+  runs_json="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?status=completed&per_page=5" \
     --jq '.workflow_runs' || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
 
   # Fallback to internal-validate.yml if no completed runs found
   if [ "$(echo "${runs_json}" | jq 'length')" -eq 0 ] && [ "${wf_name}" != "internal-validate.yml" ]; then
-    runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?status=completed&per_page=5" \
+    runs_json="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?status=completed&per_page=5" \
       --jq '.workflow_runs' || echo '[]')"
     [ -n "${runs_json}" ] || runs_json='[]'
   fi
