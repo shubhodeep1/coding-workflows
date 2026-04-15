@@ -53,7 +53,7 @@ load_env_file()
 			# a missing env var. Print the offending line number and
 			# content so the failure is immediately actionable in the
 			# validate_driver_init log tail.
-			echo "validate_driver: ${env_path}:${lineno}: unparseable env_file line: ${line}" >&2
+			printf 'validate_driver: %s:%s: unparseable env_file line: %s\n' "${env_path}" "${lineno}" "${line}" >&2
 			return 1
 		fi
 		key="${BASH_REMATCH[1]}"
