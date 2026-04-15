@@ -152,9 +152,20 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
+- Implement repair control in this repo: `MAX_POST_CODEX_REPAIR_ATTEMPTS` (default `1`) for the in-job post-syntax-failure Codex repair loop.
 - Stall recovery controls include `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`): legacy autonomous ladder remains default; stall-judge `escalate_human` outputs are terminalization-gated to the non-human fallback action unless explicitly enabled.
 - Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
+- Implementation no-op reissue cap: `MAX_IMPL_NOOP_REISSUES` (default `2`) limits automatic re-issues for `ai:implementation-failed` before the poller closes the issue and lets the judge verify whether work is already present.
+- Post-Codex in-place repair retries: `MAX_POST_CODEX_REPAIR_ATTEMPTS` (default `1`) controls the in-job syntax-repair attempt cap in `implement.yml`; it must be a non-negative integer (`0` disables repair) and invalid values fallback to `1`.
 - GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
+
+## 4a. Post-Codex Recovery Docs Sync
+
+- Recovery order for implementation failures must stay documented as: (1) syntax/step failure capture, (2) in-place repair attempt layer (`MAX_POST_CODEX_REPAIR_ATTEMPTS`-capped), (3) #829 diagnose/fix-up fallback, (4) poller handling of `ai:implementation-failed` reissue/closure (capped by `MAX_IMPL_NOOP_REISSUES`).
+- Current branch reality: step (2) is implemented and consumed by `implement.yml`; docs must keep the non-negative-integer validation/fallback semantics (including `0` disable mode) aligned with runtime behavior.
+- Implement diagnose fix-up issues use metadata type `implement-fix-up (post-codex-validation)` and enter pipeline via `ai:clarification`; an additive `ai:implement-fix-up` label is also applied for operations visibility.
+- `fix_issues[].depends_on` is additive metadata from diagnose output; `implement.yml` maps local IDs to created issue numbers via dependency-note comments. Poller state updates for implementation-failed reissues are additive (`waves[].issues[].github_issue`, `issue_number_map`) and backward-compatible with older state missing `impl_noop_count` (treated as `0`).
+- Out-of-scope failures (for example missing/empty post-Codex capture artifacts) must remain on the legacy generic failure path; do not document them as part of the targeted fix-up lane.
 
 ---
 
@@ -305,7 +316,23 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
-## 17. Internal Wrapper Pin Policy
+## 17. GitHub API Call Hygiene (MANDATORY)
+
+GitHub REST and GraphQL rate limits are a shared resource across every orchestrator and issue-processing job. Before writing **any** new `gh api`, `gh_retry`, `_safe_gh_jq`, `gh issue ... --json`, `gh pr ... --json`, `gh run list`, or direct `curl https://api.github.com/...` call, you MUST check whether the data can be obtained from an existing call in the same code path and merged or batched with it.
+
+Rules:
+
+- **Check first, add second.** Search the surrounding function and file for existing `gh` invocations hitting the same issue/PR/repo scope. If one exists, extend it (add a JSON field, add a GraphQL alias, reuse its cached result) instead of creating a new call.
+- **Prefer batched GraphQL over per-item REST.** For N-item data needs (issues, PRs, comments, labels, timeline events), use aliased GraphQL queries. Canonical examples in this repo: `_fetch_candidate_issue_details_graphql` and `_fetch_linked_pr_status_graphql` in `scripts/orchestrate_poll_process.sh`. Both return a dict keyed by issue number so the caller can drop the result into a cycle-local cache.
+- **Cycle-local caches are first-class.** Orchestrator loops that need the same data for many iterations MUST prefetch once into a shell/file cache (`ACTIVE_WORKFLOW_ISSUES`, `STALL_MANAGED_LINKED_PR_CACHE`, `_candidate_details_json`) and have the inner loop read from the cache. Adding a per-iteration `gh api` call inside such a loop is a review-blocker.
+- **Fail open on cache miss.** A cache/prefetch failure must never block the caller — fall back to the smallest safe legacy call, not a tight retry loop.
+- **Document the batching contract.** When you add a batched helper, spell out in the function docstring the input shape, output shape, number of API calls issued, and fail-open behaviour so future callers can reuse it without re-reading the implementation.
+
+If you need a new data shape that truly cannot be satisfied by any existing call, add a comment above the new invocation explaining which existing calls you audited and why they were insufficient.
+
+---
+
+## 18. Internal Wrapper Pin Policy
 
 - The `.github/workflows/internal-*.yml` wrappers in this repo MUST pin
   `uses:` to `shubhodeep1/coding-workflows/.github/workflows/<wf>.yml@main`.
