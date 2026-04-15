@@ -351,7 +351,9 @@ def _copy_diagnose_assets(repo_dir: Path) -> None:
 	for rel in (
 		"scripts/gh_helpers.sh",
 		"scripts/render_prompt.sh",
+		"scripts/validate_changed_files_syntax.sh",
 		"prompts/mode-implement-diagnose.txt",
+		"prompts/mode-implement-repair-syntax.txt",
 		"prompts/serena-efficiency-block.txt",
 	):
 		src = REPO_ROOT / rel
@@ -495,6 +497,35 @@ def test_failure_comment_step_skips_destructive_blocked_runs() -> None:
 	)
 
 
+def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
+	validate_block = _step_block_text("Validate syntax of changed files")
+	assert "continue-on-error: true" in validate_block
+	assert "bash scripts/validate_changed_files_syntax.sh" in validate_block
+
+
+def test_post_codex_syntax_repair_step_contract() -> None:
+	wf = _workflow_text()
+	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '1' }}" in wf
+
+	repair_block = _step_block_text("Attempt post-Codex syntax repair")
+	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
+	assert "prompts/mode-implement-repair.txt" in repair_block
+	assert "scripts/validate_changed_files_syntax.sh" in repair_block
+	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS" in repair_block
+	assert "[ \"${max_attempts_raw}\" -lt 0 ]" in repair_block
+	assert "if [ \"${max_attempts}\" -eq 0 ]; then" in repair_block
+	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
+	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
+	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
+
+
+def test_syntax_failure_requires_successful_repair_before_commit_path() -> None:
+	enforce_block = _step_block_text("Enforce syntax validation outcome")
+	assert "steps.validate_syntax_changed_files.outcome" in enforce_block
+	assert "steps.post_codex_syntax_repair.outputs.repaired" in enforce_block
+	assert "Syntax validation failed and post-Codex repair did not recover." in enforce_block
+
+
 def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
 	telegram_block = _step_block_text("Telegram failure notification")
 	assert "if: (failure() || cancelled()) && steps.commit_changes.outputs.destructive_commit_blocked == ''" in telegram_block, (
@@ -530,6 +561,26 @@ def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow
 	assert "FIX_COUNT=\"$(jq -r '(.fix_issues // []) | if type == \"array\" then length else 0 end' \"${IMPLEMENT_DIAGNOSE_RESULT_FILE}\")\"" in wf, (
 		"needs_fixes handling must tolerate non-array fix_issues without aborting"
 	)
+
+
+def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
+	commit_block = _step_block_text("Commit changes")
+	assert "canonical_deletions" in commit_block
+	assert "ALLOW_WORKFLOW_EDITS" in commit_block
+	assert "destructive_commit_blocked=canonical-source" in commit_block
+
+	protect_block = _step_block_text("Protect workflow files from implementation edits")
+	assert "git restore --source=HEAD --staged --worktree .github/workflows" in protect_block
+	assert "git clean -fd -- .github/workflows" in protect_block
+
+
+def test_successful_repair_path_still_flows_into_commit_gated_push_and_pr_steps() -> None:
+	push_block = _step_block_text("Push branch")
+	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'" in push_block
+	assert "bash \"${health_script}\" repair" in push_block
+
+	create_pr_block = _step_block_text("Create Pull Request")
+	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'" in create_pr_block
 
 
 
@@ -591,7 +642,7 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert "--label" in created["args"]
 		assert created["args"].count("--label") == 2
 		assert "ai:clarification" in created["args"]
-		assert "ai:orchestrator-managed" in created["args"]
+		assert "ai:implement-fix-up" in created["args"]
 		body = created["body"]
 		assert "Type: implement-fix-up (post-codex-validation)" in body
 		assert "Source issue: #948" in body
@@ -599,11 +650,84 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 
 		created_labels = {entry.get("name") for entry in state.get("label_creates", [])}
 		assert "ai:clarification" in created_labels
-		assert "ai:orchestrator-managed" in created_labels
+		assert "ai:implement-fix-up" in created_labels
+
+		source_comments = [
+			c.get("body", "")
+			for c in state.get("api_comments", [])
+			if c.get("issue") == "948"
+		]
+		assert source_comments, "expected a source-issue summary comment"
+		match = re.search(
+			r"<!-- IMPLEMENT_FIXUP_BLOCKERS_V1\n(.*?)\nIMPLEMENT_FIXUP_BLOCKERS_V1 -->",
+			source_comments[-1],
+			flags=re.S,
+		)
+		assert match is not None, "expected implement blocker metadata marker"
+		blocker_payload = json.loads(match.group(1))
+		assert blocker_payload["blocks_source_issue"] == 948
+		assert blocker_payload["fixup_issue_numbers"] == [1001]
 
 		labels = state.get("issue_labels", [])
 		assert "ai:implementation-failed" in labels
 		assert "ai:awaiting-approval" not in labels
+
+
+def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_failed():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, _state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0
+		assert "handled=true" in _read_file(paths["github_output"])
+		call_lines = [line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]
+		assert len(call_lines) == 1
+		call_args = json.loads(call_lines[0])
+		assert "exec" in call_args
+		assert "--model" in call_args
+
+
+def test_diagnose_posts_dependency_notes_for_fix_issue_edges():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, state, _runtime_dir, _paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"fix_issues": [
+					{"id": "fix-a", "title": "Fix A", "body": "Body A", "priority": 1, "depends_on": []},
+					{"id": "fix-b", "title": "Fix B", "body": "Body B", "priority": 2, "depends_on": ["fix-a"]},
+				],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0
+		created_issues = state.get("created_issues", [])
+		assert len(created_issues) == 2
+		dep_comment = next((x for x in state.get("issue_comments", []) if x.get("issue") == "1002"), None)
+		assert dep_comment is not None
+		assert "Dependency Notes" in dep_comment.get("body", "")
+		assert "#1001 (from fix-a)" in dep_comment.get("body", "")
 
 
 def test_validator_capture_aggregates_multiple_files_before_nonzero_exit():
@@ -611,6 +735,12 @@ def test_validator_capture_aggregates_multiple_files_before_nonzero_exit():
 		tmp_path = Path(td)
 		repo_dir = tmp_path / "validate-repo"
 		_bootstrap_git_repo(repo_dir)
+
+		validator_src = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst = repo_dir / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(validator_src, validator_dst)
+		validator_dst.chmod(0o755)
 
 		(runtime_py := repo_dir / "broken.py").write_text("x = 1\n", encoding="utf-8")
 		(runtime_yaml := repo_dir / "broken.yml").write_text("a: 1\n", encoding="utf-8")
@@ -625,15 +755,17 @@ def test_validator_capture_aggregates_multiple_files_before_nonzero_exit():
 
 		script = _extract_run_script("Validate syntax of changed files")
 		env = os.environ.copy()
+		github_output = runtime_dir / "github_output.txt"
 		env.update(
 			{
 				"RUNTIME_DIR": str(runtime_dir),
 				"PATH": env.get("PATH", ""),
+				"GITHUB_OUTPUT": str(github_output),
 			}
 		)
 
 		proc = _run_shell_script(script, cwd=repo_dir, env=env)
-		assert proc.returncode != 0, "expected non-zero exit when syntax errors exist"
+		assert proc.returncode != 0, "expected syntax validator step script to fail on syntax errors"
 
 		capture_file = runtime_dir / "post_codex_validation_errors.txt"
 		assert capture_file.exists(), "expected capture file to be written"
@@ -642,6 +774,55 @@ def test_validator_capture_aggregates_multiple_files_before_nonzero_exit():
 		assert "python3 -m py_compile" in capture
 		assert "broken.yml" in capture
 		assert "python3 yaml.safe_load" in capture
+
+
+def test_syntax_gate_step_fails_when_check_reports_unresolved_errors():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "validate-repo"
+		_bootstrap_git_repo(repo_dir)
+
+		script = _render_github_expressions(
+			_extract_run_script("Enforce syntax validation outcome"),
+			overrides={
+				"steps.validate_syntax_changed_files.outcome": "failure",
+				"steps.post_codex_syntax_repair.outputs.repaired || 'false'": "false",
+			},
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"RUNTIME_DIR": str(tmp_path / "runtime"),
+			}
+		)
+
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0, "expected syntax-enforcement step to fail when repair did not recover"
+		assert "Syntax validation failed and post-Codex repair did not recover" in (proc.stderr + proc.stdout)
+
+
+def test_syntax_gate_step_fails_when_check_did_not_report_status():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "validate-repo"
+		_bootstrap_git_repo(repo_dir)
+
+		script = _render_github_expressions(
+			_extract_run_script("Enforce syntax validation outcome"),
+			overrides={
+				"steps.validate_syntax_changed_files.outcome": "success",
+				"steps.post_codex_syntax_repair.outputs.repaired || 'false'": "false",
+			},
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"RUNTIME_DIR": str(tmp_path / "runtime"),
+			}
+		)
+
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode == 0, "expected syntax-enforcement step to pass when syntax validation succeeded"
 
 
 def test_needs_fixes_labels_source_issue_and_generic_failure_step_is_bypassed():
@@ -706,6 +887,10 @@ def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid
 			assert "The diagnose step could not produce a valid JSON contract" in created["body"]
 			assert "yaml parse failed on alpha.yml" in created["body"]
 			assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
+			assert "Tracking issue: #829" in created["body"]
+			assert "ai:clarification" in created["args"]
+			assert "ai:implement-fix-up" in created["args"]
+			assert "ai:implementation-failed" in state.get("issue_labels", [])
 
 
 def test_out_of_scope_noop_when_capture_file_missing():
