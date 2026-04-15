@@ -163,6 +163,10 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
           THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || '' }}
+          # Pilot: route the analyzer through Gemini 3.1 Pro Preview by default for this workflow only.
+          # Override with repo variable WORKFLOW_LOG_ANALYSIS_MODEL (e.g. openai/gpt-5.3-codex) to revert.
+          # Scoped to this step's env so other workflows still resolve WORKFLOW_EDITOR_MODEL from repo vars.
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'google/gemini-3.1-pro-preview' }}
           BATCH_API_DISABLED: ${{ vars.BATCH_API_DISABLED || 'false' }}
           BATCH_API_PROVIDER: ${{ vars.BATCH_API_PROVIDER || 'auto' }}
           BATCH_API_POLL_TIMEOUT_HOURS: ${{ vars.BATCH_API_POLL_TIMEOUT_HOURS || '24' }}
@@ -197,6 +201,13 @@ jobs:
           if [ -n "${THINKING_LEVEL_ANALYSIS}" ]; then
             cmd+=(--thinking-level "${THINKING_LEVEL_ANALYSIS}")
           fi
+          # Gemini 3.1 Pro Preview caps max output at 65536 tokens. The analyzer's default
+          # --max-output-tokens is 100000, which would be rejected by Gemini routes. Cap it
+          # only when the resolved model id contains "gemini" so non-Gemini models keep the
+          # script default.
+          case "${WORKFLOW_EDITOR_MODEL:-}" in
+            *gemini*) cmd+=(--max-output-tokens 60000) ;;
+          esac
 
           ANALYZE_EXIT=0
           REPORT_FILE=""
