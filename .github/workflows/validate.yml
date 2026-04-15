@@ -210,11 +210,11 @@ jobs:
 
           # The self-heal helper (scripts/self_heal_validation.sh) is
           # fetched below using best-effort copy from staged support refs.
-          # copy_from_ref_or_local
-          # cannot be used here because it exits the step (not returns)
-          # when the file is missing both remotely and locally, which
-          # would break consumer repos on older @stable tags that predate
-          # self-heal — see docs/validation-improvements.md rollout notes.
+          # It is fetched below inside a conditional best-effort
+          # copy_from_ref_or_local block so missing files return non-zero
+          # and the fallback path preserves compatibility with older
+          # @stable tags that predate self-heal — see
+          # docs/validation-improvements.md rollout notes.
 
           # Fetch AI memory schema files so consumer repos that lack
           # schemas on their default branch can bootstrap the ai-memory
@@ -289,9 +289,9 @@ jobs:
           # Self-heal prompt (optional; backward-compatible with older
           # stable tags that predate self-heal). Best-effort fetch: skip
           # silently on missing remote, do not overwrite an existing
-          # local copy. We do NOT use fetch_from_ref_or_local here
-          # because it `exit 1`s on missing-both, which `|| true` cannot
-          # intercept (shell exit vs function return).
+          # local copy. We fetch via a conditional
+          # copy_from_ref_or_local call so missing optional prompts return
+          # non-zero and are handled in the `else` fallback branch.
           if [ ! -f "prompts/mode-validate-self-heal.txt" ]; then
             if copy_from_ref_or_local "prompts/mode-validate-self-heal.txt" "prompts/mode-validate-self-heal.txt.tmp" "false" "true"; then
               mv "prompts/mode-validate-self-heal.txt.tmp" "prompts/mode-validate-self-heal.txt"
