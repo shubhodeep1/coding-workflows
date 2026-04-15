@@ -53,40 +53,73 @@ jobs:
 
           mkdir -p scripts
 
-          _rl_wait() {
-            local _reset_ts _wait_secs
-            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
-            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
-              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
-              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
-              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
-            else
-              _wait_secs=30
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
+
+          support_stage_root="${RUNNER_TEMP}/codex-issue-pr-status-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          support_primary_dir="${support_stage_root}/primary"
+          support_main_dir="${support_stage_root}/main"
+          is_self_repo="false"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            is_self_repo="true"
+          fi
+
+          checkout_support_ref() {
+            local ref="$1"
+            local dest="$2"
+            rm -rf "${dest}"
+            if git clone --quiet --no-tags --depth 1 --branch "${ref}" "${WF_REMOTE_URL}" "${dest}" 2>/dev/null; then
+              return 0
             fi
-            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
-            sleep "${_wait_secs}"
+            rm -rf "${dest}"
+            return 1
           }
+
+          support_primary_root=""
+          resolved_script_ref="${script_ref}"
+          if [ "${is_self_repo}" = "true" ]; then
+            support_primary_root="${GITHUB_WORKSPACE}"
+          elif checkout_support_ref "${script_ref}" "${support_primary_dir}"; then
+            support_primary_root="${support_primary_dir}"
+          elif checkout_support_ref "main" "${support_primary_dir}"; then
+            echo "::warning::Support checkout ref ${script_ref} is unavailable; using main."
+            support_primary_root="${support_primary_dir}"
+            resolved_script_ref="main"
+          fi
+
+          support_main_root=""
+          if [ "${resolved_script_ref}" != "main" ] && checkout_support_ref "main" "${support_main_dir}"; then
+            support_main_root="${support_main_dir}"
+          fi
+
           fetch_from_ref_or_local() {
             local repo_path="$1"
             local target_path="$2"
-            local tmp_path="${target_path}.tmp"
-            local attempt=1
+            local allow_main_fallback="${3:-true}"
+            local source_path=""
 
-            while [ "${attempt}" -le 5 ]; do
-              if gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${repo_path}?ref=${script_ref}" > "${tmp_path}" 2>/tmp/_gh_rl_err; then
-                mv "${tmp_path}" "${target_path}"
+            mkdir -p "$(dirname "${target_path}")"
+
+            if [ -n "${support_primary_root}" ] && [ -f "${support_primary_root}/${repo_path}" ]; then
+              source_path="${support_primary_root}/${repo_path}"
+            elif [ "${allow_main_fallback}" = "true" ] && [ -n "${support_main_root}" ] && [ -f "${support_main_root}/${repo_path}" ]; then
+              echo "::warning::${repo_path} not found on ${resolved_script_ref}; falling back to main"
+              source_path="${support_main_root}/${repo_path}"
+            fi
+
+            if [ -n "${source_path}" ]; then
+              if [ -e "${target_path}" ] && [ "$(realpath -m "${source_path}")" = "$(realpath -m "${target_path}")" ]; then
                 return 0
               fi
-              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit (attempt ${attempt}/5), waiting for reset…" >&2
-                _rl_wait; attempt=$((attempt + 1))
-              else
-                break
-              fi
-            done
+              cp "${source_path}" "${target_path}" || {
+                echo "Failed to copy ${repo_path} from ${source_path} to ${target_path}" >&2
+                return 1
+              }
+              return 0
+            fi
 
-            rm -f "${tmp_path}"
             if [ -f "${target_path}" ]; then
               echo "Using local fallback for ${target_path} (not found on ${script_ref}: ${repo_path})"
               return 0
@@ -115,11 +148,22 @@ jobs:
           # Fetch AI memory schema files so consumer repos that lack
           # schemas on their default branch can bootstrap the ai-memory
           # branch (schemas are validated during memory operations).
+          # Include H5/H6 cache schemas; fetch remains best-effort until
+          # these files exist on the selected support ref.
           mkdir -p ai-memory/schemas
-          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
+          for sf in \
+            memory_record.v1.json \
+            processed_command_entry.v1.json \
+            run_ledger_entry.v1.json \
+            task_lineage.v1.json \
+            actions_runs_cache.v1.json \
+            workflow_log_analysis_cache.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
-              gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" > "ai-memory/schemas/${sf}" 2>/dev/null || true
+              if fetch_from_ref_or_local "ai-memory/schemas/${sf}" "ai-memory/schemas/${sf}.tmp"; then
+                mv "ai-memory/schemas/${sf}.tmp" "ai-memory/schemas/${sf}"
+              else
+                rm -f "ai-memory/schemas/${sf}.tmp"
+              fi
             fi
           done
 
@@ -290,20 +334,37 @@ jobs:
           fi
 
           # Inline-fetch tg_helpers.sh for alert level support
-          wf_source="${{ github.repository_owner }}/coding-workflows"
+          wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             script_ref="${{ github.sha }}"
           else
             script_ref="stable"
           fi
           mkdir -p scripts
-          helpers_tmp="$(mktemp)"
-          if gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=${script_ref}" > "${helpers_tmp}" 2>/dev/null && [ -s "${helpers_tmp}" ]; then
-            mv "${helpers_tmp}" "scripts/tg_helpers.sh"
+
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
+
+          support_stage_root="${RUNNER_TEMP}/codex-issue-pr-status-alert-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          support_primary_dir="${support_stage_root}/primary"
+
+          alert_support_root=""
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            alert_support_root="${GITHUB_WORKSPACE}"
+          elif git clone --quiet --no-tags --depth 1 --branch "${script_ref}" "${WF_REMOTE_URL}" "${support_primary_dir}" 2>/dev/null; then
+            alert_support_root="${support_primary_dir}"
+          elif rm -rf "${support_primary_dir}" && git clone --quiet --no-tags --depth 1 --branch "main" "${WF_REMOTE_URL}" "${support_primary_dir}" 2>/dev/null; then
+            echo "::warning::Support checkout ref ${script_ref} is unavailable; using main."
+            alert_support_root="${support_primary_dir}"
+          fi
+
+          if [ -n "${alert_support_root}" ] && [ -s "${alert_support_root}/scripts/tg_helpers.sh" ]; then
+            if [ "$(realpath -m "${alert_support_root}/scripts/tg_helpers.sh")" != "$(realpath -m "scripts/tg_helpers.sh")" ]; then
+              cp "${alert_support_root}/scripts/tg_helpers.sh" "scripts/tg_helpers.sh"
+            fi
             source scripts/tg_helpers.sh
-          else
-            rm -f "${helpers_tmp}"
           fi
 
           # Only alert for non-orchestrator issues (orchestrator projects
@@ -368,11 +429,33 @@ jobs:
             script_ref="stable"
           fi
           mkdir -p scripts
-          gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/tg_helpers.sh?ref=${script_ref}" > "scripts/tg_helpers.sh" 2>/dev/null || {
+
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
+
+          support_stage_root="${RUNNER_TEMP}/codex-issue-pr-status-cleanup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          support_primary_dir="${support_stage_root}/primary"
+
+          cleanup_support_root=""
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            cleanup_support_root="${GITHUB_WORKSPACE}"
+          elif git clone --quiet --no-tags --depth 1 --branch "${script_ref}" "${WF_REMOTE_URL}" "${support_primary_dir}" 2>/dev/null; then
+            cleanup_support_root="${support_primary_dir}"
+          elif rm -rf "${support_primary_dir}" && git clone --quiet --no-tags --depth 1 --branch "main" "${WF_REMOTE_URL}" "${support_primary_dir}" 2>/dev/null; then
+            echo "::warning::Support checkout ref ${script_ref} is unavailable; using main."
+            cleanup_support_root="${support_primary_dir}"
+          fi
+
+          if [ -n "${cleanup_support_root}" ] && [ -f "${cleanup_support_root}/scripts/tg_helpers.sh" ]; then
+            if [ "$(realpath -m "${cleanup_support_root}/scripts/tg_helpers.sh")" != "$(realpath -m "scripts/tg_helpers.sh")" ]; then
+              cp "${cleanup_support_root}/scripts/tg_helpers.sh" "scripts/tg_helpers.sh"
+            fi
+          else
             echo "::warning::Could not fetch tg_helpers.sh; skipping TG cleanup."
             exit 0
-          }
+          fi
           [ -s "scripts/tg_helpers.sh" ] || { echo "::warning::tg_helpers.sh is empty; skipping TG cleanup."; exit 0; }
           export GITHUB_REPOSITORY="${REPOSITORY}"
           source scripts/tg_helpers.sh
