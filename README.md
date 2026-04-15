@@ -541,7 +541,7 @@ jobs:
 
 Create a new issue describing a feature or bug fix. The pipeline kicks off automatically:
 
-1. **Clarify** evaluates whether the issue has enough detail. If not, it comments with clarification questions.
+1. **Clarify** evaluates whether the issue has enough detail. If not, it comments with clarification questions. If required input is external and non-synthesizable (for example branch/SHA/credential/external URL), it emits a `BLOCKED: <reason>` handoff that labels the issue `ai:blocked` and pauses auto-answer loops.
 2. Once the issue is clear, comment `/answer` to trigger **Plan** generation.
 3. Review the plan, then comment `/approved` to start **Implementation** — a PR is created for you.
 

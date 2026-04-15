@@ -611,6 +611,35 @@ jobs:
           write_multiline_env "USER_ANSWERS" "${USER_ANSWERS}"
           write_multiline_env "CLARIFICATION_QUESTIONS" "${CLARIFICATION_QUESTIONS}"
 
+      - name: Capture planning ref context
+        if: env.SKIP_PLAN != 'true'
+        run: |
+          set -euo pipefail
+
+          HEAD_SHA="$(git rev-parse HEAD)"
+          HEAD_BRANCH="$(git symbolic-ref --short -q HEAD || true)"
+          if [ -z "${HEAD_BRANCH}" ]; then
+            HEAD_BRANCH="<detached-head>"
+          fi
+
+          INTEGRATION_BRANCH_META="$(printf '%s\n' "${ISSUE_BODY}" | python3 -c 'import re, sys; body = sys.stdin.read(); pattern = re.compile(r"^\\s*(?:-\\s*)?(?:\\*\\*Integration branch:\\*\\*|Integration branch:)\\s*`?\\s*([^`\\n]+?)\\s*`?\\s*$", re.MULTILINE); match = pattern.search(body); print(match.group(1).strip() if match else "")')"
+
+          REF_MISMATCH="unknown"
+          if [ -n "${INTEGRATION_BRANCH_META}" ]; then
+            if [ "${HEAD_BRANCH}" = "${INTEGRATION_BRANCH_META}" ]; then
+              REF_MISMATCH="false"
+            else
+              REF_MISMATCH="true"
+            fi
+          fi
+
+          {
+            echo "PLANNING_REF_HEAD_SHA=${HEAD_SHA}"
+            echo "PLANNING_REF_HEAD_BRANCH=${HEAD_BRANCH}"
+            echo "PLANNING_REF_INTEGRATION_BRANCH_META=${INTEGRATION_BRANCH_META}"
+            echo "PLANNING_REF_MISMATCH=${REF_MISMATCH}"
+          } >> "$GITHUB_ENV"
+
       - name: Build planning context
         if: env.SKIP_PLAN != 'true'
         run: |
@@ -622,6 +651,11 @@ jobs:
             printf '%s\n\n' "${CLARIFICATION_QUESTIONS}"
             echo "USER ANSWERS"
             printf '%s\n\n' "${USER_ANSWERS}"
+            echo "PLANNING REF CONTEXT"
+            printf 'git rev-parse HEAD: %s\n' "${PLANNING_REF_HEAD_SHA}"
+            printf 'git symbolic-ref --short -q HEAD: %s\n' "${PLANNING_REF_HEAD_BRANCH}"
+            printf 'Integration branch metadata: %s\n' "${PLANNING_REF_INTEGRATION_BRANCH_META}"
+            printf 'Integration branch mismatch: %s\n\n' "${PLANNING_REF_MISMATCH}"
             echo "ALL COMMENTS"
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${PLANNING_CONTEXT_FILE}"
@@ -842,6 +876,13 @@ jobs:
             in reasoning.
           - Map each interpreted answer back to its corresponding Q<ID> clarification question
             before creating the plan.
+          - If required input is external and non-synthesizable by the auto-answerer
+            (for example branch name, commit SHA, credential, or external URL), do not
+            emit Q/Choices; emit exactly `BLOCKED: <short reason>`.
+          - Surface the planning ref context (`git rev-parse HEAD` and symbolic branch)
+            from the planning context and do not assume `main`.
+          - If checked-out ref mismatches Integration branch metadata, emit exactly
+            `BLOCKED: integration branch mismatch`.
           - If any answer is missing, contradictory, or unclear after best-effort interpretation,
             do NOT guess: return clarification questions in the codex_system_instructions.md
             mandatory Q<ID>/Choices format and state that clarification is required before planning.
@@ -949,6 +990,27 @@ jobs:
             exit 1
           fi
 
+          BLOCKED_REASON="$(perl -ne '
+            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
+            next if $in_code;
+            if (/^\s*BLOCKED:\s*(.+\S)\s*$/i) { print $1; exit; }
+          ' "${CODEX_OUTPUT_FILE}")"
+
+          if [ -n "${BLOCKED_REASON}" ]; then
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            echo "blocked_reason=${BLOCKED_REASON}" >> "$GITHUB_OUTPUT"
+            echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
+            echo "BLOCKED=true" >> "$GITHUB_ENV"
+            echo "BLOCKED_REASON=${BLOCKED_REASON}" >> "$GITHUB_ENV"
+            echo "NEEDS_CLARIFICATION=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "blocked=false" >> "$GITHUB_OUTPUT"
+          echo "blocked_reason=" >> "$GITHUB_OUTPUT"
+          echo "BLOCKED=false" >> "$GITHUB_ENV"
+          echo "BLOCKED_REASON=" >> "$GITHUB_ENV"
+
           HAS_STATUS_NEEDS_CLARIFICATION="false"
           if grep -qiE 'STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION' "${CODEX_OUTPUT_FILE}"; then
             HAS_STATUS_NEEDS_CLARIFICATION="true"
@@ -974,8 +1036,72 @@ jobs:
             echo "NEEDS_CLARIFICATION=false" >> "$GITHUB_ENV"
           fi
 
+      - name: Handle blocked planning output
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          BLOCKED_REASON: ${{ steps.parse_plan.outputs.blocked_reason }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          source scripts/label_helpers.sh
+          source scripts/tg_helpers.sh
+
+          if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
+            gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
+          fi
+
+          ensure_label_exists "ai:blocked" "${{ github.repository }}"
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:blocked' \
+            --remove-label 'ai:planning' \
+            --remove-label 'ai:clarification' \
+            --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
+
+          {
+            echo "Planning blocked: human input required."
+            echo
+            echo "Reason: ${BLOCKED_REASON}"
+            echo
+            echo "Auto-answer has been paused to avoid unsatisfiable clarification loops."
+            echo "Provide the required input, then reply with /answer."
+          } > "${PLAN_COMMENT_FILE}"
+
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${PLAN_COMMENT_FILE}")" >/dev/null
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="Planning blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "CRITICAL"
+
+      - name: Complete /answer command (blocked)
+        if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.blocked == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          source scripts/memory_helpers.sh
+
+          memory_processed_command_complete \
+            --issue-number "${ISSUE_NUMBER}" \
+            --comment-id "${TRIGGER_COMMENT_ID}" \
+            --command "answer" \
+            --status "blocked"
+
+          echo "PROCESSED_ANSWER_COMPLETED=true" >> "$GITHUB_ENV"
+
       - name: Guard plans targeting template-owned paths
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && !endsWith(github.repository, '/coding-workflows')
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && !endsWith(github.repository, '/coding-workflows')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1023,7 +1149,7 @@ jobs:
           fi
 
       - name: Post clarification questions
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1055,7 +1181,7 @@ jobs:
             -f body="$(cat "${PLAN_COMMENT_FILE}")"
 
       - name: Record planning candidate (needs clarification)
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1077,7 +1203,7 @@ jobs:
             --source-refs "${ISSUE_URL}"
 
       - name: Complete /answer command (needs clarification)
-        if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
+        if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
@@ -1095,7 +1221,7 @@ jobs:
           echo "PROCESSED_ANSWER_COMPLETED=true" >> "$GITHUB_ENV"
 
       - name: Telegram clarification notification
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1121,7 +1247,7 @@ jobs:
           fi
 
       - name: Post implementation plan
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1163,7 +1289,7 @@ jobs:
             --add-label 'ai:awaiting-approval' --remove-label 'ai:planning' >/dev/null 2>&1 || true
 
       - name: Record planning candidate (plan posted)
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1185,7 +1311,7 @@ jobs:
             --source-refs "${ISSUE_URL}"
 
       - name: Complete /answer command (plan posted)
-        if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        if: env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
@@ -1204,7 +1330,7 @@ jobs:
 
       - name: Auto-approve clear plan
         id: auto_approve
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1229,7 +1355,7 @@ jobs:
           esac
 
       - name: Telegram plan notification
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && steps.auto_approve.outputs.auto_approved != 'true'
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && steps.auto_approve.outputs.auto_approved != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1276,7 +1402,7 @@ jobs:
             --message "Planning completed for issue #${ISSUE_NUMBER}" \
             --actor "${{ github.actor }}" \
             --issue-number "${ISSUE_NUMBER}" \
-            --metadata-json "{\"needs_clarification\": \"${{ steps.parse_plan.outputs.needs_clarification }}\"}"
+            --metadata-json "{\"needs_clarification\": \"${{ steps.parse_plan.outputs.needs_clarification }}\", \"blocked\": \"${{ steps.parse_plan.outputs.blocked }}\"}"
 
       - name: Complete /answer command (failure/cancel)
         if: (failure() || cancelled()) && env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && env.PROCESSED_ANSWER_COMPLETED != 'true'

@@ -620,6 +620,9 @@ jobs:
              (e.g., a name in the issue doesn't match the name in the code).
           8. Do NOT write code.
           9. Do NOT propose implementation solutions.
+          10. If a required input is external and non-synthesizable by the auto-answerer
+              (for example branch name, commit SHA, credential, or external URL), do not
+              emit Q/Choices; emit exactly `BLOCKED: <short reason>`.
 
           ANSWER COMPATIBILITY (MANDATORY — prevents wasted planning runs):
           - When designing multiple-choice questions, check whether any combinations of
@@ -655,6 +658,9 @@ jobs:
           RATIONALE: <1-3 short lines>
           QUESTIONS:
           - None
+
+          Or, for blocked handoff:
+          BLOCKED: <short reason>
           PROMPT
 
           # Build prompt: static context + instructions + dynamic issue context,
@@ -760,7 +766,7 @@ jobs:
               fi
             fi
             if [ -f "${CODEX_OUTPUT_FILE}" ]; then
-              STATUS="$(grep -oiE 'STATUS:\s*(CLEAR|NEEDS_CLARIFICATION)' "${CODEX_OUTPUT_FILE}" | head -1 || echo "unknown")"
+              STATUS="$(grep -oiE 'STATUS:\s*(CLEAR|NEEDS_CLARIFICATION)|^\s*BLOCKED:\s*.+$' "${CODEX_OUTPUT_FILE}" | head -1 || echo "unknown")"
               echo "| Result | ${STATUS} |"
               # Count questions if clarification was needed
               if echo "${STATUS}" | grep -qi 'NEEDS_CLARIFICATION'; then
@@ -774,6 +780,25 @@ jobs:
         id: parse_codex
         run: |
           set -euo pipefail
+          BLOCKED_REASON="$(perl -ne '
+            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
+            next if $in_code;
+            if (/^\s*BLOCKED:\s*(.+\S)\s*$/i) { print $1; exit; }
+          ' "${CODEX_OUTPUT_FILE}")"
+
+          if [ -n "${BLOCKED_REASON}" ]; then
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            echo "blocked_reason=${BLOCKED_REASON}" >> "$GITHUB_OUTPUT"
+            echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
+            echo "BLOCKED=true" >> "$GITHUB_ENV"
+            echo "BLOCKED_REASON=${BLOCKED_REASON}" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "blocked=false" >> "$GITHUB_OUTPUT"
+          echo "blocked_reason=" >> "$GITHUB_OUTPUT"
+          echo "BLOCKED=false" >> "$GITHUB_ENV"
+
           # Case-insensitive, flexible parsing to handle LLM output variability
           if grep -qiE 'STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION' "${CODEX_OUTPUT_FILE}"; then
             # Extract questions section, handling various markdown formats
@@ -803,8 +828,50 @@ jobs:
             echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Handle blocked clarification output
+        if: steps.parse_codex.outputs.blocked == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          BLOCKED_REASON: ${{ steps.parse_codex.outputs.blocked_reason }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          source scripts/label_helpers.sh
+          source scripts/tg_helpers.sh
+
+          ensure_label_exists "ai:blocked" "${{ github.repository }}"
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:blocked' \
+            --remove-label 'ai:clarification' \
+            --remove-label 'ai:planning' \
+            --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
+
+          BLOCKED_COMMENT_FILE="${RUNTIME_DIR}/blocked_comment.md"
+          {
+            echo "Clarification blocked: human input required."
+            echo
+            echo "Reason: ${BLOCKED_REASON}"
+            echo
+            echo "Auto-answer has been paused to avoid unsatisfiable clarification loops."
+            echo "Provide the required input, then run /reclarify or continue with /answer as appropriate."
+          } > "${BLOCKED_COMMENT_FILE}"
+
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${BLOCKED_COMMENT_FILE}")" >/dev/null
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="Clarification blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "CRITICAL"
+
       - name: Post clarification questions
-        if: steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -825,7 +892,7 @@ jobs:
             -f body="$(cat "${RUNTIME_DIR}/clarification_comment.md")"
 
       - name: Record clarification candidate (needs clarification)
-        if: steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -847,7 +914,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Post clear-to-proceed comment
-        if: steps.parse_codex.outputs.needs_clarification != 'true'
+        if: steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -866,7 +933,7 @@ jobs:
             -f body=$'/answer [auto-answered-by-clarify]\n\nAuto answer was posted because no human clarification was required.'
 
       - name: Record clarification candidate (clear)
-        if: steps.parse_codex.outputs.needs_clarification != 'true'
+        if: steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -886,7 +953,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Telegram clarification notification
-        if: steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -923,7 +990,9 @@ jobs:
           declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
 
           OUTCOME="clear"
-          if [ "${{ steps.parse_codex.outputs.needs_clarification }}" = "true" ]; then
+          if [ "${{ steps.parse_codex.outputs.blocked }}" = "true" ]; then
+            OUTCOME="blocked"
+          elif [ "${{ steps.parse_codex.outputs.needs_clarification }}" = "true" ]; then
             OUTCOME="needs_clarification"
           fi
 

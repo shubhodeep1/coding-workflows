@@ -22,6 +22,9 @@ Rules:
 - Read and interpret clarification answers from planning_context.txt first.
 - Accept flexible answer formats/casing; interpret intent, then map back to Q<ID> questions.
 - If any answer is missing, contradictory, or unclear: return clarification questions in mandatory Q<ID>/Choices format.
+- If a required input is external and non-synthesizable by the auto-answerer (for example branch name, commit SHA, credential, or external URL), do not emit Q/Choices; emit exactly `BLOCKED: <short reason>`.
+- Surface the planning ref context from the provided planning context (`git rev-parse HEAD` and symbolic branch) and do not assume `main`.
+- If checked-out ref mismatches Integration branch metadata, emit exactly `BLOCKED: integration branch mismatch`.
 - Use repo documentation only; no external web searches.
 - If external APIs are needed, include concrete details from provided context; if missing, ask rather than invent.
 - Do not write code.
