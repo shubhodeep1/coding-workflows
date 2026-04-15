@@ -2213,6 +2213,96 @@ extract_fix_issues_from_comment() {
   echo "${comment_body}" | sed 's/\\n/\n/g' | sed -n 's/^- #\([0-9][0-9]*\).*$/\1/p' | awk '!seen[$0]++'
 }
 
+extract_implement_fixup_blockers_from_comment() {
+  local comment_body="$1"
+  # Normalise literal \n sequences so marker lines are anchored to real lines.
+  printf '%s' "${comment_body}" | sed 's/\\n/\n/g' | sed -n '/^<!-- IMPLEMENT_FIXUP_BLOCKERS_V1$/,/^IMPLEMENT_FIXUP_BLOCKERS_V1 -->$/p' | sed '1d;$d'
+}
+
+sync_implementation_fixup_blockers() {
+  local source_issue_num="$1"
+  local issue_local_id="$2"
+  local wave_idx="$3"
+  local comments_json="$4"
+  local latest_blocker_comment_json
+  local blocker_comment_id
+  local blocker_comment_body
+  local blocker_payload
+  local parsed_source_issue
+  local normalized_fixups
+  local existing_source_issue
+  local existing_fixups
+
+  SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED="false"
+
+  if [ -z "${issue_local_id}" ] || [ "${issue_local_id}" = "null" ]; then
+    return 0
+  fi
+
+  latest_blocker_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("IMPLEMENT_FIXUP_BLOCKERS_V1"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty')"
+  if [ -z "${latest_blocker_comment_json}" ]; then
+    return 0
+  fi
+
+  blocker_comment_id="$(echo "${latest_blocker_comment_json}" | jq -r '.id // 0')"
+  if ! [[ "${blocker_comment_id}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+
+  blocker_comment_body="$(echo "${latest_blocker_comment_json}" | jq -r '.body // ""')"
+  blocker_payload="$(extract_implement_fixup_blockers_from_comment "${blocker_comment_body}")"
+  if [ -z "${blocker_payload}" ]; then
+    return 0
+  fi
+
+  parsed_source_issue="$(printf '%s' "${blocker_payload}" | jq -r '.blocks_source_issue // empty' 2>/dev/null || echo "")"
+  if [ -z "${parsed_source_issue}" ] || ! [[ "${parsed_source_issue}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  if [ "${parsed_source_issue}" != "${source_issue_num}" ]; then
+    return 0
+  fi
+
+  normalized_fixups="$(printf '%s' "${blocker_payload}" | jq -c '
+    if (.fixup_issue_numbers | type) == "array" then
+      .fixup_issue_numbers
+      | map(select(type == "number"))
+      | map(if floor == . then . else empty end)
+      | unique
+    else
+      []
+    end
+  ' 2>/dev/null || echo '[]')"
+
+  existing_source_issue="$(jq -r --arg local_id "${issue_local_id}" --argjson wave_idx "${wave_idx}" '
+    .waves[$wave_idx].issues[] | select(.id == $local_id) | .blocks_source_issue // empty
+  ' "${STATE_FILE}" 2>/dev/null | head -n1 || echo "")"
+  existing_fixups="$(jq -c --arg local_id "${issue_local_id}" --argjson wave_idx "${wave_idx}" '
+    .waves[$wave_idx].issues[] | select(.id == $local_id) | (.fixup_issue_numbers // [])
+    | if type == "array" then map(select(type == "number")) | map(if floor == . then . else empty end) | unique else [] end
+  ' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+
+  if [ "${existing_source_issue}" = "${source_issue_num}" ] && [ "${existing_fixups}" = "${normalized_fixups}" ]; then
+    return 0
+  fi
+
+  jq \
+    --arg local_id "${issue_local_id}" \
+    --argjson wave_idx "${wave_idx}" \
+    --argjson source_issue "${source_issue_num}" \
+    --argjson fixups "${normalized_fixups}" \
+    '(.waves[$wave_idx].issues[] | select(.id == $local_id)) |=
+      (. + {
+        blocks_source_issue: $source_issue,
+        fixup_issue_numbers: ($fixups | if type == "array" then . else [] end)
+      })' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED="true"
+
+  return 0
+}
+
 sync_validation_fix_issues_from_comments() {
   local comments_json="$1"
   local latest_fix_comment_json
@@ -2222,7 +2312,7 @@ sync_validation_fix_issues_from_comments() {
   local new_fix_issues_json
   local new_fix_count
 
-  latest_fix_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select(.body | startswith("## 🧪 Runtime validation found fixable issues"))] | last // empty')"
+  latest_fix_comment_json="$(echo "${comments_json}" | jq -c '[.[] | select((.body // "") | startswith("## 🧪 Runtime validation found fixable issues"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty')"
   if [ -z "${latest_fix_comment_json}" ]; then
     return 0
   fi
@@ -3819,7 +3909,8 @@ extract_recommended_answers() {
           ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required"))
         )
     ]
-    | if length > 0 then .[0].body // "" else "" end
+    | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)])
+    | .body // ""
   ')"
 
   if [ -z "${clarify_body}" ]; then
@@ -4272,7 +4363,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       # "Runtime validation failed", "Runtime validation harness error",
       # "Runtime validation infeasible", or "Runtime validation found fixable issues").
       VALIDATION_FAIL_BODY="$(echo "${COMMENTS}" | jq -r '
-        [.[] | select(.body | test("## [❌🧪⚠️]+ Runtime validation"))] | last | .body // ""
+        [.[] | select((.body // "") | test("## [❌🧪⚠️]+ Runtime validation"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) | .body // ""
       ')"
       if [ -n "${VALIDATION_FAIL_BODY}" ] && [ "${VALIDATION_FAIL_BODY}" != "" ]; then
         mark_validation_failed "${VALIDATION_FAIL_BODY}"
@@ -6181,51 +6272,219 @@ ${RB_FIX_DESC}
   while read -r if_issue; do
     [[ "${if_issue}" =~ ^[0-9]+$ ]] || continue
 
-    # Look up local_id for this issue so we can track no-op count
-    IF_LOCAL_ID="$(jq -r --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" \
-      '.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue) | .id' \
+    # Look up the wave issue entry for this source issue.
+    IF_ENTRY_JSON="$(jq -c --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" \
+      '.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue) | .' \
       "${STATE_FILE}" | head -n 1)"
+    IF_LOCAL_ID="$(echo "${IF_ENTRY_JSON}" | jq -r '.id // ""' 2>/dev/null || echo "")"
 
-    # ---- No-op loop guard: if this task has already been re-issued
-    # MAX_IMPL_NOOP_REISSUES times without producing changes, the code
-    # likely already exists on main.  Close the issue and let the
-    # wave-completion judge verify instead of looping forever.
-    NOOP_COUNT="$(get_impl_noop_count "${IF_LOCAL_ID}")"
-    # The current failure is itself a no-op, so the observed count
-    # includes this cycle even though we haven't bumped yet.
-    OBSERVED_NOOP_COUNT=$((NOOP_COUNT + 1))
-    # Cap semantics: MAX_IMPL_NOOP_REISSUES controls how many re-issues
-    # are allowed after prior no-op failures.
-    if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
-      echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
-      bump_impl_noop_count "${IF_LOCAL_ID}"
-      gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-        --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
-      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-        -c "Closing: implementation produced no changes ${OBSERVED_NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
-      tg_notify "Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${OBSERVED_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
-      IMPL_FAILED_STATE_CHANGED=true
+    IF_MODE="no-op-implementation"
+    IF_BLOCKERS_JSON='[]'
+    IF_BLOCKERS_SOURCE="none"
+    IF_DEFER_REISSUE="false"
+    IF_DEFER_REASON=""
+
+    IF_STORED_BLOCKERS_JSON="$(echo "${IF_ENTRY_JSON}" | jq -c '
+      if type == "object" then
+        (
+          ((if (.depends_on | type) == "array" then .depends_on else [] end)
+           +
+           (if (.reissue_depends_on | type) == "array" then .reissue_depends_on else [] end))
+          | map(tostring | ltrimstr("#") | tonumber?)
+          | map(select(. != null))
+          | unique
+        )
+      else
+        []
+      end
+    ' 2>/dev/null || echo '[]')"
+
+    IF_COMMENTS_JSON='[]'
+    if IF_COMMENTS_JSON="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments?sort=created&direction=desc&per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+      && echo "${IF_COMMENTS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      :
+    else
+      IF_COMMENTS_JSON='[]'
+      IF_MODE="post-codex-validation"
+      IF_DEFER_REISSUE="true"
+      IF_DEFER_REASON="unable to fetch issue comments for post-codex blocker detection"
+    fi
+
+    IF_POST_CODEX_ANY_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | test("^## Post-Codex validation"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty' 2>/dev/null || true)"
+    IF_POST_CODEX_FIX_COMMENT_JSON="$(echo "${IF_COMMENTS_JSON}" | jq -c '[.[] | select((.body // "") | startswith("## Post-Codex validation diagnosed follow-up fixes"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty' 2>/dev/null || true)"
+
+    IF_PARSED_BLOCKERS_JSON='[]'
+    IF_PARSED_BLOCKER_COUNT=0
+    IF_STORED_BLOCKER_COUNT="$(echo "${IF_STORED_BLOCKERS_JSON}" | jq 'length' 2>/dev/null || echo "0")"
+    IF_HAS_POST_CODEX_CONTEXT="false"
+    if [ -n "${IF_POST_CODEX_ANY_COMMENT_JSON}" ]; then
+      IF_HAS_POST_CODEX_CONTEXT="true"
+    fi
+
+    if [ -n "${IF_POST_CODEX_FIX_COMMENT_JSON}" ]; then
+      IF_FIX_COMMENT_BODY="$(echo "${IF_POST_CODEX_FIX_COMMENT_JSON}" | jq -r '.body // ""')"
+      IF_PARSED_BLOCKERS_JSON="$(extract_fix_issues_from_comment "${IF_FIX_COMMENT_BODY}" | jq -R 'select(length > 0) | tonumber' | jq -s 'unique')"
+      IF_PARSED_BLOCKER_COUNT="$(echo "${IF_PARSED_BLOCKERS_JSON}" | jq 'length' 2>/dev/null || echo "0")"
+    fi
+
+    if [ "${IF_PARSED_BLOCKER_COUNT}" -gt 0 ]; then
+      IF_MODE="post-codex-validation"
+      IF_BLOCKERS_JSON="${IF_PARSED_BLOCKERS_JSON}"
+      IF_BLOCKERS_SOURCE="post-codex-comment"
+    elif [ "${IF_STORED_BLOCKER_COUNT}" -gt 0 ]; then
+      IF_MODE="post-codex-validation"
+      IF_BLOCKERS_JSON="${IF_STORED_BLOCKERS_JSON}"
+      IF_BLOCKERS_SOURCE="state"
+    elif [ "${IF_HAS_POST_CODEX_CONTEXT}" = "true" ]; then
+      IF_MODE="post-codex-validation"
+      IF_DEFER_REISSUE="true"
+      IF_DEFER_REASON="post-codex blocker metadata missing or malformed"
+    fi
+
+    IF_BLOCKER_COUNT="$(echo "${IF_BLOCKERS_JSON}" | jq 'length' 2>/dev/null || echo "0")"
+    if [ "${IF_BLOCKER_COUNT}" -gt 0 ] && [[ -n "${IF_LOCAL_ID}" && "${IF_LOCAL_ID}" != "null" ]]; then
+      IF_STATE_TMP="${STATE_FILE}.impl_dep.tmp"
+      if jq --arg if_issue "${if_issue}" --argjson wave_idx "${WAVE_IDX}" --argjson blockers "${IF_BLOCKERS_JSON}" '
+        (.waves[$wave_idx].issues[] | select((.github_issue | tostring) == $if_issue)) |= (
+          if (.depends_on | type) == "array" then
+            .depends_on = ((.depends_on + $blockers) | unique)
+          else
+            .reissue_depends_on = (((.reissue_depends_on // []) + $blockers) | unique)
+          end
+        )
+      ' "${STATE_FILE}" > "${IF_STATE_TMP}"; then
+        if ! cmp -s "${STATE_FILE}" "${IF_STATE_TMP}"; then
+          mv "${IF_STATE_TMP}" "${STATE_FILE}"
+          IMPL_FAILED_STATE_CHANGED=true
+        else
+          rm -f "${IF_STATE_TMP}"
+        fi
+      else
+        rm -f "${IF_STATE_TMP}" 2>/dev/null || true
+      fi
+    fi
+
+    if [ "${IF_MODE}" = "post-codex-validation" ] && [ "${IF_BLOCKER_COUNT}" -gt 0 ]; then
+      IF_BLOCKER_OPEN_COUNT=0
+      IF_BLOCKER_UNKNOWN_COUNT=0
+      IF_BLOCKER_STATUS_SUMMARY=""
+
+      while IFS= read -r blocker_issue; do
+        [ -n "${blocker_issue}" ] || continue
+        BLOCKER_STATE="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${blocker_issue}" --jq '.state' || echo "")"
+        case "${BLOCKER_STATE}" in
+          open)
+            IF_BLOCKER_OPEN_COUNT=$((IF_BLOCKER_OPEN_COUNT + 1))
+            IF_BLOCKER_STATUS_SUMMARY+="#${blocker_issue}=open "
+            ;;
+          closed)
+            IF_BLOCKER_STATUS_SUMMARY+="#${blocker_issue}=closed "
+            ;;
+          *)
+            IF_BLOCKER_UNKNOWN_COUNT=$((IF_BLOCKER_UNKNOWN_COUNT + 1))
+            IF_BLOCKER_STATUS_SUMMARY+="#${blocker_issue}=unknown "
+            ;;
+        esac
+      done < <(echo "${IF_BLOCKERS_JSON}" | jq -r '.[]')
+
+      if [ "${IF_BLOCKER_UNKNOWN_COUNT}" -gt 0 ]; then
+        IF_DEFER_REISSUE="true"
+        IF_DEFER_REASON="blocker status lookup incomplete"
+      elif [ "${IF_BLOCKER_OPEN_COUNT}" -gt 0 ]; then
+        IF_DEFER_REISSUE="true"
+        IF_DEFER_REASON="blocker fix-up issue(s) still open"
+      fi
+
+      if [ "${IF_DEFER_REISSUE}" = "true" ]; then
+        IF_BLOCKERS_CSV="$(echo "${IF_BLOCKERS_JSON}" | jq -r 'map("#" + tostring) | join(", ")')"
+        echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; blockers=${IF_BLOCKERS_CSV}; statuses=${IF_BLOCKER_STATUS_SUMMARY}; reason=${IF_DEFER_REASON}."
+        tg_notify "Deferred implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID})."$'\n'"Mode: ${IF_MODE}"$'\n'"Blockers: ${IF_BLOCKERS_CSV}"$'\n'"Statuses: ${IF_BLOCKER_STATUS_SUMMARY}"$'\n'"Reason: ${IF_DEFER_REASON}"$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
+        continue
+      fi
+    elif [ "${IF_MODE}" = "post-codex-validation" ] && [ "${IF_DEFER_REISSUE}" = "true" ]; then
+      echo "  Deferring implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID}): mode=${IF_MODE}; reason=${IF_DEFER_REASON}."
+      tg_notify "Deferred implementation-failed reissue for #${if_issue} (${IF_LOCAL_ID})."$'\n'"Mode: ${IF_MODE}"$'\n'"Reason: ${IF_DEFER_REASON}"$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
       continue
     fi
 
-    echo "  Issue #${if_issue} has implementation-failed (no-op ${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
+    if [ "${IF_MODE}" = "no-op-implementation" ]; then
+      # ---- No-op loop guard: if this task has already been re-issued
+      # MAX_IMPL_NOOP_REISSUES times without producing changes, the code
+      # likely already exists on main.  Close the issue and let the
+      # wave-completion judge verify instead of looping forever.
+      NOOP_COUNT="$(get_impl_noop_count "${IF_LOCAL_ID}")"
+      # The current failure is itself a no-op, so the observed count
+      # includes this cycle even though we haven't bumped yet.
+      OBSERVED_NOOP_COUNT=$((NOOP_COUNT + 1))
+      # Cap semantics: MAX_IMPL_NOOP_REISSUES controls how many re-issues
+      # are allowed after prior no-op failures.
+      if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+        echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
+        bump_impl_noop_count "${IF_LOCAL_ID}"
+        gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+        gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: implementation produced no changes ${OBSERVED_NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
+        tg_notify "Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${OBSERVED_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
+        IMPL_FAILED_STATE_CHANGED=true
+        continue
+      fi
 
-    # Increment no-op counter before re-issuing
-    bump_impl_noop_count "${IF_LOCAL_ID}"
+      echo "  Issue #${if_issue} has implementation-failed (no-op ${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
+
+      # Increment no-op counter before re-issuing
+      bump_impl_noop_count "${IF_LOCAL_ID}"
+    else
+      echo "  Issue #${if_issue} has implementation-failed (${IF_MODE}; blockers resolved). Closing and re-issuing..."
+    fi
 
     # Read the original issue to preserve its content
     IF_TITLE="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
     IF_BODY="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
+    IF_COMMENTS_JSON="$(_safe_gh_jq --paginate "repos/${GITHUB_REPOSITORY}/issues/${if_issue}/comments?per_page=100" | jq -cs 'add // []' 2>/dev/null || echo '[]')"
+
+    sync_implementation_fixup_blockers "${if_issue}" "${IF_LOCAL_ID}" "${WAVE_IDX}" "${IF_COMMENTS_JSON}" || true
+    if [ "${SYNC_IMPLEMENT_FIXUP_BLOCKERS_CHANGED:-false}" = "true" ]; then
+      IMPL_FAILED_STATE_CHANGED=true
+    fi
 
     # Close the failed issue
     ensure_label_exists "ai:closed"
     gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
       --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
-    gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-      -c "Closing: implementation produced no changes. Re-issuing with additional guidance." 2>/dev/null || true
+    if [ "${IF_MODE}" = "post-codex-validation" ]; then
+      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+        -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this source task is being re-issued with blocker-sequenced guidance." 2>/dev/null || true
+    else
+      gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+        -c "Closing: implementation produced no changes. Re-issuing with additional guidance." 2>/dev/null || true
+    fi
 
     # Create replacement issue with extra guidance
-    NEW_BODY="$(cat <<REISSUE_EOF
+    if [ "${IF_MODE}" = "post-codex-validation" ]; then
+      IF_BLOCKERS_MD="$(echo "${IF_BLOCKERS_JSON}" | jq -r '.[] | "- #\(.)"')"
+      if [ -z "${IF_BLOCKERS_MD}" ]; then
+        IF_BLOCKERS_MD="- (none recorded)"
+      fi
+      NEW_BODY="$(cat <<REISSUE_EOF
+${IF_BODY}
+
+---
+
+**⚠️ Re-issued from #${if_issue}** — the previous implementation attempt failed during post-Codex syntax/validation checks.
+
+**Post-Codex blocker context:**
+${IF_BLOCKERS_MD}
+
+**Guidance for the implementation model:**
+- Review and respect the blocker fix-up outcomes listed above before re-implementing this source task.
+- Preserve compatibility with those blocker fixes; do not undo or duplicate them.
+- Run syntax/validation checks for changed files before finishing to avoid another post-Codex failure.
+- You MUST create or modify files as described in the approved plan. Do NOT only describe changes.
+REISSUE_EOF
+)"
+    else
+      NEW_BODY="$(cat <<REISSUE_EOF
 ${IF_BODY}
 
 ---
@@ -6239,6 +6498,7 @@ ${IF_BODY}
 - If the task genuinely requires no code changes, explain why in a comment instead of silently producing no output.
 REISSUE_EOF
 )"
+    fi
 
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
