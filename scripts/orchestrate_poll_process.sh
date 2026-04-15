@@ -628,7 +628,7 @@ get_issue_labels_json() {
 get_issue_state_labels_json() {
   local issue_num="$1"
   gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" \
-    --jq '{state: (.state // "open"), state_reason: (.state_reason // ""), labels: [.labels[].name]}' \
+    --jq '{state: (.state // "open"), state_reason: (.state_reason // ""), labels: [(.labels // [])[] | .name]}' \
     || echo '{"state":"open","state_reason":"","labels":[]}'
 }
 
@@ -4324,7 +4324,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         else
           FIX_EVIDENCE_STATUS=$?
           if [ "${FIX_EVIDENCE_STATUS}" -eq 1 ]; then
-            echo "Validation fix-up issue #${fix_num}: no merged PR evidence detected (state=${FIX_STATE}, state_reason=${FIX_STATE_REASON:-closed})."
+            echo "Validation fix-up issue #${fix_num}: no merged PR evidence detected (state=${FIX_STATE}, state_reason=${FIX_STATE_REASON:-none})."
           else
             # Exit code 2 = transient timeline lookup failure.  The issue is
             # still flagged as closed (the state/label said so) but without a
@@ -4377,11 +4377,13 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
       if [ "${FIX_BATCH_CYCLES}" -gt "${MAX_VALIDATION_FIX_BATCH_CYCLES}" ]; then
-        mark_validation_failed "Validation fix-up batch stalled: ${FIX_BATCH_CYCLES} poll cycles elapsed without all fix-up issues reaching ai:merged (MAX_VALIDATION_FIX_BATCH_CYCLES=${MAX_VALIDATION_FIX_BATCH_CYCLES}). Active issues: $(echo "${ACTIVE_FIX_ISSUES_JSON}" | jq -r 'map("#\(.)") | join(", ")')."
+        ACTIVE_FIX_ISSUES_SUMMARY="$(echo "${ACTIVE_FIX_ISSUES_JSON}" | jq -r 'map("#\(.)") | join(", ")' 2>/dev/null || echo "<unavailable>")"
+        mark_validation_failed "Validation fix-up batch stalled: ${FIX_BATCH_CYCLES} poll cycles elapsed without all fix-up issues reaching ai:merged (MAX_VALIDATION_FIX_BATCH_CYCLES=${MAX_VALIDATION_FIX_BATCH_CYCLES}). Active issues: ${ACTIVE_FIX_ISSUES_SUMMARY}."
         continue
       fi
 
       echo "Validation fix-up issues are still in progress (batch cycle ${FIX_BATCH_CYCLES}/${MAX_VALIDATION_FIX_BATCH_CYCLES})."
+      post_state_comment
       continue
     fi
 
