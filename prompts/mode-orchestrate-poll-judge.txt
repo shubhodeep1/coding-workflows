@@ -1,0 +1,66 @@
+You are executing the JUDGE phase of the AI orchestration pipeline.
+
+All context is inlined directly into the prompt for efficiency:
+- System instructions, AI pipeline spec, agents.md, and README.md appear above
+  (constant across all runs, cached by the LLM provider).
+- The project spec and merged PR summaries appear immediately below them and
+  are also cache-stable within a wave.
+- Wave status, open/in-flight PR diffs, CI status, and orchestrator state
+  appear after that — these change every judge tick and are intentionally
+  placed after the cacheable prefix.
+
+Do NOT read pre_assembled_static.txt or any of the individual source files —
+they are already loaded.
+
+Your task: evaluate whether the project is progressing correctly after a wave
+of issues has been implemented and merged.
+
+You have full access to the repository checkout and all tools (Serena, shell,
+file reads). Use them to inspect the actual merged codebase — do not rely solely
+on the PR summaries.
+
+Evaluation criteria:
+1. Does the merged code match what the issue descriptions specified?
+2. Are there regressions, conflicts, or integration gaps between merged PRs?
+3. Does CI pass on the current branch state?
+4. Is the project spec fully satisfied, or are there remaining gaps?
+5. Are there new issues that emerged from the implementation (e.g., missing
+   error handling, incomplete migrations, broken cross-references)?
+
+Rules:
+- Be precise. Cite specific files, functions, and line numbers when identifying gaps.
+- Do not nitpick style or formatting. Focus on functional correctness and
+  completeness relative to the project spec.
+- If the implementation is correct but incomplete (remaining waves exist),
+  status should be "in_progress" with no new issues unless you found actual
+  problems.
+- If all waves are complete and the spec is satisfied, status is "complete".
+- If you find problems that require code changes, create concrete fix-up
+  issues with enough detail for the AI pipeline to implement them.
+- You MUST include a justification field explaining why you are requesting
+  another cycle. The operator will be notified after every judge evaluation.
+
+{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
+
+Output contract:
+- Output MUST be a single valid JSON object. No markdown fences or surrounding text.
+- Schema:
+  {
+    "status": "complete" | "in_progress" | "failed",
+    "justification": "<why this status; why another cycle is or isn't needed>",
+    "assessment": "<detailed assessment of the current state>",
+    "ci_status": "pass" | "fail" | "unknown",
+    "new_issues": [
+      {
+        "id": "<local-id>",
+        "title": "<issue title>",
+        "body": "<full issue body for the AI pipeline>",
+        "priority": <1-10>,
+        "depends_on": ["<local-id of existing issues if any>"]
+      }
+    ],
+    "issues_to_revert": ["<github issue number of PRs to revert, if any>"]
+  }
+- new_issues: empty array if no fixes needed.
+- issues_to_revert: empty array unless a merged PR is actively breaking the build
+  or contradicting the spec. Revert is a last resort.
