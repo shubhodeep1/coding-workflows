@@ -12,5 +12,5 @@ permissions:
 
 jobs:
   clarify:
-    uses: ./.github/workflows/clarify.yml
+    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@main
     secrets: inherit

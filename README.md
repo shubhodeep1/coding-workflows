@@ -484,6 +484,51 @@ jobs:
 > each update.
 
 > All internal wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
+>
+> **Note on `@main` vs `@stable` inside this repo.** The `internal-*.yml`
+> wrappers here pin `uses:` to
+> `shubhodeep1/coding-workflows/.github/workflows/<wf>.yml@main` rather than
+> `@stable` (consumer templates in [`workflow-templates/`](workflow-templates/)
+> keep `@stable`). This split is intentional:
+>
+> 1. **Branch-drift immunity.** When the orchestrator opens a feature PR, any
+>    `pull_request`-triggered wrapper (`internal-review.yml`,
+>    `internal-cancel-on-pr-close.yml`, `internal-issue-pr-status.yml`) runs
+>    from the PR branch's copy of the wrapper file. Pinning to `@main` makes
+>    GitHub fetch the reusable workflow body from `main` on this repo,
+>    bypassing whatever potentially stale copy the feature branch carries.
+>    This is the fix for orchestrator runs that used to stall because the
+>    feature branch carried an outdated reusable workflow and was hard to
+>    update mid-run.
+> 2. **Fast recovery.** If a bad reusable workflow lands on `main`, pushing a
+>    fix to `main` takes effect on the next wrapper invocation immediately —
+>    no need to re-run the full `test-and-mark-stable.yml` gate first. The
+>    trade-off is that a broken merge to `main` immediately breaks in-flight
+>    orchestrator runs, which is accepted as the cost of fast recovery in
+>    the source-of-truth repo.
+> 3. **`test-and-mark-stable.yml` still validates main HEAD.** The E2E smoke
+>    test job in [`test-and-mark-stable.yml`](.github/workflows/test-and-mark-stable.yml)
+>    creates a real issue on this repo, and the `issues:[opened]` event fires
+>    the default-branch wrapper (`internal-clarify.yml@main`), which then
+>    fetches `clarify.yml@main` — i.e. the candidate code about to be tagged
+>    stable. So the release gate continues to exercise main HEAD rather than
+>    the already-stable tag.
+> 4. **Consumer repos are unaffected.** Consumer repos install the
+>    `workflow-templates/ai-*.yml` copies pinned `@stable` and get the
+>    conservative, release-gated channel.
+>
+> **Dogfood lint gate.** Because `@main` wrappers run whatever is on `main`,
+> a bad merge can cascade. To catch YAML/schema regressions on PRs before
+> they land on `main`, [`ci.yml`](.github/workflows/ci.yml) runs `yamllint`
+> and `actionlint` over every file in `.github/workflows/` **and**
+> `workflow-templates/` on `pull_request` against `main`. Broken reusable
+> workflow bodies or template schemas fail CI before merge.
+>
+> **Recovery procedure for a broken `main` reusable.** Push a fix directly
+> to `main` (or merge a hotfix PR). The next triggered wrapper run picks
+> up the fix immediately — no `test-and-mark-stable.yml` re-run required.
+> Run `test-and-mark-stable.yml` separately when you are ready to promote
+> the fix to the `@stable` channel for consumer repos.
 
 ### 3. Open an issue
 
@@ -1133,8 +1178,12 @@ coding-workflows/
 - **Immutable tags**: `v1.0.0`, `v1.0.1`, etc.
 - **Stable channel**: `@stable` — moving tag, updated after canary validation
 - **Canary channel**: `@canary` — pre-stable testing
+- **Source-of-truth channel**: `@main` — used by this repo's own
+  `internal-*.yml` wrappers. See the wrapper-pinning note in
+  "Create wrapper workflows" above for why internal wrappers track `@main`
+  rather than `@stable`.
 
-Consumer repos pin to `@stable` for automatic updates or exact tags for reproducibility.
+Consumer repos pin to `@stable` for automatic updates or exact tags for reproducibility. This repo's own `internal-*.yml` wrappers pin `@main`.
 
 ## Contributing
 
