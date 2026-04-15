@@ -571,3 +571,200 @@ curl_gh_api()
 	echo "::error::GitHub API curl failed after ${max_attempts} attempts" >&2
 	return 1
 }
+
+_gh_issue_timeline_with_cross_refs_rest()
+{
+	local owner="$1"
+	local repo="$2"
+	local issue_number="$3"
+	local timeline_json
+	local pr_urls
+	local pr_url
+	local pr_json
+	local pr_lookup_json='{}'
+
+	if ! timeline_json="$(gh_retry gh api --paginate "repos/${owner}/${repo}/issues/${issue_number}/timeline" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+		return 1
+	fi
+
+	pr_urls="$(printf '%s' "${timeline_json}" | jq -r '[.[] | select(.event == "cross-referenced" and (.source.issue.pull_request.url? | type == "string")) | .source.issue.pull_request.url] | unique | .[]?' 2>/dev/null || true)"
+	if [ -n "${pr_urls}" ]; then
+		while IFS= read -r pr_url; do
+			[ -n "${pr_url}" ] || continue
+			if pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)" && printf '%s' "${pr_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+				pr_lookup_json="$(jq -c --arg url "${pr_url}" --argjson pr "${pr_json}" '. + {($url): {ok: true, number: ($pr.number // null), state: ($pr.state // null), merged_at: ($pr.merged_at // null), merged: (($pr.merged_at != null) or ($pr.merged == true))}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
+			else
+				pr_lookup_json="$(jq -c --arg url "${pr_url}" '. + {($url): {ok: false}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
+			fi
+		done <<< "${pr_urls}"
+	fi
+
+	printf '%s' "${timeline_json}" | jq -c --argjson pr_lookup "${pr_lookup_json}" '
+		map(
+			if (.event == "cross-referenced") and (.source.issue.pull_request.url? | type == "string") then
+				.source.issue.pull_request.url as $url
+				| ($pr_lookup[$url] // null) as $enrich
+				| if ($enrich != null) and ($enrich.ok == true) then
+					.source.issue |= (. + {
+						number: ($enrich.number // .number // null),
+						state: ($enrich.state // null),
+						merged_at: ($enrich.merged_at // null),
+						merged: ($enrich.merged // false),
+						lookup_failed: false
+					})
+				elif ($enrich != null) and ($enrich.ok == false) then
+					.source.issue |= (. + {
+						merged: false,
+						lookup_failed: true
+					})
+				else
+					.
+				end
+			else
+				.
+			end
+		)
+	' 2>/dev/null
+}
+
+# gh_issue_timeline_with_cross_refs emits the legacy timeline-event shape used
+# across jq consumers in scripts/orchestrate_poll_process.sh.
+#
+# Contract (array of event objects):
+# - `.event` (e.g. "cross-referenced", "closed")
+# - `.source.issue.number`
+# - `.source.issue.pull_request.url` (REST API URL when source is a PR, else null)
+# - additive PR enrichment fields for merged checks:
+#   `.source.issue.state`, `.source.issue.merged_at`, `.source.issue.merged`
+#
+# Maintainer fixture capture (manual, replace OWNER/REPO/ISSUE):
+# - REST:    gh api --paginate "repos/OWNER/REPO/issues/ISSUE/timeline" | jq -s 'add // []' > scripts/fixtures/issue-timeline/rest_timeline_fixture.json
+# - GraphQL helper output: gh_issue_timeline_with_cross_refs OWNER REPO ISSUE > scripts/fixtures/issue-timeline/graphql_timeline_fixture.json
+gh_issue_timeline_with_cross_refs()
+{
+	local owner="$1"
+	local repo="$2"
+	local issue_number="$3"
+	local graphql_query
+	local graphql_json
+	local has_next_page
+	local transformed_json
+
+	graphql_query='query($owner: String!, $repo: String!, $issue_number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $issue_number) {
+      timelineItems(first: 100, itemTypes: [CROSS_REFERENCED_EVENT, CLOSED_EVENT]) {
+        pageInfo {
+          hasNextPage
+        }
+        nodes {
+          __typename
+          ... on CrossReferencedEvent {
+            source {
+              __typename
+              ... on PullRequest {
+                number
+                state
+                mergedAt
+                repository {
+                  name
+                  owner {
+                    login
+                  }
+                }
+              }
+              ... on Issue {
+                number
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}'
+
+	if ! graphql_json="$(gh_retry gh api graphql -f query="${graphql_query}" -f owner="${owner}" -f repo="${repo}" -F issue_number="${issue_number}" 2>/dev/null)"; then
+		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=graphql_failed owner=${owner} repo=${repo} issue=${issue_number}" >&2
+		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
+		return $?
+	fi
+
+	if ! printf '%s' "${graphql_json}" | jq -e '.data.repository.issue.timelineItems.nodes | type == "array"' >/dev/null 2>&1; then
+		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=graphql_payload_invalid owner=${owner} repo=${repo} issue=${issue_number}" >&2
+		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
+		return $?
+	fi
+
+	has_next_page="$(printf '%s' "${graphql_json}" | jq -r '.data.repository.issue.timelineItems.pageInfo.hasNextPage // false' 2>/dev/null || echo "true")"
+	if [ "${has_next_page}" = "true" ]; then
+		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=timeline_has_next_page owner=${owner} repo=${repo} issue=${issue_number}" >&2
+		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
+		return $?
+	fi
+
+	if ! transformed_json="$(printf '%s' "${graphql_json}" | jq -c --arg api_base "${GITHUB_API_URL:-https://api.github.com}" '
+		def source_issue($source):
+			if ($source | type) != "object" then
+				{
+					number: null,
+					pull_request: null,
+					state: null,
+					merged_at: null,
+					merged: false,
+					lookup_failed: false
+				}
+			elif $source.__typename == "PullRequest" then
+				{
+					number: ($source.number // null),
+					pull_request: (
+						if ($source.number != null) and ($source.repository.owner.login? != null) and ($source.repository.name? != null) then
+							{url: ($api_base + "/repos/" + $source.repository.owner.login + "/" + $source.repository.name + "/pulls/" + ($source.number | tostring))}
+						else
+							null
+						end
+					),
+					state: (
+						if ($source.state // null) == "OPEN" then "open"
+						elif (($source.state // null) == "CLOSED") or (($source.state // null) == "MERGED") then "closed"
+						else null
+						end
+					),
+					merged_at: ($source.mergedAt // null),
+					merged: (($source.mergedAt != null) or (($source.state // "") == "MERGED")),
+					lookup_failed: false
+				}
+			else
+				{
+					number: ($source.number // null),
+					pull_request: null,
+					state: null,
+					merged_at: null,
+					merged: false,
+					lookup_failed: false
+				}
+			end;
+
+		[
+			.data.repository.issue.timelineItems.nodes[]?
+			| if .__typename == "CrossReferencedEvent" then
+				{
+					event: "cross-referenced",
+					source: {
+						issue: source_issue(.source)
+					}
+				}
+			  elif .__typename == "ClosedEvent" then
+				{event: "closed"}
+			  else
+				empty
+			  end
+		]
+	' 2>/dev/null)"; then
+		echo "::warning::rate_limit_audit_fallback helper=gh_issue_timeline_with_cross_refs reason=graphql_transform_failed owner=${owner} repo=${repo} issue=${issue_number}" >&2
+		_gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_number}"
+		return $?
+	fi
+
+	printf '%s\n' "${transformed_json}"
+}
