@@ -303,6 +303,41 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
+## 17. Internal Wrapper Pin Policy
+
+- The `.github/workflows/internal-*.yml` wrappers in this repo MUST pin
+  `uses:` to `shubhodeep1/coding-workflows/.github/workflows/<wf>.yml@main`.
+  Do NOT revert them to local refs (`./.github/workflows/<wf>.yml`) and do
+  NOT flip them to `@stable`. The `@main` pin is required for two reasons:
+  (a) it makes orchestrator runs immune to stale reusable-workflow copies
+  on feature branches (which previously caused hangs that were hard to
+  fix mid-run), and (b) it still lets `test-and-mark-stable.yml`'s E2E
+  smoke test validate main HEAD — because `issues:[opened]` events fire
+  the default-branch wrapper, which then fetches the reusable body from
+  `@main` (= main HEAD = the candidate about to be tagged).
+- Consumer templates under `workflow-templates/ai-*.yml` MUST stay pinned
+  to `@stable`. Do not unify the two pin targets.
+- `ai-update-workflows.yml` must NOT be installed into `.github/workflows/`
+  in this repo. If installed, its daily self-update loop would overwrite
+  `internal-*.yml` files keyed by filename — but it only touches files
+  whose names match `workflow-templates/*.yml`, so keeping the
+  `internal-*.yml` filenames (rather than renaming to `ai-*.yml`) insulates
+  them. Do not rename `internal-*.yml` to `ai-*.yml` without first removing
+  the self-updater exposure.
+- PR-time dogfood gate: `ci.yml` runs `yamllint` and `actionlint` across
+  `.github/workflows/*.yml` and `workflow-templates/*.yml` on
+  `pull_request` against `main`. Any change that breaks YAML or GitHub
+  Actions schema must be caught here before landing on `main`, because a
+  broken merge to `main` immediately breaks all in-flight orchestrator
+  runs (accepted trade-off for fast recovery).
+- Recovery procedure for a broken `main` reusable: push the fix directly
+  to `main` (or merge a hotfix PR). The next wrapper invocation picks it
+  up immediately. Only run `test-and-mark-stable.yml` when promoting the
+  fix to the `@stable` channel for consumer repos — it is not on the
+  critical path for recovering this repo's own runtime.
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**

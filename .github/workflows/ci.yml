@@ -31,7 +31,31 @@ jobs:
       - name: YAML lint
         run: |
           set -euo pipefail
-          yamllint -s .github/workflows/*.yml .github/actions/*/action.yml
+          yamllint -s .github/workflows/*.yml .github/actions/*/action.yml workflow-templates/*.yml
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          # Dogfood gate: actionlint catches GitHub Actions schema errors that
+          # yamllint cannot (bad action refs, invalid contexts, unresolved
+          # `uses:` targets, etc.). Pinned via the upstream download script
+          # which picks the latest stable release at install time.
+          cd /tmp
+          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          sudo mv /tmp/actionlint /usr/local/bin/actionlint
+          actionlint -version
+
+      - name: Actionlint — reusable workflows and consumer templates
+        run: |
+          set -euo pipefail
+          # Lint every workflow file in this repo and every consumer template.
+          # The internal-*.yml wrappers pin `uses:` to @main, so a PR that
+          # breaks a reusable workflow body or a template schema will fail
+          # this gate before it lands and starts breaking in-flight
+          # orchestrator runs on feature branches.
+          actionlint \
+            .github/workflows/*.yml \
+            workflow-templates/*.yml
 
       - name: Python syntax check
         run: |
