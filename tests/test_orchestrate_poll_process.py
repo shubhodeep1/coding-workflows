@@ -288,6 +288,7 @@ def _run_poller(
 	tracking_comments: list[str] | None = None,
 	issue_labels: dict[int, list[str]] | None = None,
 	issue_comments: dict[int, list[str]] | None = None,
+	issue_bodies: dict[int, str] | None = None,
 	gql_mode: str = "full",
 	gql_labels: dict[int, list[str]] | None = None,
 	codex_json: dict | None = None,
@@ -307,6 +308,7 @@ def _run_poller(
 	active_autofix_runs: list[dict] | None = None,
 	mock_stall_judge_json: dict | None = None,
 	fail_issue_comment_get_after: dict[int, int] | None = None,
+	fail_issue_get_for: list[int] | None = None,
 	fail_branch_ref_after: dict[str, int] | None = None,
 	fail_branch_ref_not_found_after: dict[str, int] | None = None,
 	codex_touch_file: str | None = None,
@@ -321,6 +323,7 @@ def _run_poller(
 	if issue_labels is None:
 		issue_labels = {10: ["ai:merged"]}
 	issue_comments = issue_comments or {}
+	issue_bodies = issue_bodies or {}
 	gql_labels = gql_labels or {}
 	prs = prs or []
 	pr_api_sequence = pr_api_sequence or {}
@@ -336,6 +339,7 @@ def _run_poller(
 	active_autofix_runs = active_autofix_runs or []
 	mock_stall_judge_json = mock_stall_judge_json or {}
 	fail_issue_comment_get_after = fail_issue_comment_get_after or {}
+	fail_issue_get_for = fail_issue_get_for or []
 	fail_branch_ref_after = fail_branch_ref_after or {}
 	fail_branch_ref_not_found_after = fail_branch_ref_not_found_after or {}
 	codex_json = codex_json or {
@@ -373,13 +377,13 @@ def _run_poller(
 		for inum, labels in issue_labels.items():
 			issues[str(inum)] = {
 				"labels": list(labels),
-				"comments": [
-					{"id": idx + 1, "body": comment_body}
-					for idx, comment_body in enumerate(issue_comments.get(inum, []))
-				],
-				"body": f"Issue {inum}",
-				"closed": bool(issue_closed.get(inum, False)),
-			}
+			"comments": [
+				{"id": idx + 1, "body": comment_body}
+				for idx, comment_body in enumerate(issue_comments.get(inum, []))
+			],
+			"body": issue_bodies.get(inum, f"Issue {inum}"),
+			"closed": bool(issue_closed.get(inum, False)),
+		}
 
 		store = {
 			"issues": issues,
@@ -409,6 +413,7 @@ def _run_poller(
 			"merge_tree_conflict_paths": list(merge_tree_conflict_paths),
 			"timeline_fail_for_issues": [int(x) for x in timeline_fail_for_issues],
 			"fail_issue_comment_get_after": {str(k): int(v) for k, v in fail_issue_comment_get_after.items()},
+			"fail_issue_get_for": [int(x) for x in fail_issue_get_for],
 			"fail_branch_ref_after": {str(k): int(v) for k, v in fail_branch_ref_after.items()},
 			"fail_branch_ref_not_found_after": {str(k): int(v) for k, v in fail_branch_ref_not_found_after.items()},
 		}
@@ -737,7 +742,7 @@ if args[0] == 'api':
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
 
-	m = re.search(r'/issues/(\d+)/comments(?:\?per_page=100)?$', path)
+	m = re.search(r'/issues/(\d+)/comments(?:\?.*)?$', path)
 	if m and method == 'GET' and not fields:
 		num = m.group(1)
 		fail_after = store.get('fail_issue_comment_get_after', {}).get(num)
@@ -793,6 +798,10 @@ if args[0] == 'api':
 
 	m = re.search(r'/issues/(\d+)$', path)
 	if m:
+		num = int(m.group(1))
+		if num in set(store.get('fail_issue_get_for', [])):
+			print('forced issue API failure', file=sys.stderr)
+			sys.exit(1)
 		issue = get_issue(m.group(1))
 		issue_state = 'closed' if issue.get('closed') else 'open'
 		if jq == '.body':
@@ -2172,6 +2181,120 @@ def test_validation_fixing_redispatches_when_fix_issues_merged():
 	assert len(result["validation_dispatches"]) == 1
 
 
+def test_implementation_failed_post_codex_open_blockers_defers_reissue_and_persists_dependency_metadata():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "implementation-failed"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementation-failed"], 501: ["ai:planning"]},
+		issue_comments={
+			10: [
+				"## Post-Codex validation diagnosed follow-up fixes\n\n"
+				"Investigate captured diagnostics.\n\n"
+				"Created fix-up issues:\n"
+				"- #501"
+			],
+		},
+	)
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	latest_issue_state = result["latest_state"]["waves"][0]["issues"][0]
+	assert latest_issue_state["github_issue"] == 10
+	assert latest_issue_state.get("reissue_depends_on") == [501]
+	assert "Deferring implementation-failed reissue for #10" in result["stdout"]
+
+
+def test_implementation_failed_post_codex_closed_blockers_reissues_with_post_codex_guidance_and_uses_depends_on():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "implementation-failed"
+	state["waves"][0]["issues"][0]["depends_on"] = [777]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementation-failed"], 501: ["ai:closed"], 777: ["ai:closed"]},
+		issue_closed={501: True, 777: True},
+		issue_comments={
+			10: [
+				"## Post-Codex validation diagnosed follow-up fixes\n\n"
+				"Investigate captured diagnostics.\n\n"
+				"Created fix-up issues:\n"
+				"- #501"
+			],
+		},
+		issue_bodies={10: "Source body"},
+	)
+	assert result.get("created_issues", [])
+	new_issue_num = result["created_issues"][0]["number"]
+	assert result["closed_issues"] == [10]
+	new_issue_body = result["issues"][str(new_issue_num)]["body"]
+	assert "failed during post-Codex syntax/validation checks" in new_issue_body
+	assert "Post-Codex blocker context" in new_issue_body
+	assert "- #501" in new_issue_body
+	latest_issue_state = result["latest_state"]["waves"][0]["issues"][0]
+	assert latest_issue_state["github_issue"] == str(new_issue_num)
+	assert latest_issue_state.get("depends_on") == [501, 777]
+	assert latest_issue_state.get("reissue_depends_on") is None
+
+
+def test_implementation_failed_noop_path_keeps_existing_guidance_without_post_codex_context():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "implementation-failed"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementation-failed"]},
+		issue_bodies={10: "Source body"},
+	)
+	assert result.get("created_issues", [])
+	new_issue_num = result["created_issues"][0]["number"]
+	new_issue_body = result["issues"][str(new_issue_num)]["body"]
+	assert "previous implementation attempt produced no repository changes" in new_issue_body
+	assert "Post-Codex blocker context" not in new_issue_body
+	assert "ALLOW_WORKFLOW_EDITS=true" in new_issue_body
+
+
+def test_implementation_failed_post_codex_unknown_blocker_state_defers_reissue():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "implementation-failed"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementation-failed"], 501: ["ai:closed"]},
+		issue_comments={
+			10: [
+				"## Post-Codex validation diagnosed follow-up fixes\n\n"
+				"Investigate captured diagnostics.\n\n"
+				"Created fix-up issues:\n"
+				"- #501"
+			],
+		},
+		fail_issue_get_for=[501],
+	)
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	assert "blocker status lookup incomplete" in result["stdout"]
+
+
+def test_implementation_failed_comment_lookup_failure_defers_reissue():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "implementation-failed"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementation-failed"]},
+		fail_issue_comment_get_after={10: 0},
+	)
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	assert "unable to fetch issue comments for post-codex blocker detection" in result["stdout"]
+
+
 def test_review_blocked_merged_fix_followup_retargets_base_to_integration_branch():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert "resolve_active_orchestrator_context_for_issue \"${rb_issue}\" \"${TRACKING_NUM:-}\"" in script
@@ -3005,7 +3128,8 @@ def test_implementation_failed_reissue_persists_fixup_blocker_metadata_from_comm
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		issue_labels={10: ["ai:implementation-failed"]},
+		issue_labels={10: ["ai:implementation-failed"], 901: ["ai:closed"], 902: ["ai:closed"]},
+		issue_closed={901: True, 902: True},
 		issue_comments={10: [comment_body]},
 	)
 
