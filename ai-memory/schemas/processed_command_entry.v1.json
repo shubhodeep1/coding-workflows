@@ -74,7 +74,39 @@
       "format": "date-time"
     },
     "metadata": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "clarify_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "answer_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "clarify_comment_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "answer_comment_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cycle": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "loop_blocked": {
+          "type": "boolean"
+        },
+        "loop_block_reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        }
+      },
+      "additionalProperties": true
     }
   }
 }
