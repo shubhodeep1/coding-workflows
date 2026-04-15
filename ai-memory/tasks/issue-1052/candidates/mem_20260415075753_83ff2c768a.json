@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No Q<ID> clarification questions were asked in this issue.\n- `/answer [auto-answered-by-clarify]` is interpreted as: proceed with the issue scope exactly as written.\n\nImplementation plan:\n\n1. Files likely to change\n- `scripts/orchestrate_lib.py`\n- `scripts/orchestrate_poll_process.sh`\n- `.github/workflows/orchestrate_poll.yml`\n- `tests/test_orchestrate_lib.py`\n- `tests/test_orchestrate_poll_process.py`\n- `README.md`\n- `agents.md`\n- Likely add a focused workflow-contract test file (or extend an existing workflow-string test) for `.github/workflows/orchestrate_poll.yml` env wiring.\n\n2. Functions/modules to implement\n- In `scripts/orchestrate_lib.py`:\n- Add a dedicated resolver helper for effective declarative stall action selection, with inputs `(phase, recovery_count, allow_human_terminalization, ...)`.\n- Default behavior: backcompat non-human terminalization when gate is disabled.\n- Opt-in behavior: allow `escalate_human` when gate is enabled.\n- Fail-open behavior: if selected/judged action is invalid, return deterministic declarative fallback.\n- Thread new flag through `detect_stalls(...)` and `cmd_check_stalls(...)`.\n- Add CLI argument on `check-stalls`: `--allow-human-terminalization` with default `false`.\n- Keep `RUN_STALL_JUDGE_ACTION` routing unchanged.\n- In `scripts/orchestrate_poll_process.sh`:\n- Parse `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`, truthy normalization like existing toggles).\n- Pass it into `python3 scripts/orchestrate_lib.py check-stalls ... --allow-human-terminalization`.\n- Update `recovery_action_for_phase()` to use the new orchestrate-lib resolver (not raw `STALL_RECOVERY_ACTIONS`) so fallback action is gate-aware.\n- In `invoke_stall_judge()`, gate `escalate_human` decisions:\n- If gate disabled and judge returns `escalate_human`, execute same deterministic non-human fallback action for that phase/recovery count.\n- Preserve existing handling for unknown actions and `resolve_merge_conflict`.\n- In `.github/workflows/orchestrate_poll.yml`:\n- Add env mapping in poll job env block:\n`ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}`\n\n3. Data structures affected\n- `STALL_RECOVERY_ACTIONS` remains declarative source; behavior changes are applied via resolver/gate, not destructive ladder rewrites.\n- New boolean control path in CLI args and shell env:\n- CLI: `allow_human_terminalization`\n- Env: `ENABLE_STALL_HUMAN_TERMINALIZATION`\n- `stalls[]` output schema remains unchanged (`recovery_action` string still returned).\n\n4. API/interface changes\n- New additive CLI flag on `check-stalls`:\n- `--allow-human-terminalization {true|false}` (default `false`).\n- New additive workflow/runtime variable:\n- `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`).\n- No renames/removals to existing flags/env vars.\n- `run_stall_judge` and `resolve_merge_conflict` interfaces remain unchanged.\n\n5. Potential risks and edge cases\n- Phase ladders that end in `escalate_human` must deterministically map to non-human fallback when gate is disabled.\n- If a phase ladder is malformed (e.g., only `escalate_human` entries), resolver must fail-open to safe declarative default (`retrigger_pipeline`-style fallback).\n- Gate parsing must be case-insensitive and aligned across workflow/env/shell/python boundaries.\n- Ensure managed and standalone pathways both use gate-aware fallback logic.\n- Avoid changing retry/skip semantics (`MAX_STALL_RECOVERIES_PER_ISSUE`, judge trigger logic) beyond the gate behavior.\n\n6. Testing considerations\n- `tests/test_orchestrate_lib.py`:\n- Add default-backcompat test: gate disabled picks non-human fallback at terminal step.\n- Add opt-in test: gate enabled allows `escalate_human`.\n- Add forwarding test: `cmd_check_stalls` passes new flag into `detect_stalls`.\n- `tests/test_orchestrate_poll_process.py`:\n- Add/adjust judge test: when judge returns `escalate_human` and gate disabled, poller executes non-human fallback action and does not add `ai:needs-human`.\n- Keep/adjust existing test verifying gate enabled still allows `escalate_human`.\n- Add coverage for standalone stall path where applicable (same gating behavior).\n- Workflow contract test:\n- Assert `.github/workflows/orchestrate_poll.yml` includes new env mapping with default `false`.\n- Run focused test targets for these files to avoid unrelated suite noise.\n\n7. Docs sync\n- `README.md`:\n- Add variable entry for `ENABLE_STALL_HUMAN_TERMINALIZATION` in both env tables/sections.\n- Update stall recovery narrative to explicitly state:\n- Default is legacy autonomous non-human terminal behavior.\n- Human terminalization is opt-in.\n- Invalid judged actions fail-open to deterministic declarative fallback.\n- `agents.md`:\n- Mirror the same variable/default/behavior notes and gating semantics.\n\nConflict notes:\n- No hard code/spec contradictions found in runtime logic targets.\n- Existing tests appear to cover stall judge and fallback behavior broadly, but workflow env-contract coverage for the new variable is currently missing and should be added explicitly.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b7fe0fa497fc3e3eeccdac5a3e785c906f37becf2bf53bc85c3025deecd067fc",
+  "lineage": {
+    "issue_number": 1052,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24442748104",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24442748104",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1052"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415075753_83ff2c768a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1052,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24442748104"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1052",
+  "timestamps": {
+    "created_at": "2026-04-15T07:57:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
