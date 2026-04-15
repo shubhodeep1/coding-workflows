@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\n/answer\nANSWERS:\nQ1: B\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The issue objective is to replace REST timeline fan-out with a GraphQL-backed helper while preserving behavior, and migrating all relevant call sites best matches that goal and the recommended scope.\nQ2: README.md is the documented operational source in this repo for workflow behavior and rate-limit changes, so adding the H3 changelog note there is the most consistent and discoverable option.\nQ3: `scripts/fixtures/issue-timeline/` is the recommended path and cleanly matches the manual shell parity-check requirement with a focused, script-local fixture location.",
+  "fingerprint": "ecb9e37b68ed2dbee9f38d21cfae120e8f6b72fcb13cdb8341908eb9df0f648e",
+  "lineage": {
+    "issue_number": 1115,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24474721700",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24474721700",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1115"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20260415194533_ead6041c06",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1115,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24474721700"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #1115",
+  "timestamps": {
+    "created_at": "2026-04-15T19:45:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
