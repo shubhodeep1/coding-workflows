@@ -233,6 +233,23 @@ fi
 # Write patch to a tmp file and validate.
 printf '%s\n' "${DECISION_PATCH}" > "${SELF_HEAL_PATCH_TMP}"
 
+# Enforce an upper bound on the patch size. A derailed model response
+# could emit an enormous diff (e.g., reprinting entire prompt files),
+# which would bloat run artifacts, slow the patch validator/apply, and
+# later make the repository_dispatch payload construction in
+# validate_process.sh::dispatch_self_heal_improvements awkward. Since
+# self-heal patches MUST be small additive clarifications to one of the
+# four validation prompts (none of which currently exceeds ~12 KB), a
+# 64 KB budget is already luxurious. Treat oversized patches as "no
+# patch proposed" (exit 1) so the caller falls through to the normal
+# hard-fail path instead of pretending success.
+SELF_HEAL_MAX_PATCH_BYTES="${SELF_HEAL_MAX_PATCH_BYTES:-65536}"
+_patch_size="$(wc -c < "${SELF_HEAL_PATCH_TMP}" | tr -d ' ')"
+if [ "${_patch_size}" -gt "${SELF_HEAL_MAX_PATCH_BYTES}" ]; then
+	echo "self-heal: refusing — patch is ${_patch_size} bytes, exceeds SELF_HEAL_MAX_PATCH_BYTES=${SELF_HEAL_MAX_PATCH_BYTES}; treating as no patch proposed" >&2
+	exit 1
+fi
+
 # Reject non-additive diffs explicitly before any dry-run/apply.
 # The self-heal prompt's hard constraints require patches to be additive
 # clarifications only: no deletions, no renames, no schema/identifier

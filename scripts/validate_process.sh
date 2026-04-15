@@ -256,62 +256,105 @@ attempt_self_heal_and_reexec()
 # No-op if no patches were accumulated or GH_PAT has no dispatch scope.
 dispatch_self_heal_improvements()
 {
-  if [ ! -s "${SELF_HEAL_PATCHES_FILE}" ]; then
-    return 0
-  fi
+  # This function runs on the success path AFTER the validation has
+  # already been marked passing. It MUST NOT abort the script on any
+  # internal failure, or a model-produced pathological patches ledger
+  # could flip an otherwise-passing validation into a non-zero script
+  # exit. The entire body runs in a subshell so `set -e` failures stay
+  # local; the outer caller always sees return 0.
+  (
+    set +e
+    if [ ! -s "${SELF_HEAL_PATCHES_FILE}" ]; then
+      exit 0
+    fi
 
-  local upstream="shubhodeep1/coding-workflows"
-  local patches_json
-  patches_json="$(jq -cs '.' "${SELF_HEAL_PATCHES_FILE}" 2>/dev/null || echo '[]')"
-  if [ "${patches_json}" = "[]" ] || [ -z "${patches_json}" ]; then
-    return 0
-  fi
+    local upstream="shubhodeep1/coding-workflows"
 
-  local run_url=""
-  if [ -n "${GITHUB_RUN_ID:-}" ]; then
-    run_url="$(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
-  fi
+    # Slurp patches into an array file. jq's --slurpfile reads the
+    # referenced file from disk instead of taking it as a command-line
+    # argument, so we sidestep ARG_MAX limits on large payloads.
+    local patches_array_file="${RUNTIME_DIR}/self_heal_dispatch_patches.json"
+    if ! jq -cs '.' "${SELF_HEAL_PATCHES_FILE}" > "${patches_array_file}" 2>/dev/null; then
+      echo "::warning::Self-heal patches ledger could not be slurped by jq; skipping dispatch." >&2
+      tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} but patches ledger was malformed; dispatch skipped." "WARNING"
+      exit 0
+    fi
+    local patches_count
+    patches_count="$(jq 'length // 0' "${patches_array_file}" 2>/dev/null || echo 0)"
+    if [ "${patches_count:-0}" -le 0 ]; then
+      exit 0
+    fi
 
-  local payload
-  payload="$(jq -cn \
-    --arg consumer_repo "${GITHUB_REPOSITORY}" \
-    --arg tracking_issue "${TRACKING_ISSUE_RAW}" \
-    --arg validation_cycle "${VALIDATION_CYCLE}" \
-    --arg run_id "${GITHUB_RUN_ID:-0}" \
-    --arg run_url "${run_url}" \
-    --arg final_status "pass" \
-    --argjson attempts "${SELF_HEAL_ATTEMPT}" \
-    --argjson patches "${patches_json}" \
-    '{
-      event_type: "validation-prompt-self-heal",
-      client_payload: {
-        consumer_repo: $consumer_repo,
-        tracking_issue: $tracking_issue,
-        validation_cycle: $validation_cycle,
-        run_id: $run_id,
-        run_url: $run_url,
-        final_status: $final_status,
-        self_heal_attempts: $attempts,
-        patches: $patches
-      }
-    }')"
+    # Hard-cap total payload size so a pathological patches ledger
+    # cannot produce a giant repository_dispatch body. 1 MiB total is
+    # already far larger than any legitimate self-heal sequence
+    # (max per-patch 64 KiB × max 2 attempts = 128 KiB). Above that we
+    # skip dispatch and preserve the full ledger in the run artifact.
+    local max_dispatch_bytes="${SELF_HEAL_MAX_DISPATCH_BYTES:-1048576}"
+    local patches_size
+    patches_size="$(wc -c < "${patches_array_file}" | tr -d ' ')"
+    if [ "${patches_size:-0}" -gt "${max_dispatch_bytes}" ]; then
+      echo "::warning::Self-heal patches ledger is ${patches_size} bytes, exceeds SELF_HEAL_MAX_DISPATCH_BYTES=${max_dispatch_bytes}; skipping dispatch to avoid bloating the repository_dispatch payload." >&2
+      tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} but patches ledger is oversized (${patches_size} bytes); dispatch skipped. See run artifacts." "WARNING"
+      exit 0
+    fi
 
-  local dispatch_log="${RUNTIME_DIR}/self_heal_dispatch.log"
-  local dispatch_exit=0
-  echo "${payload}" | gh_retry gh api \
-    -X POST \
-    -H 'Accept: application/vnd.github+json' \
-    "repos/${upstream}/dispatches" \
-    --input - \
-    > "${dispatch_log}" 2>&1 || dispatch_exit=$?
+    local run_url=""
+    if [ -n "${GITHUB_RUN_ID:-}" ]; then
+      run_url="$(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+    fi
 
-  if [ "${dispatch_exit}" -ne 0 ]; then
-    echo "::warning::Self-heal dispatch to ${upstream} failed (exit ${dispatch_exit}); see ${dispatch_log}. Patches are preserved in ${SELF_HEAL_PATCHES_FILE}." >&2
-    tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} but dispatch back to ${upstream} failed. Patches remain in run artifacts." "WARNING"
-    return 0
-  fi
+    local payload_file="${RUNTIME_DIR}/self_heal_dispatch_payload.json"
+    # --slurpfile binds $patches_wrapper to [<contents-of-file>]; the
+    # patches array is already a single JSON array so we unwrap the
+    # outer slurp layer with $patches_wrapper[0].
+    if ! jq -cn \
+      --arg consumer_repo "${GITHUB_REPOSITORY}" \
+      --arg tracking_issue "${TRACKING_ISSUE_RAW}" \
+      --arg validation_cycle "${VALIDATION_CYCLE}" \
+      --arg run_id "${GITHUB_RUN_ID:-0}" \
+      --arg run_url "${run_url}" \
+      --arg final_status "pass" \
+      --argjson attempts "${SELF_HEAL_ATTEMPT}" \
+      --slurpfile patches_wrapper "${patches_array_file}" \
+      '{
+        event_type: "validation-prompt-self-heal",
+        client_payload: {
+          consumer_repo: $consumer_repo,
+          tracking_issue: $tracking_issue,
+          validation_cycle: $validation_cycle,
+          run_id: $run_id,
+          run_url: $run_url,
+          final_status: $final_status,
+          self_heal_attempts: $attempts,
+          patches: $patches_wrapper[0]
+        }
+      }' > "${payload_file}" 2>"${RUNTIME_DIR}/self_heal_dispatch_jq.log"; then
+      echo "::warning::Self-heal dispatch payload could not be built by jq; skipping dispatch. See ${RUNTIME_DIR}/self_heal_dispatch_jq.log." >&2
+      tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} but dispatch payload construction failed; dispatch skipped." "WARNING"
+      exit 0
+    fi
 
-  tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${SELF_HEAL_ATTEMPT} patch(es)); improvements dispatched to ${upstream}." "WARNING"
+    local dispatch_log="${RUNTIME_DIR}/self_heal_dispatch.log"
+    local dispatch_exit=0
+    # Stream the payload from the file via stdin — gh api --input -
+    # reads the POST body from stdin, so we never put the payload on
+    # the command line.
+    gh_retry gh api \
+      -X POST \
+      -H 'Accept: application/vnd.github+json' \
+      "repos/${upstream}/dispatches" \
+      --input "${payload_file}" \
+      > "${dispatch_log}" 2>&1 || dispatch_exit=$?
+
+    if [ "${dispatch_exit}" -ne 0 ]; then
+      echo "::warning::Self-heal dispatch to ${upstream} failed (exit ${dispatch_exit}); see ${dispatch_log}. Patches are preserved in ${SELF_HEAL_PATCHES_FILE}." >&2
+      tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} but dispatch back to ${upstream} failed. Patches remain in run artifacts." "WARNING"
+      exit 0
+    fi
+
+    tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${SELF_HEAL_ATTEMPT} patch(es)); improvements dispatched to ${upstream}." "WARNING"
+  ) || true
 }
 
 is_tracking_run()
