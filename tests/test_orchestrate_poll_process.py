@@ -2616,7 +2616,6 @@ def test_in_progress_judge_does_not_advance_when_fixups_added_to_current_wave():
 		enable_clean_wave_judge_skip="false",
 		issue_labels={10: ["ai:merged"]},
 		codex_json=codex_json,
-		enable_clean_wave_judge_skip="false",
 	)
 	ls = result["latest_state"]
 	# Must NOT have advanced to wave 2 — fix-up is still pending in wave 1
