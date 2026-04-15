@@ -174,6 +174,70 @@ jobs:
               printf '\n' >> "${patch_file}"
             fi
 
+            # Intake-side patch validation (defense-in-depth against a
+            # forged repository_dispatch payload). The earlier
+            # target-allow-list check only validates the payload
+            # metadata; the diff BODY could still touch arbitrary files
+            # or delete content. Enforce additive-only + target-path-
+            # locked semantics directly on the diff body before running
+            # git apply. This mirrors the guards in
+            # scripts/self_heal_validation.sh but runs in the upstream
+            # repo context where only an attacker with write access to
+            # shubhodeep1/coding-workflows could bypass — we still
+            # refuse to apply a non-conforming patch.
+            expected_path="prompts/${target}"
+            validate_log="/tmp/self-heal-patches/validate-${i}.log"
+            if ! awk -v expected="${expected_path}" '
+              BEGIN { in_hunk = 0; saw_header = 0 }
+              function fail(msg) { print msg > "/dev/stderr"; exit 1 }
+              /^new file mode( |$)/       { fail("new file patches are not allowed") }
+              /^deleted file mode( |$)/   { fail("deleted file patches are not allowed") }
+              /^rename from /             { fail("rename patches are not allowed") }
+              /^rename to /               { fail("rename patches are not allowed") }
+              /^copy from /               { fail("copy patches are not allowed") }
+              /^copy to /                 { fail("copy patches are not allowed") }
+              /^--- / {
+                in_hunk = 0
+                path = $2
+                if (path == "/dev/null") { fail("--- /dev/null is not allowed") }
+                sub(/^a\//, "", path)
+                if (path != expected) { fail("--- path must be a/" expected) }
+                saw_header = 1
+                next
+              }
+              /^\+\+\+ / {
+                in_hunk = 0
+                path = $2
+                if (path == "/dev/null") { fail("+++ /dev/null is not allowed") }
+                sub(/^b\//, "", path)
+                if (path != expected) { fail("+++ path must be b/" expected) }
+                saw_header = 1
+                next
+              }
+              /^@@ / {
+                if (!saw_header) { fail("hunk encountered before file headers") }
+                in_hunk = 1
+                next
+              }
+              {
+                if (in_hunk && /^-/) { fail("deletion lines are not allowed in hunks") }
+              }
+              END {
+                if (!saw_header) { fail("patch must contain ---/+++ file headers") }
+              }
+            ' "${patch_file}" 2>"${validate_log}"; then
+              echo "::warning::patch ${i} failed intake validation; skipping"
+              {
+                printf '### Patch %d — prompts/%s (REJECTED)\n\n' "$((i + 1))" "${target}"
+                printf '**Reason:** failed intake patch validation.\n\n'
+                printf '```\n'
+                cat "${validate_log}" 2>/dev/null || true
+                printf '```\n\n'
+              } >> /tmp/self-heal-patches/summary.md
+              skipped=$((skipped + 1))
+              continue
+            fi
+
             if git apply --check "${patch_file}" 2>/tmp/self-heal-patches/err-${i}.log; then
               git apply "${patch_file}"
               applied=$((applied + 1))

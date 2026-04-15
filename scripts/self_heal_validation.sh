@@ -148,34 +148,45 @@ for _llm_attempt in 1 2; do
 	echo "self-heal: LLM call attempt ${_llm_attempt}/2" >> "${SELF_HEAL_LOG_FILE}"
 	if cat "${SELF_HEAL_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${SELF_HEAL_OUTPUT_FILE}" 2>> "${SELF_HEAL_LOG_FILE}"; then
 		# Extract the last JSON object that contains a "target_prompt" key.
+		# Use json.JSONDecoder.raw_decode() which is string/escape-aware
+		# (the earlier brace-depth counter mis-handled JSON strings that
+		# contain literal '{' or '}' — unified diffs frequently do).
 		if python3 - "${SELF_HEAL_OUTPUT_FILE}" "${SELF_HEAL_DECISION_FILE}" <<'PY'
-import json, re, sys
+import json, sys
 src, dst = sys.argv[1], sys.argv[2]
 with open(src, 'r', encoding='utf-8', errors='replace') as fh:
     txt = fh.read()
-# Find all top-level { ... } blocks and pick the last one that parses and has target_prompt.
-candidates = []
-depth = 0
-start = -1
-for i, ch in enumerate(txt):
-    if ch == '{':
-        if depth == 0:
-            start = i
-        depth += 1
-    elif ch == '}':
-        depth -= 1
-        if depth == 0 and start >= 0:
-            candidates.append(txt[start:i+1])
-            start = -1
+
+decoder = json.JSONDecoder()
+
+def is_valid_candidate(obj):
+    return isinstance(obj, dict) and 'target_prompt' in obj and 'patch' in obj
+
 picked = None
-for block in reversed(candidates):
-    try:
-        obj = json.loads(block)
-    except Exception:
-        continue
-    if isinstance(obj, dict) and 'target_prompt' in obj and 'patch' in obj:
-        picked = obj
-        break
+
+# Fast path: whole output is already valid JSON.
+try:
+    whole = json.loads(txt)
+except Exception:
+    whole = None
+else:
+    if is_valid_candidate(whole):
+        picked = whole
+
+# Fallback: scan for each '{' and attempt raw_decode — which correctly
+# handles strings, escapes, and nested structures. Keep the LAST valid
+# candidate so a trailing JSON block in mixed model output wins.
+if picked is None:
+    for i, ch in enumerate(txt):
+        if ch != '{':
+            continue
+        try:
+            obj, _end = decoder.raw_decode(txt, i)
+        except Exception:
+            continue
+        if is_valid_candidate(obj):
+            picked = obj
+
 if picked is None:
     sys.exit(1)
 with open(dst, 'w', encoding='utf-8') as fh:
@@ -274,6 +285,17 @@ fi
 # ---------------------------------------------------------------
 # Apply the patch
 # ---------------------------------------------------------------
+# Record the target file hash before applying so we can detect the
+# "already applied" case that `patch -N` treats as a successful no-op.
+# Without this, a model-produced idempotent patch would burn a self-heal
+# attempt without changing the prompt, and the re-exec would hit the
+# same failure and repeat — silently draining MAX_SELF_HEAL_ATTEMPTS.
+_target_file="prompts/${DECISION_TARGET}"
+_hash_before=""
+if [ -f "${_target_file}" ]; then
+	_hash_before="$(sha256sum "${_target_file}" | awk '{print $1}')"
+fi
+
 if [ "${_APPLY_WITH_GIT}" = "true" ]; then
 	if ! git apply "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
 		echo "self-heal: git apply failed after dry-run succeeded (race)" >&2
@@ -284,6 +306,15 @@ else
 		echo "self-heal: patch -p1 failed after dry-run succeeded (race)" >&2
 		exit 2
 	fi
+fi
+
+_hash_after=""
+if [ -f "${_target_file}" ]; then
+	_hash_after="$(sha256sum "${_target_file}" | awk '{print $1}')"
+fi
+if [ -n "${_hash_before}" ] && [ "${_hash_before}" = "${_hash_after}" ]; then
+	echo "self-heal: refusing — patch applied cleanly but left prompts/${DECISION_TARGET} unchanged (likely already-applied / idempotent no-op); treating as no patch to avoid burning budget" >&2
+	exit 1
 fi
 
 # ---------------------------------------------------------------
