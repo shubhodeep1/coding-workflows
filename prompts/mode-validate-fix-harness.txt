@@ -81,6 +81,88 @@ CRITICAL — graceful shutdown container resolution:
 - If `validation/logs/compose.log` is missing at assertion time, fix the harness to write `docker compose ... logs` output to that path before running the wrapper-SIGTERM grep.
 - If a graceful shutdown test fails with "app container id unavailable after stop", this is almost certainly caused by using `docker compose ps -q <service>` (without `--status exited` or `--all`) after stop. Fix by switching to the `--status exited` or `--all` variant.
 
+CRITICAL — post-restart readiness polling in graceful_shutdown:
+- Symptom: `10_graceful_shutdown.sh` logs `ok - app shut down gracefully (exit=143 ...)` followed by `not ok - app restarted but endpoint unreachable after graceful shutdown`, optionally with `status=000` or `curl: (56) Recv failure: Connection reset by peer` on a single immediate probe.
+- Root cause: the restart leg performs ONE immediate `curl` against the app endpoint instead of polling for readiness. After `docker compose start`, the container needs a non-trivial warm-up window before its listener re-binds. A single-shot probe races the listener and produces a deterministic false negative.
+- Fix: replace the one-shot probe with a bounded readiness poll that reuses the existing health-timeout / poll-interval semantics (`${HEALTH_TIMEOUT_SECONDS:-30}` total, `${HEALTH_POLL_INTERVAL_SECONDS:-1}s` between attempts). Exit the loop as soon as the probe returns a 2xx/3xx; only emit `not ok` once the full budget is exhausted.
+- The `not ok` diagnostic MUST include the number of attempts, the last observed HTTP status, and the last curl exit code so downstream log tails distinguish a warm-up race from a genuine post-restart crash. Example: `not ok N - app restarted but endpoint unreachable after graceful shutdown (attempts=30 last_status=000 curl_exit=56)`.
+- Canonical patch pattern to apply inside `10_graceful_shutdown.sh` after the `docker compose start` step:
+    READY_URL="${READY_URL:-http://localhost:18080/}"
+    HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
+    HEALTH_POLL_INTERVAL_SECONDS="${HEALTH_POLL_INTERVAL_SECONDS:-1}"
+    attempts=0
+    last_status="000"
+    last_curl_exit=0
+    ready=0
+    while [ "$attempts" -lt "$HEALTH_TIMEOUT_SECONDS" ]; do
+      attempts=$((attempts + 1))
+      last_status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$READY_URL" 2>/dev/null || true)"
+      last_curl_exit=$?
+      case "$last_status" in
+        2*|3*) ready=1; break ;;
+      esac
+      sleep "$HEALTH_POLL_INTERVAL_SECONDS"
+    done
+    if [ "$ready" = "1" ]; then
+      echo "ok $ASSERTION - app restarted and endpoint reachable after graceful shutdown (attempts=$attempts last_status=$last_status)"
+    else
+      echo "not ok $ASSERTION - app restarted but endpoint unreachable after graceful shutdown (attempts=$attempts last_status=$last_status curl_exit=$last_curl_exit)"
+      exit 1
+    fi
+- Do NOT "fix" this by loosening the assertion, deleting the restart leg, or widening what counts as "reachable". The restart leg exists specifically to catch apps that shut down cleanly but fail to re-initialize — preserve its intent and fix the probe timing.
+
+CRITICAL — independent readiness gating for tests that run after graceful_shutdown:
+- Symptom: `11_error_format_validation.sh` (or any HTTP-assertion script ordered after `10_graceful_shutdown.sh`) fails with `status=000 err=curl: (56) Recv failure: Connection reset by peer` while `04_route_testing.sh` (which runs earlier on the same routes) passes. The error format logic is correct; the container is simply mid-restart.
+- Root cause: downstream scripts assume the previous test left the app ready. When `10_graceful_shutdown.sh` races the restart warm-up, every script after it inherits the race.
+- Fix (choose ONE, do not mix):
+  1. Prepend an independent, bounded readiness wait to every HTTP-assertion script that runs after `10_graceful_shutdown.sh`. The wait MUST reuse `${HEALTH_TIMEOUT_SECONDS:-30}` / `${HEALTH_POLL_INTERVAL_SECONDS:-1}s`, poll the same canonical readiness URL as `00_canary.sh` / `02_startup_health_checks.sh`, and emit a dedicated `not ok` line (for example `not ok 1 - app not ready before error_format assertions (attempts=30 last_status=000 curl_exit=56)`) that is distinct from the test's actual assertions.
+  2. Re-order the tests so that `11_error_format_validation.sh` runs BEFORE `10_graceful_shutdown.sh`. The harness executes scripts in lexical `NN_*.sh` order; rename to `10_error_format_validation.sh` / `11_graceful_shutdown.sh` to enforce this. When applying option 2, update any prior-fix metadata or hints that reference the old numbering.
+- Do NOT "fix" this by marking the script as passing on `status=000`, or by relaxing the expected HTTP code — the 404 assertion is correct and the earlier `04_route_testing.sh` proves it. The bug is timing.
+- When patching, prefer introducing `validation/tests/_lib/wait_ready.sh` with a single `wait_for_ready URL TIMEOUT INTERVAL` function and `source` it from every affected script, so the next harness change touches one location.
+
+CRITICAL — stdout/stderr capture in existing_test_suite_execution:
+- Symptom: `06_existing_test_suite_execution.sh` emits `not ok N - <cmd> failed (no stderr)` with no further diagnostic, making it impossible to distinguish a genuine test failure from a harness mis-invocation.
+- Root cause: the wrapper around each custom test discards stdout and/or stderr (typically via `>/dev/null 2>/dev/null` or by capturing only one stream and throwing the other away).
+- Fix: route BOTH streams through per-test temp files and, on non-zero exit, emit a bounded tail of each as TAP comments. Never swallow output with `>/dev/null`, `2>/dev/null`, or a bare `|| true`. Keep the success `ok` line as a single line (no attached output) so passing runs remain compact.
+- Tail bound: at most 40 lines of stdout and 40 lines of stderr per failing command, each prefixed with `# stdout tail:` / `# stderr tail:` and indented with `#   ` so the TAP parser treats them as comments and does not break assertion numbering.
+- Canonical patch: replace the existing inline invocation with a helper:
+    run_custom_test()
+    {
+      local cmd="$1"
+      local out_file
+      local err_file
+      local rc
+      out_file="$(mktemp)"
+      err_file="$(mktemp)"
+      set +e
+      # shellcheck disable=SC2086
+      bash -c "$cmd" >"$out_file" 2>"$err_file"
+      rc=$?
+      set -e
+      if [ "$rc" -eq 0 ]; then
+        echo "ok $ASSERTION - $cmd"
+      else
+        echo "not ok $ASSERTION - $cmd failed (exit=$rc)"
+        if [ -s "$out_file" ]; then
+          echo "# stdout tail:"
+          tail -n 40 "$out_file" | sed 's/^/#   /'
+        else
+          echo "# stdout tail: <empty>"
+        fi
+        if [ -s "$err_file" ]; then
+          echo "# stderr tail:"
+          tail -n 40 "$err_file" | sed 's/^/#   /'
+        else
+          echo "# stderr tail: <empty>"
+        fi
+      fi
+      rm -f "$out_file" "$err_file"
+      ASSERTION=$((ASSERTION + 1))
+      return "$rc"
+    }
+- Apply the wrapper to every entry from `.ai/validate.yml` `custom_tests:` hints and every auto-detected command. Do not special-case Python — pytest/unittest failures surface on stderr and are the most common source of `failed (no stderr)` artifact lines.
+- If a custom test can hang, wrap it in `timeout 120 bash -c "$cmd"` and include the timeout exit code (`124`) in the diagnostic. Do not allow a hung custom test to consume the whole validation budget silently.
+
 CRITICAL — "command not found" for a tool the canary claims is present:
 - Symptom: `00_canary.sh` passes `ok N - required container CLI tools are present (..., forge)` but a later test fails with `sh: 1: forge: not found` (or the same pattern for `npx`, `hardhat`, `pytest`, etc.) inside `npm run ...` / `npx ...` / similar.
 - Root cause: the canary assertion and the test invocation are using different `docker compose exec` shell modes. On Debian/Ubuntu base images, `/bin/sh -lc 'npm run ...'` is a login shell that sources `/etc/profile` and RESETS PATH to a hard-coded value, dropping any `ENV PATH=/root/.foundry/bin:$PATH` (or equivalent) set in the Dockerfile. npm then spawns the script command via `sh -c`, inheriting the stripped PATH — so the tool appears missing even though the image has it installed.

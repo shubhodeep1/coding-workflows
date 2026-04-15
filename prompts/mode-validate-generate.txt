@@ -260,6 +260,89 @@ CRITICAL — graceful shutdown container resolution:
       exit 1
     fi
 
+CRITICAL — post-restart readiness polling in graceful_shutdown:
+- The `graceful_shutdown` script verifies a full stop/start cycle. After `docker compose start <service>` (or equivalent re-up), the container needs a non-trivial warm-up window before its listener re-binds and health endpoints respond. A single immediate `curl` produces a deterministic false negative ("restarted but endpoint unreachable") even though the app is perfectly healthy a second or two later.
+- Hard rule: after restart, the test MUST poll the readiness endpoint with bounded retries BEFORE asserting reachability. Do NOT issue one immediate `curl` and assert on its result.
+- Retry budget: reuse the same health-timeout / poll-interval semantics already used by `02_startup_health_checks.sh` / `00_canary.sh`. Typical values are 30 attempts × 1s, or `${HEALTH_TIMEOUT_SECONDS:-30}` total with `${HEALTH_POLL_INTERVAL_SECONDS:-1}s` between attempts. Never hardcode a single-shot check.
+- Success condition: exit the retry loop as soon as the readiness probe returns a success (HTTP 2xx or the project's documented health signature). Only emit `not ok` after the full budget is exhausted.
+- Diagnostics on failure: the `not ok` line MUST include the last observed HTTP status code, the last curl exit code, and the number of attempts made (for example `not ok N - app restarted but endpoint unreachable after graceful shutdown (attempts=30 last_status=000 curl_exit=56)`). This lets downstream log tails distinguish a mid-warmup race from a genuine post-restart crash.
+- Recommended pattern (append immediately after the restart step in `10_graceful_shutdown.sh`):
+    READY_URL="${READY_URL:-http://localhost:18080/}"
+    HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
+    HEALTH_POLL_INTERVAL_SECONDS="${HEALTH_POLL_INTERVAL_SECONDS:-1}"
+    docker compose -f "$COMPOSE_FILE" start "$APP_SERVICE" >/dev/null 2>&1 || true
+    attempts=0
+    last_status="000"
+    last_curl_exit=0
+    ready=0
+    while [ "$attempts" -lt "$HEALTH_TIMEOUT_SECONDS" ]; do
+      attempts=$((attempts + 1))
+      last_status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$READY_URL" 2>/dev/null || true)"
+      last_curl_exit=$?
+      case "$last_status" in
+        2*|3*) ready=1; break ;;
+      esac
+      sleep "$HEALTH_POLL_INTERVAL_SECONDS"
+    done
+    if [ "$ready" = "1" ]; then
+      echo "ok $ASSERTION - app restarted and endpoint reachable after graceful shutdown (attempts=$attempts last_status=$last_status)"
+    else
+      echo "not ok $ASSERTION - app restarted but endpoint unreachable after graceful shutdown (attempts=$attempts last_status=$last_status curl_exit=$last_curl_exit)"
+      exit 1
+    fi
+    ASSERTION=$((ASSERTION + 1))
+- Do NOT "fix" this by loosening the post-restart assertion or by dropping the restart leg of `graceful_shutdown` — the restart leg exists specifically to catch apps that shut down cleanly but fail to re-initialize. Fix the readiness polling.
+
+CRITICAL — independent readiness gating for tests that run after graceful_shutdown:
+- `11_error_format_validation.sh` (and any other HTTP-assertion script ordered after `10_graceful_shutdown.sh`) runs against the same long-running app service. If `graceful_shutdown` leaves the container mid-restart, the next script hits an empty listener and emits the canonical cascade signature `status=000 err=curl: (56) Recv failure: Connection reset by peer`. This is a harness false negative, not an app defect.
+- Hard rule: every HTTP-assertion test that could run after `10_graceful_shutdown.sh` MUST perform its own independent readiness wait before asserting. Do NOT assume the previous test left the app ready.
+- Ordering alternative: if the readiness wait would duplicate too much logic, re-order tests so that `11_error_format_validation.sh` runs BEFORE `10_graceful_shutdown.sh`. The harness executes scripts in lexical `NN_*.sh` order, so rename accordingly (`10_error_format_validation.sh`, `11_graceful_shutdown.sh`). Both orderings are acceptable; mixed ordering without a readiness gate is NOT.
+- Readiness wait specification: the wait MUST be bounded (reuse `${HEALTH_TIMEOUT_SECONDS:-30}` / `${HEALTH_POLL_INTERVAL_SECONDS:-1}s`), MUST poll the same canonical readiness URL as `00_canary.sh` / `02_startup_health_checks.sh`, and MUST fail with a dedicated `not ok` line (for example `not ok 1 - app not ready before error_format assertions (attempts=30 last_status=000 curl_exit=56)`) that is clearly distinguishable from the actual test's assertions. This prevents misclassification of readiness races as route/format defects.
+- When in doubt, generate a small shared helper such as `validation/tests/_lib/wait_ready.sh` that exposes a single function (`wait_for_ready URL TIMEOUT INTERVAL`) and `source` it from both `10_graceful_shutdown.sh` and every downstream HTTP assertion script. Duplication is acceptable; omission is not.
+
+CRITICAL — stdout/stderr capture in existing_test_suite_execution:
+- `06_existing_test_suite_execution.sh` wraps each custom test command (`python3 tests/foo.py`, `npm test`, `pytest`, `go test`, etc.) in its own TAP assertion. When one of those commands fails, the assertion message is the only diagnostic that reaches the artifact tail. If the wrapper discards stdout or stderr, the root cause is invisible and the orchestrator cannot distinguish a genuine app bug from a harness mis-invocation (wrong cwd, missing env, bad interpreter).
+- Hard rule: every custom test invocation MUST capture BOTH stdout and stderr to per-test temp files, and on failure MUST emit a bounded tail of each stream as part of the `not ok` diagnostic. Never swallow output with `>/dev/null`, `2>/dev/null`, or a bare `|| true`.
+- Tail bound: emit at most the last 40 lines of stdout and the last 40 lines of stderr, each prefixed with `# stdout:` / `# stderr:` so they round-trip through the TAP parser as comments and do not break numbering.
+- The `ok` line on success MUST remain a single line (no attached output); capture files may be removed or left in place.
+- Recommended pattern:
+    run_custom_test()
+    {
+      local cmd="$1"
+      local out_file
+      local err_file
+      local rc
+      out_file="$(mktemp)"
+      err_file="$(mktemp)"
+      set +e
+      # shellcheck disable=SC2086
+      bash -c "$cmd" >"$out_file" 2>"$err_file"
+      rc=$?
+      set -e
+      if [ "$rc" -eq 0 ]; then
+        echo "ok $ASSERTION - $cmd"
+      else
+        echo "not ok $ASSERTION - $cmd failed (exit=$rc)"
+        if [ -s "$out_file" ]; then
+          echo "# stdout tail:"
+          tail -n 40 "$out_file" | sed 's/^/#   /'
+        else
+          echo "# stdout tail: <empty>"
+        fi
+        if [ -s "$err_file" ]; then
+          echo "# stderr tail:"
+          tail -n 40 "$err_file" | sed 's/^/#   /'
+        else
+          echo "# stderr tail: <empty>"
+        fi
+      fi
+      rm -f "$out_file" "$err_file"
+      ASSERTION=$((ASSERTION + 1))
+      return "$rc"
+    }
+- Apply this wrapper to every entry in `custom_tests:` from `.ai/validate.yml` hints and to every auto-detected test command. Do NOT special-case Python: Python unittest/pytest failures surface on stderr and are the most common source of `failed (no stderr)` artifact lines.
+- If the command is expected to be long-running or interactive, wrap it with a bounded timeout (for example `timeout 120 bash -c "$cmd"`) and include the exit code in the diagnostic. Do NOT allow a hung custom test to consume the whole validation budget silently.
+
 CRITICAL — robust synthetic env-var assertions in env_var_validation tests:
 - Docker Compose services declare synthetic test credentials with an override-or-default expression:
     environment:
