@@ -787,11 +787,21 @@ jobs:
           ' "${CODEX_OUTPUT_FILE}")"
 
           if [ -n "${BLOCKED_REASON}" ]; then
+            BLOCKED_REASON_OUTPUT_DELIM="BLOCKED_REASON_OUTPUT_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}_$$"
+            BLOCKED_REASON_ENV_DELIM="BLOCKED_REASON_ENV_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}_$$"
             echo "blocked=true" >> "$GITHUB_OUTPUT"
-            echo "blocked_reason=${BLOCKED_REASON}" >> "$GITHUB_OUTPUT"
+            {
+              printf 'blocked_reason<<%s\n' "${BLOCKED_REASON_OUTPUT_DELIM}"
+              printf '%s\n' "${BLOCKED_REASON}"
+              printf '%s\n' "${BLOCKED_REASON_OUTPUT_DELIM}"
+            } >> "$GITHUB_OUTPUT"
             echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
             echo "BLOCKED=true" >> "$GITHUB_ENV"
-            echo "BLOCKED_REASON=${BLOCKED_REASON}" >> "$GITHUB_ENV"
+            {
+              printf 'BLOCKED_REASON<<%s\n' "${BLOCKED_REASON_ENV_DELIM}"
+              printf '%s\n' "${BLOCKED_REASON}"
+              printf '%s\n' "${BLOCKED_REASON_ENV_DELIM}"
+            } >> "$GITHUB_ENV"
             exit 0
           fi
 

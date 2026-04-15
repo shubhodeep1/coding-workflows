@@ -361,8 +361,14 @@ jobs:
             ensure_label_exists "ai:planning" "${{ github.repository }}"
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --add-label 'ai:planning' --remove-label 'ai:clarification' >/dev/null 2>&1 || true
+          elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:blocked") != null' >/dev/null; then
+            echo "Issue #${ISSUE_NUMBER} is in ai:blocked phase; transitioning to ai:planning for /answer processing."
+            source scripts/label_helpers.sh
+            ensure_label_exists "ai:planning" "${{ github.repository }}"
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:planning' --remove-label 'ai:blocked' >/dev/null 2>&1 || true
           else
-            echo "Issue #${ISSUE_NUMBER} has neither ai:planning nor ai:clarification labels. Skipping planning run."
+            echo "Issue #${ISSUE_NUMBER} has none of ai:planning, ai:clarification, or ai:blocked labels. Skipping planning run."
             echo "Current labels: ${ISSUE_LABELS_JSON}"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             exit 0
@@ -997,11 +1003,21 @@ jobs:
           ' "${CODEX_OUTPUT_FILE}")"
 
           if [ -n "${BLOCKED_REASON}" ]; then
+            BLOCKED_REASON_OUTPUT_DELIM="BLOCKED_REASON_OUTPUT_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}_$$"
+            BLOCKED_REASON_ENV_DELIM="BLOCKED_REASON_ENV_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}_$$"
             echo "blocked=true" >> "$GITHUB_OUTPUT"
-            echo "blocked_reason=${BLOCKED_REASON}" >> "$GITHUB_OUTPUT"
+            {
+              printf 'blocked_reason<<%s\n' "${BLOCKED_REASON_OUTPUT_DELIM}"
+              printf '%s\n' "${BLOCKED_REASON}"
+              printf '%s\n' "${BLOCKED_REASON_OUTPUT_DELIM}"
+            } >> "$GITHUB_OUTPUT"
             echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
             echo "BLOCKED=true" >> "$GITHUB_ENV"
-            echo "BLOCKED_REASON=${BLOCKED_REASON}" >> "$GITHUB_ENV"
+            {
+              printf 'BLOCKED_REASON<<%s\n' "${BLOCKED_REASON_ENV_DELIM}"
+              printf '%s\n' "${BLOCKED_REASON}"
+              printf '%s\n' "${BLOCKED_REASON_ENV_DELIM}"
+            } >> "$GITHUB_ENV"
             echo "NEEDS_CLARIFICATION=false" >> "$GITHUB_ENV"
             exit 0
           fi

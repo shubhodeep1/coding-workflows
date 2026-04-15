@@ -37,6 +37,8 @@ def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	assert "--add-label 'ai:blocked'" in wf
 	assert "--remove-label 'ai:planning'" in wf
 	assert "--remove-label 'ai:clarification'" in wf
+	assert 'index("ai:blocked") != null' in wf
+	assert "--remove-label 'ai:blocked'" in wf
 	assert "--status \"blocked\"" in wf
 	assert "steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'" in wf
 
