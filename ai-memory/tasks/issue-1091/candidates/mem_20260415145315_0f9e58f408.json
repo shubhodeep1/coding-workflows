@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- `/answer [auto-answered-by-clarify]` is present and valid.\n- There were no Q-ID clarification questions in the planning context, so there is no Q<ID>\u2192answer mapping to resolve before planning.\n\nImplementation plan:\n\n1. Files likely to change\n- `.github/workflows/plan.yml`\n- `README.md` (only if we decide this behavior should be documented in pipeline behavior notes)\n\n2. Functions/modules to implement\n- Add a new step in `plan.yml` immediately after `Parse planning output` that runs only when `needs_clarification == true`.\n- In that step, detect orchestrator-managed issues (`ai:orchestrator-managed` label and/or existing orchestrator metadata marker already loaded in `ISSUE_BODY`).\n- Parse Q-ID blocks from `${CODEX_OUTPUT_FILE}` and extract `(RECOMMENDED)` options from choice lines.\n- Enforce strict auto-answer eligibility:\n  - Every detected Q-ID must have exactly one recommended option.\n  - The recommended option token must be a single letter (`A`-`Z`) only.\n  - Any combination (`A+C`), multiple recommended options, missing recommendation, or unparseable block fails eligibility.\n- If eligible:\n  - Build synthesized answer string exactly in the requested shape (`/answer Q1: A, Q2: B, ...`), while preserving bot marker compatibility for the existing plan trigger gate.\n  - Post the synthesized `/answer` comment via GitHub API.\n  - Log mapping (`Q-ID -> option`) and run id in workflow logs (and optionally step summary/memory candidate details).\n- If not eligible:\n  - Do not auto-answer.\n  - Keep human-in-loop path, but add an explicit parse-failure note in the clarification comment with reason and run id.\n\n3. Data structures affected\n- New ephemeral parser outputs in workflow step outputs/env:\n  - `auto_answer_posted` (`true/false`)\n  - `auto_answer_mapping` (`Q1->A, Q2->B`)\n  - `auto_answer_parse_failed` (`true/false`)\n  - `auto_answer_failure_reason` (human-readable reason)\n- No persistent schema/database changes.\n\n4. API/interface changes\n- Existing GitHub API usage remains, with one additional automated issue comment post in eligible orchestrator cases:\n  - `POST /repos/{owner}/{repo}/issues/{issue_number}/comments` with synthesized `/answer ...`.\n- Clarification comment content changes for parse-failure cases to explicitly state auto-parse failure and required human reply.\n- Non-orchestrator behavior remains unchanged.\n\n5. Potential risks and edge cases\n- Parser false positives from code blocks or quoted examples in plan output.\n- Ambiguous formatting variants (`**Q1:**`, lowercase letters, unusual dash characters).\n- Duplicate/repeated Q-IDs.\n- Race conditions between this run posting `/answer` and stale comment checks in subsequent run.\n- Existing orchestrator clarify responder behavior: current repository behavior auto-answers \u201cClarification required\u201d comments for orchestrator-managed issues; this conflicts with the new \u201cparse-failure must remain human-loop\u201d requirement unless plan comment text/branching is adjusted accordingly.\n\n6. Testing considerations\n- Orchestrator-managed issue, all Qs single-letter recommended:\n  - Expect auto `/answer` comment posted.\n  - Expect mapping+run-id log.\n  - Expect planning to continue without waiting for human.\n- Orchestrator-managed issue, one Q has `A+C` recommended:\n  - Expect no auto `/answer`.\n  - Expect explicit parse-failure note.\n  - Expect human `/answer` still required.\n- Orchestrator-managed issue, missing/unparseable recommended for any Q:\n  - Same expected behavior as above (human fallback).\n- Non-orchestrator issue with clarification-needed plan:\n  - Confirm behavior is unchanged.\n- Regression check:\n  - Ensure existing `/answer` command claiming/completion and stale-comment protections still function with the new auto-posted answer path.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3e717a64d3e748547e1d265e06ad969d2a6cfb0d20cc399e28ec46e5e8fcb4f1",
+  "lineage": {
+    "issue_number": 1091,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24461023814",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24461023814",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1091"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415145315_0f9e58f408",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1091,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24461023814"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1091",
+  "timestamps": {
+    "created_at": "2026-04-15T14:53:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
