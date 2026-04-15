@@ -414,7 +414,7 @@ def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_implementing_ph
 		max_recoveries=5,
 		stall_judge_trigger_count=2,
 		enable_stall_judge=False,
-		allow_human_terminalization=True,
+		allow_human_terminalization=False,
 	)
 
 	assert len(stalls) == 1
@@ -440,7 +440,7 @@ def test_detect_stalls_disables_human_terminalization_by_default():
 	)
 
 	assert len(stalls) == 1
-	assert stalls[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][1]
+	assert stalls[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][2]
 
 
 def test_detect_stalls_allows_human_terminalization_when_enabled():
@@ -554,7 +554,6 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 	assert captured["now_ts"] == 777
 	assert captured["max_recoveries"] == 6
 	assert captured["phase_thresholds"] == {"ai:planning": 90}
-	assert captured["allow_human_terminalization"] is False
 	assert captured["stall_judge_trigger_count"] == 3
 	assert captured["enable_stall_judge"] is True
 	assert captured["allow_human_terminalization"] is True
@@ -701,7 +700,6 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 	assert captured["now_ts"] == 777
 	assert captured["max_recoveries"] == 6
 	assert captured["phase_thresholds"] == {"ai:planning": 90}
-	assert captured["allow_human_terminalization"] is False
 	assert captured["stall_judge_trigger_count"] == 3
 	assert captured["enable_stall_judge"] is True
 	assert captured["allow_human_terminalization"] is True

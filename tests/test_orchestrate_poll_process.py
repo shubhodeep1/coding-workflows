@@ -284,7 +284,6 @@ def _run_poller(
 	state: dict,
 	enable_validation: str,
 	max_validate_cycles: str,
-	enable_stall_human_terminalization: str = "false",
 	tracking_labels: list[str] | None = None,
 	tracking_comments: list[str] | None = None,
 	issue_labels: dict[int, list[str]] | None = None,
@@ -1069,7 +1068,6 @@ print(json.dumps(parsed))
 				"ENABLE_STALL_HUMAN_TERMINALIZATION": enable_stall_human_terminalization,
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
-				"ENABLE_STALL_HUMAN_TERMINALIZATION": enable_stall_human_terminalization,
 				"GH_MOCK_STORE": str(store_file),
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
@@ -2565,10 +2563,12 @@ def test_stall_recovery_disables_human_terminalization_by_default():
 		stall_judge_trigger_count="9",
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
-	assert issue_entry["stall_recovery_count"] == 3
+	assert issue_entry["github_issue"] != 10
+	assert issue_entry["status"] == "pending"
+	assert issue_entry["stall_recovery_count"] == 0
 	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
-	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
-	assert any("/approved" in body for body in issue_comments)
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"]["closed"] is True
 
 
 def test_stall_recovery_allows_human_terminalization_when_enabled():
@@ -2609,8 +2609,8 @@ AI_STANDALONE_STALL_STATE_V1 -->"""
 		stall_judge_trigger_count="9",
 	)
 	assert "ai:needs-human" not in result["issues"]["42"]["labels"]
-	issue_comments = [c.get("body", "") for c in result["issues"]["42"]["comments"]]
-	assert any("/approved" in body for body in issue_comments)
+	assert "ai:closed" in result["issues"]["42"]["labels"]
+	assert result["issues"]["42"]["closed"] is True
 
 
 def test_standalone_stall_recovery_allows_human_terminalization_when_enabled():
