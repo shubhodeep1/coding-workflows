@@ -1547,25 +1547,36 @@ jobs:
 
           git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
 
-          # Re-fetch git_ref_health_check.sh — the commit step deletes fetched
-          # artifacts to keep them out of caller repos.
+          # Re-fetch git_ref_health_check.sh to a path OUTSIDE the working
+          # tree.  In consumer repos the commit step deletes fetched artifacts
+          # from scripts/, so a re-fetch is required here.  In the canonical
+          # coding-workflows repo the file is tracked source, so writing to
+          # scripts/git_ref_health_check.sh would clobber it and the
+          # subsequent `rm -f` would leave an unstaged deletion of a tracked
+          # file, which then blocks the rebase reconciliation path below
+          # ("error: cannot rebase: You have unstaged changes").  Using a
+          # temp path keeps the working tree clean in both cases.
           wf_source="${{ github.repository_owner }}/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             script_ref="${{ github.sha }}"
           else
             script_ref="stable"
           fi
-          mkdir -p scripts
+          health_script="$(mktemp -t git_ref_health_check.XXXXXX.sh)"
+          # Ensure the temp file is always cleaned up even if `gh api`,
+          # `chmod`, or the script itself fails under `set -euo pipefail`.
+          trap 'rm -f "${health_script}"' EXIT
           if ! gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=${script_ref}" > scripts/git_ref_health_check.sh 2>/dev/null; then
+            "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=${script_ref}" > "${health_script}" 2>/dev/null; then
             echo "::warning::git_ref_health_check.sh not found on ${script_ref}; falling back to main"
             gh_retry gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=main" > scripts/git_ref_health_check.sh
+              "repos/${wf_source}/contents/scripts/git_ref_health_check.sh?ref=main" > "${health_script}"
           fi
-          chmod +x scripts/git_ref_health_check.sh
+          chmod +x "${health_script}"
 
-          bash scripts/git_ref_health_check.sh repair
-          rm -f scripts/git_ref_health_check.sh
+          bash "${health_script}" repair
+          rm -f "${health_script}"
+          trap - EXIT
 
           for attempt in 1 2 3; do
             # Fetch latest remote state before pushing so local tracking refs
