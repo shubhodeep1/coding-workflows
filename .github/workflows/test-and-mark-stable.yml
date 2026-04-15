@@ -1177,7 +1177,24 @@ jobs:
             # internal-implement.yml but the reusable workflow skips the job.
             TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
             SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
-            if [ "$TOTAL_JOBS" -gt 0 ] && [ "$SKIPPED_JOBS" -eq "$TOTAL_JOBS" ]; then
+            if [ "$TOTAL_JOBS" -eq 0 ]; then
+              # GitHub can briefly report zero jobs before the run is fully indexed.
+              # Re-fetch a few times so we don't false-pass real runs as spurious.
+              echo "  │  ⚠ Run has no jobs yet — rechecking for indexing delay..."
+              for _jobs_retry in 1 2 3; do
+                sleep $((_jobs_retry * 2))
+                JOBS_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null || echo '{"jobs":[]}')
+                TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
+                SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
+                [ "$TOTAL_JOBS" -gt 0 ] && break
+              done
+            fi
+            if [ "$TOTAL_JOBS" -eq 0 ]; then
+              echo "  │  ⊘ Run has no jobs after retries (spurious re-trigger) — OK"
+              echo "  └─"
+              return 0
+            fi
+            if [ "$SKIPPED_JOBS" -eq "$TOTAL_JOBS" ]; then
               echo "  │  ⊘ All ${TOTAL_JOBS} job(s) were skipped (spurious re-trigger) — OK"
               echo "  └─"
               return 0
@@ -1257,7 +1274,10 @@ jobs:
           echo "  Totals: ${TOTAL_OK} ok, ${TOTAL_FAILED} failed, ${TOTAL_SKIPPED} skipped"
           echo "───────────────────────────────────────────"
 
-          if [ "$TOTAL_FAILED" -gt 0 ]; then
+          # Print the failed-steps list whenever deep verify did not fully pass,
+          # so "no steps found in run" / "run ID not found" entries (which do not
+          # increment TOTAL_FAILED) are still surfaced in the summary.
+          if [ "$DEEP_PASS" != "true" ] || [ "$TOTAL_FAILED" -gt 0 ]; then
             echo ""
             echo "  Failed steps:"
             echo -e "$FAILED_STEPS"
