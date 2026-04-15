@@ -605,26 +605,30 @@ _gh_issue_timeline_with_cross_refs_rest()
 		done <<< "${pr_urls}"
 	fi
 
-	printf '%s' "${timeline_json}" | jq -c --argjson pr_lookup "${pr_lookup_json}" '
+	printf '%s' "${timeline_json}" | jq -c --argjson pr_lookup "${pr_lookup_json}" --arg pr_api_prefix "${pr_api_prefix}" '
 		map(
 			if (.event == "cross-referenced") and (.source.issue.pull_request.url? | type == "string") then
 				.source.issue.pull_request.url as $url
-				| ($pr_lookup[$url] // null) as $enrich
-				| if ($enrich != null) and ($enrich.ok == true) then
-					.source.issue |= (. + {
-						number: ($enrich.number // .number // null),
-						state: ($enrich.state // null),
-						merged_at: ($enrich.merged_at // null),
-						merged: ($enrich.merged // false),
-						lookup_failed: false
-					})
-				elif ($enrich != null) and ($enrich.ok == false) then
-					.source.issue |= (. + {
-						merged: false,
-						lookup_failed: true
-					})
+				| if ($url | startswith($pr_api_prefix) | not) then
+					.source.issue.pull_request = null
 				else
-					.
+					($pr_lookup[$url] // null) as $enrich
+					| if ($enrich != null) and ($enrich.ok == true) then
+						.source.issue |= (. + {
+							number: ($enrich.number // .number // null),
+							state: ($enrich.state // null),
+							merged_at: ($enrich.merged_at // null),
+							merged: ($enrich.merged // false),
+							lookup_failed: false
+						})
+					elif ($enrich != null) and ($enrich.ok == false) then
+						.source.issue |= (. + {
+							merged: false,
+							lookup_failed: true
+						})
+					else
+						.
+					end
 				end
 			else
 				.
