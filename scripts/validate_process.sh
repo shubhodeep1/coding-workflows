@@ -636,8 +636,13 @@ START_TS="$(date +%s)"
 if [ -f "${ENV_FILE}" ]; then
   while IFS= read -r env_line || [ -n "${env_line}" ]; do
     env_line="${env_line%$'\r'}"
+    env_line="${env_line#"${env_line%%[![:space:]]*}"}"
     [ -z "${env_line}" ] && continue
     [ "${env_line#\#}" != "${env_line}" ] && continue
+    if [[ ! "${env_line}" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
+      printf 'validation_runtime_driver: %s: unparseable env_file line: %s\n' "${ENV_FILE}" "${env_line}" >&2
+      exit 1
+    fi
     export "${env_line}"
   done < "${ENV_FILE}"
 fi
