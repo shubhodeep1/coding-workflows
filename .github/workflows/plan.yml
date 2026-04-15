@@ -73,13 +73,65 @@ jobs:
           set -euo pipefail
           npm install -g "${{ runner.tool_cache }}/codex/package" --no-audit --no-fund
 
+      - name: Resolve integration ref
+        id: refctx
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          issue_number="${ISSUE_NUMBER:-}"
+          if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
+            echo "::notice::No issue number available for integration ref resolution; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! issue_body="$(gh api "repos/${{ github.repository }}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null)"; then
+            echo "::warning::Failed to read issue body for integration ref resolution; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          integration_branch="$(printf '%s\n' "${issue_body}" | sed -nE 's/^- Integration branch:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p; s/^\*\*Integration branch:\*\*[[:space:]]*`([^`]+)`[[:space:]]*$/\1/p' | head -n1 | tr -d '\r')"
+          if [ -z "${integration_branch}" ]; then
+            echo "::notice::No integration branch metadata found; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! printf '%s' "${integration_branch}" | grep -Eq '^orchestrator/project-[0-9]+$'; then
+            echo "::warning::Ignoring integration branch with invalid format: ${integration_branch}"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          integration_branch_ref="$(printf '%s' "${integration_branch}" | jq -sRr @uri)"
+          if gh api "repos/${{ github.repository }}/git/ref/heads/${integration_branch_ref}" >/dev/null 2>&1; then
+            echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Integration branch from metadata does not exist: ${integration_branch}"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
+          ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
           # Planning is read-only — shallow clone is sufficient and faster.
           # Implementation workflows use fetch-depth: 0 for full history.
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+
+      - name: Log checkout ref
+        run: |
+          set -euo pipefail
+          echo "Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "HEAD commit: $(git rev-parse HEAD)"
+          if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
+            echo "HEAD branch: ${branch_name}"
+          else
+            echo "HEAD branch: DETACHED"
+          fi
 
       - name: Configure git auth for memory helper clones
         env:

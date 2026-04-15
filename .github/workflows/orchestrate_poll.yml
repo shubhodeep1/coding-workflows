@@ -275,8 +275,7 @@ jobs:
               install -m 0644 "${src}" "ai-memory/schemas/${sf}"
             fi
           done
-
-          for pf in mode-judge.txt mode-judge-review-blocked.txt serena-efficiency-block.txt; do
+          for pf in mode-judge.txt mode-judge-review-blocked.txt mode-judge-stall-recovery.txt serena-efficiency-block.txt; do
             src=".codex-workflow-src/prompts/${pf}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${pf}" ]; then
               src=".codex-workflow-src-main/prompts/${pf}"

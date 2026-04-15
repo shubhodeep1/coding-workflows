@@ -188,6 +188,7 @@ jobs:
             prompts/mode-workflow-analysis.txt
             prompts/mode-judge.txt
             prompts/mode-judge-review-blocked.txt
+            prompts/mode-judge-stall-recovery.txt
             prompts/mode-clarify-respond.txt
             prompts/mode-validate-generate.txt
             prompts/mode-validate-diagnose.txt
