@@ -521,14 +521,12 @@ ensure_label_exists() {
   # Check if label already exists to avoid futile retries (gh label create
   # returns a non-zero exit code for existing labels, which is not transient).
   #
-  # NOTE: this probe is intentionally a bare `gh api` (no gh_retry).  On
-  # the normal first-run path the label does not exist yet and the call
-  # returns HTTP 404 — gh_retry treats every non-rate-limit failure as a
-  # transient error and would burn ~31 s of exponential backoff
-  # (1+2+4+8+16) per missing label before falling through to the
-  # `gh label create` path.  Single-attempt is correct here because the
-  # follow-up `gh_retry gh label create` already absorbs any rate-limit
-  # / transient hit on the actual mutating call.
+  # The two `gh api` probes below are intentionally NOT wrapped with
+  # `gh_retry`: a 404 (label missing) is the expected normal case on the
+  # first probe, and re-running it under exponential backoff would add
+  # ~31 s of latency to every label miss. Rate-limit detection + the
+  # Telegram admin alert still fire on the `gh_retry gh label create`
+  # immediately below, which is the write path that actually matters.
   local encoded_name
   encoded_name="$(printf '%s' "${label_name}" | jq -sRr @uri)"
   if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
@@ -546,9 +544,7 @@ ensure_label_exists() {
 
   # Creation can fail if another concurrent actor created the label first.
   # Cache only when a follow-up read confirms the label now exists.
-  # Bare `gh api` for the same reason as the probe above — a 404 here
-  # means the label genuinely doesn't exist and retrying with backoff
-  # would only delay the caller.
+  # (Same rationale as above — not wrapped with gh_retry.)
   if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
     _ENSURED_LABELS_CACHE[${label_name}]=1
   fi
@@ -1454,28 +1450,19 @@ invoke_judge_for_integration_conflict() {
 
   local pr_diff
   local pr_files
-  # Fetch the full diff to a tempfile via gh_retry_to_file, then
-  # truncate locally.  Piping `gh_retry gh pr diff ... | head -c N`
-  # races SIGPIPE: once `head` closes the read end at the byte
-  # limit, `gh pr diff` exits non-zero, and gh_retry treats that as
-  # a transient failure and retries with exponential backoff (~31 s
-  # total) — wasting time and possibly ending up with empty output.
-  # Truncation after a successful retry-to-file is byte-identical
-  # and has no pipeline feedback.
-  local _pr_diff_file
-  _pr_diff_file="$(mktemp "${TMPDIR:-/tmp}/integration_pr_diff.XXXXXX")"
-  # Let gh_retry_to_file surface its own retry / rate-limit warnings
-  # and terminal `::error::` diagnostics — suppressing them would
-  # make a silently-empty `pr_diff` undebuggable. On failure, emit
-  # an explicit warning so the judge prompt's "(diff unavailable)"
-  # fallback is traceable in the job log.
-  if gh_retry_to_file "${_pr_diff_file}" gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}"; then
-    pr_diff="$(head -c 120000 "${_pr_diff_file}" 2>/dev/null || true)"
+  # Fetch into a temp file before truncating: piping gh pr diff directly
+  # into `head -c` causes SIGPIPE on gh pr diff once head has read enough
+  # bytes, which gh_retry then treats as a transient failure and retries
+  # with exponential backoff. Capture first, truncate second.
+  local _pr_diff_tmp
+  _pr_diff_tmp="$(mktemp)"
+  if gh_retry_to_file "${_pr_diff_tmp}" gh pr diff "${final_pr}" --repo "${GITHUB_REPOSITORY}"; then
+    pr_diff="$(head -c 120000 "${_pr_diff_tmp}" 2>/dev/null || true)"
   else
     echo "::warning::Failed to fetch PR #${final_pr} diff for integration-conflict judge; continuing with empty pr_diff." >&2
     pr_diff=""
   fi
-  rm -f "${_pr_diff_file}"
+  rm -f "${_pr_diff_tmp}"
   pr_files="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}/files" --jq '[.[] | {filename, status, additions, deletions}]' || echo "[]")"
   [ -n "${pr_files}" ] || pr_files='[]'
   local retries
@@ -2322,7 +2309,8 @@ build_active_issue_set() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Fetch in_progress + queued runs (recent, max 50)
+  # Fetch in_progress + queued runs (recent, max 50).
+  # _safe_gh_jq guarantees empty stdout on failure → fallback is valid JSON.
   local runs_json
   runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
     --jq '.workflow_runs' || echo '[]')"
@@ -2399,7 +2387,8 @@ cancel_zombie_runs_for_issue() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Re-fetch in_progress runs and find zombies matching this issue
+  # Re-fetch in_progress runs and find zombies matching this issue.
+  # _safe_gh_jq guarantees empty stdout on failure → fallback stays valid.
   local runs_json
   runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
     --jq '.workflow_runs' || echo '[]')"
@@ -2981,7 +2970,9 @@ invoke_stall_judge() {
 
   local workflows_json
   local workflow_outcomes
-  workflows_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=50" 2>/dev/null || echo '{"workflow_runs":[]}')"
+  # _safe_gh_jq → clean empty stdout on failure so the `|| echo '{...}'`
+  # fallback stays valid JSON for downstream jq reads.
+  workflows_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=50" 2>/dev/null || echo '{"workflow_runs":[]}')"
   workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" '
     [.workflow_runs[]?
       | select((.name // "") == "AI Review"
@@ -4030,7 +4021,7 @@ _has_active_autofix_run()
 
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
 		local active
-		active="$(gh run list --repo "${GITHUB_REPOSITORY}" \
+		active="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
 			--workflow "${wf_candidate}" \
 			--branch "${head_ref}" \
 			--limit 5 \
@@ -4087,7 +4078,7 @@ _dispatch_review_for_conflicts()
 	echo "  ${log_prefix} Dispatching review workflow for conflict resolution..."
 
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
-		if gh workflow run "${wf_candidate}" \
+		if gh_retry gh workflow run "${wf_candidate}" \
 			--repo "${GITHUB_REPOSITORY}" \
 			--ref "${head_ref}" \
 			-f pr_number="${pr_number}" 2>/dev/null; then
@@ -4867,7 +4858,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 
   if [ "${#_gql_issue_nums[@]}" -gt 0 ]; then
     _gql_query="query { repository(owner: \"${_repo_owner}\", name: \"${_repo_name}\") {${_gql_fields} } }"
-    _labels_result="$(gh_retry gh api graphql -f query="${_gql_query}" 2>/dev/null || echo '{}')"
+    # _safe_gh_jq → clean empty stdout on failure so the `|| echo '{}'`
+    # fallback stays valid JSON for the downstream python parser.
+    _labels_result="$(gh_retry _safe_gh_jq graphql -f query="${_gql_query}" 2>/dev/null || echo '{}')"
     LABELS_JSON="$(echo "${_labels_result}" | python3 -c "
 import json, sys
 raw = json.load(sys.stdin)
@@ -6606,25 +6599,20 @@ Manual intervention required." >/dev/null
       --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
       || echo "")"
     if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
-      # Fetch the full diff to a tempfile via gh_retry_to_file and
-      # truncate locally.  Piping `gh_retry gh api ... | head -500`
-      # races SIGPIPE (once `head` stops reading, `gh api` exits
-      # non-zero, gh_retry classifies that as transient and retries).
-      # Retry-to-file + local truncation avoids the feedback loop.
-      # Intentionally NOT redirecting gh_retry_to_file's stderr — its
-      # rate-limit / retry / terminal-error diagnostics need to reach
-      # the job log so a silently-empty "(diff unavailable)" fallback
-      # is traceable.  On failure, emit an explicit warning to pair
-      # with the fallback value.
-      _pr_diff_file="$(mktemp "${TMPDIR:-/tmp}/judge_pr_diff.XXXXXX")"
-      if gh_retry_to_file "${_pr_diff_file}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
+      # Fetch the diff into a temp file before truncating: piping
+      # gh api directly into `head -500` causes SIGPIPE on gh api once
+      # head has read enough lines, which gh_retry then treats as a
+      # transient failure and retries with exponential backoff.
+      _pr_diff_tmp="$(mktemp)"
+      if gh_retry_to_file "${_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
         -H 'Accept: application/vnd.github.diff'; then
-        PR_DIFF="$(head -n 500 "${_pr_diff_file}" 2>/dev/null || echo "(diff unavailable)")"
+        PR_DIFF="$(head -n 500 "${_pr_diff_tmp}" 2>/dev/null || echo "(diff unavailable)")"
       else
         echo "::warning::Failed to fetch PR #${PR_NUM} diff for judge context (issue #${inum}); falling back to '(diff unavailable)'." >&2
         PR_DIFF="(diff unavailable)"
       fi
-      rm -f "${_pr_diff_file}"
+      rm -f "${_pr_diff_tmp}"
+      unset _pr_diff_tmp
       _issue_status="$(jq -r --arg num "${inum}" --argjson wi "${WAVE_IDX}" \
         '.waves[$wi].issues[] | select((.github_issue | tostring) == $num) | .status // ""' \
         "${STATE_FILE}" 2>/dev/null | head -n1)"
@@ -7285,11 +7273,9 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		continue
 	fi
 
-	# Check mergeable state via REST API (dirty == merge conflicts).
-	# Use _safe_gh_jq (not bare `gh api`): on non-2xx gh writes the
-	# error body to stdout, which would concatenate with the '{}'
-	# fallback and yield invalid JSON that breaks the jq parsing
-	# below.
+	# Check mergeable state via REST API (dirty == merge conflicts)
+	# _safe_gh_jq → clean empty stdout on failure so the `|| echo '{}'`
+	# fallback stays valid JSON for the downstream jq reads.
 	S_PR_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}" || echo '{}')"
 	[ -n "${S_PR_JSON}" ] || S_PR_JSON='{}'
 	S_STATE="$(echo "${S_PR_JSON}" | jq -r '.state // ""')"
