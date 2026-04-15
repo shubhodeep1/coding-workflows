@@ -9,7 +9,7 @@ on:
   # "Validation self-healing"), which are opened as drafts to bypass
   # auto-review/automerge until a human reviews them.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
   workflow_dispatch:
     inputs:
       pr_number:
