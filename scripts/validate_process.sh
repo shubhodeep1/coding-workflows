@@ -1717,10 +1717,11 @@ case "${DIAG_STATUS}" in
       exit 0
     fi
 
-	FIX_URL="$(gh_retry gh issue create \
+	FIX_URL_OUTPUT="$(gh_retry gh issue create \
 	  --repo "${GITHUB_REPOSITORY}" \
 	  --title "${CONSOLIDATED_TITLE}" \
 	  --body-file "${CONSOLIDATED_BODY_FILE}")"
+	FIX_URL="$(printf '%s\n' "${FIX_URL_OUTPUT}" | grep -oE 'https://github\.com/[^/]+/[^/]+/issues/[0-9]+' | tail -n 1 || true)"
 	FIX_NUM="$(printf '%s' "${FIX_URL}" | sed -nE 's#^https://github\.com/[^/]+/[^/]+/issues/([0-9]+)$#\1#p')"
 	if [ -z "${FIX_NUM}" ]; then
 	  failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s), but creating the consolidated fix-up issue failed."
