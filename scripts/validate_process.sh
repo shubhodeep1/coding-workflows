@@ -1069,6 +1069,89 @@ PY
 		return 1
 	fi
 
+	# Embedded-Python syntax check for generated harness scripts.
+	#
+	# `bash -n` above validates shell syntax only; it cannot see inside a
+	# heredoc body. Codex occasionally emits `python3 - <<'PY' ... PY`
+	# blocks whose Python source has a SyntaxError (typically malformed
+	# f-strings or stray quoting) that only surfaces at runtime, producing
+	# a `harness_error` diagnose outcome. Statically ast-parse every
+	# QUOTED python3 heredoc body under validation/ so the preflight self-
+	# heal path (phase tag "preflight") can intercept the failure with an
+	# actionable fix pointer instead of burning a validation cycle. Only
+	# quoted delimiters (`<<'PY'`, `<<"PY"`) are checked: unquoted
+	# delimiters allow shell variable expansion, so the static body is not
+	# the source Python actually sees.
+	if ! python3 - >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY2'
+import ast
+import pathlib
+import re
+import sys
+
+HEREDOC_PATTERN = re.compile(
+    r'^.*\bpython3\b[^\n<]*<<(-)?[\'"](\w+)[\'"]\s*$',
+    re.MULTILINE,
+)
+
+errors = []
+root = pathlib.Path("validation")
+if not root.is_dir():
+    print("validation/ directory missing; embedded Python check skipped.")
+    sys.exit(0)
+
+for path in sorted(root.rglob("*.sh")):
+    if "logs" in path.parts:
+        continue
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        errors.append(f"{path}: cannot read: {exc}")
+        continue
+    for match in HEREDOC_PATTERN.finditer(text):
+        strip_tabs = bool(match.group(1))
+        delim = match.group(2)
+        rest = text[match.end():]
+        close_re = re.compile(
+            r'^' + (r'\t*' if strip_tabs else r'') + re.escape(delim) + r'\s*$',
+            re.MULTILINE,
+        )
+        close_match = close_re.search(rest)
+        if close_match is None:
+            continue
+        body = rest[: close_match.start()]
+        if body.startswith('\n'):
+            body = body[1:]
+        if strip_tabs:
+            body = '\n'.join(line.lstrip('\t') for line in body.splitlines())
+        try:
+            ast.parse(body)
+        except SyntaxError as exc:
+            opener_line = text[: match.start()].count('\n') + 1
+            errors.append(
+                f"{path}:{opener_line}: embedded Python heredoc <<{delim}>>: "
+                f"SyntaxError: {exc.msg} (body line {exc.lineno}, offset {exc.offset})"
+            )
+
+if errors:
+    print("Embedded Python syntax errors in generated harness scripts:")
+    for err in errors:
+        print(f"  {err}")
+    print(
+        "Prompt guidance: mode-validate-generate.txt forbids nested heredoc "
+        "inline Python. Rewrite as a sidecar .py file under validation/tests/_lib/ "
+        "and invoke via `python3 validation/tests/_lib/<name>.py`, or use "
+        "`python3 -c \"$(cat <<'PY'\\n...\\nPY\\n)\"` with no additional shell layering."
+    )
+    sys.exit(1)
+
+print("Embedded Python heredoc syntax checks passed.")
+PY2
+	then
+		PRE_FLIGHT_STATUS="fail"
+		_emit_preflight_tail "embedded Python syntax check failed in validation/**/*.sh"
+		return 1
+	fi
+
 	PRE_FLIGHT_STATUS="pass"
 	return 0
 }
