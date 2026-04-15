@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/implement.yml\n.github/workflows/review_autofix.yml\nprompts/mode-validate-generate.txt\nscripts/orchestrate_poll_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\nprompts/conflict-resolver.txt\nprompts/mode-implement-repair.txt\nscripts/validate_changed_files_syntax.sh\nscripts/validate_process.sh\ntests/test_implement_post_codex_recovery.py\ntests/test_semantic_cache.py",
+  "fingerprint": "9fdd01d9a7e11eaecd2051629a57d1c56fa660c402b1514d31e5c5cd3b4b6876",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1053,
+    "run_id": "24452121059",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24452121059",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415115427_0858f75503",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1053,
+    "run_id": "24452121059"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T11:54:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
