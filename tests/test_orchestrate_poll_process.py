@@ -385,9 +385,16 @@ def _run_poller(
 			"closed": bool(issue_closed.get(inum, False)),
 		}
 
+		max_seeded_comment_id = 0
+		for issue in issues.values():
+			for comment in issue.get("comments", []):
+				cid = int(comment.get("id", 0) or 0)
+				if cid > max_seeded_comment_id:
+					max_seeded_comment_id = cid
+
 		store = {
 			"issues": issues,
-			"next_comment_id": 2 + len(tracking_comments),
+			"next_comment_id": max_seeded_comment_id + 1,
 			"validation_dispatches": [],
 			"review_dispatches": [],
 			"closed_issues": [],
