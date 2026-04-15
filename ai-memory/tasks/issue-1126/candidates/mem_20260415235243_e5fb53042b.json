@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `judge-branch-audit-e2e-docs`\n\nClarification mapping\n- Clarification set: none.\n- Interpreted answer: `/answer [auto-answered-by-orchestrator]` means proceed with full scoped implementation.\n\nConflict notes (issue vs current code)\n- `review_autofix.yml` already checks out PR head (`ref: pull_request.head.sha`), so PR-head judge context is already correct there.\n- `orchestrate_poll.yml` intentionally checks out default branch (documented exception in `tests/test_workflow_checkout_integration_ref_audit.py`), so integration-branch correctness must be enforced inside `scripts/orchestrate_poll_process.sh`, not at workflow checkout level.\n- README already contains `ORCHESTRATOR_MAX_CLARIFY_CYCLES` and `ai:blocked` mentions; required work is precision/operational wording updates, not first-time additions.\n\n1. Judge-path audit and fixes\nFiles likely to change\n- `scripts/orchestrate_poll_process.sh`\n- `tests/test_orchestrate_poll_process.py`\n- `tests/test_workflow_checkout_integration_ref_audit.py` (or a nearby contract test file)\n- `tests/test_review_autofix_merge_precheck.py` (or a new focused workflow contract test)\n\nFunctions/modules to implement/update\n- In `scripts/orchestrate_poll_process.sh`, add/extend a helper to prepare judge execution ref per tracking issue before the main wave judge (`mode-judge.txt`) runs.\n- Reuse existing integration-context resolution semantics (`resolve_active_orchestrator_context_for_issue`, `integration_branch_exists`, `resolve_branch_analysis_ref`) to select integration branch when metadata exists.\n- Enforce fail-safe behavior: if integration metadata exists but branch is missing, do not silently fall back to default branch; keep/extend the existing failure path.\n- Keep review-blocked branch-prep behavior as-is unless a real gap is found; add tests to lock it.\n- For `scripts/review_rb_judge.sh` + `review_autofix.yml`, keep behavior unchanged and add regression coverage proving PR-head context remains required.\n\nData structures affected\n- No schema changes expected.\n- Possibly add/adjust runtime log lines for selected judge ref/context per tracking issue to make test assertions deterministic.\n\nAPI/interface changes\n- No external API changes.\n- No env-var changes expected.\n\n2. Regression test: integration-only symbols\nFiles likely to change\n- `tests/test_orchestrate_poll_process.py`\n- Test harness internals in the same file (`_run_poller`, mock git/codex behavior)\n\nPlanned test design\n- Build a sandbox fixture where a required sentinel symbol/file exists only on `orchestrator/project-<id>` branch, not on `main`.\n- Trigger the orchestrator wave judge path.\n- Assert judge execution context resolves to integration branch and the sentinel is visible to judge-time execution.\n- Assert no default-branch fallback when integration metadata exists and branch is valid.\n- Add negative assertion for missing integration branch metadata/branch-missing behavior (fallback only when metadata absent).\n\n3. End-to-end smoke extension\nFiles likely to change\n- `.github/workflows/test-and-mark-stable.yml`\n\nPlanned extension\n- Add an orchestrator-managed smoke scenario that includes non-default-branch-only sentinel content in fixture repo flow.\n- Assert pipeline advances (plan/progress labels/comments) instead of clarify-loop churn.\n- Keep existing smoke flow intact; add as an additive phase/check to avoid destabilizing current release gate.\n\n4. Documentation updates\nFiles likely to change\n- `README.md`\n\nPlanned updates\n- Tighten `ORCHESTRATOR_MAX_CLARIFY_CYCLES` behavior text with explicit escalation semantics.\n- Tighten `ai:blocked` operational semantics for orchestrator clarify-loop guard.\n- Add explicit integration-ref resolution order wording:\n  - child issue metadata footer first,\n  - tracking issue metadata second,\n  - default-branch fallback only when integration metadata is absent (not when present-but-invalid).\n\n5. Risks and edge cases\n- Poller processes multiple tracking issues per run; branch context must be reset/switched per tracking issue to avoid cross-project bleed.\n- Review-blocked merged follow-up behavior intentionally retains default-base fallback when no integration metadata exists; must preserve backward compatibility.\n- Branch existence checks can fail transiently; logic must fail open only where already intended and fail closed where metadata mandates integration branch safety.\n- E2E additions can be flaky under rate limits; keep assertions on durable phase progression signals.\n\n6. Testing and verification\nTargeted tests during implementation\n- `PYTHONDONTWRITEBYTECODE=1 pytest -q tests/test_orchestrate_poll_process.py`\n- `PYTHONDONTWRITEBYTECODE=1 pytest -q tests/test_workflow_checkout_integration_ref_audit.py`\n- `PYTHONDONTWRITEBYTECODE=1 pytest -q tests/test_review_autofix_merge_precheck.py` (or whichever workflow contract file is updated)\n\nRequired full verification for this issue\n- `PYTHONDONTWRITEBYTECODE=1 pytest -q`\n- `bash scripts/resolve_integration_ref.sh --self-test`\n- `bash -n scripts/orchestrate_poll_process.sh`\n- `bash -n scripts/review_rb_judge.sh`\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "798a7f5916eac21a63b9e26c1e635e506eb623f741c55fef14deb2804c44f7ad",
+  "lineage": {
+    "issue_number": 1126,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24483573065",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24483573065",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1126"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415235243_e5fb53042b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1126,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24483573065"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1126",
+  "timestamps": {
+    "created_at": "2026-04-15T23:52:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
