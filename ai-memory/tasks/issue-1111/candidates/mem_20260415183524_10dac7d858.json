@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping\n- No `Q<ID>` clarification questions were issued in this issue.\n- `/answer [auto-answered-by-clarify]` is interpreted as \u201cscope is clear; proceed with planning as written.\u201d\n\nConflict detection\n- `.github/workflows/internal-review.yml` and `workflow-templates/ai-review.yml` are wrapper workflows and currently contain no `closingIssuesReferences` query sites to replace.\n- The requirement \u201cAdd H2 changelog entry\u201d implies updating `CHANGELOG.md`, which is not listed in the target-file list.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/review_autofix.yml`\n- `CHANGELOG.md`\n- `.github/workflows/internal-review.yml` (verification-only; no functional edits expected unless required for consistency note)\n- `workflow-templates/ai-review.yml` (verification-only; no functional edits expected unless required for consistency note)\n\n2. Functions/modules to implement\n- Add one shared early step in `review_autofix.yml` to fetch `closingIssuesReferences(first: 50)` once and export `LINKED_ISSUES_JSON` via `$GITHUB_ENV`.\n- Use the existing \u201cMark linked issues ready to merge\u201d logic as the representative multi-issue pattern and replace its direct GraphQL fetch with `jq` reads from `LINKED_ISSUES_JSON`.\n- Apply the same replacement to other multi-issue status/label steps that currently re-query GraphQL:\n- \u201cMark linked issues review-blocked (max iterations reached)\u201d\n- \u201cMark linked issues review-blocked (workflow failure)\u201d\n- Use the existing Telegram steps as the representative single-issue pattern and replace their `first:1` calls with `jq` first-element extraction from `LINKED_ISSUES_JSON`:\n- \u201cTelegram conflict resolution message\u201d\n- \u201cTelegram success\u201d\n- \u201cTelegram review-blocked judge decision\u201d\n- \u201cTelegram failure\u201d\n- Keep all existing fallback/error branches intact, including PR title/body REST fallback where currently present.\n\n3. Data structures affected\n- New job-scoped env payload: `LINKED_ISSUES_JSON`\n- Recommended shape: JSON array of node objects (`[{\"number\":123}, ...]`) matching `closingIssuesReferences(first: 50).nodes`.\n- Multi-issue extraction parity: `jq -r '.[].number'`\n- Single-issue parity: `jq -r '.[0].number // empty'`\n\n4. API/interface changes\n- No workflow input/output schema changes.\n- No label/state transition contract changes.\n- One internal env contract added (`LINKED_ISSUES_JSON`) used only within the review job.\n- Existing REST fallback call (`repos/.../pulls/${PR_NUMBER}` for title/body parsing) remains exactly as-is in the same code paths.\n\n5. Potential risks and edge cases\n- `GITHUB_ENV` JSON serialization/quoting must be robust (avoid newline/escaping corruption).\n- If GraphQL cache step fails, downstream steps must continue safely with empty JSON and preserve existing fallback behavior.\n- Preserve `first:50` cap semantics and ordering; do not expand scope beyond current behavior.\n- Avoid logging/message drift in success/failure and Telegram paths.\n- Ensure no accidental changes to wrapper pin policy (`internal-review @main`, template `@stable`).\n\n6. Testing considerations\n- Static acceptance check: `review_autofix.yml` should have exactly one live `closingIssuesReferences` query site (the cache step).\n- Regression check for behavior parity on fixtures:\n- PR with multiple linked issues via closing keywords.\n- PR with single linked issue.\n- PR with no GraphQL-linked issues but issue references in title/body (REST fallback path).\n- PR with no linked issues at all.\n- Failure-path execution to confirm `ai:review-blocked` labeling/state updates unchanged.\n- Run workflow linting (`yamllint`, `actionlint`) to ensure YAML and expression validity.\n- Add `CHANGELOG.md` Unreleased entry for H2 cache change with no behavioral drift claim.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4497f6a2ac726de006535fb296c7ef9f0158d499ee558f456ab3f76cb89f528f",
+  "lineage": {
+    "issue_number": 1111,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24471418970",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24471418970",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1111"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260415183524_10dac7d858",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1111,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24471418970"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1111",
+  "timestamps": {
+    "created_at": "2026-04-15T18:35:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
