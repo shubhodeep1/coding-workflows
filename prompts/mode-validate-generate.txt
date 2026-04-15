@@ -209,19 +209,71 @@ CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
 
 CRITICAL — Dockerfile PID 1 signal handling (prevents exit 137 in graceful_shutdown):
 - Any generated `validation/Dockerfile*` MUST use **exec-form** (JSON array) `CMD` and `ENTRYPOINT` so PID 1 is the actual application process and receives SIGTERM directly from `docker compose stop`.
-- CORRECT (exec-form, PID 1 is the app):
-    CMD ["python3", "-m", "http.server", "18080"]
+- CORRECT (exec-form, PID 1 is the app). These are illustrative ALTERNATIVES, not composable — a real Dockerfile must contain at most one `CMD` and at most one `ENTRYPOINT`; if you emit multiple `CMD` lines only the last one takes effect and the earlier ones are silently discarded. Pick the shape that matches how the app-under-test actually starts; do not treat these examples as prescriptive runtime choices (do not install packages you do not already need):
+    # Option 1: a compiled binary or wrapper script installed inside the image
+    CMD ["/usr/local/bin/my-app", "--port", "8080"]
+    # Option 2: a Node.js entrypoint (only valid if the app itself registers process.on('SIGTERM', ...))
     CMD ["node", "server.js"]
-    ENTRYPOINT ["/usr/local/bin/app"]
-- WRONG (shell-form, PID 1 is `/bin/sh -c` which does NOT forward signals):
+    # Option 3: a binary wired via ENTRYPOINT instead of CMD
+    ENTRYPOINT ["/usr/local/bin/my-app"]
+- WRONG (shell-form, PID 1 is `/bin/sh -c` which does NOT forward signals). Again these are alternative failure examples, NOT stacked:
+    # Option 1: shell-form with a Python stdlib server
     CMD python3 -m http.server 18080
+    # Option 2: shell-form with a Node entrypoint
     CMD node server.js
-  Shell-form makes `/bin/sh -c "..."` PID 1. POSIX `sh` does not forward SIGTERM to its child by default, so `docker compose stop` times out and docker escalates to SIGKILL. The container exits with code **137** (= 128 + SIGKILL), which fails the `graceful_shutdown` assertion even though the app itself was perfectly healthy right up to teardown. This is the single most common cause of false-negative shutdown failures in this harness.
-- If the app genuinely cannot install a SIGTERM handler and exec-form alone is not sufficient (rare — applies to some wrapper scripts and a few legacy Python stdlib servers), pick ONE of:
-  1. Add `init: true` to the compose service so Docker injects `tini` as PID 1; tini reaps children and forwards SIGTERM correctly.
-  2. Install `tini` in the image and use `ENTRYPOINT ["/sbin/tini", "--"]` with the real command as `CMD`.
+  Shell-form makes `/bin/sh -c "..."` PID 1. POSIX `sh` does not forward SIGTERM to its child by default, so `docker compose stop` times out and docker escalates to SIGKILL. The container exits with code **137** (= 128 + SIGKILL), which fails the `graceful_shutdown` assertion even though the app itself was perfectly healthy right up to teardown. This is one of the two most common causes of false-negative shutdown failures in this harness; the other is the PID-1 kernel signal rule described next.
+- CRITICAL sub-rule — Linux PID-1 kernel signal semantics. Exec-form alone is NOT sufficient when PID 1 does not install a user-space SIGTERM handler. The Linux kernel has a "don't accidentally kill init" safeguard: **signals sent to PID 1 are silently dropped unless PID 1 has explicitly registered a handler for them.** SIGKILL and SIGSTOP are the only exceptions (kernel always honours them). A container running `python3 -m http.server` as PID 1 will therefore IGNORE SIGTERM, `docker compose stop` will time out, and docker will escalate to SIGKILL — producing the same exit 137 as shell-form CMD, even though the CMD is written in perfect exec-form. The symptom in validation logs is identical: `not ok N - graceful_shutdown: app exited with code 137`, with container logs showing the app serving healthy responses right up to teardown.
+- MANDATORY: the compose service MUST set `init: true` (preferred) OR the Dockerfile MUST install and use `tini` as PID 1 whenever ANY of the following is true:
+  1. The CMD is a Python stdlib module that does not install its own SIGTERM handler. Non-exhaustive list: `python3 -m http.server`, `python -m http.server`, `python3 -m SimpleHTTPServer`, `python -m SimpleHTTPServer`, `python3 -m pydoc`, `python -m pydoc`, `python3 -m smtpd`, `python -m smtpd`, `python3 -m CGIHTTPServer`. These all block in `serve_forever()` with no signal handling and exhibit exit 137 on SIGTERM as PID 1.
+  2. The app is a **synthetic fallback app** — i.e. the repo under validation has no long-running runtime of its own (it is a library, CLI, workflow template, or documentation repo) and the harness is generating a placeholder service purely to have something to smoke-test. Synthetic fallback apps MUST set `init: true` unconditionally; the cost is negligible and it eliminates the entire PID-1 signal-handling bug class.
+  3. The CMD is a simple shell-less Python script that calls `http.server.HTTPServer`, `socketserver.TCPServer`, `socketserver.UDPServer`, `wsgiref.simple_server.make_server`, or any other stdlib server constructor without wiring `signal.signal(signal.SIGTERM, ...)` to a clean-shutdown handler. If you cannot immediately point at a SIGTERM handler in the app code, assume there isn't one and use `init: true`.
+  4. The CMD is a Node.js script that does not register `process.on('SIGTERM', ...)`, a Ruby/Python/Go wrapper that ignores SIGTERM, or any other runtime whose default behavior is to block signals.
+- Preferred mechanism: add `init: true` under the compose service. Docker Compose ships with tini built in; no Dockerfile changes needed, no package to install, no ENTRYPOINT to wire. Example:
+    services:
+      app:
+        build:
+          context: ..
+          dockerfile: validation/Dockerfile.app
+        init: true
+        ports:
+          - "18080:8000"
+  With `init: true`, tini becomes PID 1, Python becomes PID 2, and SIGTERM delivered to PID 1 is forwarded to PID 2 where the kernel's PID-1 safeguard does not apply. Python then terminates with the OS default action and exits 143 (= 128 + SIGTERM), which the graceful_shutdown assertion treats as a clean stop.
+- Alternative mechanism (only if `init: true` is not usable for some reason): install tini in the image and set it as PID 1 via ENTRYPOINT:
+    RUN apt-get update && apt-get install -y --no-install-recommends tini && rm -rf /var/lib/apt/lists/*
+    ENTRYPOINT ["/usr/bin/tini", "--"]
+    CMD ["python3", "-m", "http.server", "8000", "--bind", "0.0.0.0", "--directory", "/workspace"]
+- Worked example — failing case from the harness log tail `not ok 1 - graceful_shutdown: app exited with code 137 (expected 0, 143, or npm-wrapped SIGTERM)` on a synthetic fallback app for a library repo:
+    # validation/Dockerfile.app (unchanged — exec-form CMD was already correct)
+    FROM python:3.12-slim
+    ENV PYTHONDONTWRITEBYTECODE=1 \
+        PYTHONUNBUFFERED=1
+    RUN apt-get update \
+        && apt-get install -y --no-install-recommends bash ca-certificates curl jq git \
+        && rm -rf /var/lib/apt/lists/*
+    WORKDIR /workspace
+    COPY . /workspace
+    CMD ["python3", "-m", "http.server", "8000", "--bind", "0.0.0.0", "--directory", "/workspace"]
+
+    # validation/docker-compose.test.yml — add `init: true` to the app service:
+    services:
+      app:
+        build:
+          context: ..
+          dockerfile: validation/Dockerfile.app
+        init: true                      # <-- the single-line fix
+        ports:
+          - "18080:8000"
+        healthcheck:
+          test: ["CMD-SHELL", "curl -fsS http://localhost:8000/ >/dev/null || exit 1"]
+          interval: 5s
+          timeout: 3s
+          retries: 20
+          start_period: 5s
+  After the fix, `docker compose stop app` sends SIGTERM to tini (PID 1), tini forwards to `python3 -m http.server` (PID 2), Python exits 143, and the graceful_shutdown assertion passes.
 - Do NOT "fix" this by relaxing the shutdown assertion to accept exit code 137. Exit 137 can also be produced by OOM kills, livelocks, and real SIGKILLs from the host — accepting it would hide genuine failures. Fix the PID 1 process model instead.
-- After generating the Dockerfile, mentally verify: "If I ran `docker run <image>` and then `docker stop`, would PID 1 itself receive SIGTERM?" If PID 1 is `/bin/sh -c …` or an un-exec'd wrapper script, the answer is no — rewrite to exec-form.
+- Do NOT "fix" this by adding a Python wrapper script that installs a SIGTERM handler and then execs `http.server`. That's a second process to maintain, a second potential signal-forwarding bug, and is strictly inferior to `init: true`. Use tini.
+- Do NOT "fix" this by raising `stop_grace_period` — the app never stops, so no amount of extra grace will save it; you'll just wait longer for the same SIGKILL.
+- After generating the Dockerfile AND the compose file, mentally verify BOTH: (a) "If I ran `docker run <image>` and then `docker stop`, would PID 1 itself receive SIGTERM?" — if PID 1 is `/bin/sh -c …` or an un-exec'd wrapper script, the answer is no (rewrite to exec-form). AND (b) "Does PID 1 install a SIGTERM handler, or is there a signal-forwarding init (tini/`init: true`) in front of it?" — if neither, the kernel will drop SIGTERM (add `init: true`).
 
 CRITICAL — graceful shutdown container resolution:
 - After `docker compose stop <service>`, the container moves to `exited` state.
@@ -259,6 +311,150 @@ CRITICAL — graceful shutdown container resolution:
       echo "not ok - app exited with code $EXIT_CODE (expected 0, 143, or npm-wrapped SIGTERM)"
       exit 1
     fi
+
+CRITICAL — post-restart readiness polling in graceful_shutdown:
+- The `graceful_shutdown` script verifies a full stop/start cycle. After `docker compose start <service>` (or equivalent re-up), the container needs a non-trivial warm-up window before its listener re-binds and health endpoints respond. A single immediate `curl` produces a deterministic false negative ("restarted but endpoint unreachable") even though the app is perfectly healthy a second or two later.
+- Hard rule: after restart, the test MUST poll the readiness endpoint with bounded retries BEFORE asserting reachability. Do NOT issue one immediate `curl` and assert on its result.
+- Retry budget: reuse the same health-timeout / poll-interval semantics already used by `02_startup_health_checks.sh` / `00_canary.sh`. Typical values are 30 attempts × 1s, or `${HEALTH_TIMEOUT_SECONDS:-30}` total with `${HEALTH_POLL_INTERVAL_SECONDS:-1}s` between attempts. Never hardcode a single-shot check.
+- Success condition: exit the retry loop as soon as the readiness probe returns a success (HTTP 2xx or the project's documented health signature). Only emit `not ok` after the full budget is exhausted.
+- Diagnostics on failure: the `not ok` line MUST include the last observed HTTP status code, the last curl exit code, and the number of attempts made (for example `not ok N - app restarted but endpoint unreachable after graceful shutdown (attempts=30 last_status=000 curl_exit=56)`). This lets downstream log tails distinguish a mid-warmup race from a genuine post-restart crash.
+- Recommended pattern (append immediately after the restart step in `10_graceful_shutdown.sh`):
+    READY_URL="${READY_URL:-http://localhost:18080/}"
+    HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
+    HEALTH_POLL_INTERVAL_SECONDS="${HEALTH_POLL_INTERVAL_SECONDS:-1}"
+    # Restart the service. Check the start rc explicitly and emit a dedicated
+    # TAP diagnostic on failure — do NOT mask with `|| true`, which would turn
+    # a hard restart failure (bad compose file, missing service, image pull or
+    # build error) into a misleading "endpoint unreachable" timeout after the
+    # readiness poll. Distinguish "restart never started" from "restart started
+    # but app did not become ready in time".
+    compose_start_log="$(mktemp)"
+    set +e
+    docker compose -f "$COMPOSE_FILE" start "$APP_SERVICE" >"$compose_start_log" 2>&1
+    start_rc=$?
+    set -e
+    if [ "$start_rc" -ne 0 ]; then
+      echo "not ok $ASSERTION - docker compose start $APP_SERVICE failed (rc=$start_rc)"
+      sed 's/^/#   /' "$compose_start_log"
+      rm -f "$compose_start_log"
+      exit 1
+    fi
+    rm -f "$compose_start_log"
+    deadline=$(( $(date +%s) + HEALTH_TIMEOUT_SECONDS ))
+    attempts=0
+    last_status="000"
+    last_curl_exit=0
+    ready=0
+    # Loop is driven by wall-clock deadline, not by attempt count, so the
+    # total budget remains HEALTH_TIMEOUT_SECONDS regardless of poll interval.
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+      attempts=$((attempts + 1))
+      # Capture curl's real exit code. Do NOT use `$(... || true)` inside the
+      # command substitution: `|| true` collapses the substitution's status to
+      # 0 and `$?` on the next line would always read 0. Use `set +e` so the
+      # script doesn't abort on a non-zero curl rc, then restore `set -e`.
+      set +e
+      last_status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$READY_URL" 2>/dev/null)"
+      last_curl_exit=$?
+      set -e
+      case "$last_status" in
+        2*|3*) ready=1; break ;;
+      esac
+      sleep "$HEALTH_POLL_INTERVAL_SECONDS"
+    done
+    if [ "$ready" = "1" ]; then
+      echo "ok $ASSERTION - app restarted and endpoint reachable after graceful shutdown (attempts=$attempts last_status=$last_status)"
+    else
+      echo "not ok $ASSERTION - app restarted but endpoint unreachable after graceful shutdown (attempts=$attempts last_status=$last_status curl_exit=$last_curl_exit)"
+      exit 1
+    fi
+    ASSERTION=$((ASSERTION + 1))
+- Do NOT "fix" this by loosening the post-restart assertion or by dropping the restart leg of `graceful_shutdown` — the restart leg exists specifically to catch apps that shut down cleanly but fail to re-initialize. Fix the readiness polling.
+
+CRITICAL — independent readiness gating for tests that run after graceful_shutdown:
+- `11_error_format_validation.sh` (and any other HTTP-assertion script ordered after `10_graceful_shutdown.sh`) runs against the same long-running app service. If `graceful_shutdown` leaves the container mid-restart, the next script hits an empty listener and emits the canonical cascade signature `status=000 err=curl: (56) Recv failure: Connection reset by peer`. This is a harness false negative, not an app defect.
+- Hard rule: every HTTP-assertion test that could run after `10_graceful_shutdown.sh` MUST perform its own independent readiness wait before asserting. Do NOT assume the previous test left the app ready.
+- Ordering alternative: if the readiness wait would duplicate too much logic, re-order tests so that `11_error_format_validation.sh` runs BEFORE `10_graceful_shutdown.sh`. The harness executes scripts in lexical `NN_*.sh` order, so rename accordingly (`10_error_format_validation.sh`, `11_graceful_shutdown.sh`). Both orderings are acceptable; mixed ordering without a readiness gate is NOT.
+- Readiness wait specification: the wait MUST be bounded (reuse `${HEALTH_TIMEOUT_SECONDS:-30}` / `${HEALTH_POLL_INTERVAL_SECONDS:-1}s`), MUST poll the same canonical readiness URL as `00_canary.sh` / `02_startup_health_checks.sh`, and MUST fail with a dedicated `not ok` line (for example `not ok 1 - app not ready before error_format assertions (attempts=30 last_status=000 curl_exit=56)`) that is clearly distinguishable from the actual test's assertions. This prevents misclassification of readiness races as route/format defects.
+- When in doubt, generate a small shared helper such as `validation/tests/_lib/wait_ready.sh` that exposes a single function (`wait_for_ready URL TIMEOUT INTERVAL`) and `source` it from both `10_graceful_shutdown.sh` and every downstream HTTP assertion script. Duplication is acceptable; omission is not.
+
+CRITICAL — stdout/stderr capture in existing_test_suite_execution:
+- `06_existing_test_suite_execution.sh` wraps each custom test command (`python3 tests/foo.py`, `npm test`, `pytest`, `go test`, etc.) in its own TAP assertion. When one of those commands fails, the assertion message is the only diagnostic that reaches the artifact tail. If the wrapper discards stdout or stderr, the root cause is invisible and the orchestrator cannot distinguish a genuine app bug from a harness mis-invocation (wrong cwd, missing env, bad interpreter).
+- Hard rule: every custom test invocation MUST capture BOTH stdout and stderr to per-test temp files, and on failure MUST emit a bounded tail of each stream as part of the `not ok` diagnostic. Never swallow output with `>/dev/null`, `2>/dev/null`, or a bare `|| true`.
+- Tail bound: emit at most the last 40 lines of stdout and the last 40 lines of stderr, each prefixed with `# stdout:` / `# stderr:` so they round-trip through the TAP parser as comments and do not break numbering.
+- The `ok` line on success MUST remain a single line (no attached output); capture files may be removed or left in place.
+- Recommended pattern:
+    run_custom_test()
+    {
+      local cmd="$1"
+      local out_file
+      local err_file
+      local rc
+      out_file="$(mktemp)"
+      err_file="$(mktemp)"
+      set +e
+      # shellcheck disable=SC2086
+      bash -c "$cmd" >"$out_file" 2>"$err_file"
+      rc=$?
+      set -e
+      if [ "$rc" -eq 0 ]; then
+        echo "ok $ASSERTION - $cmd"
+      else
+        echo "not ok $ASSERTION - $cmd failed (exit=$rc)"
+        if [ -s "$out_file" ]; then
+          echo "# stdout tail:"
+          tail -n 40 "$out_file" | sed 's/^/#   /'
+        else
+          echo "# stdout tail: <empty>"
+        fi
+        if [ -s "$err_file" ]; then
+          echo "# stderr tail:"
+          tail -n 40 "$err_file" | sed 's/^/#   /'
+        else
+          echo "# stderr tail: <empty>"
+        fi
+      fi
+      rm -f "$out_file" "$err_file"
+      ASSERTION=$((ASSERTION + 1))
+      return "$rc"
+    }
+- Apply this wrapper to every entry in `custom_tests:` from `.ai/validate.yml` hints and to every auto-detected test command. Do NOT special-case Python: Python unittest/pytest failures surface on stderr and are the most common source of `failed (no stderr)` artifact lines.
+- If the command is expected to be long-running or interactive, wrap it with a bounded timeout (for example `timeout 120 bash -c "$cmd"`) and include the exit code in the diagnostic. Do NOT allow a hung custom test to consume the whole validation budget silently.
+
+CRITICAL — custom_tests external tool dependency analysis (prevents FileNotFoundError in custom tests):
+- When `.ai/validate.yml` hints declare `custom_tests:` (or you auto-detect a project-specific test suite), the declared test files often invoke external binaries that are NOT part of the base image. The canonical failure mode is `FileNotFoundError: [Errno 2] No such file or directory: 'git'` surfacing as a Python traceback inside `03_existing_test_suite_execution.sh` / `06_existing_test_suite_execution.sh`, because `python:3.12-slim` (and most `*-slim` base images) ship without `git`, `make`, `rsync`, `unzip`, `openssl`, `jq`, and friends. The harness must detect these needs up front instead of crashing mid-run.
+- Hard rule: before writing `validation/Dockerfile.app`, statically scan every file referenced by `custom_tests:` (AND every `.sh` script the harness generates that invokes tools not already on the base image) for external binary invocations. Emit a union set of tools and install ALL of them via `apt-get` in a single `RUN` layer. Then extend `00_canary.sh` with a tool-presence assertion for each tool so the image fails fast with a clear TAP diagnostic instead of a Python traceback mid-run.
+- Patterns to scan for in each custom test file:
+  - Python: `subprocess.run(["<bin>", ...])`, `subprocess.call([...])`, `subprocess.Popen([...])`, `subprocess.check_output([...])`, `subprocess.check_call([...])`, `os.system("<cmd> ...")`, `os.popen("<cmd> ...")`, `shutil.which("<bin>")`, `sh.<bin>(...)` (if the `sh` package is imported).
+  - Shell: bare `<bin> ...` at line start, `$(<bin> ...)`, backticks `` `<bin> ...` ``, `command -v <bin>`, `which <bin>`, `type <bin>`, `exec <bin>`, `hash <bin>`.
+  - Makefiles / pyproject / package.json scripts referenced by the custom tests: recursively walk one level of indirection (`make <target>`, `npm run <script>`, `pnpm <script>`) and scan those targets too.
+- Extract the FIRST token of each match as the binary name. Discard shell builtins and POSIX coreutils that are present on every base image (`cd`, `pwd`, `echo`, `printf`, `test`, `[`, `[[`, `read`, `set`, `export`, `unset`, `true`, `false`, `exit`, `return`, `shift`, `ls`, `cat`, `mv`, `cp`, `rm`, `mkdir`, `rmdir`, `ln`, `touch`, `chmod`, `chown`, `head`, `tail`, `sort`, `uniq`, `wc`, `cut`, `tr`, `sed`, `awk`, `grep`, `find`, `xargs`, `env`, `sh`, `bash`, `dash`, `basename`, `dirname`, `readlink`, `realpath`, `tee`, `date`, `sleep`, `which`, `uname`, `id`). Everything else is a candidate dependency.
+- Map each candidate to its Debian/Ubuntu apt package name. Common mappings: `git` → `git`, `make` → `make`, `gcc`/`cc` → `build-essential`, `g++` → `build-essential`, `jq` → `jq`, `curl` → `curl`, `wget` → `wget`, `rsync` → `rsync`, `unzip` → `unzip`, `zip` → `zip`, `openssl` → `openssl`, `ssh` → `openssh-client`, `scp`/`sftp` → `openssh-client`, `ssh-keygen` → `openssh-client`, `pkg-config` → `pkg-config`, `xmllint` → `libxml2-utils`, `netcat`/`nc` → `netcat-openbsd`, `ip`/`ss` → `iproute2`, `ping` → `iputils-ping`, `ca-certificates` → `ca-certificates`, `patch` → `patch`, `file` → `file`. If a tool has no obvious mapping, emit a `blockers[]` entry explaining the gap rather than silently dropping it.
+- Always install `ca-certificates` alongside anything that makes HTTPS calls (`git`, `curl`, `wget`). Always combine installs into a single `RUN apt-get update && apt-get install -y --no-install-recommends ... && rm -rf /var/lib/apt/lists/*` layer to keep the image lean.
+- After regenerating `validation/Dockerfile.app`, update `00_canary.sh` to include one TAP assertion per installed tool using the robust pattern:
+    CANARY_TOOLS="${CANARY_TOOLS:-curl jq python3 git}"
+    for tool in $CANARY_TOOLS; do
+      if docker compose -f "$COMPOSE_FILE" exec -T "$APP_SERVICE" /bin/sh -c "command -v $tool >/dev/null 2>&1"; then
+        echo "ok $ASSERTION - $tool is available in $APP_SERVICE"
+      else
+        echo "not ok $ASSERTION - $tool is NOT available in $APP_SERVICE (required by custom_tests)"
+        exit 1
+      fi
+      ASSERTION=$((ASSERTION + 1))
+    done
+  Respect the shell-mode parity rule at the top of this prompt: the canary tool-check MUST use the same `/bin/sh -c` (or `/bin/sh -lc`) form as the subsequent test invocations.
+- Worked example. Given `.ai/validate.yml`:
+    custom_tests:
+      - python3 tests/test_validate_process_driver_guard_scope.py
+  and `tests/test_validate_process_driver_guard_scope.py` contains:
+    subprocess.run(["git", "init", "--quiet"], cwd=repo_dir, check=True)
+  the generator MUST:
+  1. Detect `git` from the `subprocess.run` token.
+  2. Add `git` and `ca-certificates` to the `validation/Dockerfile.app` apt install list.
+  3. Add `git` to the canary's `CANARY_TOOLS` list so `ok N - git is available in app` precedes any custom test execution.
+- Do NOT "fix" a missing tool failure by catching `FileNotFoundError` in the test, by deleting the failing test, or by special-casing the test wrapper. The test is correct; the image lacks the tool. Fix the image + canary.
+- Do NOT assume `python:*-slim` has any of these tools. `python:3.12-slim` ships only Python, `bash`, coreutils, and a handful of libc utilities. Every other tool must be installed explicitly.
+- Do NOT rely on the stdout/stderr capture wrapper in `existing_test_suite_execution` as a substitute for this check. The wrapper surfaces the failure; it does not prevent it. Apply BOTH rules: static dependency analysis here, plus stdout/stderr capture in the existing_test_suite_execution section above.
 
 CRITICAL — robust synthetic env-var assertions in env_var_validation tests:
 - Docker Compose services declare synthetic test credentials with an override-or-default expression:

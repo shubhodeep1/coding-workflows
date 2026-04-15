@@ -264,7 +264,7 @@ class SQLiteVecBackend:
 			rows = conn.execute(
 				"""
 				SELECT phase, original_issue_id, cached_at, expires_at, embedding_model, embedding_json,
-				       response_text, similarity_threshold, source_fingerprint
+				response_text, similarity_threshold, source_fingerprint
 				FROM semantic_cache_entries
 				WHERE phase = ? AND expires_at > ? AND embedding_model = ?
 				""",
