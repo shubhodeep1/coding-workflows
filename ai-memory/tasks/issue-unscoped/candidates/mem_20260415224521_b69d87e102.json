@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\nscripts/gh_helpers.sh\n\nLow confidence files (mentioned by 1 reviewer):\n/tmp/codex-pr-24481864136-1-20629/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\nscripts/compare_issue_timeline_parity.sh\nscripts/orchestrate_poll_process.sh\nscripts/orchestrate_poll_process.sh",
+  "fingerprint": "a6e4913e1040b4f40b6e0038a433e2a74abd795ad945b005601ae86d655f3e59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1120,
+    "run_id": "24481864136",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24481864136",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260415224521_b69d87e102",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1120,
+    "run_id": "24481864136"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-15T22:45:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
