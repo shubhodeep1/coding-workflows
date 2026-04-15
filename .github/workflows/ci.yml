@@ -77,8 +77,8 @@ jobs:
       - name: Clarify loop guard unit tests
         run: |
           set -euo pipefail
-          python3 tests/test_orchestrate_clarify_loop_guard.py
-          python3 tests/test_ai_memory_processed_command_entry.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_clarify_loop_guard.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py
 
       - name: Workflow log collector coverage gate
         run: |

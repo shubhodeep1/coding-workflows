@@ -177,7 +177,7 @@ memory_processed_command_list()
 memory_clarify_loop_guard()
 {
 	if ! _memory_enabled; then
-		echo '{"result": {"blocked": false, "reason": "none", "cycle": 1, "max_cycles": 1}}'
+		echo '{"result": {"blocked": false, "reason": "none", "cycle": 1, "max_cycles": null}}'
 		return 0
 	fi
 
@@ -189,7 +189,7 @@ memory_clarify_loop_guard()
 
 	{
 		_memory_warn "clarify-loop-guard failed (fail-open)"
-		echo '{"result": {"blocked": false, "reason": "none", "cycle": 1, "max_cycles": 1}}'
+		echo '{"result": {"blocked": false, "reason": "none", "cycle": 1, "max_cycles": null}}'
 		return 0
 	}
 }

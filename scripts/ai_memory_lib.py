@@ -515,7 +515,11 @@ def list_processed_command_entries(
     entries: list[dict[str, Any]] = []
     for entry_path in _iter_json_files(processed_dir):
         payload = _load_json(entry_path)
-        validate_processed_command_entry(payload, memory_root)
+        try:
+            validate_processed_command_entry(payload, memory_root)
+        except MemoryValidationError as exc:
+            _log.warning("Skipping invalid processed command entry %s: %s", entry_path, exc)
+            continue
         if command and str(payload.get("command") or "").strip().lower() != command.strip().lower():
             continue
         if workflow and str(payload.get("workflow") or "").strip().lower() != workflow.strip().lower():
