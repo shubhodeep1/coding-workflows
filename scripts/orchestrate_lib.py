@@ -401,7 +401,6 @@ VALID_STALL_RECOVERY_ACTIONS: set[str] = {
 VALID_STALL_RECOVERY_ACTIONS.update({
 	"close_and_reissue",
 	"resolve_merge_conflict",
-	"skip",
 })
 
 
@@ -606,7 +605,7 @@ def detect_stalls(
 		if elapsed < threshold_secs:
 			continue
 
-		recovery_count = issue.get("stall_recovery_count", 0)
+		recovery_count = int(issue.get("stall_recovery_count", 0) or 0)
 
 		# Determine recovery action
 		if recovery_count >= max_recoveries:
