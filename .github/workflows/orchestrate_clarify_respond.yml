@@ -581,6 +581,7 @@ jobs:
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
           CLARIFICATION_COMMENT_ID: ${{ github.event.comment.id }}
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -717,8 +718,11 @@ jobs:
             } > "${RUNTIME_DIR}/loop_break_comment.md"
 
             LOOP_BREAK_RESPONSE="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-              -f body="$(cat "${RUNTIME_DIR}/loop_break_comment.md")")"
-            LOOP_BREAK_COMMENT_ID="$(printf '%s' "${LOOP_BREAK_RESPONSE}" | jq -r '.id // 0')"
+              -f body="$(cat "${RUNTIME_DIR}/loop_break_comment.md")" || true)"
+            LOOP_BREAK_COMMENT_ID="$(printf '%s' "${LOOP_BREAK_RESPONSE}" | jq -r '.id // 0' 2>/dev/null || echo "0")"
+            if [ "${LOOP_BREAK_COMMENT_ID}" = "0" ]; then
+              echo "::warning::Failed to post or parse loop-break comment for issue #${ISSUE_NUMBER}; continuing with comment ID 0."
+            fi
 
             if [ -f scripts/tg_helpers.sh ]; then
               source scripts/tg_helpers.sh
