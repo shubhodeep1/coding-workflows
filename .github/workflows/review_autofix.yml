@@ -94,8 +94,12 @@ jobs:
             SHOULD_RUN="false"
             echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
           else
-            pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
-            pr_merged="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.merged // false' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "false")"
+            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false)] | @tsv' 2>/dev/null)"; then
+              pr_state="${_pr_gate%%$'\t'*}"
+              pr_merged="${_pr_gate#*$'\t'}"
+              [ "${pr_merged}" = "${_pr_gate}" ] && pr_merged="false"
+              pr_merged="$(printf '%s' "${pr_merged}" | tr '[:upper:]' '[:lower:]')"
+            fi
           fi
 
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
@@ -438,7 +442,7 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
-          pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
+          pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' || echo "")"
           if [ -n "${pr_state}" ] && [ "${pr_state}" != "open" ]; then
             echo "::warning::PR #${PR_NUMBER} is ${pr_state} — setting PR_CLOSED to skip downstream work."
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"
@@ -704,7 +708,7 @@ jobs:
             -f name="$(echo '${{ github.repository }}' | cut -d/ -f2)" \
             -F number="${PR_NUMBER}" \
             -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null; then
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
             _linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
           else
             echo "::warning::Failed to fetch linked issues via GraphQL; proceeding without linked-issue context."
@@ -3061,7 +3065,7 @@ jobs:
               -f name="${REPOSITORY#*/}" \
               -F number="${PR_NUMBER}" \
               -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null)"; then
+              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []')"; then
               :
             else
               echo "::warning::Failed to refresh linked issues references; proceeding with empty linked issue list."
