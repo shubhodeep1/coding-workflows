@@ -462,7 +462,10 @@ wait_for_health()
 		service_ready=0
 		url_ready=1
 
-		container_id="$(docker compose -f "${COMPOSE_FILE}" ps -q --all -- "${APP_SERVICE}" | head -n1 || true)"
+		container_id="$(docker compose -f "${COMPOSE_FILE}" ps -q --all -- "${APP_SERVICE}" 2>/dev/null | head -n1 || true)"
+		if [ -z "${container_id}" ]; then
+			container_id="$(docker compose -f "${COMPOSE_FILE}" ps -q -- "${APP_SERVICE}" 2>/dev/null | head -n1 || true)"
+		fi
 		if [ -n "${container_id}" ]; then
 			running="$(docker inspect -f '{{.State.Running}}' "${container_id}" 2>/dev/null || echo false)"
 			health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${container_id}" 2>/dev/null || echo unknown)"
