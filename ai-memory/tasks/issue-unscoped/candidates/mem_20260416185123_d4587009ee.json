@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 3\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: `.github/workflows/review_autofix.yml`\n      Problem: Location: Line 1935; Issue: `head -1` is used to pick the first status line, but if an editor provides conflicting information (e.g., an inline value and a different bullet value), the inline one wins silently.; Suggested minimal fix: While `head -1` is safe, adding a check to ensure `change_status_section` only contains one unique status word would be stricter. However, the current logic is sufficient for production as editors are instructed to be concise.; Estimated lines changed: 0 (No change recommended, existing logic is sufficient).; ### FILES CHANGED; - `.github/workflows/review_autofix.yml` (Lines 1924\u20132030); - `scripts/review_apply_fixes.sh` (Lines 321, 344\u2013353, 569, 718\u2013720); ### CONCLUSION; No changes are needed. The implementation is safe, backward-compatible with older summaries through its fallback heuristic, and directly addresses the reported false-positives.\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: `.github/workflows/review_autofix.yml` (line ~1950)\n      Problem: When \"Change status:\" says \"not-edited\" but \"Changes made:\" contains actual file change claims (e.g., \"- updated foo.sh\"), the code trusts the authoritative status and does not flag the contradiction. The prompt contract states they \"MUST agree\" but there's no enforcement of this cross-check.; A buggy or confused editor could report \"Change status: not-edited\" while also claiming to have made file changes. This would incorrectly set `has_real_changes=\"false\"`, potentially allowing the PR to auto-merge without the claimed changes being committed.; **HARDENING NOTES**; The contradiction detection only exists in the fallback heuristic path (lines 1996-2008). When the authoritative signal is present, no cross-check validates that it agrees with the Changes made section content. Suggested minimal cross-check:; ```bash; if [ \"${change_status}\" = \"edited\" ]; then; has_real_changes=\"true\"; has_real_changes=\"false\"; # Cross-check: warn if Changes made appears to contradict not-edited status; if printf '%s\\n' \"${changes_section}\" | grep -qE \"^[[:space:]]*- [a-zA-Z]\"; then; echo \"::warning::Editor claimed Change status: not-edited but Changes made section contains content\"; **HARDENING_RISK_SCORE: 2**; **Summary**: The implementation is correct and addresses the false-positive issue. The contradiction detection gap is a minor hardening concern that could help catch editor bugs.\n      Confidence: avg 4.0\n      Flagged by: moonshotai_kimi-k2_5\n\n  [3] File: .github/workflows/review_autofix.yml (line ~1950)\n      Problem: if [ \"${change_status}\" = \"edited\" ] || [ \"${change_status}\" = \"not-edited\" ]; then; if [ \"${change_status}\" = \"edited\" ]; then; has_real_changes=\"true\"; elif [ -n \"${changes_section}\" ]; then; # heuristic that detects contradictions when first line is \"- none\" ...; When `change_status` is `not-edited`, the code never executes the `elif` branch, so any edit claims present in the `Changes made:` section (contradicting the status) are silently ignored. This violates the stated contract \u201cChange status \u2026 MUST agree with \u2018Changes made:\u2019\u201d and can mask editor bugs or cause false negatives where the editor claims changes but sets status to `not-edited` and then fails to commit.; An editor output like `Change status: not-edited` together with a `Changes made:` list containing actual file edits will not trigger `EDITOR_CHANGES_LOST` even if no commit is produced. This could allow a PR to merge without the claimed fixes or let an editor malfunction go undetected.; Suggested fix: Only treat `edited` as immediately authoritative; for any other status (including `not-edited`), fall back to the heuristic on `changes_section` to detect real change claims. Replace the `if/elif` block starting at line 1950 with:; if [ \"${change_status}\" = \"edited\" ]; then; has_real_changes=\"true\"; if [ \"${change_status}\" != \"edited\" ] && [ -n \"${changes_section}\" ]; then; # existing heuristic code (moves the current elif branch body here); This preserves the false-positive fix (sub-bullets are filtered by the heuristic) while restoring contradiction detection for the `not-edited` case.\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml\n`.github/workflows/review_autofix.yml`",
+  "fingerprint": "970b2a07b9ea4a436950ce0fcdeb5ef29834c84f74daded35efd1d10fc37721c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1240,
+    "run_id": "24527399323",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24527399323",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416185123_d4587009ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1240,
+    "run_id": "24527399323"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-16T18:51:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
