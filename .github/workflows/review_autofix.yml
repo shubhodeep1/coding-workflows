@@ -983,7 +983,7 @@ jobs:
           echo "judge_fix_count=${judge_fix_count}" >> "$GITHUB_OUTPUT"
 
       - name: Select reviewer reasoning effort for current cycle
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
 
@@ -1073,7 +1073,7 @@ jobs:
           echo "reviewer_reasoning_selection: ${reviewer_reasoning_selection_json}"
 
       - name: Generate diff context
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
 
@@ -1246,7 +1246,7 @@ jobs:
           } > "${RUNTIME_CONTEXT_DIR}/run_logs_best_effort.txt" || true
 
       - name: "Preflight: Verify required files before reviewer invocation"
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
 
@@ -1348,7 +1348,7 @@ jobs:
           echo "Preflight check PASSED: all required files present."
 
       - name: Run reviewer models
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         id: reviewers
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
