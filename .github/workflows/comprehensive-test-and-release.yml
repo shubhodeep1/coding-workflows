@@ -442,6 +442,8 @@ jobs:
     needs: phase2-collect-and-analyze-logs
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      tracking_issue: ${{ steps.phase3.outputs.tracking_issue }}
     steps:
       - name: Dispatch orchestrator and mark tracking issue
         id: phase3
