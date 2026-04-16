@@ -790,7 +790,7 @@ run_reviewer() {
           # stdout on 403/429 rate-limit responses (--jq is not applied
           # to error bodies, so raw JSON leaks into the variable and
           # defeats the || echo "open" fallback).
-          pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+          pr_state="$({ gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open"; } 2>/dev/null)"
           if [ "${pr_state}" != "open" ]; then
             echo "Reviewer ${model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
             printf 'pr_closed_api' > "${wd_reason_file}"
