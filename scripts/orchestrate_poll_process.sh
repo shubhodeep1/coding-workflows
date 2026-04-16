@@ -1577,12 +1577,33 @@ prepare_tracking_judge_checkout() {
 
   if target_ref="$(resolve_branch_analysis_ref "${target_branch}")"; then
     if ! git checkout -q "${target_branch}" >/dev/null 2>&1 && ! git checkout -q "${target_ref}" >/dev/null 2>&1; then
-      if [ -n "${integration_branch}" ]; then
-        echo "::error::Integration branch '${integration_branch}' exists but could not be checked out for judge context (resolved ref '${target_ref}')." >&2
+      # Workflow support files (scripts/, prompts/, .github/ai/) installed
+      # from coding-workflows are untracked and can block checkout when the
+      # target branch has overlapping paths.  Back them up, force-checkout,
+      # then restore so render_prompt.sh et al. remain available.
+      local _wf_backup
+      _wf_backup="$(mktemp -d)"
+      for _d in scripts prompts; do
+        [ -d "${_d}" ] && cp -a "${_d}" "${_wf_backup}/${_d}" 2>/dev/null || true
+      done
+      [ -d ".github/ai" ] && { mkdir -p "${_wf_backup}/github_ai"; cp -a ".github/ai/." "${_wf_backup}/github_ai/" 2>/dev/null || true; }
+
+      if git checkout -f -q "${target_ref}" >/dev/null 2>&1; then
+        # Force checkout succeeded — restore workflow support files
+        for _d in scripts prompts; do
+          [ -d "${_wf_backup}/${_d}" ] && { mkdir -p "${_d}"; cp -a "${_wf_backup}/${_d}/." "${_d}/" 2>/dev/null || true; }
+        done
+        [ -d "${_wf_backup}/github_ai" ] && { mkdir -p ".github/ai"; cp -a "${_wf_backup}/github_ai/." ".github/ai/" 2>/dev/null || true; }
+        rm -rf "${_wf_backup}"
       else
-        echo "::error::Default branch '${target_branch}' could not be checked out for judge context (resolved ref '${target_ref}')." >&2
+        rm -rf "${_wf_backup}"
+        if [ -n "${integration_branch}" ]; then
+          echo "::error::Integration branch '${integration_branch}' exists but could not be checked out for judge context (resolved ref '${target_ref}')." >&2
+        else
+          echo "::error::Default branch '${target_branch}' could not be checked out for judge context (resolved ref '${target_ref}')." >&2
+        fi
+        return 1
       fi
-      return 1
     fi
   else
     if [ -n "${integration_branch}" ]; then
@@ -3871,7 +3892,7 @@ invoke_stall_judge() {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR}\""
-    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE}\""
+    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-xhigh}\""
     if [ -f "${CATALOG_PATH}" ]; then
       echo "model_catalog_json = \"${CATALOG_PATH}\""
     fi
@@ -6425,7 +6446,7 @@ json.dump(result, sys.stdout)
       echo 'web_search = "live"'
       echo 'model_provider = "openrouter"'
       echo "model = \"${MODEL_EDITOR}\""
-      echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE}\""
+      echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-xhigh}\""
       if [ -f "${CATALOG_PATH}" ]; then
         echo "model_catalog_json = \"${CATALOG_PATH}\""
       fi
@@ -7974,17 +7995,13 @@ Manual intervention required." >/dev/null
   # Setup Codex config for judge
   mkdir -p ~/.codex
   JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))
-  EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="${MODEL_REASONING_EFFORT_JUDGE}"
-  if [ "${JUDGE_INVOCATION_CYCLE}" -gt 3 ] && [ "${MODEL_REASONING_EFFORT_JUDGE}" = "xhigh" ]; then
-    EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="high"
-  fi
-  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE}"
+  echo "Judge reasoning effort for cycle ${JUDGE_INVOCATION_CYCLE}: ${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
   CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
   {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR}\""
-    echo "model_reasoning_effort = \"${EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE}\""
+    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-xhigh}\""
     if [ -f "${CATALOG_PATH}" ]; then
       echo "model_catalog_json = \"${CATALOG_PATH}\""
     fi

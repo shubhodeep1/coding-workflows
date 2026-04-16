@@ -615,6 +615,106 @@ CRITICAL — importlib dynamic module loading for dependency_auditing import che
   `importlib.import_module` handles `sys.modules` registration automatically
   and is the correct API for "does this module load?" audits.
 
+CRITICAL — dependency_auditing sidecar scripts MUST set sys.path to repo root:
+- Any Python sidecar file generated under `validation/tests/_lib/` for
+  dependency_auditing MUST contain BOTH of the following lines before any
+  `importlib.import_module()` call:
+    os.chdir("/workspace")
+    sys.path.insert(0, "/workspace")
+  Without these lines, `scripts.*` modules are not importable because
+  `/workspace` is not on `sys.path` by default inside the container.
+  This is the single most common cause of false `No module named 'scripts'`
+  harness failures. Omitting these lines is a harness defect.
+
+CRITICAL — sibling imports when dynamically loading modules from subdirectories:
+- When a Python entry point lives in a subdirectory (e.g.
+  `backend/appsflyer_event_worker.py`) and uses bare sibling imports such as
+  `from db_indexes import ...`, the module's parent directory MUST be on
+  `sys.path` before `exec_module` / `importlib.import_module` is called.
+  In production `python -B backend/appsflyer_event_worker.py` puts
+  `/workspace/backend` on `sys.path[0]` automatically; `importlib` does NOT.
+- Any helper function (e.g. `_load_worker_module()`) that loads a module via
+  `importlib.util.spec_from_file_location` + `exec_module` MUST insert the
+  target file's parent directory into `sys.path` first:
+    parent = str(pathlib.Path(path).resolve().parent)
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+  Omitting this causes `ModuleNotFoundError` for every bare sibling import
+  in the loaded module. This is a harness defect, not an app defect.
+- The same rule applies to PYTHONPATH-based sidecar scripts: set PYTHONPATH
+  to include BOTH `/workspace` (repo root) AND the entry point's parent
+  directory (e.g. `/workspace/backend`) when the entry point uses bare
+  sibling imports.
+
+CRITICAL — dependency_auditing binary audit MUST be a sidecar file (NOT inline Python):
+- The `dependency_auditing` category typically has two checks: (1) an import
+  audit (already uses sidecar `validation/tests/_lib/import_audit.py`) and
+  (2) a custom binary audit that AST-walks test files for subprocess calls
+  to detect unexpected external binaries. The binary audit Python snippet is
+  complex (imports `ast`, `pathlib`, `sys`; defines helper functions; uses
+  f-strings) and MUST be placed in a sidecar file, never inlined via a
+  heredoc or `python3 -c` inside `docker compose exec -T ... /bin/sh -c`.
+- Failure mode being prevented: when the binary audit is inlined, the outer
+  shell quoting layer strips single quotes from f-string expressions like
+  `f"UNEXPECTED_BINARIES {','.join(unexpected)}"`, producing the mangled
+  `f"UNEXPECTED_BINARIES {,.join(unexpected)}"` at runtime, which crashes
+  with `SyntaxError: f-string: expecting a valid expression after '{'`.
+  This is a harness defect, not an application defect.
+- Hard rule: write the binary audit as `validation/tests/_lib/binary_audit.py`
+  and invoke it from `08_dependency_auditing.sh` via:
+    if docker compose -f "$COMPOSE_FILE" exec -T "$APP_SERVICE" \
+        python3 /workspace/validation/tests/_lib/binary_audit.py \
+        >"$TMP_OUT" 2>"$TMP_ERR"; then
+      if grep -q '^BINARY_AUDIT_OK$' "$TMP_OUT"; then
+        echo "ok $ASSERTION - custom test binary audit passed (no missing external tools detected)"
+      else
+        echo "not ok $ASSERTION - custom test binary audit unexpected output"
+        exit 1
+      fi
+    else
+      echo "not ok $ASSERTION - custom test binary audit failed (exit=$?)"
+      exit 1
+    fi
+- The sidecar file MUST follow the named-variable-then-interpolate pattern
+  for any f-string output:
+    # WRONG (will break under shell re-quoting)
+    print(f"UNEXPECTED_BINARIES {','.join(unexpected)}")
+    # RIGHT
+    joined = ",".join(unexpected)
+    print(f"UNEXPECTED_BINARIES {joined}")
+- This rule applies even when the Python source would parse correctly in
+  isolation. The shell quoting hazard is latent and only manifests at
+  runtime inside the container.
+- Hard rule: the binary audit MUST extract candidate binary names ONLY from
+  structured sources. Permitted sources are exactly:
+  1. The `argv[0]` of each `custom_tests:` entry from `.ai/validate.yml`,
+     parsed via `shlex.split(entry)[0]` (after stripping a leading `timeout
+     <N>` / `env VAR=val ...` / `exec` / `command` prefix).
+  2. The `argv[0]` of any `subprocess.run`/`subprocess.call`/`subprocess.check_call`/
+     `subprocess.check_output`/`subprocess.Popen`/`os.system`/`os.popen` call
+     reached by `ast.walk` over the referenced test file, where `argv` is a
+     `ast.List` of `ast.Constant[str]` (list form) or a `ast.Constant[str]`
+     whose first whitespace-separated token is the binary (string form).
+- Forbidden: ANY regex/substring scan over the raw file text, docstring, or
+  comment body of a custom_test file as a "fallback" source of binary names.
+  This includes `re.finditer` patterns like `\b(command\s+-v|which)\s+(\w+)`
+  applied to `path.read_text()`. Such fallbacks match incidental English
+  prose ("which expects", "which causes", "which are compatible") and emit
+  false-positive `UNEXPECTED_BINARIES are,causes,expects` failures that
+  cannot be fixed by changing application code. If you need to inspect shell
+  fragments embedded in Python strings, narrow the scope to `ast.Constant[str]`
+  values whose content matches a shell-command shape (e.g. starts with a
+  known binary token), and still extract only `shlex.split(value)[0]` — never
+  word-tokens from arbitrary positions in the string.
+- Mandatory regression self-check before emitting the sidecar: simulate the
+  audit against the current `custom_tests:` set (all `python3 tests/<file>.py`
+  in this repo). The simulated output MUST be exactly `BINARY_AUDIT_OK`. If
+  the simulated output contains any token that is an English connector word
+  (e.g. `are`, `is`, `not`, `causes`, `expects`, `which`, `that`, `the`),
+  the extraction logic is wrong — discard the regex/substring path and
+  re-derive binaries from structured AST nodes only. Document this self-check
+  result in the generator's reasoning trace.
+
 Validation coverage (implement only when concretely applicable):
 1. Build verification
 2. Startup and health checks
