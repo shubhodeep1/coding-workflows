@@ -1747,9 +1747,9 @@ jobs:
             git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
-          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
             echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+            git reset -q HEAD -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
           if [ "${PROTECTED_LEAKED}" = "true" ]; then
@@ -2386,8 +2386,8 @@ jobs:
           # Skipped on the workflow source repo itself, where these paths are
           # real source code.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
-            git checkout -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+            git reset -q HEAD -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+            git checkout -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
           fi
 
           # Restore stashed dirs so Codex has its full environment.
@@ -2855,9 +2855,9 @@ jobs:
               git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
-            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
               echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-              git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+              git reset -q HEAD -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
             if [ "${PROTECTED_LEAKED}" = "true" ]; then
