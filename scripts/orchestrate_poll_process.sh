@@ -5125,6 +5125,9 @@ recover_stalled_issue() {
         # PR exists AND the stall threshold is exceeded (rare), not per-cycle.
         _opr_review_comments="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_lpr_num}/reviews" \
           --jq '[.[] | select(.user != null and .user.login != null)] | sort_by(.user.login, (.submitted_at // "")) | group_by(.user.login) | map(last) | map(select(.state == "CHANGES_REQUESTED")) | length' 2>/dev/null || echo "0")"
+        if ! [[ "${_opr_review_comments}" =~ ^[0-9]+$ ]]; then
+          _opr_review_comments="0"
+        fi
         if [ "${_opr_review_comments}" -gt 0 ] && [ -n "${_opr_head_ref}" ]; then
           local _opr_autofix_rc=0
           _dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_autofix_rc=$?
