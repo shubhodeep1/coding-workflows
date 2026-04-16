@@ -2092,10 +2092,10 @@ jobs:
                 mismatch_found=false
                 while IFS= read -r line; do
                   [ -n "${line}" ] || continue
-                  t="$(printf '%s' "${line}" | grep -oP 'total issues listed[^0-9]*\K[0-9]+' || echo "")"
-                  a="$(printf '%s' "${line}" | grep -oP '(?<!already )issues applied[^0-9]*\K[0-9]+' || echo "")"
-                  aa="$(printf '%s' "${line}" | grep -oP 'issues already applied[^0-9]*\K[0-9]+' || echo "")"
-                  ig="$(printf '%s' "${line}" | grep -oP 'issues ignored[^0-9]*\K[0-9]+' || echo "")"
+                  t="$(printf '%s' "${line}" | grep -ioP 'total issues listed[^0-9]*\K[0-9]+' || echo "")"
+                  a="$(printf '%s' "${line}" | grep -ioP '(?<!already )issues applied[^0-9]*\K[0-9]+' || echo "")"
+                  aa="$(printf '%s' "${line}" | grep -ioP 'issues already applied[^0-9]*\K[0-9]+' || echo "")"
+                  ig="$(printf '%s' "${line}" | grep -ioP 'issues ignored[^0-9]*\K[0-9]+' || echo "")"
 
                   # Skip entries that don't have parseable counts (not audit lines)
                   [ -n "${t}" ] || continue
