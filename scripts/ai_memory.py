@@ -39,6 +39,13 @@ def _print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=True, sort_keys=True))
 
 
+def _emit_telemetry(op: str, **fields: Any) -> None:
+    """Emit a structured telemetry line to stderr for log analysis visibility."""
+    entry: dict[str, Any] = {"op": op}
+    entry.update(fields)
+    print(f"AI_MEMORY_TELEMETRY: {json.dumps(entry, ensure_ascii=True, sort_keys=True)}", file=sys.stderr)
+
+
 def _require_nonempty(value: str, field_name: str) -> str:
     text = (value or "").strip()
     if not text:
@@ -106,6 +113,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
         else:
             print(context, end="")
         _print_json({"ok": True, "enabled": False, "records_selected": 0, "estimated_tokens": 0})
+        _emit_telemetry("retrieve", ok=True, enabled=False, records_selected=0)
         return 0
 
     repo_root = _resolve_repo_root(args.repo_root)
@@ -125,6 +133,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             else:
                 print(context, end="")
             _print_json({"ok": True, "enabled": False, "records_selected": 0, "estimated_tokens": 0, "warning": str(exc)})
+            _emit_telemetry("retrieve", ok=True, enabled=False, records_selected=0, warning="branch_unavailable")
             return 0
         memory_root = _resolve_memory_root(branch_dir, args.memory_root)
         profiles_path = branch_dir / args.retrieval_profiles
@@ -165,7 +174,17 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
                 "records_selected": len(result.selected_record_ids),
                 "record_ids": result.selected_record_ids,
                 "estimated_tokens": result.estimated_tokens,
+                "keyword_method": result.keyword_method,
             }
+        )
+        _emit_telemetry(
+            "retrieve",
+            ok=True,
+            enabled=True,
+            role=result.role,
+            records_selected=len(result.selected_record_ids),
+            estimated_tokens=result.estimated_tokens,
+            keyword_method=result.keyword_method,
         )
         return 0
     finally:
@@ -206,6 +225,14 @@ def cmd_record_run_event(args: argparse.Namespace) -> int:
         operation=_op,
     )
     _print_json({"ok": True, **result})
+    _emit_telemetry(
+        "record-run-event",
+        ok=True,
+        workflow=args.workflow,
+        event_type=args.event_type,
+        did_push=result.get("did_push", False),
+        push_attempts=result.get("push_attempts", 0),
+    )
     return 0
 
 
@@ -267,7 +294,18 @@ def cmd_record_candidate(args: argparse.Namespace) -> int:
         commit_message=f"ai-memory: record candidate [{args.category}]",
         operation=_op,
     )
+    op_result = result.get("operation_result") or {}
+    record = op_result.get("record") or {}
     _print_json({"ok": True, **result})
+    _emit_telemetry(
+        "record-candidate",
+        ok=True,
+        category=args.category,
+        record_id=record.get("record_id"),
+        issue_number=_safe_int(args.issue_number),
+        did_push=result.get("did_push", False),
+        push_attempts=result.get("push_attempts", 0),
+    )
     return 0
 
 
@@ -333,7 +371,16 @@ def cmd_promote(args: argparse.Namespace) -> int:
         commit_message="ai-memory: promote candidates",
         operation=_op,
     )
+    op_result = result.get("operation_result") or {}
     _print_json({"ok": True, **result})
+    _emit_telemetry(
+        "promote",
+        ok=True,
+        promoted=len(op_result.get("promoted") or []),
+        rejected=len(op_result.get("rejected") or []),
+        superseded=len(op_result.get("superseded") or []),
+        did_push=result.get("did_push", False),
+    )
     return 0
 
 
@@ -384,7 +431,16 @@ def cmd_finalize_task(args: argparse.Namespace) -> int:
         commit_message=f"ai-memory: finalize issue-{args.issue_number}",
         operation=_op,
     )
+    op_result = result.get("operation_result") or {}
+    lineage = op_result.get("lineage") or {}
     _print_json({"ok": True, **result})
+    _emit_telemetry(
+        "finalize-task",
+        ok=True,
+        issue_number=_safe_int(args.issue_number),
+        final_state=lineage.get("state"),
+        did_push=result.get("did_push", False),
+    )
     return 0
 
 
@@ -414,7 +470,19 @@ def cmd_compact(args: argparse.Namespace) -> int:
         commit_message=f"ai-memory: compact {month}",
         operation=_op,
     )
+    op_result = result.get("operation_result") or {}
+    summary = op_result.get("summary") or {}
     _print_json({"ok": True, **result})
+    _emit_telemetry(
+        "compact",
+        ok=True,
+        month=month,
+        archived_candidates=summary.get("archived_candidates", 0),
+        archived_ledgers=summary.get("archived_ledgers", 0),
+        removed_candidates=summary.get("removed_candidates", 0),
+        removed_ledgers=summary.get("removed_ledgers", 0),
+        did_push=result.get("did_push", False),
+    )
     return 0
 
 
@@ -447,6 +515,7 @@ def cmd_processed_command_check(args: argparse.Namespace) -> int:
                 "entry": entry,
             }
         )
+        _emit_telemetry("processed-command-check", ok=True, enabled=True, exists=bool(entry))
         return 0
     except MemoryGitError as exc:
         error_text = str(exc)
@@ -498,6 +567,7 @@ def cmd_processed_command_list(args: argparse.Namespace) -> int:
                 "count": len(entries),
             }
         )
+        _emit_telemetry("processed-command-list", ok=True, enabled=True, count=len(entries))
         return 0
     except MemoryGitError as exc:
         error_text = str(exc)
@@ -570,6 +640,14 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
                 "result": result,
                 "entries_considered": len(entries),
             }
+        )
+        _emit_telemetry(
+            "clarify-loop-guard",
+            ok=True,
+            enabled=True,
+            blocked=bool(result.get("blocked")),
+            cycle=_safe_int(result.get("cycle")),
+            entries_considered=len(entries),
         )
         return 0
     except MemoryGitError as exc:
@@ -657,7 +735,15 @@ def cmd_processed_command_claim(args: argparse.Namespace) -> int:
             commit_message=f"ai-memory: claim processed command [{args.command}]",
             operation=_op,
         )
+        op_result = result.get("operation_result") or {}
         _print_json({"ok": True, **result})
+        _emit_telemetry(
+            "processed-command-claim",
+            ok=True,
+            command=args.command,
+            claimed=op_result.get("claimed", False),
+            did_push=result.get("did_push", False),
+        )
         return 0
     except MemoryGitError as exc:
         # Concurrent claims on different runners can race on the same entry file.
@@ -730,6 +816,13 @@ def cmd_processed_command_complete(args: argparse.Namespace) -> int:
         operation=_op,
     )
     _print_json({"ok": True, **result})
+    _emit_telemetry(
+        "processed-command-complete",
+        ok=True,
+        command=args.command,
+        status=args.status,
+        did_push=result.get("did_push", False),
+    )
     return 0
 
 
