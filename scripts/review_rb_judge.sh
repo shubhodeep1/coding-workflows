@@ -251,7 +251,7 @@ for attempt in 1 2; do
     echo "::warning::Judge attempt ${attempt}/2 codex exec failed (rc=$?)."
     if [ -s "${JUDGE_STDERR_FILE}" ]; then
       echo "--- judge stderr (attempt ${attempt}) ---"
-      head -50 "${JUDGE_STDERR_FILE}"
+      cat "${JUDGE_STDERR_FILE}"
       echo "---"
     fi
   fi
@@ -269,7 +269,7 @@ if [ "${JUDGE_SUCCESS}" != "true" ]; then
   echo "::warning::Review-blocked judge LLM execution failed after 2 attempts — needs human intervention."
   if [ -s "${JUDGE_STDERR_FILE}" ]; then
     echo "::group::Last judge stderr"
-    head -100 "${JUDGE_STDERR_FILE}"
+    cat "${JUDGE_STDERR_FILE}"
     echo "::endgroup::"
   fi
   echo "judge_skip_reason=llm_failed" >> "$GITHUB_OUTPUT"
