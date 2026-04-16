@@ -5051,13 +5051,17 @@ recover_stalled_issue() {
 
         # Sub-case 1: PR has merge conflicts → dispatch conflict resolver
         if [ "${_opr_mergeable}" = "false" ] && [ -n "${_opr_head_ref}" ]; then
-          echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict pr=${_lpr_num} phase=${phase} action=dispatch_conflict_resolver"
-          add_healing_note "Issue #${issue_num}: open PR #${_lpr_num} has merge conflicts (phase=${phase}); dispatching conflict resolver instead of '${action}'"
-          STALL_HEALING_CHANGED=true
           local _opr_dispatch_rc=0
           _dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_dispatch_rc=$?
           if [ "${_opr_dispatch_rc}" -eq 0 ]; then
+            echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict pr=${_lpr_num} phase=${phase} action=dispatch_conflict_resolver"
+            add_healing_note "Issue #${issue_num}: open PR #${_lpr_num} has merge conflicts (phase=${phase}); dispatching conflict resolver instead of '${action}'"
+            STALL_HEALING_CHANGED=true
             tg_notify "Stall recovery: PR #${_lpr_num} for issue #${issue_num} has merge conflicts. Dispatched conflict resolver."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
+          elif [ "${_opr_dispatch_rc}" -eq 2 ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=open_pr_merge_conflict_dispatch_skipped pr=${_lpr_num} phase=${phase} action=${action}"
+          else
+            echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict_dispatch_failed pr=${_lpr_num} phase=${phase} action=${action} rc=${_opr_dispatch_rc}"
           fi
           return 1  # Signal: corrective action taken, don't increment stall counter
         fi
@@ -5069,7 +5073,7 @@ recover_stalled_issue() {
         # review state.  This is acceptable because it only fires when an open
         # PR exists AND the stall threshold is exceeded (rare), not per-cycle.
         _opr_review_comments="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_lpr_num}/reviews" \
-          --jq '[.[] | select(.state == "CHANGES_REQUESTED")] | length' 2>/dev/null || echo "0")"
+          --jq '[.[] | select(.user != null and .user.login != null)] | sort_by(.user.login, (.submitted_at // "")) | group_by(.user.login) | map(last) | map(select(.state == "CHANGES_REQUESTED")) | length' 2>/dev/null || echo "0")"
         if [ "${_opr_review_comments}" -gt 0 ] && [ -n "${_opr_head_ref}" ]; then
           echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_changes_requested pr=${_lpr_num} phase=${phase} action=dispatch_autofix"
           add_healing_note "Issue #${issue_num}: open PR #${_lpr_num} has ${_opr_review_comments} review(s) requesting changes (phase=${phase}); dispatching autofix instead of '${action}'"

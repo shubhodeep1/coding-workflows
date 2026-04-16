@@ -749,7 +749,7 @@ jobs:
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Data-provision guard
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.run_codex.outcome == 'success'
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true')
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -912,7 +912,8 @@ jobs:
           if [ "${LOOP_BLOCKED}" != "true" ] && [ "${SKIP_AUTO_ANSWER}" != "true" ]; then
             COMMENT_COUNT_GUARD=0
             if [ -f "${THREAD_HISTORY_FILE:-/dev/null}" ]; then
-              COMMENT_COUNT_GUARD="$(grep -c '\[auto-answered-by-orchestrator\]' "${THREAD_HISTORY_FILE}" 2>/dev/null || echo "0")"
+              COMMENT_COUNT_GUARD="$(grep -c '\[auto-answered-by-orchestrator\]' "${THREAD_HISTORY_FILE}" 2>/dev/null || true)"
+              COMMENT_COUNT_GUARD="${COMMENT_COUNT_GUARD:-0}"
             fi
             if [ "${COMMENT_COUNT_GUARD}" -ge "${MAX_CYCLES}" ]; then
               echo "::warning::Backup loop guard: found ${COMMENT_COUNT_GUARD} prior auto-answer comments (MAX_CYCLES=${MAX_CYCLES}). Blocking to prevent runaway loop."

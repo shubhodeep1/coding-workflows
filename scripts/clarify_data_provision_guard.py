@@ -56,7 +56,7 @@ def _parse_questions(clarification_text: str) -> dict[str, dict[str, str]]:
 
 	for line in clarification_text.splitlines():
 		# Detect question header: **Q1: ...** or Q1: ...
-		qid_match = re.match(r"\*{0,2}(Q\d+)\s*:", line)
+		qid_match = re.match(r"\s*\*{0,2}(Q\d+)\s*:", line)
 		if qid_match:
 			current_qid = qid_match.group(1)
 			questions[current_qid] = {}
