@@ -67,6 +67,16 @@
 						"minimum": 1,
 						"maximum": 10,
 						"description": "Lower is higher priority. Used for ordering within the same wave."
+					},
+					"files_touched": {
+						"type": "array",
+						"maxItems": 50,
+						"items": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 512
+						},
+						"description": "Optional list of repository-relative file paths this issue intends to edit or create. Used by the planner-side partition guard to detect sibling overlap and auto-serialize conflicting issues into later waves. Omit or leave empty when the scope is not known at decomposition time; the poller will still enforce byte-level partitioning via git merge-tree at merge time."
 					}
 				}
 			}

@@ -149,6 +149,11 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 
 ## 4. Environment Variables
 
+<!-- anchor:agents-env-vars -->
+<!-- Parallel orchestrator sub-issues: append new env-var bullets to the
+     bottom of this list under this anchor. Do NOT reorder existing
+     bullets or reflow paragraphs — parallel edits that rewrite
+     existing bullets here cause merge conflicts. -->
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
@@ -164,6 +169,8 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Orchestrator clarify loop guard: `ORCHESTRATOR_MAX_CLARIFY_CYCLES` (default `3`) caps auto-answer clarification cycles before escalating to `ai:blocked`.
 - Implementation no-op reissue cap: `MAX_IMPL_NOOP_REISSUES` (default `2`) limits automatic re-issues for `ai:implementation-failed` before the poller closes the issue and lets the judge verify whether work is already present.
 - GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
+- Orchestrator merge-conflict probe: `MAX_MERGE_DEFERRALS` (default `5`) caps how many consecutive poll cycles a single sub-PR may be deferred by `probe_sibling_merge_conflicts` in `scripts/orchestrate_poll_process.sh`. The probe uses local `git merge-tree --write-tree --name-only` against every other open sibling PR targeting the same integration branch, spending zero GH API calls per probe (one batched `gh pr list` + one batched `git fetch` per cycle). Exceeding the threshold emits a Telegram WARNING but does not fail the PR.
+- Orchestrator auto-learning hot-file registry: consumer repos get partitioning with ZERO manual setup. On every detected sibling conflict, the poller appends a record to `ai-memory/orchestrator/merge_conflicts.jsonl` on the `ai-memory` branch (git protocol only, 0 GH API calls, auto-creates the branch via `memory_ensure_branch`). On the next orchestrator run, the planner step in `.github/workflows/orchestrate.yml` does `git fetch --depth=50 origin ai-memory` (git protocol, 0 GH API calls), reads the JSONL via `git show`, and unions telemetry-learned files meeting `ORCHESTRATOR_HOT_FILE_MIN_EVENTS` (default `3`) across `ORCHESTRATOR_HOT_FILE_MIN_PROJECTS` (default `2`) distinct projects within `ORCHESTRATOR_HOT_FILE_WINDOW_DAYS` (default `90`) with the optional committed seed at `.github/ai/hot_files.json`. The committed seed is OPTIONAL — consumer repos do not need to create it. Both sources missing is a valid state: the partition guard degrades to pairwise file-touch overlap detection and the poller probe still catches byte-level conflicts.
 
 ## 4a. Post-Codex Recovery Docs Sync
 

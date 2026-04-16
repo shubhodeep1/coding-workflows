@@ -47,7 +47,7 @@ jobs:
       ISSUE_URL: ${{ github.event.issue.html_url }}
       ISSUE_TITLE: ${{ github.event.issue.title }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
-      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY_RESPOND || 'low' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY_RESPOND || 'medium' }}
       ORCHESTRATOR_MAX_CLARIFY_CYCLES: ${{ vars.ORCHESTRATOR_MAX_CLARIFY_CYCLES || '3' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
 
@@ -577,7 +577,7 @@ jobs:
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY_RESPOND || '15' }}
+          TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY_RESPOND || '25' }}
         run: |
           set -euo pipefail
 
@@ -604,6 +604,24 @@ jobs:
             cat "${RUNTIME_DIR}/clarification_comment.txt"
           } > "${CODEX_PROMPT_FILE}"
 
+          # Inject prior clarify-cycle context if available.
+          # NOTE: memory_clarify_cycle_history should be implemented in
+          # scripts/memory_helpers.sh as a follow-up.
+          if [ -f scripts/memory_helpers.sh ]; then
+            source scripts/memory_helpers.sh
+            PRIOR_CYCLES="$(memory_clarify_cycle_history \
+              --issue-number "${ISSUE_NUMBER}" \
+              --max-cycles 5 2>/dev/null || true)"
+            if [ -n "${PRIOR_CYCLES}" ] && [ "${PRIOR_CYCLES}" != "null" ] && [ "${PRIOR_CYCLES}" != "[]" ]; then
+              {
+                echo "=== PRIOR CLARIFY CYCLES ==="
+                echo "The following auto-answer cycles have already occurred on this issue."
+                echo "Do NOT repeat a prior answer that failed to unblock planning."
+                echo "${PRIOR_CYCLES}"
+              } >> "${CODEX_PROMPT_FILE}"
+            fi
+          fi
+
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex clarify-respond attempt ${attempt}/${max_attempts}..."
@@ -626,6 +644,73 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Self-critique pass for non-letter decisions
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          # Self-critique pass for non-letter decisions
+          HAS_NON_LETTER="false"
+          if grep -qE '^Q[0-9]+:\s*(DERIVE_FROM_REPO|SYNTHESIZE|REFRAME|ESCALATE)' "${CODEX_OUTPUT_FILE}"; then
+            HAS_NON_LETTER="true"
+          fi
+
+          if [ "${HAS_NON_LETTER}" = "true" ]; then
+            echo "Non-letter decisions detected; running self-critique pass..."
+
+            {
+              echo "You are reviewing an autonomous clarify-resolve decision."
+              echo "The original clarification questions and the responder's decisions follow."
+              echo
+              echo "=== CLARIFICATION QUESTIONS ==="
+              cat "${RUNTIME_DIR}/clarification_comment.txt"
+              echo
+              echo "=== RESPONDER DECISIONS ==="
+              cat "${CODEX_OUTPUT_FILE}"
+              echo
+              echo "Review checklist:"
+              echo "1. Did the responder avoid fabricating data? Every derivation must trace to a specific repo file."
+              echo "2. Is each equivalence argument sound? Does the substitute genuinely satisfy the original intent?"
+              echo "3. Is the execution plan actually executable by the planner/implementer with repo access only?"
+              echo "4. Are synthetic fixtures deterministic and well-specified?"
+              echo "5. If ESCALATE was used, are rungs 1-3 genuinely infeasible?"
+              echo
+              echo "Output exactly one of:"
+              echo "VERDICT: APPROVE"
+              echo "VERDICT: REJECT"
+              echo "REASON: <1-2 sentences if REJECT>"
+            } > "${RUNTIME_DIR}/critic_prompt.txt"
+
+            CRITIC_MODEL="${MODEL_EDITOR}"
+            if cat "${RUNTIME_DIR}/critic_prompt.txt" | codex exec \
+              --model "${CRITIC_MODEL}" --full-auto > "${RUNTIME_DIR}/critic_output.txt" 2>/dev/null; then
+              if grep -q 'VERDICT: REJECT' "${RUNTIME_DIR}/critic_output.txt"; then
+                echo "::warning::Self-critique rejected the decision. Appending critique and re-running."
+                CRITIC_REASON="$(grep -A5 'REASON:' "${RUNTIME_DIR}/critic_output.txt" || echo "No reason provided")"
+                {
+                  cat "${CODEX_PROMPT_FILE}"
+                  echo
+                  echo "=== SELF-CRITIQUE FEEDBACK (your previous output was rejected) ==="
+                  echo "${CRITIC_REASON}"
+                  echo "Revise your decisions to address this feedback."
+                } > "${CODEX_PROMPT_FILE}.v2"
+
+                if cat "${CODEX_PROMPT_FILE}.v2" | codex exec \
+                  --model "${MODEL_EDITOR}" --full-auto > "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
+                  echo "Revised decision produced after self-critique."
+                else
+                  echo "::warning::Revised Codex call failed; using original output."
+                fi
+              else
+                echo "Self-critique approved the decision."
+              fi
+            else
+              echo "::warning::Critic call failed; proceeding with original output."
+            fi
+          fi
 
       - name: Semantic cache store
         if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
@@ -703,6 +788,12 @@ jobs:
           if [ -z "${ANSWERS_BODY}" ]; then
             echo "::error::Codex output is empty; cannot post answer."
             exit 1
+          fi
+
+          # Detect ESCALATE decisions — treat same as loop-guard block
+          HAS_ESCALATE="false"
+          if printf '%s' "${ANSWERS_BODY}" | grep -qE '^Q[0-9]+:\s*ESCALATE'; then
+            HAS_ESCALATE="true"
           fi
 
           if [ -f scripts/memory_helpers.sh ]; then
@@ -785,7 +876,7 @@ jobs:
             fi
           fi
 
-          if [ "${LOOP_BLOCKED}" = "true" ]; then
+          if [ "${LOOP_BLOCKED}" = "true" ] || [ "${HAS_ESCALATE}" = "true" ]; then
             if [ -f scripts/label_helpers.sh ]; then
               source scripts/label_helpers.sh
               ensure_label_exists "ai:blocked" "${{ github.repository }}"
@@ -794,17 +885,32 @@ jobs:
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --add-label 'ai:blocked' --remove-label 'ai:planning' --remove-label 'ai:clarification' >/dev/null 2>&1 || true
 
-            {
-              echo "Clarification loop guard escalation for issue #${ISSUE_NUMBER}."
-              echo
-              echo "Auto-answer has been paused to prevent repeated clarification loops."
-              echo
-              echo "- Current clarify comment ID: ${CLARIFICATION_COMMENT_ID}"
-              echo "- Previous clarify comment ID: ${PREVIOUS_CLARIFY_COMMENT_ID}"
-              echo "- Previous auto-answer comment ID: ${PREVIOUS_ANSWER_COMMENT_ID}"
-              echo "- Loop reason: ${LOOP_REASON}"
-              echo "- Cycle: ${CYCLE}/${MAX_CYCLES}"
-            } > "${RUNTIME_DIR}/loop_break_comment.md"
+            # Build escalation comment — ESCALATE-triggered vs loop-guard-triggered
+            if [ "${HAS_ESCALATE}" = "true" ] && [ "${LOOP_BLOCKED}" != "true" ]; then
+              ESCALATION_SECTION="$(printf '%s' "${ANSWERS_BODY}" | sed -n '/^ESCALATION/,$ p')"
+              {
+                echo "Autonomous resolution not possible for issue #${ISSUE_NUMBER}."
+                echo
+                echo "The clarify-resolve phase determined that one or more questions require data that cannot be derived from the repository."
+                echo
+                echo "${ESCALATION_SECTION}"
+                echo
+                echo "- Clarify comment ID: ${CLARIFICATION_COMMENT_ID}"
+                echo "- Cycle: ${CYCLE}/${MAX_CYCLES}"
+              } > "${RUNTIME_DIR}/loop_break_comment.md"
+            else
+              {
+                echo "Clarification loop guard escalation for issue #${ISSUE_NUMBER}."
+                echo
+                echo "Auto-answer has been paused to prevent repeated clarification loops."
+                echo
+                echo "- Current clarify comment ID: ${CLARIFICATION_COMMENT_ID}"
+                echo "- Previous clarify comment ID: ${PREVIOUS_CLARIFY_COMMENT_ID}"
+                echo "- Previous auto-answer comment ID: ${PREVIOUS_ANSWER_COMMENT_ID}"
+                echo "- Loop reason: ${LOOP_REASON}"
+                echo "- Cycle: ${CYCLE}/${MAX_CYCLES}"
+              } > "${RUNTIME_DIR}/loop_break_comment.md"
+            fi
 
             LOOP_BREAK_RESPONSE="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
               -f body="$(cat "${RUNTIME_DIR}/loop_break_comment.md")" || true)"
