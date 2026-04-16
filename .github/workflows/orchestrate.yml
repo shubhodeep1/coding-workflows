@@ -503,7 +503,7 @@ jobs:
             marker_sample = match.group(0).rstrip() if match else ""
             print(f"MARKER_FOUND={shlex.quote(marker_found)}")
             print(f"MARKER_SAMPLE={shlex.quote(marker_sample)}")
-            PY
+          PY
           )"
           MARKER_SAMPLE="${MARKER_SAMPLE//$'\r'/ }"
           MARKER_SAMPLE="${MARKER_SAMPLE//$'\n'/ }"
