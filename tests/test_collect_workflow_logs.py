@@ -684,7 +684,7 @@ print(json.dumps({}))
 		assert not (log_output_dir / "recent" / "owner_repo" / "validate" / "204").exists()
 
 		store_after = json.loads(store_file.read_text(encoding="utf-8"))
-		assert store_after["log_call_counts"] == {"201": 2, "202": 2}
+		assert store_after["log_call_counts"] == {"201": 1, "202": 1}
 
 
 # ---------------------------------------------------------------------------

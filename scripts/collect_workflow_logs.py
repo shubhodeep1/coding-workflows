@@ -369,6 +369,31 @@ def extract_log_excerpts(log_archive: bytes, max_chars: int = LOG_EXCERPT_MAX_CH
     return excerpts
 
 
+def _fetch_run_log_archive(
+    repo: str,
+    run_id: int,
+    *,
+    token: str,
+    cache: dict[tuple[str, int], bytes | Exception] | None = None,
+) -> bytes:
+    identity = (repo, run_id)
+    if cache is not None and identity in cache:
+        cached = cache[identity]
+        if isinstance(cached, Exception):
+            raise cached
+        return cached
+
+    try:
+        payload = gh_api_bytes(_build_logs_endpoint(repo, run_id), token=token)
+    except Exception as exc:  # noqa: BLE001
+        if cache is not None:
+            cache[identity] = exc
+        raise
+    if cache is not None:
+        cache[identity] = payload
+    return payload
+
+
 def list_run_log_excerpts(
     repo: str,
     run_id: int,
@@ -376,7 +401,7 @@ def list_run_log_excerpts(
     token: str,
     max_chars: int = LOG_EXCERPT_MAX_CHARS,
 ) -> list[dict[str, str]]:
-    payload = gh_api_bytes(_build_logs_endpoint(repo, run_id), token=token)
+    payload = _fetch_run_log_archive(repo, run_id, token=token)
     return extract_log_excerpts(payload, max_chars=max_chars)
 
 
@@ -437,6 +462,23 @@ def compute_run_metrics(
         "duration_seconds": duration_seconds,
         "failure_point": failure_point,
     }
+
+
+def _dedupe_errors(errors: list[dict[str, str]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for error in errors:
+        key = (
+            str(error.get("repository") or ""),
+            str(error.get("run_id") or ""),
+            str(error.get("scope") or ""),
+            str(error.get("message") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(error)
+    return deduped
 
 
 def _percentile(values: list[int], percentile: int) -> float:
@@ -668,6 +710,7 @@ def export_categorized_logs(
     max_log_runs: int,
     token: str,
     errors: list[dict[str, str]],
+    log_archive_cache: dict[tuple[str, int], bytes | Exception] | None = None,
 ) -> None:
     categories = select_runs_for_log_export_categories(runs, max_log_runs)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -692,7 +735,12 @@ def export_categorized_logs(
         if not repository or run_id <= 0:
             continue
         try:
-            payload = gh_api_bytes(_build_logs_endpoint(repository, run_id), token=token)
+            payload = _fetch_run_log_archive(
+                repository,
+                run_id,
+                token=token,
+                cache=log_archive_cache,
+            )
             full_logs_by_identity[identity] = extract_full_logs(payload)
         except Exception as exc:  # noqa: BLE001
             errors.append(
@@ -755,6 +803,7 @@ def main(argv: list[str] | None = None) -> int:
     errors: list[dict[str, str]] = []
     run_rows: list[dict[str, Any]] = []
     successful_repo_queries = 0
+    log_archive_cache: dict[tuple[str, int], bytes | Exception] | None = {} if args.log_output_dir else None
 
     for repo in repositories:
         try:
@@ -815,7 +864,11 @@ def main(argv: list[str] | None = None) -> int:
         if not repository or run_id <= 0:
             continue
         try:
-            run["log_excerpts"] = list_run_log_excerpts(repository, run_id, token=token)
+            if log_archive_cache is not None:
+                payload = _fetch_run_log_archive(repository, run_id, token=token, cache=log_archive_cache)
+                run["log_excerpts"] = extract_log_excerpts(payload)
+            else:
+                run["log_excerpts"] = list_run_log_excerpts(repository, run_id, token=token)
         except Exception as exc:  # noqa: BLE001
             errors.append(
                 {
@@ -834,8 +887,10 @@ def main(argv: list[str] | None = None) -> int:
             max_log_runs=args.max_log_runs,
             token=token,
             errors=errors,
+            log_archive_cache=log_archive_cache,
         )
 
+    errors = _dedupe_errors(errors)
     report = build_report(repositories, run_rows, errors)
     _write_json_atomic(Path(args.output), report)
     if args.log_output_dir:
