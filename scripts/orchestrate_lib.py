@@ -81,6 +81,48 @@ def validate_decomposition(data: dict[str, Any]) -> dict[str, Any]:
 		if not isinstance(priority, int) or priority < 1 or priority > 10:
 			raise OrchestrateError(f"issues[{idx}].priority must be 1-10, got {priority!r}")
 
+		# files_touched is optional. When present, it must be an array of
+		# non-empty repository-relative path strings with at most 50 entries.
+		# Duplicates within a single issue are dropped silently (the partition
+		# guard treats them as a set).
+		ft_raw = issue.get("files_touched", None)
+		if ft_raw is None:
+			# Normalize missing key to empty list so downstream code can treat
+			# it uniformly without re-checking for absence.
+			issue["files_touched"] = []
+		else:
+			if not isinstance(ft_raw, list):
+				raise OrchestrateError(f"issues[{idx}].files_touched must be an array if present")
+			if len(ft_raw) > 50:
+				raise OrchestrateError(
+					f"issues[{idx}].files_touched has {len(ft_raw)} entries (max 50)"
+				)
+			cleaned: list[str] = []
+			seen: set[str] = set()
+			for fidx, raw_path in enumerate(ft_raw):
+				if not isinstance(raw_path, str):
+					raise OrchestrateError(
+						f"issues[{idx}].files_touched[{fidx}] must be a string"
+					)
+				p = raw_path.strip()
+				if not p:
+					raise OrchestrateError(
+						f"issues[{idx}].files_touched[{fidx}] must not be empty"
+					)
+				if len(p) > 512:
+					raise OrchestrateError(
+						f"issues[{idx}].files_touched[{fidx}] exceeds 512 chars"
+					)
+				# Normalize to forward slashes and strip leading "./".
+				p = p.replace("\\", "/")
+				while p.startswith("./"):
+					p = p[2:]
+				if p in seen:
+					continue
+				seen.add(p)
+				cleaned.append(p)
+			issue["files_touched"] = cleaned
+
 	edges = data.get("dependency_edges", [])
 	if not isinstance(edges, list):
 		raise OrchestrateError("dependency_edges must be an array")
@@ -127,15 +169,422 @@ def _detect_cycles(issue_ids: set[str], edges: list[dict[str, str]]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Hot-file registry loader
+# ---------------------------------------------------------------------------
+
+DEFAULT_HOT_FILES_PATH = ".github/ai/hot_files.json"
+
+
+def load_hot_files(path: str | Path | None = None) -> set[str]:
+	"""Load the hot-file registry used by the partition guard.
+
+	Consumer repositories opt into hot-file partitioning by committing a JSON
+	file at ``.github/ai/hot_files.json`` with the shape:
+
+		{"hot_files": ["path/one", "path/two", ...]}
+
+	If the file is absent, malformed, or unreadable, the hot-file set is
+	empty and the partition guard falls back to straight pairwise overlap
+	detection without the multi-sibling-per-hot-file rule. This keeps new
+	consumer repos working out of the box with no config.
+	"""
+	target = Path(path) if path else Path(DEFAULT_HOT_FILES_PATH)
+	try:
+		with target.open("r", encoding="utf-8") as f:
+			data = json.load(f)
+	except (FileNotFoundError, PermissionError, OSError):
+		return set()
+	except json.JSONDecodeError:
+		return set()
+
+	raw_list = data.get("hot_files") if isinstance(data, dict) else None
+	if not isinstance(raw_list, list):
+		return set()
+
+	cleaned: set[str] = set()
+	for item in raw_list:
+		if not isinstance(item, str):
+			continue
+		p = item.strip().replace("\\", "/")
+		while p.startswith("./"):
+			p = p[2:]
+		if p:
+			cleaned.add(p)
+	return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Effective hot-file resolution (committed seed + learned telemetry)
+# ---------------------------------------------------------------------------
+
+DEFAULT_TELEMETRY_WINDOW_DAYS = 90
+DEFAULT_TELEMETRY_MIN_EVENTS = 3
+DEFAULT_TELEMETRY_MIN_PROJECTS = 2
+
+
+def compute_effective_hot_files(
+	committed_hot_files: set[str],
+	telemetry_jsonl_path: str | Path | None = None,
+	window_days: int = DEFAULT_TELEMETRY_WINDOW_DAYS,
+	min_events: int = DEFAULT_TELEMETRY_MIN_EVENTS,
+	min_distinct_projects: int = DEFAULT_TELEMETRY_MIN_PROJECTS,
+	now_ts: int | None = None,
+) -> tuple[set[str], dict[str, Any]]:
+	"""Compose the *effective* hot-file set from two sources:
+
+	1. **Committed seed** — optional per-consumer-repo JSON at
+	   ``.github/ai/hot_files.json`` (already loaded via
+	   :func:`load_hot_files`). This is a human override, NOT required.
+	2. **Learned telemetry** — an append-only JSONL at
+	   ``ai-memory/orchestrator/merge_conflicts.jsonl`` on the
+	   ``ai-memory`` branch, written by the poller every time
+	   :func:`probe_sibling_merge_conflicts` in
+	   ``orchestrate_poll_process.sh`` detects a real byte-level
+	   conflict. Records have the shape::
+
+	       {"ts": <epoch>, "project": "<tracking_issue>", "pr_a": "<num>",
+	        "pr_b": "<num>", "paths": ["path/a", "path/b", ...]}
+
+	Promotion rule (Option D from the design thread): a path is
+	"learned hot" when it appears in at least ``min_events`` distinct
+	conflict events across at least ``min_distinct_projects`` distinct
+	orchestrator projects within the last ``window_days``. The window
+	naturally handles stale demotion — files with zero recent events
+	drop out of the learned set on the next run without any persistent
+	state needed.
+
+	Returns ``(effective_set, audit)`` where ``audit`` is a
+	JSON-serialisable dict so the orchestrate.yml partition-guard step
+	can log which files were promoted and why.
+	"""
+	now_ts = now_ts if now_ts is not None else int(time.time())
+	audit: dict[str, Any] = {
+		"committed_seed_count": len(committed_hot_files),
+		"telemetry_events_total": 0,
+		"telemetry_events_in_window": 0,
+		"window_days": window_days,
+		"min_events": min_events,
+		"min_distinct_projects": min_distinct_projects,
+		"learned_count": 0,
+		"learned_files": [],
+		"telemetry_source": None,
+	}
+	effective = set(committed_hot_files)
+
+	if not telemetry_jsonl_path:
+		return effective, audit
+
+	p = Path(telemetry_jsonl_path)
+	audit["telemetry_source"] = str(p)
+	try:
+		if not p.exists() or p.stat().st_size == 0:
+			return effective, audit
+	except OSError:
+		return effective, audit
+
+	window_start = now_ts - (window_days * 86400)
+
+	# path -> {"events": int, "projects": set[str]}
+	tallies: dict[str, dict[str, Any]] = {}
+	try:
+		with p.open("r", encoding="utf-8") as f:
+			for raw_line in f:
+				line = raw_line.strip()
+				if not line:
+					continue
+				try:
+					rec = json.loads(line)
+				except json.JSONDecodeError:
+					continue
+				if not isinstance(rec, dict):
+					continue
+				audit["telemetry_events_total"] += 1
+				ts = rec.get("ts")
+				try:
+					ts_int = int(ts)
+				except (TypeError, ValueError):
+					continue
+				if ts_int < window_start:
+					continue
+				audit["telemetry_events_in_window"] += 1
+				project = str(rec.get("project", "") or "").strip()
+				raw_paths = rec.get("paths")
+				if not isinstance(raw_paths, list):
+					continue
+				for raw_path in raw_paths:
+					if not isinstance(raw_path, str):
+						continue
+					path = raw_path.strip().replace("\\", "/")
+					while path.startswith("./"):
+						path = path[2:]
+					if not path:
+						continue
+					entry = tallies.setdefault(path, {"events": 0, "projects": set()})
+					entry["events"] += 1
+					if project:
+						entry["projects"].add(project)
+	except OSError:
+		return effective, audit
+
+	learned_records: list[dict[str, Any]] = []
+	for path, t in tallies.items():
+		if t["events"] >= min_events and len(t["projects"]) >= min_distinct_projects:
+			effective.add(path)
+			learned_records.append({
+				"path": path,
+				"events": t["events"],
+				"distinct_projects": len(t["projects"]),
+			})
+
+	# Sort learned records for stable audit logs
+	learned_records.sort(key=lambda r: (-r["events"], r["path"]))
+	audit["learned_count"] = len(learned_records)
+	audit["learned_files"] = learned_records
+	return effective, audit
+
+
+# ---------------------------------------------------------------------------
+# Partition guard: detect and auto-serialize sibling file-touch overlaps
+# ---------------------------------------------------------------------------
+
+def _parallel_groups_from_edges(
+	issues_by_id: dict[str, dict[str, Any]],
+	edges: list[dict[str, str]],
+) -> list[list[str]]:
+	"""Return the topological wave grouping (list of lists of issue IDs).
+
+	This is the pure-ordering helper used by the partition guard. It mirrors
+	the logic of :func:`compute_waves` but returns IDs only and skips issue
+	object materialisation so we can run it repeatedly during auto-serialize
+	without mutating state.
+	"""
+	in_degree: dict[str, int] = {iid: 0 for iid in issues_by_id}
+	dependents: dict[str, list[str]] = {iid: [] for iid in issues_by_id}
+	for edge in edges:
+		if edge["to"] in in_degree:
+			in_degree[edge["to"]] += 1
+		if edge["from"] in dependents:
+			dependents[edge["from"]].append(edge["to"])
+
+	remaining = set(issues_by_id.keys())
+	groups: list[list[str]] = []
+	while remaining:
+		ready = sorted(
+			[iid for iid in remaining if in_degree[iid] == 0],
+			key=lambda iid: (issues_by_id[iid].get("priority", 10), iid),
+		)
+		if not ready:
+			raise OrchestrateError(
+				f"Cannot compute wave grouping; remaining issues have unmet deps: {remaining}"
+			)
+		groups.append(ready)
+		for iid in ready:
+			remaining.discard(iid)
+			for dep in dependents[iid]:
+				if dep in in_degree:
+					in_degree[dep] -= 1
+	return groups
+
+
+def validate_wave_file_partition(
+	wave_ids: list[str],
+	issues_by_id: dict[str, dict[str, Any]],
+	hot_files: set[str] | None = None,
+) -> list[dict[str, Any]]:
+	"""Detect sibling file-touch overlaps within a single wave.
+
+	Returns a list of overlap records, each:
+
+		{
+			"type": "pair" | "hot_file",
+			"issue_a": <id>,
+			"issue_b": <id>,
+			"files": [<overlapping paths>],
+		}
+
+	- ``pair`` overlaps: any two siblings that share at least one
+	  ``files_touched`` entry. The caller should serialize them.
+	- ``hot_file`` overlaps: any two siblings that both touch the same hot
+	  file (even if it's their ONLY overlap). Deliberately reported
+	  separately from pair overlaps so the caller can treat them with a
+	  different policy if desired; at present they are serialized the same
+	  way.
+
+	Issues whose ``files_touched`` list is empty are never flagged — there is
+	nothing to compare. The byte-level pre-merge probe in the poller handles
+	unknown-scope issues at merge time instead.
+	"""
+	hot = hot_files or set()
+	overlaps: list[dict[str, Any]] = []
+
+	# Build {issue_id: set(paths)} once.
+	files_for: dict[str, set[str]] = {}
+	for iid in wave_ids:
+		raw = issues_by_id.get(iid, {}).get("files_touched", []) or []
+		files_for[iid] = set(raw)
+
+	seen_pairs: set[tuple[str, str]] = set()
+	for i, iid_a in enumerate(wave_ids):
+		fa = files_for[iid_a]
+		if not fa:
+			continue
+		for iid_b in wave_ids[i + 1:]:
+			fb = files_for[iid_b]
+			if not fb:
+				continue
+			common = sorted(fa & fb)
+			if not common:
+				continue
+			pair_key = (iid_a, iid_b)
+			if pair_key in seen_pairs:
+				continue
+			seen_pairs.add(pair_key)
+
+			hot_common = [p for p in common if p in hot]
+			if hot_common:
+				overlaps.append({
+					"type": "hot_file",
+					"issue_a": iid_a,
+					"issue_b": iid_b,
+					"files": hot_common,
+				})
+			# Also report the non-hot overlap for the same pair so callers
+			# can distinguish "hot-file-only" overlap from mixed overlap.
+			non_hot = [p for p in common if p not in hot]
+			if non_hot:
+				overlaps.append({
+					"type": "pair",
+					"issue_a": iid_a,
+					"issue_b": iid_b,
+					"files": non_hot,
+				})
+	return overlaps
+
+
+def auto_serialize_file_overlaps(
+	data: dict[str, Any],
+	hot_files: set[str] | None = None,
+	max_rounds: int = 50,
+) -> list[dict[str, Any]]:
+	"""Inject synthetic dependency_edges that resolve sibling file overlaps.
+
+	Mutates ``data["dependency_edges"]`` in place, appending one edge per
+	resolved overlap, and records a machine-readable audit trail in
+	``data["partition_serializations"]`` so the orchestrate.yml step can log
+	the rewrites to the tracking issue.
+
+	The injected edge orders the lower-priority (higher numeric priority)
+	sibling AFTER the higher-priority one. On priority tie, the issue with
+	the lexicographically smaller ID wins first-wave placement.
+
+	If adding an edge would introduce a cycle, the function raises
+	OrchestrateError — the decomposition is fundamentally inconsistent and a
+	human must re-plan.
+
+	``max_rounds`` caps the auto-serialize loop to avoid pathological cases
+	where every round keeps producing new overlaps. In practice one or two
+	rounds suffice because each edge strictly reduces the set of parallel
+	siblings that can still collide.
+
+	Returns the audit trail (list of serialization records).
+	"""
+	hot = hot_files or set()
+	issues_by_id: dict[str, dict[str, Any]] = {i["id"]: i for i in data["issues"]}
+	edges: list[dict[str, str]] = list(data.get("dependency_edges", []) or [])
+	serializations: list[dict[str, Any]] = []
+
+	def _edge_exists(frm: str, to: str) -> bool:
+		for e in edges:
+			if e.get("from") == frm and e.get("to") == to:
+				return True
+		return False
+
+	def _pick_winner(iid_a: str, iid_b: str) -> tuple[str, str]:
+		"""Return (winner, loser) — winner runs first, loser depends on winner."""
+		pa = issues_by_id[iid_a].get("priority", 10)
+		pb = issues_by_id[iid_b].get("priority", 10)
+		if pa < pb:
+			return iid_a, iid_b
+		if pb < pa:
+			return iid_b, iid_a
+		# Priority tie: stable by lexicographic id
+		return (iid_a, iid_b) if iid_a < iid_b else (iid_b, iid_a)
+
+	for round_idx in range(max_rounds):
+		groups = _parallel_groups_from_edges(issues_by_id, edges)
+		any_new = False
+		for group_idx, wave_ids in enumerate(groups):
+			overlaps = validate_wave_file_partition(wave_ids, issues_by_id, hot)
+			if not overlaps:
+				continue
+			for record in overlaps:
+				winner, loser = _pick_winner(record["issue_a"], record["issue_b"])
+				if _edge_exists(winner, loser):
+					continue  # already serialized by a previous round
+				# Prevent cycles: test with the candidate edge applied.
+				test_edges = edges + [{"from": winner, "to": loser}]
+				try:
+					_detect_cycles(set(issues_by_id.keys()), test_edges)
+				except OrchestrateError as exc:
+					raise OrchestrateError(
+						"auto_serialize_file_overlaps: injecting dependency "
+						f"{winner!r} -> {loser!r} to resolve overlap "
+						f"{record['files']!r} would create a cycle: {exc}. "
+						"The decomposition is inconsistent — re-plan required."
+					)
+				edges.append({"from": winner, "to": loser})
+				serializations.append({
+					"round": round_idx + 1,
+					"wave_index": group_idx,
+					"overlap_type": record["type"],
+					"winner": winner,
+					"loser": loser,
+					"files": record["files"],
+				})
+				any_new = True
+		if not any_new:
+			break
+	else:
+		# max_rounds exhausted without stabilising
+		raise OrchestrateError(
+			f"auto_serialize_file_overlaps did not converge within {max_rounds} rounds; "
+			"decomposition has structurally tangled file ownership — re-plan required."
+		)
+
+	data["dependency_edges"] = edges
+	data["partition_serializations"] = serializations
+	return serializations
+
+
+# ---------------------------------------------------------------------------
 # Wave computation
 # ---------------------------------------------------------------------------
 
-def compute_waves(data: dict[str, Any]) -> list[list[dict[str, Any]]]:
+def compute_waves(
+	data: dict[str, Any],
+	hot_files: set[str] | None = None,
+	auto_serialize: bool = True,
+) -> list[list[dict[str, Any]]]:
 	"""Compute execution waves from the dependency DAG.
 
 	Returns a list of waves. Each wave is a list of issue objects that can
 	run in parallel. Within each wave, issues are sorted by priority (ascending).
+
+	When ``auto_serialize`` is true (default), any pair of siblings in the
+	same wave that share ``files_touched`` entries is resolved by injecting a
+	synthetic dependency edge, pushing the lower-priority sibling into a
+	later wave. The audit trail is recorded on ``data["partition_serializations"]``.
+
+	``hot_files`` is an optional set of repository-relative paths that are
+	considered "hot" — they are flagged separately from regular pair overlaps
+	so the orchestrate.yml log step can highlight them, but they are
+	serialized identically. When ``None``, the function calls
+	:func:`load_hot_files` with the default registry path.
 	"""
+	if auto_serialize:
+		effective_hot = hot_files if hot_files is not None else load_hot_files()
+		auto_serialize_file_overlaps(data, effective_hot)
+
 	issues_by_id: dict[str, dict[str, Any]] = {i["id"]: i for i in data["issues"]}
 	edges = data.get("dependency_edges", [])
 
@@ -203,6 +652,11 @@ def build_tracking_state(
 				"github_issue": gh_num,
 				"status": "pending" if gh_num is not None else "not_created",
 			}
+			# Persist the file-partition manifest onto each wave entry so the
+			# poller-side merge-tree probe can consult it without re-parsing
+			# issue bodies. Empty list is persisted explicitly to distinguish
+			# "known empty / unknown scope" from "missing".
+			entry["files_touched"] = list(issue.get("files_touched", []) or [])
 			# Seed stall-tracking fields for issues that already exist
 			if gh_num is not None:
 				entry["last_seen_phase"] = ""
@@ -223,6 +677,7 @@ def build_tracking_state(
 				"title": issue["title"],
 				"body": issue["body"],
 				"priority": issue["priority"],
+				"files_touched": list(issue.get("files_touched", []) or []),
 			}
 
 	# Snapshot the tracking issue body at project creation time. The
@@ -1055,19 +1510,123 @@ def cmd_validate(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _resolve_hot_files_from_args(args: argparse.Namespace) -> tuple[set[str], dict[str, Any]]:
+	"""Shared helper for CLI commands that need the effective hot-file set.
+
+	Composes the committed seed (optional) with the learned-telemetry
+	compute from the ai-memory JSONL (optional). Either source may be
+	missing — both missing means an empty effective set, which is a
+	valid state: the planner guard still detects pairwise file-touch
+	overlaps and the poller probe still catches byte-level conflicts.
+	"""
+	committed = load_hot_files(getattr(args, "hot_files_path", None) or None)
+	telemetry_path = getattr(args, "conflict_telemetry_jsonl", None) or None
+	window_days = int(getattr(args, "telemetry_window_days", DEFAULT_TELEMETRY_WINDOW_DAYS) or DEFAULT_TELEMETRY_WINDOW_DAYS)
+	min_events = int(getattr(args, "telemetry_min_events", DEFAULT_TELEMETRY_MIN_EVENTS) or DEFAULT_TELEMETRY_MIN_EVENTS)
+	min_projects = int(getattr(args, "telemetry_min_projects", DEFAULT_TELEMETRY_MIN_PROJECTS) or DEFAULT_TELEMETRY_MIN_PROJECTS)
+	effective, audit = compute_effective_hot_files(
+		committed_hot_files=committed,
+		telemetry_jsonl_path=telemetry_path,
+		window_days=window_days,
+		min_events=min_events,
+		min_distinct_projects=min_projects,
+	)
+	return effective, audit
+
+
 def cmd_compute_waves(args: argparse.Namespace) -> int:
 	path = Path(args.input_file).resolve()
 	with path.open("r", encoding="utf-8") as f:
 		data = json.load(f)
 	data = validate_decomposition(data)
-	waves = compute_waves(data)
+	hot_files, hot_files_audit = _resolve_hot_files_from_args(args)
+	waves = compute_waves(data, hot_files=hot_files)
 	output = []
 	for wave_idx, wave in enumerate(waves):
 		output.append({
 			"wave": wave_idx + 1,
-			"issues": [{"id": i["id"], "title": i["title"], "priority": i["priority"]} for i in wave],
+			"issues": [
+				{
+					"id": i["id"],
+					"title": i["title"],
+					"priority": i["priority"],
+					"files_touched": list(i.get("files_touched", []) or []),
+				}
+				for i in wave
+			],
 		})
-	_print_json({"ok": True, "total_waves": len(waves), "waves": output})
+	_print_json({
+		"ok": True,
+		"total_waves": len(waves),
+		"waves": output,
+		"hot_files": sorted(hot_files),
+		"hot_files_audit": hot_files_audit,
+		"partition_serializations": data.get("partition_serializations", []),
+	})
+	# Also write the (possibly serialized) decomposition back to disk so
+	# downstream steps (tracking issue creation, Wave 1 dispatch) consume
+	# the post-serialization edge set, not the raw decomposer output.
+	if getattr(args, "write_back", False):
+		with path.open("w", encoding="utf-8") as f:
+			json.dump(data, f, ensure_ascii=True, indent=2)
+	return 0
+
+
+def cmd_check_partition(args: argparse.Namespace) -> int:
+	"""Probe a decomposition for file-partition overlaps without mutating it.
+
+	Emits a machine-readable report of overlaps detected in each wave and a
+	dry-run audit trail of edges that ``auto_serialize_file_overlaps`` would
+	inject. Used by the orchestrate.yml partition-guard step to log the
+	rewrite plan to the tracking issue before the destructive compute-waves
+	call runs with ``--write-back``.
+	"""
+	path = Path(args.input_file).resolve()
+	with path.open("r", encoding="utf-8") as f:
+		data = json.load(f)
+	data = validate_decomposition(data)
+	hot_files, hot_files_audit = _resolve_hot_files_from_args(args)
+
+	# Dry-run pass: compute waves WITHOUT auto-serialize to see what the raw
+	# decomposer produced, and then report overlaps per wave.
+	raw_waves = compute_waves(dict(data, dependency_edges=list(data.get("dependency_edges", []))), hot_files=hot_files, auto_serialize=False)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+
+	wave_reports: list[dict[str, Any]] = []
+	total_overlaps = 0
+	for wave_idx, wave in enumerate(raw_waves):
+		ids = [i["id"] for i in wave]
+		overlaps = validate_wave_file_partition(ids, issues_by_id, hot_files)
+		total_overlaps += len(overlaps)
+		wave_reports.append({
+			"wave": wave_idx + 1,
+			"issue_count": len(ids),
+			"overlap_count": len(overlaps),
+			"overlaps": overlaps,
+		})
+
+	# Dry-run serialize against a clone so we can report the planned rewrites.
+	clone = json.loads(json.dumps(data))
+	try:
+		planned = auto_serialize_file_overlaps(clone, hot_files)
+	except OrchestrateError as exc:
+		_print_json({
+			"ok": False,
+			"error": str(exc),
+			"total_overlaps": total_overlaps,
+			"wave_reports": wave_reports,
+			"hot_files_audit": hot_files_audit,
+		})
+		return 3
+
+	_print_json({
+		"ok": True,
+		"hot_files": sorted(hot_files),
+		"hot_files_audit": hot_files_audit,
+		"total_overlaps": total_overlaps,
+		"wave_reports": wave_reports,
+		"planned_serializations": planned,
+	})
 	return 0
 
 
@@ -1333,9 +1892,23 @@ def build_parser() -> argparse.ArgumentParser:
 	p_validate.add_argument("--input-file", required=True)
 	p_validate.set_defaults(func=cmd_validate)
 
+	def _add_hot_file_args(sp: argparse.ArgumentParser) -> None:
+		sp.add_argument("--hot-files-path", default=None, help="Path to committed hot_files.json seed (optional; default: .github/ai/hot_files.json in CWD; absent file => empty seed). Consumer repos do NOT need to create this file; the effective hot-file set is learned from telemetry if --conflict-telemetry-jsonl is supplied.")
+		sp.add_argument("--conflict-telemetry-jsonl", default=None, help="Path to merge_conflicts.jsonl extracted from the ai-memory branch (one JSON record per line with fields ts, project, pr_a, pr_b, paths). When provided, paths meeting --telemetry-min-events and --telemetry-min-projects thresholds within --telemetry-window-days are promoted to the effective hot-file set automatically. Absent file or empty JSONL degrades cleanly to the committed seed (which may also be empty).")
+		sp.add_argument("--telemetry-window-days", type=int, default=DEFAULT_TELEMETRY_WINDOW_DAYS, help=f"Lookback window for telemetry-learned hot files in days (default: {DEFAULT_TELEMETRY_WINDOW_DAYS}). Events older than this drop out automatically, providing implicit demotion without persistent state.")
+		sp.add_argument("--telemetry-min-events", type=int, default=DEFAULT_TELEMETRY_MIN_EVENTS, help=f"Minimum distinct conflict events within the window before a path is promoted (default: {DEFAULT_TELEMETRY_MIN_EVENTS}).")
+		sp.add_argument("--telemetry-min-projects", type=int, default=DEFAULT_TELEMETRY_MIN_PROJECTS, help=f"Minimum distinct orchestrator projects within the window before a path is promoted (default: {DEFAULT_TELEMETRY_MIN_PROJECTS}). Prevents a single runaway project from skewing the learned set.")
+
 	p_waves = subparsers.add_parser("compute-waves", help="Compute execution waves from decomposition")
 	p_waves.add_argument("--input-file", required=True)
+	_add_hot_file_args(p_waves)
+	p_waves.add_argument("--write-back", action="store_true", help="Write the serialized decomposition (with injected dependency_edges) back to --input-file")
 	p_waves.set_defaults(func=cmd_compute_waves)
+
+	p_partition = subparsers.add_parser("check-partition", help="Dry-run partition check for sibling file-touch overlaps")
+	p_partition.add_argument("--input-file", required=True)
+	_add_hot_file_args(p_partition)
+	p_partition.set_defaults(func=cmd_check_partition)
 
 	p_body = subparsers.add_parser("build-tracking-body", help="Build tracking issue markdown body")
 	p_body.add_argument("--input-file", required=True)

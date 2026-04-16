@@ -23,6 +23,25 @@ Restrictions:
 - Do not change CI workflows.
 - Do not modify ai_pipeline.md or codex_system_instructions.md.
 
+Sibling-conflict discipline (prevents merge conflicts with parallel sibling
+orchestrator issues that may be editing adjacent code):
+
+- If the issue body lists `files_touched:` (machine-readable or prose form) or
+  names specific files in its scope/acceptance criteria, STAY INSIDE that
+  file set. Do not opportunistically edit, reformat, renumber, or refactor
+  files outside the stated scope — other sibling issues in the same wave may
+  be editing them right now.
+- Prefer append-only edits in shared documentation (`README.md`, `agents.md`,
+  CHANGELOG, operator docs): add new sections under existing stable HTML
+  anchors of the form `<!-- anchor:NAME -->` rather than renumbering numbered
+  lists, reflowing paragraphs, or rewriting surrounding content. If the
+  target doc has no relevant anchor, add a new anchor comment alongside
+  your insertion instead of restructuring unrelated sections.
+- Do not delete, rename, or reorder existing anchors. Anchors are contract
+  insertion points used across the orchestrator pipeline.
+- When your change intersects an anchor, make the minimal edit required and
+  leave untouched prose intact byte-for-byte.
+
 If clarification context is incomplete, apply the safest minimal interpretation and explicitly record assumptions in your output/log summary without asking interactive questions.
 
 {{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}

@@ -66,7 +66,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `MAX_SELF_HEAL_ATTEMPTS` | No | `2` | validate | Maximum in-process self-heal attempts per `validate_process.sh` invocation. Self-heal patches one of the four validation prompt files locally and re-execs the pipeline, and does NOT increment `MAX_VALIDATE_CYCLES`. Set to `0` to disable. See [Validation self-healing](#validation-self-healing). |
 | `VALIDATE_WORKFLOW_NAME` | No | `ai-validate.yml` | orchestrate_poll | Workflow filename to dispatch for runtime validation. Override to `internal-validate.yml` for repos using the internal naming convention. Falls back to `internal-validate.yml` automatically if the primary name fails. |
 | `MAX_JUDGE_CYCLES` | No | `25` | orchestrate_poll | Maximum judge evaluation cycles per project before forcing failure. Prevents infinite fix-up loops when the judge repeatedly returns `in_progress`. |
-| `ENABLE_CLEAN_WAVE_JUDGE_SKIP` | No | `true` | orchestrate_poll | When true, a completed clean wave (no failures, not project-complete, not stuck-wave) advances mechanically without invoking the judge; set to `false` to force judge execution on every wave completion. |
+| `ENABLE_CLEAN_WAVE_JUDGE_SKIP` | No | `true` | orchestrate_poll | When true, a completed clean wave (no failures, not stuck-wave) advances mechanically without invoking the judge. Also skips the judge on clean project completions (all waves merged, no failures, no review-blocked issues) — the verdict is deterministic (`complete`). Set to `false` to force judge execution on every wave completion and project finalization. |
 | `ORCHESTRATOR_MAX_CLARIFY_CYCLES` | No | `3` | orchestrate_clarify_respond | Maximum orchestrator clarification auto-answer cycles per issue. When the limit is exceeded, or when a clarify hash repeats, `orchestrate_clarify_respond` stops posting auto-answers and escalates the issue to `ai:blocked` for explicit human intervention. |
 | `STALL_THRESHOLD_MINUTES` | No | `120` | orchestrate_poll | Fallback minutes an issue can remain in the same pipeline phase before auto-recovery. Used when no per-phase override is set. |
 | `STALL_THRESHOLD_NO_LABELS_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for issues with no AI pipeline labels (pre-pipeline). |
@@ -690,6 +690,11 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 
 ## Required Variables
 
+<!-- anchor:required-variables-table -->
+<!-- Parallel orchestrator sub-issues: append new env vars to the BOTTOM
+     of this table directly under this anchor. Do NOT reorder existing
+     rows or reflow the table — parallel sub-issues inserting rows in
+     the middle is a classic merge-conflict generator. -->
 | Variable | Default | Description |
 |---|---|---|
 | `WORKFLOW_EDITOR_MODEL` | `openai/gpt-5.3-codex` | Model for code editing tasks |
@@ -706,7 +711,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ENABLE_VALIDATION` | `true` | Enable post-judge runtime validation gate in orchestrator poller |
 | `MAX_VALIDATE_CYCLES` | `3` | Maximum runtime validation cycles before terminal validation failure |
 | `MAX_SELF_HEAL_ATTEMPTS` | `2` | Maximum in-process self-heal attempts per `validate_process.sh` invocation (self-heal re-execs do not burn cycles) |
-| `ENABLE_CLEAN_WAVE_JUDGE_SKIP` | `true` | Skip judge on clean completed waves (no failures) and advance to next wave mechanically |
+| `ENABLE_CLEAN_WAVE_JUDGE_SKIP` | `true` | Skip judge on clean completed waves (no failures) and on clean project completions; advance mechanically |
 | `ORCHESTRATOR_MAX_CLARIFY_CYCLES` | `3` | Maximum orchestrator clarify auto-answer cycles before the auto-answer loop is halted and the issue is escalated to `ai:blocked` for human input |
 | `STALL_THRESHOLD_MINUTES` | `120` | Fallback minutes before a stalled issue triggers auto-recovery |
 | `STALL_THRESHOLD_NO_LABELS_MINUTES` | `60` | Stall threshold for pre-pipeline (no labels) phase |
@@ -787,6 +792,10 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `SEMANTIC_CACHE_MAX_CANONICAL_CHARS` | `50000` | Maximum canonical input length for cache key generation (longer inputs skip cache lookup/store) |
 | `SERENA_WARN_THRESHOLD_IMPLEMENT` | `50` | Minimum Serena efficiency (%) before implement emits low-adoption warning |
 | `SERENA_WARN_THRESHOLD_REVIEW` | `50` | Minimum Serena efficiency (%) before review_autofix emits low-adoption warning |
+| `MAX_MERGE_DEFERRALS` | `5` | Max consecutive poll cycles a single sub-PR may be deferred by the pre-merge sibling-conflict probe (`probe_sibling_merge_conflicts` in `scripts/orchestrate_poll_process.sh`). The probe runs `git merge-tree --write-tree --name-only` locally against every other open sub-PR targeting the same integration branch before invoking `gh pr merge --squash`. When a textual conflict is detected, the candidate PR is skipped for the cycle and the deferral counter on its wave entry is incremented. Exceeding `MAX_MERGE_DEFERRALS` triggers a Telegram WARNING for human review but does not mark the PR failed — the probe is a merge-ordering nudge, not a gate. Set lower for more aggressive human escalation or higher to give auto-serialization more room. Every detected conflict also emits a telemetry event to `ai-memory/orchestrator/merge_conflicts.jsonl` on the `ai-memory` branch (git protocol only, zero GH API calls) so the next orchestrator run can auto-learn hot files without any manual seed file. |
+| `ORCHESTRATOR_HOT_FILE_WINDOW_DAYS` | `90` | Lookback window for the auto-learned hot-file set computed at plan time from `ai-memory/orchestrator/merge_conflicts.jsonl`. A path is promoted to "hot" when it appears in at least `ORCHESTRATOR_HOT_FILE_MIN_EVENTS` distinct conflict events across at least `ORCHESTRATOR_HOT_FILE_MIN_PROJECTS` distinct orchestrator projects within this window. Older events drop out automatically — no persistent "demotion" state is kept. |
+| `ORCHESTRATOR_HOT_FILE_MIN_EVENTS` | `3` | Minimum distinct conflict events required to promote a path to the learned hot-file set. Lower for faster reaction, higher for less noise. |
+| `ORCHESTRATOR_HOT_FILE_MIN_PROJECTS` | `2` | Minimum distinct orchestrator projects required to promote a path. Prevents a single runaway project from skewing the set. |
 
 ## Semantic Cache (Clarification Only)
 
@@ -911,6 +920,14 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 
 ### How it works
 
+<!-- anchor:orchestrator-pipeline-steps -->
+<!-- Parallel orchestrator sub-issues: when you need to document a new
+     pipeline step or behavior here, insert new prose directly under this
+     anchor with an append-only `Na.` / `Nb.` suffixed bullet. Do NOT
+     renumber existing steps and do NOT reflow the paragraphs below —
+     multiple siblings editing this list in parallel is a known conflict
+     generator, and the partition guard will serialize waves that touch
+     the same anchor. See prompts/mode-orchestrate.txt. -->
 1. **Pre-LLM short-circuit (cost guard):** If `project_description` is short (`<= ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS`, default `1200`) and has no multi-step markers (`step\s*\d|phase\s*\d|wave\s*\d|\bthen\b|\bafter\b|\band\s+then\b|multi[- ]?step`), orchestrate skips decomposer entirely and creates exactly one plain issue from the description. This path does not apply orchestrator labels and does not create tracking issue, integration branch, state comment, or wave dispatch.
 2. **Decomposition (default path):** When the short-circuit condition is not met, the LLM reads your repo and breaks the project into scoped issues with a dependency graph. If decomposition returns exactly one issue, orchestrate creates a single standalone issue (labels: `ai:clarification`, `ai:orchestrator-managed`, `ai:orchestrator-validate-required`) without creating a tracking issue or integration branch. Otherwise it creates a tracking issue (labeled `ai:orchestrator-tracking`).
 3. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically. If clarification questions are raised, the `orchestrate_clarify_respond` workflow answers them automatically using an LLM. When `plan.yml` emits structured `Q<ID>` clarification blocks with single-letter `(RECOMMENDED)` options for every question, `plan.yml` now posts a synthesized `/answer Q1: A, ... [auto-answered-by-orchestrator]`; if parsing fails or any recommendation is non-single-letter (for example `A+C`), it does not auto-answer and keeps the human `/answer` loop.
@@ -919,6 +936,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 6. **Polling:** Every 5 minutes, the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge.
 7. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with adaptive thinking (`xhigh` for cycles 1-3, then `high`). Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
 7a. **Clean-wave skip (flagged):** When `ENABLE_CLEAN_WAVE_JUDGE_SKIP=true`, and the completed wave has no failed issues, project is not complete, and it is not a stuck-wave invocation, the poller advances `current_wave` and increments `judge_cycle` without calling Codex judge. `judge_stall_cycles` is unchanged.
+7b. **Clean project-completion skip (flagged):** When `ENABLE_CLEAN_WAVE_JUDGE_SKIP=true`, the final wave is complete with all issues merged, no failures, no review-blocked issues, and no stuck-wave invocation, the poller emits a synthetic `complete` verdict without calling the Codex judge. The outcome is deterministic in this case — the LLM judge cannot add value and risks empty-output failures.
 8. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
 9. **Review-blocked resolution:** When a PR exhausts its autofix iterations (`ai:review-blocked`), the poller invokes a dedicated review-blocked judge (xhigh thinking, full PR context). The judge makes autonomous architectural and security trade-off decisions — it does not defer to humans. It can: (a) merge the PR as-is if remaining issues are cosmetic or low-risk, (b) push an `[orchestrator-fix]` commit with targeted fixes (resets the autofix counter, re-triggers review), or (c) close the PR and create a replacement issue with refined guidance. After `MAX_REVIEW_BLOCKED_RETRIES` (default 2), the judge must choose merge or close+reissue — no further fix attempts.
 10. **Implementation-failed recovery:** When the implementation phase reaches the post-Codex pre-commit path with no committable file changes despite an approved plan (e.g. workflow edits stripped without `ALLOW_WORKFLOW_EDITS=true`, or model failure), `implement.yml` labels the source issue `ai:implementation-failed`. The poller automatically closes that issue and creates a replacement with additional diagnostic guidance, so the pipeline retries without manual intervention. For no-op implementation failures this behavior is unchanged; retries are bounded by `MAX_IMPL_NOOP_REISSUES`.
