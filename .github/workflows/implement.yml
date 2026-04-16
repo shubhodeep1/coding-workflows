@@ -2127,10 +2127,22 @@ jobs:
             } > "${CONFIG_FILE}"
           fi
 
-          cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${ISSUE_SUMMARY_FILE}"
+          for _summary_attempt in 1 2 3; do
+            cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" \
+              | codex exec --model "${MODEL_EDITOR}" --full-auto > "${ISSUE_SUMMARY_FILE}" || true
+            if [ -s "${ISSUE_SUMMARY_FILE}" ] && grep -q '^### AI Issue Summary' "${ISSUE_SUMMARY_FILE}"; then
+              echo "Summary generated on attempt ${_summary_attempt}."
+              break
+            fi
+            echo "::warning::Summary generation attempt ${_summary_attempt}/3 produced empty or invalid output."
+            if [ "${_summary_attempt}" -lt 3 ]; then
+              sleep 2
+            fi
+          done
 
       - name: Post AI issue summary as first PR comment
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
