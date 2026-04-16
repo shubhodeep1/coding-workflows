@@ -574,10 +574,10 @@ while [ "${attempt}" -le 3 ]; do
           in_s { print }
         ' "${tmp_output}" \
           | grep -vE '^[[:space:]]*$' \
-          | grep -vE '^[[:space:]]*-[[:space:]]*none' \
-          | grep -viE 'no (repository |repo |code |file )?changes (were |was |are |is )?(required|needed|made|necessary)' \
-          | grep -viE 'no (repository |repo |code |file )?(modifications|edits) (were |was |are |is )?(required|needed|made|necessary)' \
-          | grep -viE 'no .* file changes (were |was |are |is )?required' \
+          | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)' \
+          | grep -viE 'no (repository |repo |code |file )?changes([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)' \
+          | grep -viE 'no (repository |repo |code |file )?(modifications|edits)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)' \
+          | grep -viE 'no .* file changes([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)' \
           || true)"
 
         if [ -n "${_claimed_changes}" ]; then
