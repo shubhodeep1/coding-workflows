@@ -1646,16 +1646,15 @@ jobs:
             done < "${CODEX_TOUCHED_FILE}"
             rm -f "${CODEX_TOUCHED_FILE}"
           else
-            # Build per-file exclusions from scripts/.gitignore instead of a
-            # blanket ':!scripts' — consumer-repo-owned scripts must be staged.
+            # Build per-file exclusions from scripts/.gitignore when present.
+            # If it is absent, keep exclusions empty so consumer-owned scripts/
+            # changes are still staged.
             _ra_script_excludes=()
             if [ -f scripts/.gitignore ]; then
               while IFS= read -r _ign_entry; do
                 [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
                 _ra_script_excludes+=(":!scripts/${_ign_entry}")
               done < scripts/.gitignore
-            else
-              _ra_script_excludes+=(':!scripts')
             fi
             git add -u -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
             git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
@@ -2779,16 +2778,15 @@ jobs:
               done < "${RESOLVER_TOUCHED_FILE}"
               rm -f "${RESOLVER_TOUCHED_FILE}"
             else
-              # Build per-file exclusions from scripts/.gitignore instead of a
-              # blanket ':!scripts' — consumer-repo-owned scripts must be staged.
+              # Build per-file exclusions from scripts/.gitignore when present.
+              # If it is absent, keep exclusions empty so consumer-owned scripts/
+              # changes are still staged.
               _rs_script_excludes=()
               if [ -f scripts/.gitignore ]; then
                 while IFS= read -r _ign_entry; do
                   [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
                   _rs_script_excludes+=(":!scripts/${_ign_entry}")
                 done < scripts/.gitignore
-              else
-                _rs_script_excludes+=(':!scripts')
               fi
               git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
               git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
