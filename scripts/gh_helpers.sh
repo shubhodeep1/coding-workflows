@@ -1027,6 +1027,7 @@ curl_gh_api()
 		if [ "${http_code}" = "429" ] || { [ "${http_code}" = "403" ] && _is_gh_rate_limit "${body_content}"; }; then
 			echo "::warning::GitHub API rate limit (HTTP ${http_code}, attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
+			_gh_rate_limit_trip_breaker
 			local _reset_ts
 			_reset_ts=$(_parse_reset_header "${header_file}")
 			_sleep_until_reset "${_reset_ts}"
