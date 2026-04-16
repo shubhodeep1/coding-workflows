@@ -75,6 +75,40 @@ fi
 echo "judge_handled=false" >> "$GITHUB_OUTPUT"
 echo "judge_skip_reason=" >> "$GITHUB_OUTPUT"
 
+# _resilient_phase_swap <issue_number> <target_label>
+#
+# Atomically swap AI phase labels on an issue via REST API GET+PUT,
+# avoiding the `gh issue edit --remove-label` failure mode where a
+# label that does not exist as a repo label definition aborts the
+# entire command.  Falls back to POST (add-only) on PUT failure.
+# API calls: 2 (GET + PUT) happy path, 3 on fallback.
+_resilient_phase_swap()
+{
+	local _rps_issue="$1" _rps_target="$2"
+	local _rps_phases='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
+	local _rps_cur _rps_new
+	if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
+		echo "::warning::_resilient_phase_swap: GET labels failed for #${_rps_issue} — falling back to POST add." >&2
+		gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+			-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
+			|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
+		return 1
+	fi
+	_rps_cur="${_rps_cur:-[]}"
+	_rps_new="$(echo "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
+		'(. - $p) + [$t] | unique')"
+	if printf '{"labels":%s}' "${_rps_new}" | \
+		gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+			--input - >/dev/null 2>&1; then
+		return 0
+	fi
+	echo "::warning::_resilient_phase_swap: PUT failed for #${_rps_issue} — falling back to POST add." >&2
+	gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+		-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
+		|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
+}
+
 if [ "${ENABLE_REVIEW_BLOCKED_JUDGE}" != "true" ]; then
   echo "Review-blocked judge disabled (set ENABLE_REVIEW_BLOCKED_JUDGE=true to enable)."
   echo "judge_skip_reason=disabled" >> "$GITHUB_OUTPUT"
@@ -382,11 +416,7 @@ case "${RB_ACTION}" in
     ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
     while IFS= read -r issue_number; do
       [ -n "${issue_number}" ] || continue
-      gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
-        --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' \
-        --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' \
-        --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' \
-        --add-label 'ai:ready-to-merge' || true
+      _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
     done <<< "${ISSUE_NUMBERS}"
 
     # Attempt merge.
@@ -455,11 +485,7 @@ case "${RB_ACTION}" in
       ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
       while IFS= read -r issue_number; do
         [ -n "${issue_number}" ] || continue
-        gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
-          --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' \
-          --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' \
-          --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' \
-          --add-label 'ai:ready-to-merge' || true
+        _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
       done <<< "${ISSUE_NUMBERS}"
 
       PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
@@ -606,9 +632,7 @@ ${RB_FIX_DESC}"
     ensure_label_exists "ai:closed" "${REPOSITORY}"
     while IFS= read -r issue_number; do
       [ -n "${issue_number}" ] || continue
-      gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
-        --remove-label 'ai:review-blocked' --remove-label 'ai:done' \
-        --add-label 'ai:closed' 2>/dev/null || true
+      _resilient_phase_swap "${issue_number}" "ai:closed" || true
     done <<< "${ISSUE_NUMBERS}"
 
     # Create replacement issue
