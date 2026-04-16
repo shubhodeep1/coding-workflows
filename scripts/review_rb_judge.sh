@@ -237,12 +237,22 @@ fi
 # Run the judge
 # -----------------------------------------------------------
 JUDGE_SUCCESS=false
+JUDGE_STDERR_FILE="${RUNTIME_DIR}/rb_judge_stderr.txt"
 for attempt in 1 2; do
   echo "Review-blocked judge attempt ${attempt}/2..."
-  if codex exec --model "${MODEL_EDITOR}" --full-auto < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>/dev/null; then
+  if codex exec --model "${MODEL_EDITOR}" --full-auto < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}"; then
     if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
       JUDGE_SUCCESS=true
       break
+    else
+      echo "::warning::Judge attempt ${attempt}/2 produced empty output."
+    fi
+  else
+    echo "::warning::Judge attempt ${attempt}/2 codex exec failed (rc=$?)."
+    if [ -s "${JUDGE_STDERR_FILE}" ]; then
+      echo "--- judge stderr (attempt ${attempt}) ---"
+      cat "${JUDGE_STDERR_FILE}"
+      echo "---"
     fi
   fi
   if [ "${attempt}" -lt 2 ]; then
@@ -256,7 +266,13 @@ if [ -f "${HOME}/.codex/config.toml" ]; then
 fi
 
 if [ "${JUDGE_SUCCESS}" != "true" ]; then
-  echo "::warning::Review-blocked judge failed — falling back to manual intervention."
+  echo "::warning::Review-blocked judge LLM execution failed after 2 attempts — needs human intervention."
+  if [ -s "${JUDGE_STDERR_FILE}" ]; then
+    echo "::group::Last judge stderr"
+    cat "${JUDGE_STDERR_FILE}"
+    echo "::endgroup::"
+  fi
+  echo "judge_skip_reason=llm_failed" >> "$GITHUB_OUTPUT"
   exit 0
 fi
 
@@ -309,7 +325,11 @@ sys.exit(1)
 " 2>/dev/null || echo "")"
 
 if [ -z "${JUDGE_JSON:-}" ]; then
-  echo "::warning::Could not parse review-blocked judge output — falling back to manual intervention."
+  echo "::warning::Could not parse review-blocked judge output — needs human intervention."
+  echo "::group::Raw judge output (first 200 lines)"
+  head -200 "${RB_JUDGE_OUTPUT}" 2>/dev/null || true
+  echo "::endgroup::"
+  echo "judge_skip_reason=json_parse_failed" >> "$GITHUB_OUTPUT"
   exit 0
 fi
 
