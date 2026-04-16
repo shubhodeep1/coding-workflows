@@ -1955,6 +1955,51 @@ jobs:
             echo "::warning::Unable to post editor summary comment after retries."
           fi
 
+      - name: Detect editor-claimed-but-uncommitted changes
+        # The editor LLM reports what it believes it changed in the
+        # EDITOR_SUMMARY_FILE ("Changes made:" section).  The commit step
+        # independently checks `git diff --cached` to determine what actually
+        # changed on disk.  When the editor claims changes but git has no
+        # diff, the Serena MCP tool calls likely failed to persist — this is
+        # NOT a "clean review" signal and must block auto-merge.
+        # See: PR #1136, #1137 where this mismatch caused premature
+        # auto-merge of un-fixed PRs.
+        if: "!cancelled() && steps.commit_changes.outputs.did_commit != 'true' && env.PR_CLOSED != 'true'"
+        run: |
+          set -euo pipefail
+
+          EDITOR_CHANGES_LOST="false"
+
+          if [ -s "${EDITOR_SUMMARY_FILE:-}" ]; then
+            # Extract the "Changes made:" section, stopping at the next
+            # top-level section header (line starting with a non-dash
+            # alphabetic word followed by a colon).
+            changes_section="$(awk '
+              /^Changes made:/ { in_section=1; next }
+              in_section && /^[A-Za-z].*:/ { exit }
+              in_section { print }
+            ' "${EDITOR_SUMMARY_FILE}")"
+
+            # Check if the section contains substantive entries (not just
+            # "- none" variants).
+            has_real_changes="false"
+            if [ -n "${changes_section}" ]; then
+              # Strip lines that are blank or match "- none*"
+              substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^\s*$' | grep -vE '^\s*-\s*none' || true)"
+              if [ -n "${substantive}" ]; then
+                has_real_changes="true"
+              fi
+            fi
+
+            if [ "${has_real_changes}" = "true" ]; then
+              echo "::error::Editor claimed changes but no files were committed. Serena MCP tool calls likely failed to persist changes on disk."
+              echo "Editor-claimed changes:"
+              printf '%s\n' "${changes_section}" | head -20
+              EDITOR_CHANGES_LOST="true"
+            fi
+          fi
+
+          echo "EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
         # Run conflict detection regardless of max_iterations_reached or
@@ -2955,7 +3000,7 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Mark linked issues ready to merge
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3111,7 +3156,7 @@ jobs:
           fi
 
       - name: Enable auto-merge on PR
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -3301,7 +3346,7 @@ jobs:
           fi
 
       - name: Telegram success
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -3324,6 +3369,44 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
+
+      - name: Telegram editor-changes-lost warning
+        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true'"
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          MSG="⚠️ Editor changes lost: #${PR_NUMBER}"
+          MSG+=$'\n'
+          MSG+="Editor claimed changes but nothing was committed."
+          MSG+=$'\n'
+          MSG+="Serena MCP tool calls likely failed to persist."
+          MSG+=$'\n'
+          MSG+="Auto-merge blocked. Manual review required."
+          MSG+=$'\n'
+          MSG+="PR: ${PR_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "CRITICAL"
+
+          # Also post a warning comment on the PR so the issue is visible
+          BODY="⚠️ **Editor changes lost** — the editor reported making changes but no files were modified on disk."
+          BODY+=$'\n\n'
+          BODY+="Auto-merge has been **blocked** to prevent merging without the intended fixes."
+          BODY+=$'\n'
+          BODY+="The Serena MCP tool calls likely failed to persist the edits."
+          BODY+=$'\n\n'
+          BODY+="**Next steps:** re-run the review workflow or apply the changes manually."
+          BODY+=$'\n'
+          BODY+="See the editor summary comment above for the intended changes."
+          gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
 
       - name: Telegram review-blocked judge decision
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true'
