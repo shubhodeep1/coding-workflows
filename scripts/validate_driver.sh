@@ -353,10 +353,32 @@ run_preflight_checks()
 
 start_compose()
 {
-	if ! docker compose -f "${COMPOSE_FILE}" up -d --build >/dev/null 2>&1; then
+	local build_log
+	build_log="$(mktemp "${TMPDIR:-/tmp}/compose_build.XXXXXX")"
+	if ! docker compose -f "${COMPOSE_FILE}" up -d --build >"${build_log}" 2>&1; then
 		capture_compose_logs
+		# Prepend the build/start output so the log_tail includes the
+		# actual error (e.g. buildx permission denied) that docker emitted
+		# before any container runtime logs.
+		if [ -s "${build_log}" ]; then
+			local merged_log
+			merged_log="$(mktemp "${TMPDIR:-/tmp}/compose_merged.XXXXXX")"
+			{
+				echo "=== docker compose up --build output ==="
+				cat "${build_log}"
+				echo ""
+				if [ -f "${COMPOSE_LOG}" ]; then
+					echo "=== container logs ==="
+					cat "${COMPOSE_LOG}"
+				fi
+			} > "${merged_log}"
+			mkdir -p "$(dirname -- "${COMPOSE_LOG}")" >/dev/null 2>&1 || true
+			mv "${merged_log}" "${COMPOSE_LOG}"
+		fi
+		rm -f "${build_log}"
 		fail_fast "preflight_compose_up" "failed to build/start compose services" "${COMPOSE_LOG}" "startup"
 	fi
+	rm -f "${build_log}"
 
 	capture_compose_logs
 }
