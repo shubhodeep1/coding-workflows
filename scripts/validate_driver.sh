@@ -161,7 +161,14 @@ capture_compose_logs()
 {
 	if [ -f "${COMPOSE_FILE}" ]; then
 		mkdir -p "$(dirname -- "${COMPOSE_LOG}")" >/dev/null 2>&1 || true
-		docker compose -f "${COMPOSE_FILE}" logs --no-color > "${COMPOSE_LOG}" 2>&1 || true
+		local compose_log_tmp
+		compose_log_tmp="$(mktemp "${TMPDIR:-/tmp}/compose_capture.XXXXXX" 2>/dev/null || true)"
+		if [ -n "${compose_log_tmp}" ]; then
+			if docker compose -f "${COMPOSE_FILE}" logs --no-color > "${compose_log_tmp}" 2>&1 && [ -s "${compose_log_tmp}" ]; then
+				mv "${compose_log_tmp}" "${COMPOSE_LOG}"
+			fi
+			rm -f "${compose_log_tmp}" >/dev/null 2>&1 || true
+		fi
 	fi
 }
 
@@ -253,18 +260,28 @@ print(
 
 teardown()
 {
+	local preserve_startup_failure_log=0
+
 	if [ "${TEARDOWN_DONE}" = "1" ]; then
 		return 0
 	fi
 
 	TEARDOWN_DONE=1
-	capture_compose_logs
+	if [ "${RESULT}" = "fail" ] && [ "${PHASE}" = "startup" ]; then
+		preserve_startup_failure_log=1
+	fi
+
+	if [ "${preserve_startup_failure_log}" != "1" ]; then
+		capture_compose_logs
+	fi
 
 	if [ -f "${COMPOSE_FILE}" ]; then
 		docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
 	fi
 
-	capture_compose_logs
+	if [ "${preserve_startup_failure_log}" != "1" ]; then
+		capture_compose_logs
+	fi
 }
 
 mark_unexpected_failure()
