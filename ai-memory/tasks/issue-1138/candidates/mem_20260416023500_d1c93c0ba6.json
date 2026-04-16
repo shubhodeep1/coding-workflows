@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation:\n- No Q<ID> clarification questions were asked in this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpretable as confirmation to proceed with the exact requested scope.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/clarify.yml`\n- `.github/workflows/plan.yml`\n- `.github/workflows/implement.yml`\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `.github/workflows/validate.yml`\n- `tests/test_workflow_checkout_integration_ref_audit.py`\n- `tests/test_orchestrate_lib.py`\n- Optional only if needed: `tests/fixtures/integration_ref_resolver/*.json` (see conflict note below)\n\n2. Functions/modules to implement\n- Replace each workflow\u2019s inline `Resolve integration ref` shell parsing block with a canonical resolver call (prefer one consistent path across all 5 workflows):\n  - `scripts/resolve_integration_ref.sh` (or `scripts/orchestrate_lib.py --print-integration-ref`), with identical fail-open wrapper behavior.\n- Preserve existing workflow contract elements unchanged:\n  - step name `Resolve integration ref`\n  - step id `refctx`\n  - checkout ref expression `steps.refctx.outputs.ref || github.event.repository.default_branch`\n  - checkout logging lines (`Resolved ref`, `git rev-parse HEAD`, `git symbolic-ref --short HEAD` fallback).\n- Keep workflow-specific behavior:\n  - `implement.yml` resolver step `if: env.SKIP_IMPLEMENT != 'true'`\n  - `orchestrate_clarify_respond.yml` resolver step gated by orchestrator check\n  - `validate.yml` uses `inputs.tracking_issue` as current issue source.\n- In `plan.yml`, preserve `integration_branch_meta` output semantics while switching to canonical resolver (set from resolved branch when non-empty).\n\n3. Data structures affected\n- GitHub Actions step outputs from `refctx`:\n  - `ref` (all 5 workflows)\n  - `integration_branch_meta` (plan workflow only)\n- Integration-ref fixture test data shape (if updated/added): `issues`, `branch_exists`, `expected_stdout`, `expected_exit_code`.\n\n4. API/interface changes\n- No external API/interface changes (no new user-facing env vars, commands, or workflow inputs).\n- Internal resolver interface becomes centralized via canonical script invocation.\n- Existing fail-open behavior remains: unresolved/invalid/missing metadata should still result in empty `ref` and default-branch checkout fallback.\n\n5. Potential risks / edge cases\n- Canonical resolver exits non-zero when metadata points to a non-existent branch; workflow steps must catch this and fail-open (do not fail job).\n- Behavior shift risk: old inline logic enforced `^orchestrator/project-[0-9]+$`; canonical resolver validates by branch existence, not strict naming regex. This is expected centralization, but should be noted.\n- `plan.yml` must not lose downstream use of `integration_branch_meta`.\n- Missing issue number / missing tracking issue / GH API transient failures must continue to produce empty `ref` with notice/warning.\n- Ensure no regression in resolver-step ordering before checkout.\n\n6. Testing considerations\n- Extend `tests/test_workflow_checkout_integration_ref_audit.py`:\n  - Keep existing checkout contract assertions.\n  - Add assertion that each required workflow uses canonical resolver invocation (allow one canonical form, or explicitly allow both if desired).\n  - Add assertion that ad-hoc inline parsing markers are absent in required workflows.\n- Extend `tests/test_orchestrate_lib.py`:\n  - Add dedicated regression test explicitly exercising child-missing/tracking-present fallback end-to-end (using existing resolver helpers).\n  - Ensure shell/python parity test still passes.\n- Run targeted tests:\n  - `tests/test_workflow_checkout_integration_ref_audit.py`\n  - integration-ref resolver tests in `tests/test_orchestrate_lib.py` (including self-test/parity path).\n\nFactual conflict detected\n- The issue asks to \u201cadd one end-to-end fixture\u201d for child-missing/tracking-present fallback, but repository already contains `tests/fixtures/integration_ref_resolver/fallback_tracking_issue.json`, and it is already included in parity coverage.\n- Plan: avoid duplicate fixtures unless required; instead add an explicit dedicated test referencing this fixture so the fallback scenario remains a hard regression guard.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f5c46acd9495e00d085d249886ff67c280af7815770215072f12942f3cb73b65",
+  "lineage": {
+    "issue_number": 1138,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24488755917",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24488755917",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1138"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416023500_d1c93c0ba6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1138,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24488755917"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1138",
+  "timestamps": {
+    "created_at": "2026-04-16T02:35:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
