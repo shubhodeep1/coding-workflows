@@ -133,7 +133,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             else:
                 print(context, end="")
             _print_json({"ok": True, "enabled": False, "records_selected": 0, "estimated_tokens": 0, "warning": str(exc)})
-            _emit_telemetry("retrieve", ok=True, enabled=False, records_selected=0, warning="branch_unavailable")
+            _emit_telemetry("retrieve", ok=True, enabled=False, records_selected=0, warning=str(exc))
             return 0
         memory_root = _resolve_memory_root(branch_dir, args.memory_root)
         profiles_path = branch_dir / args.retrieval_profiles
