@@ -475,7 +475,6 @@ jobs:
           printf '%s\n' "${PROJECT_DESCRIPTION}" > "${PROJECT_CONTEXT_FILE}"
 
           SHORTCIRCUIT_REGEX='step\s*\d|phase\s*\d|wave\s*\d|\bthen\b|\bafter\b|\band\s+then\b|multi[- ]?step'
-          DESCRIPTION_LENGTH="$(python3 -c 'import os; print(len(os.environ.get("PROJECT_DESCRIPTION", "")))')"
 
           MAX_CHARS_RAW="${ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS:-1200}"
           if ! [[ "${MAX_CHARS_RAW}" =~ ^[0-9]+$ ]]; then
@@ -490,19 +489,63 @@ jobs:
 
           MARKER_FOUND="false"
           MARKER_SAMPLE=""
+          DESCRIPTION_LENGTH=0
+          RESOLVED_FILES=""
           eval "$(
             PROJECT_DESCRIPTION="${PROJECT_DESCRIPTION}" SHORTCIRCUIT_REGEX="${SHORTCIRCUIT_REGEX}" python3 - <<'PY'
-            import os
-            import re
-            import shlex
+            import os, re, shlex, pathlib
 
             description = os.environ.get("PROJECT_DESCRIPTION", "")
             pattern = os.environ.get("SHORTCIRCUIT_REGEX", "")
-            match = re.search(pattern, description, re.IGNORECASE)
+
+            # Resolve repo-file references embedded in the description.
+            # Detected paths are read from the checkout and their content is
+            # included in both the length and multi-step-marker evaluations so
+            # that a short issue body pointing at a large planning doc is not
+            # incorrectly short-circuited (see issue #1163).
+            FILE_REF_RE = (
+                r'(?<![/\w])'
+                r'(?:\.\/)?'
+                r'([a-zA-Z0-9_][a-zA-Z0-9_./-]*'
+                r'\.(?:md|txt|yml|yaml|json|toml|sh|py|js|ts))'
+                r'(?=\s|[)\]"\'`,:;]|$)'
+            )
+            MAX_PER_FILE = 51200   # 50 KiB per file
+            MAX_TOTAL   = 204800   # 200 KiB total
+
+            resolved_files = []
+            resolved_content = ""
+            total_resolved = 0
+            for m in re.finditer(FILE_REF_RE, description):
+                ref_path = m.group(1)
+                candidate = pathlib.Path(ref_path)
+                if candidate.is_absolute() or ".." in candidate.parts:
+                    continue
+                if not candidate.is_file():
+                    continue
+                try:
+                    content = candidate.read_text(errors="replace")[:MAX_PER_FILE]
+                    if total_resolved + len(content) > MAX_TOTAL:
+                        content = content[:MAX_TOTAL - total_resolved]
+                    resolved_content += "\n" + content
+                    total_resolved += len(content)
+                    resolved_files.append(ref_path)
+                except Exception:
+                    pass
+                if total_resolved >= MAX_TOTAL:
+                    break
+
+            effective = description + resolved_content
+
+            match = re.search(pattern, effective, re.IGNORECASE)
             marker_found = "true" if match else "false"
             marker_sample = match.group(0).rstrip() if match else ""
+
             print(f"MARKER_FOUND={shlex.quote(marker_found)}")
             print(f"MARKER_SAMPLE={shlex.quote(marker_sample)}")
+            print(f"DESCRIPTION_LENGTH={len(effective)}")
+            csv = ",".join(resolved_files) if resolved_files else ""
+            print(f"RESOLVED_FILES={shlex.quote(csv)}")
           PY
           )"
           MARKER_SAMPLE="${MARKER_SAMPLE//$'\r'/ }"
@@ -521,7 +564,7 @@ jobs:
             REASON="multi-step-marker-detected"
           fi
 
-          echo "Short-circuit evaluation: short_circuit=${SHORT_CIRCUIT}, reason=${REASON}, description_length=${DESCRIPTION_LENGTH}, max_chars=${MAX_CHARS}, marker_found=${MARKER_FOUND}, marker_sample=${MARKER_SAMPLE:-none}"
+          echo "Short-circuit evaluation: short_circuit=${SHORT_CIRCUIT}, reason=${REASON}, description_length=${DESCRIPTION_LENGTH}, max_chars=${MAX_CHARS}, marker_found=${MARKER_FOUND}, marker_sample=${MARKER_SAMPLE:-none}, resolved_files=${RESOLVED_FILES:-none}"
 
           {
             echo "short_circuit=${SHORT_CIRCUIT}"
@@ -530,6 +573,7 @@ jobs:
             echo "short_circuit_max_chars=${MAX_CHARS}"
             echo "short_circuit_marker_found=${MARKER_FOUND}"
             echo "short_circuit_marker_sample=${MARKER_SAMPLE}"
+            echo "short_circuit_resolved_files=${RESOLVED_FILES}"
           } >> "$GITHUB_OUTPUT"
 
           {
@@ -538,6 +582,7 @@ jobs:
             echo "ORCHESTRATE_SHORT_CIRCUIT_LENGTH=${DESCRIPTION_LENGTH}"
             echo "ORCHESTRATE_SHORT_CIRCUIT_MARKER_FOUND=${MARKER_FOUND}"
             echo "ORCHESTRATE_SHORT_CIRCUIT_MARKER_SAMPLE=${MARKER_SAMPLE}"
+            echo "ORCHESTRATE_SHORT_CIRCUIT_RESOLVED_FILES=${RESOLVED_FILES}"
           } >> "$GITHUB_ENV"
 
       - name: Create plain issue from project description (short-circuit)
