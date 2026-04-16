@@ -31,6 +31,8 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 
+CALLER_SEARCH_CAP = 10
+
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)")
 FILE_RE = re.compile(r"^\+\+\+ b/(.+)$")
 
@@ -346,7 +348,59 @@ def classify_hunk(hunk, symbols):
     }
 
 
-def generate_summary(diff_text, changed_files_text, project_dir):
+def find_callers(symbol_name, project_dir, exclude_file):
+    """Find files that reference/call symbol_name using grep-based detection.
+
+    Args:
+        symbol_name: The symbol (function/class/method) name to search for.
+        project_dir: Absolute or relative path to the project root.
+        exclude_file: File path (relative to project_dir) where the symbol is
+            defined -- excluded from results.
+
+    Returns:
+        List of file paths (relative to project_dir) that reference the symbol,
+        capped at CALLER_SEARCH_CAP. Returns empty list on any error.
+    """
+    try:
+        abs_project_dir = os.path.abspath(project_dir)
+        proc = subprocess.run(
+            [
+                "grep", "-rl",
+                "--exclude-dir=.git",
+                "--exclude-dir=node_modules",
+                "--exclude-dir=__pycache__",
+                "--exclude-dir=.serena",
+                symbol_name,
+                ".",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=abs_project_dir,
+        )
+        if proc.returncode not in (0, 1):
+            return []
+
+        callers = []
+        exclude_normalized = os.path.normpath(exclude_file)
+        for line in proc.stdout.splitlines():
+            rel_path = line.strip()
+            if not rel_path:
+                continue
+            # grep -rl with "." prefix returns paths like ./src/foo.py
+            if rel_path.startswith("./"):
+                rel_path = rel_path[2:]
+            if os.path.normpath(rel_path) == exclude_normalized:
+                continue
+            callers.append(rel_path)
+            if len(callers) >= CALLER_SEARCH_CAP:
+                break
+        return callers
+    except Exception:
+        return []
+
+
+def generate_summary(diff_text, changed_files_text, project_dir, include_callers=True):
     """Generate symbol-level diff summary."""
     file_hunks = parse_diff_hunks(diff_text)
 
@@ -381,12 +435,24 @@ def generate_summary(diff_text, changed_files_text, project_dir):
 
         output_lines.append(f"FILE: {file_path}")
 
+        seen_symbols = set()
         for hunk in hunks:
             info = classify_hunk(hunk, symbols)
             if info["symbol"]:
                 output_lines.append(
                     f"  {info['type']}: {info['symbol']} (lines {info['lines']})"
                 )
+                if include_callers and info["symbol"] not in seen_symbols:
+                    seen_symbols.add(info["symbol"])
+                    callers = find_callers(info["symbol"], project_dir, file_path)
+                    if callers:
+                        output_lines.append(
+                            f"    CALLERS ({len(callers)}): {', '.join(callers)}"
+                        )
+                    else:
+                        output_lines.append(
+                            "    CALLERS (0): (none found)"
+                        )
             else:
                 output_lines.append(
                     f"  {info['type']}: lines {info['lines']}"
@@ -435,6 +501,12 @@ def main():
         default=".",
         help="Project root directory (default: current directory)",
     )
+    parser.add_argument(
+        "--include-callers",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include 1-hop caller detection per modified symbol (default: True, disable with --no-include-callers)",
+    )
     args = parser.parse_args()
 
     # Read inputs
@@ -451,7 +523,7 @@ def main():
     if not diff_text and not changed_files_text:
         summary = "No diff or changed files available for symbol summary."
     else:
-        summary = generate_summary(diff_text, changed_files_text, args.project_dir)
+        summary = generate_summary(diff_text, changed_files_text, args.project_dir, args.include_callers)
 
     # Write output
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
