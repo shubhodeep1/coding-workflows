@@ -724,7 +724,9 @@ jobs:
           try:
               with open(json_path, "r", encoding="utf-8") as fh:
                   issues = json.load(fh)
-          except (json.JSONDecodeError, TypeError):
+          except (json.JSONDecodeError, TypeError, OSError, UnicodeDecodeError):
+              issues = []
+          if not isinstance(issues, list):
               issues = []
           lines = []
           for iss in issues:
