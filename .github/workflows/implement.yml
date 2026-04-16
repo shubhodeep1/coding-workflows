@@ -1552,8 +1552,10 @@ jobs:
               add_u_excludes+=(':!scripts')
               add_o_excludes+=(':!scripts')
             fi
-            add_u_excludes+=(':!.github/prompts' ':!.github/scripts')
-            add_o_excludes+=(':!prompts' ':!.github/prompts' ':!.github/scripts')
+            # Keep runtime artifact paths out of consumer-repo commits for
+            # both tracked updates (-u) and untracked additions.
+            add_u_excludes+=(':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
+            add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
           fi
           git add -u -- "${add_u_excludes[@]}"
           git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
