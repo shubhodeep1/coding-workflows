@@ -2784,7 +2784,7 @@ handle_comprehensive_release_callback_if_needed() {
     version_tag="$(echo "${metadata_json}" | jq -r '.version_tag // ""' 2>/dev/null || echo "")"
     test_repo="$(echo "${metadata_json}" | jq -r '.test_repo // ""' 2>/dev/null || echo "")"
 
-    if ! [[ "${version_tag}" =~ ^[A-Za-z0-9._/+:-]{1,100}$ ]]; then
+    if ! [[ "${version_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
       version_tag=""
     fi
 

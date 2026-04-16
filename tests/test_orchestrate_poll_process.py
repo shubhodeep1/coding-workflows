@@ -1474,6 +1474,36 @@ def test_comprehensive_pending_complete_dispatches_release_without_optional_meta
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
 
 
+def test_comprehensive_pending_already_complete_dispatches_release():
+	state = _base_state(status="complete")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 353,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert len(result["release_dispatches"]) == 1
+	dispatch = result["release_dispatches"][0]
+	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["dry_run"] == "false"
+	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
+
+
 def test_comprehensive_pending_failed_does_not_dispatch_release():
 	state = _base_state(status="failed")
 	result = _run_poller(
