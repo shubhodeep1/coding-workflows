@@ -27,7 +27,7 @@ from pathlib import Path
 # external data they likely don't have.
 _DATA_PROVISION_PATTERNS = [
 	re.compile(
-		r"(?:provide|supply|share|paste|submit|attach|include|link)\b"
+		r"(?:provide|supply|share|paste|submit|attach|include|link|require(?:s|d)?|need(?:s|ed)?|must\s+(?:provide|supply|share|paste|submit|attach|include|link))\b"
 		r".{0,60}"
 		r"(?:URL|PR\b|pull\s+request|SHA|commit|branch|http|deployment|build\s+output|test\s+result|log\b|screenshot)",
 		re.IGNORECASE,
