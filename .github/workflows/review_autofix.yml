@@ -1934,10 +1934,12 @@ jobs:
               # file-change claims; without this guard those bullets trigger
               # a false-positive EDITOR_CHANGES_LOST error.
               first_line="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | head -1 || true)"
-              # Strip lines that are blank, match "- none*", or are
-              # informational metadata bullets (e.g. "- Validation executed").
-              substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed' || true)"
-              edit_claim_regex='modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)|`[^`]+\.[[:alpha:]]+`'
+              # Strip lines that are blank, match "- none*", are indented
+              # nested sub-bullets (continuations of validation/assumption
+              # headers), or are informational metadata bullets
+              # (e.g. "- Validation executed").
+              substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed|^[[:space:]]{2,}-' || true)"
+              edit_claim_regex='modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)'
               if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)'; then
                 # Preserve contradictory summaries such as "- none" followed
                 # by "- created ...".
@@ -1952,11 +1954,13 @@ jobs:
                   fi
                 fi
               else
-                # Strip lines that are blank, match "- none*", or are
-                # informational metadata (e.g. "- Validation executed: ...")
-                # that the editor may emit when no files changed. Keep
-                # explicit "no changes" lines for contradiction detection.
-                substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed' || true)"
+                # Strip lines that are blank, match "- none*", are indented
+                # nested sub-bullets (continuations of validation/assumption
+                # headers), or are informational metadata
+                # (e.g. "- Validation executed: ...") that the editor may
+                # emit when no files changed. Keep explicit "no changes"
+                # lines for contradiction detection.
+                substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed|^[[:space:]]{2,}-' || true)"
                 if [ -n "${substantive}" ]; then
                   if printf '%s\n' "${substantive}" | grep -qiE 'no (repository )?files were modified|no changes (were )?made|no modifications'; then
                     # Preserve contradictory mixed lines ("no changes, but
