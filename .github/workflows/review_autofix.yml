@@ -1508,8 +1508,10 @@ jobs:
           # "canonical helpers" like review_apply_fixes.sh — be legitimately
           # modified, while still blocking files the editor never touched from
           # riding along in the commit.
-          # Consumer repos are unchanged: they continue to use the ':!scripts'
-          # full-directory exclusion, which already blocks script leaks there.
+          # Consumer repos no longer blanket-exclude ':!scripts' — the
+          # bootstrap-generated scripts/.gitignore handles fetched helpers.
+          # This lets consumer-repo-owned scripts (e.g. scripts/security/)
+          # be committed normally.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
             PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
             : > "${PRE_EDITOR_STATE_FILE}"
@@ -1726,8 +1728,8 @@ jobs:
             done < "${CODEX_TOUCHED_FILE}"
             rm -f "${CODEX_TOUCHED_FILE}"
           else
-            git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+            git add -u -- ':!node_modules' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
+            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
           fi
 
           echo "Staged files before commit:"
@@ -2374,10 +2376,10 @@ jobs:
 
           # Defensive: `git merge --no-commit` auto-stages merged hunks (and
           # conflict-marked hunks) into the index for every path both sides
-          # touched, including protected paths (scripts/, prompts/, .serena/,
+          # touched, including protected paths (prompts/, .serena/,
           # .github/scripts/, .github/prompts/, ai-memory/) when the consumer
           # repo has leaked tracked copies of workflow runtime helpers from an
-          # older buggy run.  The downstream `git add -u -- ':!scripts' …`
+          # older buggy run.  The downstream `git add -u -- ':!prompts' …`
           # exclusion does NOT unstage already-indexed paths, so without this
           # reset the merge commit would carry protected-path changes and
           # trip the commit-gate guard, wasting the whole review run.
@@ -2625,11 +2627,12 @@ jobs:
           # Remove root-level workflow-generated artifacts so they are never
           # committed to caller repos.  Skip when running on coding-workflows
           # itself — these files are actual source code there, not artifacts.
-          # NOTE: scripts/, .serena/, and prompts/ are cleaned up in the final
+          # NOTE: .serena/ and prompts/ are cleaned up in the final
           # "Cleanup temporary artifacts" step because later notification steps
           # (Telegram, labeling) still need scripts/tg_helpers.sh and
-          # scripts/label_helpers.sh.  These directories are already excluded
-          # from git add via ':!scripts', ':!.serena', ':!prompts' patterns.
+          # scripts/label_helpers.sh.  prompts/ and .serena/ are excluded
+          # from git add via ':!.serena', ':!prompts' patterns; fetched
+          # scripts are excluded via the bootstrap-generated scripts/.gitignore.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
@@ -2834,8 +2837,8 @@ jobs:
               done < "${RESOLVER_TOUCHED_FILE}"
               rm -f "${RESOLVER_TOUCHED_FILE}"
             else
-              git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+              git add -u -- ':!node_modules' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
+              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
             fi
             echo "Staged files before commit:"
             STAGED_FILES="$(git diff --cached --name-only || true)"

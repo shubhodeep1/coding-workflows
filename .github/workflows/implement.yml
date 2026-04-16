@@ -1512,13 +1512,21 @@ jobs:
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
-          # Template-owned paths (scripts/, prompts/, .github/prompts/,
+          # Template-owned paths (prompts/, .github/prompts/,
           # .github/scripts/) are fetched from coding-workflows at runtime in
           # consumer repos, and must NOT be committed there — any edit to them
           # in a consumer wrapper would either be a no-op (overwritten next run)
           # or leak a stale copy back into the caller's tree.  In the canonical
           # `*/coding-workflows` repository these paths ARE the source of truth
           # and must be editable, so the excludes are dropped.
+          #
+          # NOTE: scripts/ is NOT blanket-excluded here.  The bootstrap step
+          # writes a scripts/.gitignore that ignores only the runtime-fetched
+          # helpers (gh_helpers.sh, tg_helpers.sh, etc.).  A blanket ':!scripts'
+          # would also block legitimate consumer-repo scripts such as
+          # scripts/security/*.js — which was the root cause of
+          # ai:implementation-failed false-positives on repos that keep their
+          # own scripts under scripts/.
           is_self_repo="false"
           if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then
             is_self_repo="true"
@@ -1526,8 +1534,8 @@ jobs:
           add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
           add_o_excludes=(':!node_modules' ':!.serena' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
           if [ "${is_self_repo}" = "false" ]; then
-            add_u_excludes+=(':!scripts' ':!.github/prompts' ':!.github/scripts')
-            add_o_excludes+=(':!scripts' ':!prompts' ':!.github/prompts' ':!.github/scripts')
+            add_u_excludes+=(':!.github/prompts' ':!.github/scripts')
+            add_o_excludes+=(':!prompts' ':!.github/prompts' ':!.github/scripts')
           fi
           git add -u -- "${add_u_excludes[@]}"
           git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
@@ -1612,7 +1620,7 @@ jobs:
           # re-label the issue and post an explanatory comment.
           if [ -z "$(git diff --cached --name-only)" ]; then
             if [ "${is_self_repo}" = "false" ]; then
-              echo "All Codex changes were filtered out (scripts/, .github/prompts/, .github/scripts/, or fetched-manifest cleanup); nothing to commit."
+              echo "All Codex changes were filtered out (.github/prompts/, .github/scripts/, prompts/, or fetched-manifest cleanup); nothing to commit."
             else
               echo "No staged changes after fetched-manifest cleanup; nothing to commit."
             fi
