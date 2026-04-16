@@ -3544,6 +3544,10 @@ jobs:
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge disabled\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               not_writable)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), branch not writable\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
+              llm_failed_critical_issues|json_parse_failed_critical_issues)
+                MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge LLM failed, deterministic fallback found critical issues\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
+              llm_failed*|json_parse_failed*)
+                MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge LLM failed\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               *)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations)\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
             esac
