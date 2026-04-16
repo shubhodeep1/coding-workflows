@@ -390,8 +390,9 @@ EDITOR_MAX_WALL="${EDITOR_MAX_WALL:-3300}"            # 55 min
 EDITOR_MIN_ATTEMPT_SECS="${EDITOR_MIN_ATTEMPT_SECS:-300}"  # 5 min minimum
 JOB_TIMEOUT_SECS=$((180 * 60))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
+_hb_tmpdir=""
 _hb_fifo=""
-trap '[ -n "${_hb_fifo:-}" ] && rm -f "${_hb_fifo}" 2>/dev/null || true' EXIT
+trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EXIT
 
 attempt=1
 while [ "${attempt}" -le 3 ]; do
@@ -490,8 +491,9 @@ while [ "${attempt}" -le 3 ]; do
   # to avoid a bash 5.2 bug where process substitution combined with
   # backgrounding (&) corrupts the shell's script-file read position,
   # causing spurious syntax errors after the retry loop exits.
-  _hb_fifo="$(mktemp -u /tmp/hb_fifo_editor.XXXXXX)"
-  mkfifo "${_hb_fifo}"
+  _hb_tmpdir="$(mktemp -d /tmp/hb_fifo_editor.XXXXXX)"
+  _hb_fifo="${_hb_tmpdir}/stderr.pipe"
+  mkfifo -m 600 "${_hb_fifo}"
   # Start heartbeat reader in background — reads stderr lines through
   # the FIFO, updates the heartbeat file, and writes to tmp_err.
   (
@@ -511,7 +513,8 @@ while [ "${attempt}" -le 3 ]; do
   wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
   # Wait for the heartbeat reader to finish draining the FIFO.
   wait "${_hb_reader_pid}" 2>/dev/null || true
-  rm -f "${_hb_fifo}"
+  rm -rf "${_hb_tmpdir}"
+  _hb_tmpdir=""
   _hb_fifo=""
 
   kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
