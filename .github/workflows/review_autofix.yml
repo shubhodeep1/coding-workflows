@@ -62,6 +62,7 @@ env:
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+  ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
 
 jobs:
   gate:
@@ -312,7 +313,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh build_issue_consensus.py"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -489,6 +490,7 @@ jobs:
             echo "EDITOR_SUMMARY_FILE=${RUNTIME_DIR}/editor_summary.txt"
             echo "PR_EDITOR_COMMENT_FILE=${RUNTIME_DIR}/pr_editor_comment.txt"
             echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
+            echo "LINKED_ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/linked_issue_context.txt"
             echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
             echo "CONFLICT_RESOLVER_PROMPT_FILE=${RUNTIME_DIR}/conflict_resolver_prompt.txt"
             echo "CONFLICT_RESOLVER_SUMMARY_FILE=${RUNTIME_DIR}/conflict_resolver_summary.txt"
@@ -684,6 +686,51 @@ jobs:
             headRefName: (.head.ref // ""),
             headRepoFullName: (.head.repo.full_name // "")
           }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+
+          # Fetch linked issue title+body via GraphQL — single call that also
+          # populates LINKED_ISSUES_JSON early so the late-stage "Cache linked
+          # issues references" step can skip its own fetch.
+          # Audited existing calls: the only other closingIssuesReferences
+          # fetch is in the post-review "Cache linked issues references" step
+          # (line ~2986) which fetches numbers only. This call supersedes it
+          # by fetching title+body as well, and we set LINKED_ISSUES_JSON
+          # here so the later step becomes a no-op cache read.
+          # NOTE: first:50 matches the GitHub GraphQL API maximum for this
+          # field; PRs with more than 50 linked issues will be silently
+          # truncated (an extremely rare edge case in practice).
+          _linked_raw="$(gh api graphql \
+            -f owner="${{ github.repository_owner }}" \
+            -f name="$(echo '${{ github.repository }}' | cut -d/ -f2)" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null || echo '[]')"
+          _linked_raw="$(printf '%s' "${_linked_raw}" | jq -c '.' 2>/dev/null || echo '[]')"
+          printf 'LINKED_ISSUES_JSON=%s\n' "${_linked_raw}" >> "$GITHUB_ENV"
+
+          # Build linked issue context file for reviewer/editor prompts.
+          PYTHONDONTWRITEBYTECODE=1 python3 - "${_linked_raw}" "${LINKED_ISSUE_CONTEXT_FILE}" <<'PYLINKED'
+          import json, sys
+          raw = sys.argv[1]
+          out_path = sys.argv[2]
+          try:
+              issues = json.loads(raw)
+          except (json.JSONDecodeError, TypeError):
+              issues = []
+          lines = []
+          for iss in issues:
+              num = iss.get("number", "?")
+              title = iss.get("title", "")
+              body = iss.get("body", "")
+              lines.append(f"Issue #{num}: {title}")
+              if body:
+                  lines.append(body)
+              lines.append("")
+          if not lines:
+              lines.append("No linked issues found.")
+          with open(out_path, "w", encoding="utf-8") as fh:
+              fh.write("\n".join(lines))
+          PYLINKED
+          echo "Linked issue context bytes: $(wc -c < "${LINKED_ISSUE_CONTEXT_FILE}" | tr -d '[:space:]')"
 
           PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
           import json
@@ -1277,50 +1324,42 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
-      - name: Filter reviewer issues by consensus
+      - name: Build issue-level consensus from reviewer outputs
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
-        env:
-          TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
           set -euo pipefail
 
-          REVIEWER_FILE_FREQUENCY_FILE="${RUNTIME_DIR}/reviewer_file_frequency.txt"
-
-          if ! find "${PREVIOUS_REVIEWS_DIR}" -maxdepth 1 -type f -name 'review_*.txt' | grep -q .; then
-            echo "No reviewer output files found for consensus filtering."
-            {
-              echo "High confidence files (mentioned by >=2 reviewers):"
-              echo "(none)"
-              echo
-              echo "Low confidence files (mentioned by 1 reviewer):"
-              echo "(none)"
-            } > "${REVIEWER_CONSENSUS_FILE}"
-            : > "${REVIEWER_FILE_FREQUENCY_FILE}"
-            exit 0
+          # Issue-level consensus: deduplicates findings across reviewers by
+          # file + line proximity + keyword overlap. Falls back to empty
+          # placeholder on any error. Output includes a backward-compatible
+          # FILE-LEVEL SUMMARY section at the bottom.
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/build_issue_consensus.py" ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/build_issue_consensus.py" \
+              --reviews-dir "${PREVIOUS_REVIEWS_DIR}" \
+              --output "${REVIEWER_CONSENSUS_FILE}" || {
+                echo "::warning::Issue consensus script failed; falling back to legacy file-level consensus."
+                # Legacy fallback: file-level only
+                REVIEWER_FILE_FREQUENCY_FILE="${RUNTIME_DIR}/reviewer_file_frequency.txt"
+                if grep "File:" "${PREVIOUS_REVIEWS_DIR}"/review_*.txt 2>/dev/null |
+                   sed 's/.*File: //' |
+                   sort | uniq -c > "${REVIEWER_FILE_FREQUENCY_FILE}" 2>/dev/null; then
+                  {
+                    echo "High confidence files (mentioned by >=2 reviewers):"
+                    awk '$1 >= 2 {print $2}' "${REVIEWER_FILE_FREQUENCY_FILE}" || echo "(none)"
+                    echo
+                    echo "Low confidence files (mentioned by 1 reviewer):"
+                    awk '$1 == 1 {print $2}' "${REVIEWER_FILE_FREQUENCY_FILE}" || echo "(none)"
+                  } > "${REVIEWER_CONSENSUS_FILE}"
+                else
+                  printf 'High confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n(none)\n' > "${REVIEWER_CONSENSUS_FILE}"
+                fi
+              }
+          else
+            echo "::warning::build_issue_consensus.py not found; writing empty consensus."
+            printf 'High confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n(none)\n' > "${REVIEWER_CONSENSUS_FILE}"
           fi
 
-          if ! grep "File:" "${PREVIOUS_REVIEWS_DIR}"/review_*.txt |
-             sed 's/.*File: //' |
-             sort | uniq -c > "${REVIEWER_FILE_FREQUENCY_FILE}"; then
-            echo "No 'File:' markers found in reviewer outputs — reviewers may have found no file-level issues."
-            : > "${REVIEWER_FILE_FREQUENCY_FILE}"
-          fi
-
-          {
-            echo "High confidence files (mentioned by >=2 reviewers):"
-            if awk '$1 >= 2 {print $2}' "${REVIEWER_FILE_FREQUENCY_FILE}" | grep -q .; then
-              awk '$1 >= 2 {print $2}' "${REVIEWER_FILE_FREQUENCY_FILE}"
-            else
-              echo "(none)"
-            fi
-            echo
-            echo "Low confidence files (mentioned by 1 reviewer):"
-            if awk '$1 == 1 {print $2}' "${REVIEWER_FILE_FREQUENCY_FILE}" | grep -q .; then
-              awk '$1 == 1 {print $2}' "${REVIEWER_FILE_FREQUENCY_FILE}"
-            else
-              echo "(none)"
-            fi
-          } > "${REVIEWER_CONSENSUS_FILE}"
+          echo "Consensus file bytes: $(wc -c < "${REVIEWER_CONSENSUS_FILE}" | tr -d '[:space:]')"
 
       - name: Record reviewer consensus candidate in memory (fail-open)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
@@ -2933,18 +2972,25 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set +e
-          if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
-            source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          # Reuse LINKED_ISSUES_JSON from the early "Collect PR metadata" step
+          # which already fetched closingIssuesReferences via GraphQL (with
+          # title+body). Only re-fetch if the early step failed to set it.
+          if [ -n "${LINKED_ISSUES_JSON:-}" ] && [ "${LINKED_ISSUES_JSON}" != "[]" ]; then
+            echo "Linked issues already cached from early fetch: ${LINKED_ISSUES_JSON}"
+          else
+            if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
+              source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+            fi
+            type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+            LINKED_ISSUES_JSON="$(gh_retry gh api graphql \
+              -f owner="${REPOSITORY%/*}" \
+              -f name="${REPOSITORY#*/}" \
+              -F number="${PR_NUMBER}" \
+              -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null || echo '[]')"
+            LINKED_ISSUES_JSON="$(printf '%s' "${LINKED_ISSUES_JSON}" | jq -c '.' 2>/dev/null || echo '[]')"
+            printf 'LINKED_ISSUES_JSON=%s\n' "${LINKED_ISSUES_JSON}" >> "$GITHUB_ENV"
           fi
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          LINKED_ISSUES_JSON="$(gh_retry gh api graphql \
-            -f owner="${REPOSITORY%/*}" \
-            -f name="${REPOSITORY#*/}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null || echo '[]')"
-          LINKED_ISSUES_JSON="$(printf '%s' "${LINKED_ISSUES_JSON}" | jq -c '.' 2>/dev/null || echo '[]')"
-          printf 'LINKED_ISSUES_JSON=%s\n' "${LINKED_ISSUES_JSON}" >> "$GITHUB_ENV"
 
       - name: Telegram conflict resolution message
         if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true'
@@ -3755,7 +3801,7 @@ jobs:
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
-            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh
+            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/build_issue_consensus.py
             rm -rf .serena prompts
             rm -f .github/ai/orchestrate_schema.v1.json
           fi
