@@ -1855,9 +1855,26 @@ jobs:
                 if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
                   echo "Attempting rebase onto origin/${TARGET_BRANCH} to reconcile non-fast-forward..."
                   if ! git rebase "origin/${TARGET_BRANCH}"; then
-                    echo "::error::Rebase failed due to conflicts. Manual resolution required."
-                    echo "::warning::Aborting rebase — git state may need manual inspection if abort fails."
                     git rebase --abort || true
+                    # ai/issue-* branches are unprotected bot branches.  When the
+                    # integration branch has moved forward (e.g. a sibling sub-issue
+                    # merged) the stale remote ai/issue-* cannot be cleanly rebased
+                    # onto.  Fall back to --force-with-lease so the fresh local
+                    # commit (based on the latest integration branch) supersedes the
+                    # stale remote rather than failing the entire implementation run.
+                    if [[ "${TARGET_BRANCH}" =~ ^ai/issue-[0-9]+$ ]]; then
+                      echo "::warning::Rebase failed due to conflicts on bot branch ${TARGET_BRANCH}; falling back to --force-with-lease push."
+                      REMOTE_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
+                      if git push -u origin "HEAD:${TARGET_BRANCH}" \
+                           --force-with-lease="refs/heads/${TARGET_BRANCH}:${REMOTE_SHA}"; then
+                        echo "Force-with-lease push succeeded after rebase conflict on ${TARGET_BRANCH}."
+                        exit 0
+                      fi
+                      echo "::error::Force-with-lease push also failed on ${TARGET_BRANCH}."
+                    else
+                      echo "::error::Rebase failed due to conflicts. Manual resolution required."
+                    fi
+                    echo "::warning::Aborting rebase — git state may need manual inspection if abort fails."
                     exit 1
                   fi
                   echo "Rebase onto origin/${TARGET_BRANCH} succeeded; retrying push."
