@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 1\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: README.md, agents.md\n      Problem: Documentation accurately describes the implementation; Does not fail - documentation correctly matches code behavior\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nREADME.md, agents.md",
+  "fingerprint": "d715b28fbd0cec390c6d1900d5512d65eda5d47dc8685b24987677242cf70616",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1246,
+    "run_id": "24538791375",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24538791375",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416234900_bee82456cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1246,
+    "run_id": "24538791375"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-16T23:49:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
