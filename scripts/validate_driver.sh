@@ -171,7 +171,9 @@ capture_compose_logs()
 		if [ -n "${compose_log_tmp}" ]; then
 			docker compose -f "${COMPOSE_FILE}" logs --no-color > "${compose_log_tmp}" 2>&1 || true
 			if [ -s "${compose_log_tmp}" ]; then
-				mv "${compose_log_tmp}" "${COMPOSE_LOG}"
+				if ! mv "${compose_log_tmp}" "${COMPOSE_LOG}" 2>/dev/null; then
+					cp "${compose_log_tmp}" "${COMPOSE_LOG}" 2>/dev/null || true
+				fi
 			fi
 			rm -f "${compose_log_tmp}" >/dev/null 2>&1 || true
 		fi
@@ -188,7 +190,18 @@ capture_service_logs()
 	local dest="${LOG_DIR}/${safe_service}.log"
 	if [ -f "${COMPOSE_FILE}" ]; then
 		mkdir -p "$(dirname -- "${dest}")" >/dev/null 2>&1 || true
-		docker compose -f "${COMPOSE_FILE}" logs --no-color -- "${service}" > "${dest}" 2>&1 || true
+		: > "${dest}" 2>/dev/null || true
+		local service_log_tmp
+		service_log_tmp="$(mktemp "${TMPDIR:-/tmp}/service_capture.XXXXXX" 2>/dev/null || true)"
+		if [ -n "${service_log_tmp}" ]; then
+			docker compose -f "${COMPOSE_FILE}" logs --no-color -- "${service}" > "${service_log_tmp}" 2>&1 || true
+			if [ -s "${service_log_tmp}" ]; then
+				if ! mv "${service_log_tmp}" "${dest}" 2>/dev/null; then
+					cp "${service_log_tmp}" "${dest}" 2>/dev/null || true
+				fi
+			fi
+			rm -f "${service_log_tmp}" >/dev/null 2>&1 || true
+		fi
 	fi
 }
 
@@ -280,18 +293,18 @@ print(
 
 teardown()
 {
-	local preserve_startup_failure_log=0
+	local preserve_failure_log=0
 
 	if [ "${TEARDOWN_DONE}" = "1" ]; then
 		return 0
 	fi
 
 	TEARDOWN_DONE=1
-	if [ "${RESULT}" = "fail" ] && [ "${PHASE}" = "startup" ]; then
-		preserve_startup_failure_log=1
+	if [ "${RESULT}" = "fail" ] && { [ "${PHASE}" = "startup" ] || [ "${PHASE}" = "health" ]; }; then
+		preserve_failure_log=1
 	fi
 
-	if [ "${preserve_startup_failure_log}" != "1" ]; then
+	if [ "${preserve_failure_log}" != "1" ]; then
 		# Capture live container logs BEFORE docker compose down. These are the
 		# diagnostically valuable logs. Save an immutable pre-down copy so the
 		# post-down capture (which may be near-empty) cannot overwrite them.
@@ -305,7 +318,7 @@ teardown()
 		docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
 	fi
 
-	if [ "${preserve_startup_failure_log}" != "1" ]; then
+	if [ "${preserve_failure_log}" != "1" ]; then
 		# Post-down capture for any final shutdown messages; the primary artifact
 		# is the pre_down copy above.
 		capture_compose_logs
@@ -422,7 +435,10 @@ start_compose()
 				fi
 			} > "${merged_log}"
 			mkdir -p "$(dirname -- "${COMPOSE_LOG}")" >/dev/null 2>&1 || true
-			mv "${merged_log}" "${COMPOSE_LOG}"
+			if ! mv "${merged_log}" "${COMPOSE_LOG}" 2>/dev/null; then
+				cp "${merged_log}" "${COMPOSE_LOG}" 2>/dev/null || true
+				rm -f "${merged_log}" >/dev/null 2>&1 || true
+			fi
 		fi
 		rm -f "${build_log}" >/dev/null 2>&1 || true
 		fail_fast "preflight_compose_up" "failed to build/start compose services" "${COMPOSE_LOG}" "startup" 1
@@ -453,7 +469,10 @@ wait_for_health()
 		service_ready=0
 		url_ready=1
 
-		container_id="$(docker compose -f "${COMPOSE_FILE}" ps -q -- "${APP_SERVICE}" | head -n1 || true)"
+		container_id="$(docker compose -f "${COMPOSE_FILE}" ps -q --all -- "${APP_SERVICE}" 2>/dev/null | head -n1 || true)"
+		if [ -z "${container_id}" ]; then
+			container_id="$(docker compose -f "${COMPOSE_FILE}" ps -q -- "${APP_SERVICE}" 2>/dev/null | head -n1 || true)"
+		fi
 		if [ -n "${container_id}" ]; then
 			running="$(docker inspect -f '{{.State.Running}}' "${container_id}" 2>/dev/null || echo false)"
 			health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${container_id}" 2>/dev/null || echo unknown)"
@@ -505,18 +524,20 @@ wait_for_health()
 			app_log_tail="$(tail -n "${TAIL_LINES}" "${app_service_log}" 2>/dev/null || echo "(no service log)")"
 			{
 				echo "=== ${APP_SERVICE} timeout diagnostics ==="
+				# Write app log tail first so the final tailed failure payload
+				# still retains infra diagnostics at the end.
+				echo "--- ${APP_SERVICE} log tail ---"
+				echo "${app_log_tail}"
 				echo "--- docker compose ps ---"
 				docker compose -f "${COMPOSE_FILE}" ps 2>&1 || true
 				if [ -n "${container_id}" ]; then
 					echo "--- docker inspect state (${APP_SERVICE}) ---"
-					docker inspect -f 'Status={{.State.Status}} Running={{.State.Running}} ExitCode={{.State.ExitCode}} RestartCount={{.RestartCount}} Health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+					docker inspect -f 'Status={{.State.Status}} Running={{.State.Running}} ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} RestartCount={{.RestartCount}} Health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
 						"${container_id}" 2>&1 || true
 					echo "--- docker inspect health log (${APP_SERVICE}) ---"
-						docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}{{.Output}}{{end}}{{else}}no healthcheck configured{{end}}' \
-							"${container_id}" 2>&1 || true
+					docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}exit={{.ExitCode}} start={{.Start}} output={{.Output}}{{"\n"}}{{end}}{{else}}no healthcheck configured{{end}}' \
+						"${container_id}" 2>&1 | tail -n 5 || true
 				fi
-				echo "--- ${APP_SERVICE} log tail ---"
-				echo "${app_log_tail}"
 				echo "=== end diagnostics ==="
 			} >> "${app_service_log}" 2>&1 || true
 			capture_compose_logs
