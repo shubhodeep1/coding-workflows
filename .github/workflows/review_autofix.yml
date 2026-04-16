@@ -1997,8 +1997,10 @@ jobs:
             # "- none" variants).
             has_real_changes="false"
             if [ -n "${changes_section}" ]; then
-              # Strip lines that are blank or match "- none*"
-              substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' || true)"
+              # Strip lines that are blank, match "- none*", or are
+              # informational metadata (e.g. "- Validation executed: ...")
+              # that the editor emits alongside "- none" when no files changed.
+              substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' | grep -viE '^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)' || true)"
               if [ -n "${substantive}" ]; then
                 has_real_changes="true"
               fi
