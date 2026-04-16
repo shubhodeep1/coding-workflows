@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/implement.yml\n`.github/workflows/implement.yml`\n\nLow confidence files (mentioned by 1 reviewer):\n`.github/workflows/impl",
+  "fingerprint": "03d823ac2a4c4116f8d96a93514429cbec294cf50bfcf1c7543d084c999c9552",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1183,
+    "run_id": "24508197903",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24508197903",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416114643_ec39d80823",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1183,
+    "run_id": "24508197903"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T11:46:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
