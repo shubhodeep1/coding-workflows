@@ -617,10 +617,14 @@ def select_runs_for_log_export_categories(
         [run for run in eligible if (run.get("conclusion") or "").lower() == "failure"]
     )
 
+    runs_by_repository: dict[str, list[dict[str, Any]]] = {}
+    for run in eligible:
+        repository = str(run.get("repository"))
+        runs_by_repository.setdefault(repository, []).append(run)
+
     slow_runs: list[dict[str, Any]] = []
-    repositories = sorted({str(run.get("repository")) for run in eligible})
-    for repository in repositories:
-        repo_runs = [run for run in eligible if str(run.get("repository")) == repository]
+    for repository in sorted(runs_by_repository):
+        repo_runs = runs_by_repository[repository]
         repo_runs.sort(
             key=lambda item: (
                 _to_int(item.get("duration_seconds"), 0),
@@ -881,14 +885,24 @@ def main(argv: list[str] | None = None) -> int:
 
     run_rows.sort(key=lambda item: (item.get("created_at") or ""), reverse=True)
     if args.log_output_dir:
-        export_categorized_logs(
-            Path(args.log_output_dir),
-            run_rows,
-            max_log_runs=args.max_log_runs,
-            token=token,
-            errors=errors,
-            log_archive_cache=log_archive_cache,
-        )
+        try:
+            export_categorized_logs(
+                Path(args.log_output_dir),
+                run_rows,
+                max_log_runs=args.max_log_runs,
+                token=token,
+                errors=errors,
+                log_archive_cache=log_archive_cache,
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(
+                {
+                    "repository": "",
+                    "run_id": "",
+                    "scope": "log_export",
+                    "message": str(exc),
+                }
+            )
 
     errors = _dedupe_errors(errors)
     report = build_report(repositories, run_rows, errors)
