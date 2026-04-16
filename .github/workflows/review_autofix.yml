@@ -698,13 +698,16 @@ jobs:
           # NOTE: first:50 matches the GitHub GraphQL API maximum for this
           # field; PRs with more than 50 linked issues will be silently
           # truncated (an extremely rare edge case in practice).
-          _linked_raw="$(gh api graphql \
+          _linked_issues_tmp="$(mktemp)"
+          gh api graphql \
             -f owner="${{ github.repository_owner }}" \
             -f name="$(echo '${{ github.repository }}' | cut -d/ -f2)" \
             -F number="${PR_NUMBER}" \
             -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null || echo '[]')"
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' > "${_linked_issues_tmp}" 2>/dev/null || printf '[]' > "${_linked_issues_tmp}"
+          _linked_raw="$(cat "${_linked_issues_tmp}" 2>/dev/null || echo '[]')"
           _linked_raw="$(printf '%s' "${_linked_raw}" | jq -c '.' 2>/dev/null || echo '[]')"
+          rm -f "${_linked_issues_tmp}" || true
           printf 'LINKED_ISSUES_JSON=%s\n' "${_linked_raw}" >> "$GITHUB_ENV"
 
           # Build linked issue context file for reviewer/editor prompts.

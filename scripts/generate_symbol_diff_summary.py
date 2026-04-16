@@ -365,7 +365,7 @@ def find_callers(symbol_name, project_dir, exclude_file):
         abs_project_dir = os.path.abspath(project_dir)
         proc = subprocess.run(
             [
-                "grep", "-rlF",
+                "grep", "-rlFw",
                 "--exclude-dir=.git",
                 "--exclude-dir=node_modules",
                 "--exclude-dir=__pycache__",

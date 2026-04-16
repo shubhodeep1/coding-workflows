@@ -96,8 +96,9 @@ def parse_review_file(path: Path) -> list[Issue]:
 				continue
 			cm = _CODE_RE.match(ln)
 			if cm:
-				code_ref = cm.group(1).strip()
-				line_number = line_number or _extract_line(code_ref)
+				new_code_ref = cm.group(1).strip()
+				code_ref = f"{code_ref}; {new_code_ref}" if code_ref and new_code_ref else (new_code_ref or code_ref)
+				line_number = line_number or _extract_line(new_code_ref)
 				continue
 			cfm = _CONF_RE.match(ln)
 			if cfm:
