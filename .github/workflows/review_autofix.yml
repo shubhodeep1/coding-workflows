@@ -1995,7 +1995,7 @@ jobs:
 
             # Check if the section contains substantive entries (not just
             # "- none" variants or investigation-report lines that explicitly
-            # state no changes were made).
+            # state no changes were made.
             has_real_changes="false"
             if [ -n "${changes_section}" ]; then
               # Strip lines that are blank, match "- none*", or explicitly
