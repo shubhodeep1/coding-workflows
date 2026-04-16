@@ -161,7 +161,15 @@ capture_compose_logs()
 {
 	if [ -f "${COMPOSE_FILE}" ]; then
 		mkdir -p "$(dirname -- "${COMPOSE_LOG}")" >/dev/null 2>&1 || true
-		docker compose -f "${COMPOSE_FILE}" logs --no-color > "${COMPOSE_LOG}" 2>&1 || true
+		local compose_log_tmp
+		compose_log_tmp="$(mktemp "${TMPDIR:-/tmp}/compose_capture.XXXXXX" 2>/dev/null || true)"
+		if [ -n "${compose_log_tmp}" ]; then
+			docker compose -f "${COMPOSE_FILE}" logs --no-color > "${compose_log_tmp}" 2>&1 || true
+			if [ -s "${compose_log_tmp}" ]; then
+				mv "${compose_log_tmp}" "${COMPOSE_LOG}"
+			fi
+			rm -f "${compose_log_tmp}" >/dev/null 2>&1 || true
+		fi
 	fi
 }
 
@@ -170,9 +178,12 @@ append_failure()
 	local test_name="$1"
 	local error_message="$2"
 	local log_source="${3:-}"
+	local skip_capture="${4:-0}"
 	local log_tail=""
 
-	capture_compose_logs
+	if [ "${skip_capture}" != "1" ]; then
+		capture_compose_logs
+	fi
 
 	if [ -n "${log_source}" ] && [ -f "${log_source}" ]; then
 		log_tail="$(tail -n "${TAIL_LINES}" "${log_source}" 2>/dev/null || true)"
@@ -250,18 +261,28 @@ print(
 
 teardown()
 {
+	local preserve_startup_failure_log=0
+
 	if [ "${TEARDOWN_DONE}" = "1" ]; then
 		return 0
 	fi
 
 	TEARDOWN_DONE=1
-	capture_compose_logs
+	if [ "${RESULT}" = "fail" ] && [ "${PHASE}" = "startup" ]; then
+		preserve_startup_failure_log=1
+	fi
+
+	if [ "${preserve_startup_failure_log}" != "1" ]; then
+		capture_compose_logs
+	fi
 
 	if [ -f "${COMPOSE_FILE}" ]; then
 		docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
 	fi
 
-	capture_compose_logs
+	if [ "${preserve_startup_failure_log}" != "1" ]; then
+		capture_compose_logs
+	fi
 }
 
 mark_unexpected_failure()
@@ -303,9 +324,10 @@ fail_fast()
 	local error_message="$2"
 	local log_source="${3:-${COMPOSE_LOG}}"
 	local fail_phase="${4:-runtime_validation}"
+	local skip_capture="${5:-0}"
 
 	echo "${error_message}" >&2
-	append_failure "${test_name}" "${error_message}" "${log_source}"
+	append_failure "${test_name}" "${error_message}" "${log_source}" "${skip_capture}"
 	TOTAL_TESTS=$((TOTAL_TESTS + 1))
 	FAILED_TESTS=$((FAILED_TESTS + 1))
 	RESULT="fail"
@@ -353,10 +375,32 @@ run_preflight_checks()
 
 start_compose()
 {
-	if ! docker compose -f "${COMPOSE_FILE}" up -d --build >/dev/null 2>&1; then
+	local build_log
+	build_log="$(mktemp "${TMPDIR:-/tmp}/compose_build.XXXXXX")" || fail_fast "preflight_compose_up" "failed to create temp file for compose build output" "${COMPOSE_LOG}" "startup"
+	if ! docker compose -f "${COMPOSE_FILE}" up -d --build >"${build_log}" 2>&1; then
 		capture_compose_logs
-		fail_fast "preflight_compose_up" "failed to build/start compose services" "${COMPOSE_LOG}" "startup"
+		# Prepend the build/start output so the log_tail includes the
+		# actual error (e.g. buildx permission denied) that docker emitted
+		# before any container runtime logs.
+		if [ -s "${build_log}" ]; then
+			local merged_log
+			merged_log="$(mktemp "${TMPDIR:-/tmp}/compose_merged.XXXXXX")" || fail_fast "preflight_compose_up" "failed to create temp file for compose merged output" "${build_log}" "startup" 1
+			{
+				echo "=== docker compose up --build output ==="
+				cat "${build_log}"
+				echo ""
+				if [ -f "${COMPOSE_LOG}" ]; then
+					echo "=== container logs ==="
+					cat "${COMPOSE_LOG}"
+				fi
+			} > "${merged_log}"
+			mkdir -p "$(dirname -- "${COMPOSE_LOG}")" >/dev/null 2>&1 || true
+			mv "${merged_log}" "${COMPOSE_LOG}"
+		fi
+		rm -f "${build_log}" >/dev/null 2>&1 || true
+		fail_fast "preflight_compose_up" "failed to build/start compose services" "${COMPOSE_LOG}" "startup" 1
 	fi
+	rm -f "${build_log}" >/dev/null 2>&1 || true
 
 	capture_compose_logs
 }
