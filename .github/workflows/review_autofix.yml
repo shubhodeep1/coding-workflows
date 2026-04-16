@@ -1940,7 +1940,7 @@ jobs:
                   | grep -viE '^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)' \
                   | grep -viE 'no (repository |repo |code |file )?changes([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)([[:space:][:punct:]]*)$' \
                   | grep -viE 'no (repository |repo |code |file )?(modifications|edits)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)([[:space:][:punct:]]*)$' \
-                  | grep -viE 'no .* file changes([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)([[:space:][:punct:]]*)$' \
+                  | grep -viE 'no .*file changes([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)([[:space:][:punct:]]*)$' \
                   || true)"
                 if [ -n "${substantive}" ]; then
                   has_real_changes="true"
@@ -2016,7 +2016,7 @@ jobs:
                 || true)"
 
               if [ -z "${real_audit}" ]; then
-                echo "::warning::${REVIEWERS_SUCCESSFUL} reviewer(s) succeeded but editor audit section is empty or contains only fallback text."
+                echo "::warning::${REVIEWERS_SUCCESSFUL:-0} reviewer(s) succeeded but editor audit section is empty or contains only fallback text."
                 EDITOR_NOOP_SUSPICIOUS="true"
               else
                 # Parse each audit entry and verify total == applied + already_applied + ignored.
