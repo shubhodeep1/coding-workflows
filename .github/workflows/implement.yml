@@ -1512,13 +1512,14 @@ jobs:
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
-          # Template-owned paths (scripts/, prompts/, .github/prompts/,
-          # .github/scripts/) are fetched from coding-workflows at runtime in
-          # consumer repos, and must NOT be committed there — any edit to them
-          # in a consumer wrapper would either be a no-op (overwritten next run)
-          # or leak a stale copy back into the caller's tree.  In the canonical
-          # `*/coding-workflows` repository these paths ARE the source of truth
-          # and must be editable, so the excludes are dropped.
+          # Template-owned helper scripts (listed in scripts/.gitignore),
+          # prompts/, .github/prompts/, and .github/scripts/ are fetched from
+          # coding-workflows at runtime in consumer repos, and must NOT be
+          # committed there.  Consumer-repo-owned scripts (e.g.
+          # scripts/security/*.js) ARE committed — the exclusion targets only
+          # the specific fetched helpers, not the whole scripts/ directory.
+          # In the canonical `*/coding-workflows` repository these paths ARE
+          # the source of truth and must be editable, so excludes are dropped.
           is_self_repo="false"
           if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then
             is_self_repo="true"
@@ -1526,8 +1527,26 @@ jobs:
           add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
           add_o_excludes=(':!node_modules' ':!.serena' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
           if [ "${is_self_repo}" = "false" ]; then
-            add_u_excludes+=(':!scripts' ':!.github/prompts' ':!.github/scripts')
-            add_o_excludes+=(':!scripts' ':!prompts' ':!.github/prompts' ':!.github/scripts')
+            # Build per-file exclusions from the runtime-generated scripts/.gitignore
+            # instead of a blanket ':!scripts'.  The blanket exclusion previously
+            # blocked ALL consumer-repo-owned files under scripts/ (e.g.
+            # scripts/security/check-npm-audit.js), causing silent no-op commits.
+            # The .gitignore lists exactly the fetched coding-workflows helper
+            # scripts that must NOT be committed to consumer repos.
+            if [ -f scripts/.gitignore ]; then
+              while IFS= read -r _ign_entry; do
+                [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
+                add_u_excludes+=(":!scripts/${_ign_entry}")
+                add_o_excludes+=(":!scripts/${_ign_entry}")
+              done < scripts/.gitignore
+            else
+              # Fallback: if .gitignore was not created (bootstrap failure), use
+              # blanket exclusion for safety — same as the legacy behaviour.
+              add_u_excludes+=(':!scripts')
+              add_o_excludes+=(':!scripts')
+            fi
+            add_u_excludes+=(':!.github/prompts' ':!.github/scripts')
+            add_o_excludes+=(':!prompts' ':!.github/prompts' ':!.github/scripts')
           fi
           git add -u -- "${add_u_excludes[@]}"
           git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
