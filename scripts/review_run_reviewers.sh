@@ -167,7 +167,57 @@ PROMPT_RUNTIME_CONTEXT_HINT="$(printf '%s\n' \
   'Useful files include git_status.txt, git_diff_stat.txt, shallow_tree.txt, environment_sorted.txt, recent_commits.txt, branches.txt, workflow_snapshot.yml, and run_logs_best_effort.txt.' \
   "Example command: cat ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
 
+# Detect whether this is the first review iteration (no prior AI autofix run).
+IS_FIRST_ITERATION=false
+if grep -q '^No previous AI autofix' "${LAST_RUN_DIFF_FILE}" 2>/dev/null; then
+  IS_FIRST_ITERATION=true
+fi
+
+# Build iteration-awareness block for the reviewer prompt.
+if [ "${IS_FIRST_ITERATION}" = "true" ]; then
+  ITERATION_CONTEXT_BLOCK="$(printf '%s\n' \
+    'ITERATION CONTEXT' \
+    'This is the FIRST review pass for this PR. There is no previous AI autofix run.' \
+    'Analyze the FULL PR DIFF thoroughly — every changed file and hunk matters.' \
+    'Do not skip any area of the patch. Your findings will drive the initial fix.' \
+    'Be comprehensive: identify ALL issues in a single pass to minimize the need for future iterations.')"
+else
+  ITERATION_CONTEXT_BLOCK="$(printf '%s\n' \
+    'ITERATION CONTEXT' \
+    'This is a SUBSEQUENT review pass. A previous AI autofix run has already made changes.' \
+    'Focus primarily on LAST RUN DIFF and LAST RUN CHANGED FILES.' \
+    'Only broaden to the full PR diff when needed to understand interactions.')"
+fi
+
+# Build PR intent context block (title/body + linked issue).
+PR_INTENT_BLOCK=""
+if [ -s "${PR_META_FILE:-}" ]; then
+  _pr_title="$(jq -r '.title // ""' "${PR_META_FILE}" 2>/dev/null || true)"
+  _pr_body="$(jq -r '.body // ""' "${PR_META_FILE}" 2>/dev/null || true)"
+  PR_INTENT_BLOCK="$(printf '%s\n' \
+    'PR INTENT CONTEXT' \
+    "PR Title: ${_pr_title}" \
+    "PR Description: ${_pr_body}" \
+    '')"
+fi
+
+LINKED_ISSUE_BLOCK=""
+if [ -s "${LINKED_ISSUE_CONTEXT_FILE:-}" ]; then
+  LINKED_ISSUE_BLOCK="$(printf '%s\n' \
+    'LINKED ISSUE (ORIGINAL TASK DESCRIPTION)' \
+    'The following is the original issue that triggered this PR.' \
+    'Use it to understand the INTENT of the changes — what the code is supposed to accomplish.' \
+    'This helps identify completeness issues (e.g., the task required changes in 3 places but only 2 were modified).' \
+    '' \
+    "$(cat "${LINKED_ISSUE_CONTEXT_FILE}")" \
+    '')"
+fi
+
 cat > "${REVIEWER_PROMPT_BODY_FILE}" <<__REVIEWER_PROMPT__
+${ITERATION_CONTEXT_BLOCK}
+
+${PR_INTENT_BLOCK}
+${LINKED_ISSUE_BLOCK}
 SYMBOL-LEVEL DIFF SUMMARY
 A compact symbol-level summary of what changed is available at:
 ${SYMBOL_DIFF_SUMMARY_FILE}
@@ -554,6 +604,14 @@ File:
 Line or code reference:
 Problem:
 Why it fails at runtime:
+ISSUE_CONFIDENCE: <1-5>
+
+Confidence scale:
+1 = speculative, pattern-based suspicion only
+2 = plausible issue but uncertain about runtime trigger
+3 = likely issue with partial evidence
+4 = high confidence with concrete code evidence
+5 = certain — clear bug with obvious runtime failure path
 
 Example:
 
@@ -561,6 +619,7 @@ File: src/cache_manager.py
 Code: lock.acquire() without corresponding release in exception path
 Problem: lock may remain held if an exception occurs
 Runtime impact: subsequent cache operations will deadlock
+ISSUE_CONFIDENCE: 4
 
 OUTPUT RULES
 Output plain text only.
@@ -577,34 +636,51 @@ reviewer_prompt_rendered="$(mktemp)"
 ) > "${reviewer_prompt_rendered}"
 mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 
-{
-  cat ./pre_assembled_static.txt
-  echo
-  if [ -n "${TOOL_CALL_BUDGET_JUDGE:-}" ]; then
-    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
+# Assemble the base reviewer prompt (used by both passes in two-pass mode,
+# or as the sole prompt in single-pass mode).
+assemble_reviewer_prompt() {
+  local target_file="$1"
+  local prompt_body_file="$2"
+  local extra_context_file="${3:-}"
+  {
+    cat ./pre_assembled_static.txt
     echo
-  fi
-  echo "=== MEMORY CONTEXT (REVIEWER) ==="
-  if [ -s "${MEMORY_CONTEXT_FILE}" ]; then
-    cat "${MEMORY_CONTEXT_FILE}"
-  else
-    echo "AI MEMORY CONTEXT"
-    echo "status: unavailable"
-  fi
-  echo
-  echo "${PROMPT_ARTIFACT_PATH_HINT}"
-  echo
-  echo "${PROMPT_RUNTIME_CONTEXT_HINT}"
-  echo
-  cat "${REVIEWER_PROMPT_BODY_FILE}"
-} > "${REVIEWER_PROMPT_FILE}"
+    if [ -n "${TOOL_CALL_BUDGET_JUDGE:-}" ]; then
+      echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
+      echo
+    fi
+    echo "=== MEMORY CONTEXT (REVIEWER) ==="
+    if [ -s "${MEMORY_CONTEXT_FILE}" ]; then
+      cat "${MEMORY_CONTEXT_FILE}"
+    else
+      echo "AI MEMORY CONTEXT"
+      echo "status: unavailable"
+    fi
+    echo
+    echo "${PROMPT_ARTIFACT_PATH_HINT}"
+    echo
+    echo "${PROMPT_RUNTIME_CONTEXT_HINT}"
+    echo
+    cat "${prompt_body_file}"
+    if [ -n "${extra_context_file}" ] && [ -s "${extra_context_file}" ]; then
+      echo
+      cat "${extra_context_file}"
+    fi
+  } > "${target_file}"
+}
+
+# Assemble the default (pass 1 / single-pass) prompt.
+assemble_reviewer_prompt "${REVIEWER_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
 
 run_reviewer() {
   local model="$1"
   local safe_name="$2"
-  local output_file="${PREVIOUS_REVIEWS_DIR}/review_${safe_name}.txt"
-  local status_file="${PREVIOUS_REVIEWS_DIR}/status_${safe_name}.txt"
-  local log_file="${PREVIOUS_REVIEWS_DIR}/review_${safe_name}.log"
+  local output_prefix="${3:-review}"
+  local prompt_file="${4:-${REVIEWER_PROMPT_FILE}}"
+  local reasoning_level="${5:-}"
+  local output_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.txt"
+  local status_file="${PREVIOUS_REVIEWS_DIR}/status_${output_prefix}_${safe_name}.txt"
+  local log_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log"
   local reviewer_idle_timeout="${HEARTBEAT_IDLE_TIMEOUT:-900}"
   local reviewer_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
   local attempt=1
@@ -733,8 +809,19 @@ run_reviewer() {
 
     # Run codex in a wrapper subshell so we can capture its PID
     # for the watchdog to kill on timeout.
+    # If a per-pass reasoning level override is set, temporarily patch the
+    # codex config inside the isolated CODEX_HOME so the model uses the
+    # desired thinking level without affecting other reviewers.
+    if [ -n "${reasoning_level}" ] && [ -f "${reviewer_codex_home}/config.toml" ]; then
+      sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/config.toml" 2>/dev/null || true
+    elif [ -n "${reasoning_level}" ] && [ -f "${HOME}/.codex/config.toml" ] && [ -d "${reviewer_codex_home}" ]; then
+      # Config might be at the standard location within the isolated home
+      if [ -f "${reviewer_codex_home}/.codex/config.toml" ]; then
+        sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/.codex/config.toml" 2>/dev/null || true
+      fi
+    fi
     (
-      exec "${codex_bin}" exec --model "${model}" --full-auto "$(cat "${REVIEWER_PROMPT_FILE}")"
+      exec "${codex_bin}" exec --model "${model}" --full-auto "$(cat "${prompt_file}")"
     ) > "${tmp_output}" 2> >(
       while IFS= read -r line || [ -n "$line" ]; do
         # Atomic heartbeat update: write to tmp then rename
@@ -833,43 +920,139 @@ run_reviewer() {
   return 0
 }
 
-declare -a reviewer_pids=()
-declare -a reviewer_models=()
-declare -a reviewer_status_files=()
-declare -a reviewer_log_files=()
+# ── Two-pass reviewer architecture ──────────────────────────────────────
+# Pass 1: broad sweep at lower thinking level → collect findings
+# Cross-pollination: summarise pass 1 findings for pass 2 context
+# Pass 2: deep review at full thinking level, informed by pass 1
+#
+# Controlled by ENABLE_REVIEWER_TWO_PASS (default: true).
+# When disabled, a single pass runs at the scheduled reasoning level.
+# ────────────────────────────────────────────────────────────────────────
 
-while IFS= read -r model; do
-  if [ -z "${model}" ]; then
-    continue
+TWO_PASS_ENABLED=true
+case "${ENABLE_REVIEWER_TWO_PASS:-true}" in
+  0|false|FALSE|no|NO|off|OFF) TWO_PASS_ENABLED=false ;;
+esac
+
+# Helper: fan out all reviewer models in parallel for a given pass.
+# Args: $1=output_prefix  $2=prompt_file  $3=reasoning_level_override (optional)
+run_reviewer_pass() {
+  local pass_prefix="$1"
+  local pass_prompt="$2"
+  local pass_reasoning="${3:-}"
+
+  local -a pass_pids=()
+  local -a pass_models=()
+  local -a pass_status_files=()
+  local -a pass_log_files=()
+
+  while IFS= read -r model; do
+    [ -z "${model}" ] && continue
+    local safe_name
+    safe_name="$(echo "${model}" | tr '/.:' '___')"
+    pass_models+=("${model}")
+    pass_status_files+=("${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_${safe_name}.txt")
+    pass_log_files+=("${PREVIOUS_REVIEWS_DIR}/${pass_prefix}_${safe_name}.log")
+    run_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2 &
+    pass_pids+=("$!")
+  done <<< "${REVIEWER_MODELS}"
+
+  if [ "${#pass_pids[@]}" -eq 0 ]; then
+    echo "No reviewer models configured." >&2
+    exit 1
   fi
 
-  safe_name="$(echo "${model}" | tr '/.:' '___')"
-  reviewer_models+=("${model}")
-  reviewer_status_files+=("${PREVIOUS_REVIEWS_DIR}/status_${safe_name}.txt")
-  reviewer_log_files+=("${PREVIOUS_REVIEWS_DIR}/review_${safe_name}.log")
-  run_reviewer "${model}" "${safe_name}" &
-  reviewer_pids+=("$!")
-done <<< "${REVIEWER_MODELS}"
+  for idx in "${!pass_pids[@]}"; do
+    local pid="${pass_pids[$idx]}"
+    local model="${pass_models[$idx]}"
+    if ! wait "${pid}"; then
+      echo "Reviewer worker process crashed for model ${model} (${pass_prefix})." >&2
+    fi
+  done
 
-if [ "${#reviewer_pids[@]}" -eq 0 ]; then
-  echo "No reviewer models configured."
-  exit 1
+  local pass_successful=0
+  for sf in "${pass_status_files[@]}"; do
+    if [ -f "${sf}" ] && [ "$(cat "${sf}")" = "success" ]; then
+      pass_successful=$((pass_successful + 1))
+    fi
+  done
+
+  echo "${pass_successful}"
+}
+
+# Helper: build a cross-pollination summary from pass 1 reviewer outputs.
+# Extracts all issues found across pass 1 reviewers into a compact summary
+# that pass 2 reviewers receive as additional context.
+build_cross_pollination_summary() {
+  local summary_file="${RUNTIME_DIR}/cross_pollination_summary.txt"
+  {
+    echo "=== CROSS-POLLINATION SUMMARY (from pass 1 reviewers) ==="
+    echo "The following issues were identified by other reviewer models in a preliminary pass."
+    echo "Use this context to:"
+    echo "- Verify these findings against the actual code"
+    echo "- Identify issues that multiple reviewers agree on (higher confidence)"
+    echo "- Discover additional issues that the preliminary pass may have missed"
+    echo "- Provide your own independent assessment — do not blindly adopt pass 1 findings"
+    echo ""
+    local reviewer_count=0
+    for pass1_file in "${PREVIOUS_REVIEWS_DIR}"/pass1_*.txt; do
+      [ -f "${pass1_file}" ] || continue
+      local model_name
+      model_name="$(basename "${pass1_file}" .txt | sed 's/^pass1_//' | tr '___' '/.:')"
+      # Skip files that contain only failure messages
+      if grep -q '^.*failed after retries' "${pass1_file}" 2>/dev/null; then
+        continue
+      fi
+      reviewer_count=$((reviewer_count + 1))
+      echo "--- Findings from ${model_name} ---"
+      # Extract a compact version: keep File/Problem/ISSUE_CONFIDENCE lines
+      # and surrounding context, capped at 200 lines per reviewer
+      head -n 200 "${pass1_file}"
+      echo ""
+    done
+    if [ "${reviewer_count}" -eq 0 ]; then
+      echo "(No pass 1 reviewer outputs available)"
+    fi
+    echo "=== END CROSS-POLLINATION SUMMARY ==="
+  } > "${summary_file}"
+  echo "${summary_file}"
+}
+
+if [ "${TWO_PASS_ENABLED}" = "true" ]; then
+  echo "Two-pass review enabled."
+
+  # ── PASS 1: broad sweep at medium thinking ──
+  echo "=== PASS 1: Broad sweep (medium reasoning) ==="
+  PASS1_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass1.txt"
+  assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
+
+  pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "medium")"
+  echo "Pass 1 complete: ${pass1_successful} reviewers successful."
+
+  # Check for PR closure after pass 1
+  if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    echo "PR #${PR_NUMBER} was closed/merged during pass 1 — exiting cleanly."
+    echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+    exit 0
+  fi
+
+  # ── Build cross-pollination summary ──
+  CROSS_POLLINATION_FILE="$(build_cross_pollination_summary)"
+  echo "Cross-pollination summary: $(wc -c < "${CROSS_POLLINATION_FILE}") bytes"
+
+  # ── PASS 2: deep review at full thinking, with cross-pollination ──
+  echo "=== PASS 2: Deep review (${REVIEWER_REASONING_EFFORT:-xhigh} reasoning) ==="
+  PASS2_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass2.txt"
+  assemble_reviewer_prompt "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"
+
+  pass2_successful="$(run_reviewer_pass "review" "${PASS2_PROMPT_FILE}" "")"
+  echo "Pass 2 complete: ${pass2_successful} reviewers successful."
+  reviewers_successful="${pass2_successful}"
+else
+  echo "Single-pass review mode."
+  reviewers_successful="$(run_reviewer_pass "review" "${REVIEWER_PROMPT_FILE}" "")"
+  echo "Review complete: ${reviewers_successful} reviewers successful."
 fi
-
-for idx in "${!reviewer_pids[@]}"; do
-  pid="${reviewer_pids[$idx]}"
-  model="${reviewer_models[$idx]}"
-  if ! wait "${pid}"; then
-    echo "Reviewer worker process crashed for model ${model}."
-  fi
-done
-
-reviewers_successful=0
-for status_file in "${reviewer_status_files[@]}"; do
-  if [ -f "${status_file}" ] && [ "$(cat "${status_file}")" = "success" ]; then
-    reviewers_successful=$((reviewers_successful + 1))
-  fi
-done
 
 if [ "${reviewers_successful}" -eq 0 ]; then
   # If PR was closed/merged, exit cleanly instead of failing
@@ -879,7 +1062,7 @@ if [ "${reviewers_successful}" -eq 0 ]; then
     exit 0
   fi
   echo "Reviewer failure diagnostics:"
-  for log_file in "${reviewer_log_files[@]}"; do
+  for log_file in "${PREVIOUS_REVIEWS_DIR}"/review_*.log; do
     if [ -f "${log_file}" ]; then
       grep -E "Reviewer .* (produced empty output|execution failed|failed after|codex-cli stderr on attempt)" "${log_file}" || true
     fi
