@@ -89,30 +89,28 @@ jobs:
           SHOULD_RUN="true"
           POST_MERGE_DISPATCH="false"
 
-          if [ "${EVENT_NAME}" = "workflow_call" ]; then
-            pr_state=""
-            pr_merged="false"
-            if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
-              SHOULD_RUN="false"
-              echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
-            else
-              pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
-              pr_merged="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.merged // false' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "false")"
-            fi
+          pr_state=""
+          pr_merged="false"
+          if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            SHOULD_RUN="false"
+            echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
+          else
+            pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
+            pr_merged="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.merged // false' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "false")"
+          fi
 
-            if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
-              SHOULD_RUN="false"
-              echo "::warning::Unable to determine PR state for #${PR_NUMBER}; skipping review run."
-            elif [ "${pr_state}" = "closed" ]; then
-              SHOULD_RUN="false"
-              if [ "${pr_merged}" = "true" ]; then
-                POST_MERGE_DISPATCH="true"
-              fi
-            elif [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
-              SHOULD_RUN="false"
-            elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
-              SHOULD_RUN="false"
+          if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
+            SHOULD_RUN="false"
+            echo "::warning::Unable to determine PR state for #${PR_NUMBER}; skipping review run."
+          elif [ "${pr_state}" = "closed" ]; then
+            SHOULD_RUN="false"
+            if [ "${pr_merged}" = "true" ]; then
+              POST_MERGE_DISPATCH="true"
             fi
+          elif [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
+            SHOULD_RUN="false"
+          elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
+            SHOULD_RUN="false"
           fi
 
           echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
@@ -430,6 +428,21 @@ jobs:
           if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             echo "Invalid PR_NUMBER: ${PR_NUMBER}. Expected numeric string matching ^[0-9]+$"
             exit 1
+          fi
+
+      - name: Check PR state (defense-in-depth)
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
+          if [ -n "${pr_state}" ] && [ "${pr_state}" != "open" ]; then
+            echo "::warning::PR #${PR_NUMBER} is ${pr_state} — setting PR_CLOSED to skip downstream work."
+            echo "PR_CLOSED=true" >> "$GITHUB_ENV"
           fi
 
       - name: Install dependencies
@@ -970,7 +983,7 @@ jobs:
           echo "judge_fix_count=${judge_fix_count}" >> "$GITHUB_OUTPUT"
 
       - name: Select reviewer reasoning effort for current cycle
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
 
@@ -1060,7 +1073,7 @@ jobs:
           echo "reviewer_reasoning_selection: ${reviewer_reasoning_selection_json}"
 
       - name: Generate diff context
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
 
@@ -1233,7 +1246,7 @@ jobs:
           } > "${RUNTIME_CONTEXT_DIR}/run_logs_best_effort.txt" || true
 
       - name: "Preflight: Verify required files before reviewer invocation"
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
 
@@ -1335,7 +1348,7 @@ jobs:
           echo "Preflight check PASSED: all required files present."
 
       - name: Run reviewer models
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         id: reviewers
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
