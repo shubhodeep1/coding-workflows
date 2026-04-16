@@ -367,7 +367,7 @@ probe_sibling_merge_conflicts()
 		# line only when it looks like an object ID.
 		local conflict_paths
 		conflict_paths="$(printf '%s\n' "${conflicts_out}" | sed '/^$/d')"
-		if printf '%s\n' "${conflict_paths}" | head -n1 | grep -Eq '^[0-9a-f]{40}([0-9a-f]{24})?$'; then
+		if printf '%s\n' "${conflict_paths}" | head -n1 | grep -Eq '^[[:xdigit:]]{40}([[:xdigit:]]{24})?$'; then
 			conflict_paths="$(printf '%s\n' "${conflict_paths}" | awk 'NR==1{next} {print}')"
 		fi
 		if [ -z "${conflict_paths}" ]; then
@@ -1525,7 +1525,7 @@ merge_tree_conflict_paths_json() {
   fi
 
   printf '%s\n' "${merge_output}" \
-    | sed '1{/^[0-9a-f]\{40,\}$/d};/^$/d' \
+    | sed '1{/^[[:xdigit:]]\{40,\}$/d};/^$/d' \
     | jq -Rsc 'split("\n") | map(select(length > 0)) | unique'
 }
 
