@@ -52,6 +52,12 @@ def _make_poller_sandbox(target: Path) -> None:
 	consumer-repo cleanup path is exercised against throwaway copies —
 	the real checkout is never at risk regardless of how that cleanup
 	path is gated in a future revision.
+
+	The fixture also creates a deterministic integration branch
+	(``orchestrator/project-192``) containing
+	``.orchestrator_judge_context_sentinel.txt`` so tests can prove judge
+	context came from integration branch state rather than default-branch
+	state.
 	"""
 	for rel in _SANDBOX_DIRS:
 		src = REPO_ROOT / rel
@@ -88,7 +94,41 @@ def _make_poller_sandbox(target: Path) -> None:
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
+		["git", "-C", str(target), "add", "-A"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
 		["git", "-C", str(target), "commit", "--allow-empty", "-m", "sandbox init", "--quiet"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "checkout", "-B", "orchestrator/project-192"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	(target / ".orchestrator_judge_context_sentinel.txt").write_text(
+		"integration-branch-only-symbol\\n",
+		encoding="utf-8",
+	)
+	subprocess.run(
+		["git", "-C", str(target), "add", ".orchestrator_judge_context_sentinel.txt"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "commit", "-m", "integration sentinel", "--quiet"],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "-C", str(target), "checkout", "main"],
 		check=True,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
@@ -102,8 +142,6 @@ def _make_poller_sandbox(target: Path) -> None:
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
-
-
 def _rewrite_cmd_for_sandbox(cmd: list, sandbox: Path) -> list:
 	"""Rewrite any command-line argument that is an absolute path under
 	``REPO_ROOT`` so it resolves to the equivalent path inside
@@ -1103,6 +1141,7 @@ sys.exit(proc.returncode)
 ''',
 		)
 
+
 		_write_exec(
 			bin_dir / "codex",
 			"""#!/usr/bin/env python3
@@ -1335,6 +1374,37 @@ def test_missing_integration_branch_marks_failed():
 	assert result["latest_state"]["status"] == "failed"
 	assert result["latest_state"]["final_merge_status"] == "failed"
 	assert "final_merge_error" in result["latest_state"]
+
+
+def test_wave_judge_uses_integration_branch_context_when_available():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		enable_clean_wave_judge_skip="false",
+	)
+	assert "Judge execution context for tracking #192: source=integration_branch" in result["stdout"]
+	assert "sentinel_present=true" in result["stdout"]
+	assert "Judge context sentinel for tracking #192: integration-branch-only-symbol" in result["stdout"]
+
+
+def test_wave_judge_uses_default_branch_context_without_integration_metadata():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = ""
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		enable_clean_wave_judge_skip="false",
+	)
+	assert "Judge execution context for tracking #192: source=default_branch" in result["stdout"]
+	assert "sentinel_present=false" in result["stdout"]
+	assert "Judge context sentinel for tracking #192:" not in result["stdout"]
 
 
 def test_review_blocked_merged_followup_retargets_to_integration_branch():

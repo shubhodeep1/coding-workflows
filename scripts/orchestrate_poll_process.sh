@@ -1182,6 +1182,55 @@ resolve_branch_analysis_ref() {
   return 1
 }
 
+prepare_tracking_judge_checkout() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local target_branch="${default_branch:-main}"
+  local target_ref=""
+
+  JUDGE_EXECUTION_SOURCE="default_branch"
+  JUDGE_EXECUTION_REF=""
+  JUDGE_CONTEXT_SENTINEL_PRESENT="false"
+  JUDGE_CONTEXT_SENTINEL_VALUE=""
+
+  if [ -n "${integration_branch}" ]; then
+    JUDGE_EXECUTION_SOURCE="integration_branch"
+    target_branch="${integration_branch}"
+    if ! integration_branch_exists "${integration_branch}"; then
+      mark_integration_branch_missing_failed "${integration_branch}"
+      return 1
+    fi
+  fi
+
+  if target_ref="$(resolve_branch_analysis_ref "${target_branch}")"; then
+    if ! git checkout -q "${target_ref}" >/dev/null 2>&1 && ! git checkout -q "${target_branch}" >/dev/null 2>&1; then
+      if [ -n "${integration_branch}" ]; then
+        mark_integration_branch_missing_failed "${integration_branch}"
+        return 1
+      fi
+      echo "::warning::Could not check out '${target_branch}' for judge context; continuing on current ref." >&2
+    fi
+  else
+    if [ -n "${integration_branch}" ]; then
+      mark_integration_branch_missing_failed "${integration_branch}"
+      return 1
+    fi
+    echo "::warning::Could not resolve '${target_branch}' for judge context; continuing on current ref." >&2
+  fi
+
+  JUDGE_EXECUTION_REF="$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+  if [ -f .orchestrator_judge_context_sentinel.txt ]; then
+    JUDGE_CONTEXT_SENTINEL_PRESENT="true"
+    JUDGE_CONTEXT_SENTINEL_VALUE="$(head -n 1 .orchestrator_judge_context_sentinel.txt 2>/dev/null | tr -d '\r' | head -c 200)"
+  fi
+
+  echo "  Judge execution context for tracking #${TRACKING_NUM}: source=${JUDGE_EXECUTION_SOURCE} ref=${JUDGE_EXECUTION_REF} sentinel_present=${JUDGE_CONTEXT_SENTINEL_PRESENT}"
+  if [ "${JUDGE_CONTEXT_SENTINEL_PRESENT}" = "true" ] && [ -n "${JUDGE_CONTEXT_SENTINEL_VALUE}" ]; then
+    echo "  Judge context sentinel for tracking #${TRACKING_NUM}: ${JUDGE_CONTEXT_SENTINEL_VALUE}"
+  fi
+  return 0
+}
+
 merge_tree_conflict_paths_json() {
   local default_ref="$1"
   local integration_ref="$2"
@@ -7227,6 +7276,10 @@ Manual intervention required." >/dev/null
   # Setup Serena for judge
   bash scripts/setup_serena.sh --mode planning --context codex || true
 
+  if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+    continue
+  fi
+
   # Collect PR diffs for context, split by issue status so the
   # byte-stable "merged PR diffs" block can sit inside the cacheable
   # prefix of the judge prompt (before the volatile WAVE STATUS).
@@ -7353,6 +7406,12 @@ ${PR_DIFF}
     echo
     echo "=== ORCHESTRATOR STATE ==="
     echo
+    echo "Judge checkout source: ${JUDGE_EXECUTION_SOURCE}"
+    echo "Judge checkout ref: ${JUDGE_EXECUTION_REF}"
+    echo "Judge context sentinel present: ${JUDGE_CONTEXT_SENTINEL_PRESENT}"
+    if [ "${JUDGE_CONTEXT_SENTINEL_PRESENT}" = "true" ] && [ -n "${JUDGE_CONTEXT_SENTINEL_VALUE}" ]; then
+      echo "Judge context sentinel value: ${JUDGE_CONTEXT_SENTINEL_VALUE}"
+    fi
     echo "Judge cycle: $((JUDGE_CYCLE + 1))"
     echo "Current wave just completed: ${CURRENT_WAVE} of ${TOTAL_WAVES}"
     echo "Project complete (all waves dispatched and merged): ${PROJECT_COMPLETE}"

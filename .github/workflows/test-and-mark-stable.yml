@@ -896,6 +896,12 @@ jobs:
           python3 scripts/ai_labels.py contract-validate \
             --contract-file .github/ai/label_contract.v1.json
 
+          # 5g: Judge integration-ref context regression guard
+          echo ""
+          echo "── Judge integration-ref context regression guard ──"
+          python3 tests/test_orchestrate_poll_process.py test_wave_judge_uses_integration_branch_context_when_available
+          python3 tests/test_orchestrate_poll_process.py test_wave_judge_uses_default_branch_context_without_integration_metadata
+
           echo ""
           echo "✓ All orchestrator script integration tests passed"
           echo "status=success" >> "$GITHUB_OUTPUT"
