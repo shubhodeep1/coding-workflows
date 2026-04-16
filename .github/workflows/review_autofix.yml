@@ -3405,11 +3405,11 @@ jobs:
         # all retry attempts, automatically re-dispatch the review workflow
         # so the next iteration gets a fresh Serena MCP instance.
         # Guard against an endless re-dispatch loop when no commit is
-        # produced by allowing this auto-redispatch only from workflow_call
-        # runs that still carry the original pull_request event payload.
-        # Re-dispatched wrapper workflow_dispatch runs do not include
+        # produced by allowing this auto-redispatch only on runs that still
+        # carry the original pull_request event payload.
+        # Re-dispatched workflow_dispatch runs do not include
         # github.event.pull_request and therefore cannot re-enter this path.
-        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CAN_PUSH == 'true' && github.event_name == 'workflow_call' && github.event.pull_request.number"
+        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CAN_PUSH == 'true' && github.event.pull_request.number"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
