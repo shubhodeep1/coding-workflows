@@ -310,7 +310,7 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 - Poller callback handling is label-gated: `handle_comprehensive_release_callback_if_needed` runs only while the tracking issue has `ai:comprehensive-test-pending`.
 - On project status `complete`, the poller dispatches `test-and-mark-stable.yml` with `dry_run=false`, reusing validated `version_tag`/`test_repo` extracted from tracking comments when present.
 - On project status `failed` or `validation-failed`, the poller sends an abort notification and does not dispatch release.
-- In both completion and abort paths, the poller writes `comprehensive_release_callback` (`handled`, `status`, `handled_at`) and removes `ai:comprehensive-test-pending` best-effort; `handled=true` is still recorded when dispatch fails to prevent redispatch loops.
+- On completion/abort callback paths, the poller writes `comprehensive_release_callback` (`handled`, `status`, `handled_at`) and removes `ai:comprehensive-test-pending` best-effort. When dispatch fails in the `complete` path, it leaves callback state/label unchanged so the poller retries on a later cycle.
 
 ---
 
