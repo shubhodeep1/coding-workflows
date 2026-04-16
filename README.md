@@ -634,9 +634,20 @@ Collector script: [`scripts/collect_workflow_logs.py`](scripts/collect_workflow_
   - `--repo` (repeatable)
   - window selector (exactly one): `--lookback-days` or `--since`
   - `--output` (default `workflow_log_report.json`)
+  - `--log-output-dir` (optional categorized full-log export directory)
   - `--per-page`, `--max-pages`, `--max-runs`, `--max-log-runs` (default `15`)
 - Token handling in `main`: uses `GH_TOKEN` with `GITHUB_TOKEN` fallback.
+- Workflow family normalization covers pipeline families: `clarify`, `plan`, `implement`, `review_autofix`, `validate`, `orchestrate`, `orchestrate_poll`, `orchestrate_clarify_respond`, `issue_pr_status`, `cancel_on_pr_close`, and `memory_maintenance`.
 - For notable runs (failed, retries > 0, and top 10 slowest per repository), the collector also downloads raw run logs from `repos/{repo}/actions/runs/{run_id}/logs`, extracts ZIP contents in memory, and stores truncated per-step excerpts.
+
+When `--log-output-dir` is set, collector additionally writes:
+
+- `<log-output-dir>/summary.json` (same schema payload as `--output`)
+- `<log-output-dir>/errors/<repo_slug>/<family>/<run_id>/metadata.json` and full `step-*.log`
+- `<log-output-dir>/slow/<repo_slug>/<family>/<run_id>/metadata.json` and full `step-*.log`
+- `<log-output-dir>/recent/<repo_slug>/<family>/<run_id>/metadata.json` and full `step-*.log`
+
+Full-log downloads for disk export are restricted to the selected `errors`/`slow`/`recent` runs and deduplicated per `(repository, run_id)` across overlapping categories.
 
 Generated JSON report (`workflow_log_report.json`) includes:
 

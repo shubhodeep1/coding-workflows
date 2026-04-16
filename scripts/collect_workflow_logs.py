@@ -19,7 +19,20 @@ from typing import Any
 from urllib.parse import urlencode
 
 SCHEMA_VERSION = "workflow_log_collector.v1"
-CORE_WORKFLOW_FAMILIES = ("clarify", "plan", "implement", "review_autofix")
+CORE_WORKFLOW_FAMILIES = (
+    "clarify",
+    "plan",
+    "implement",
+    "review_autofix",
+    "validate",
+    "orchestrate",
+    "orchestrate_poll",
+    "orchestrate_clarify_respond",
+    "issue_pr_status",
+    "cancel_on_pr_close",
+    "memory_maintenance",
+)
+LOG_EXPORT_CATEGORIES = ("errors", "slow", "recent")
 LOG_EXCERPT_MAX_CHARS = 4000
 SLOW_RUNS_PER_REPO = 10
 RETRY_MARKERS = (
@@ -109,6 +122,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=15,
         help="Optional cap on notable runs to fetch raw logs for (0 = disabled).",
+    )
+    parser.add_argument(
+        "--log-output-dir",
+        default=None,
+        help="Optional directory path for categorized full-log export artifacts.",
     )
     return parser
 
@@ -215,31 +233,29 @@ def gh_api_bytes(
 
 
 def normalize_workflow_family(workflow_name: str | None, workflow_path: str | None) -> str | None:
-    name = (workflow_name or "").lower()
-    path = (workflow_path or "").lower()
-    combined = f"{name} {path}"
+    normalized = re.sub(r"[^a-z0-9]+", "_", f"{workflow_name or ''} {workflow_path or ''}".lower()).strip("_")
 
-    if "orchestrate" in combined or "validate" in combined:
-        return None
-    if "clarify_respond" in combined:
-        return None
-
-    if any(tag in combined for tag in ("clarify", "ai-clarify", "internal-clarify")):
-        return "clarify"
-    if any(tag in combined for tag in ("plan", "ai-plan", "internal-plan")):
-        return "plan"
-    if any(tag in combined for tag in ("implement", "ai-implement", "internal-implement")):
-        return "implement"
-    if any(
-        tag in combined
-        for tag in (
-            "review_autofix",
-            "ai-review",
-            "internal-review",
-            "review",
-        )
-    ):
-        return "review_autofix"
+    family_matchers: tuple[tuple[str, str], ...] = (
+        ("orchestrate_clarify_respond", "orchestrate_clarify_respond"),
+        ("orchestrate_poller", "orchestrate_poll"),
+        ("orchestrate_poll", "orchestrate_poll"),
+        ("issue_pr_status", "issue_pr_status"),
+        ("cancel_runs_on_pr_close", "cancel_on_pr_close"),
+        ("cancel_on_pr_close", "cancel_on_pr_close"),
+        ("memory_maintenance", "memory_maintenance"),
+        ("review_autofix", "review_autofix"),
+        ("codex_pr_self_healing_semantic_agent", "review_autofix"),
+        ("ai_review", "review_autofix"),
+        ("internal_review", "review_autofix"),
+        ("validate", "validate"),
+        ("clarify", "clarify"),
+        ("plan", "plan"),
+        ("implement", "implement"),
+        ("orchestrate", "orchestrate"),
+    )
+    for marker, family in family_matchers:
+        if marker in normalized:
+            return family
     return None
 
 
@@ -488,15 +504,19 @@ def _run_identity(run: dict[str, Any]) -> tuple[str, int]:
     return str(run.get("repository") or ""), _to_int(run.get("run_id"), 0)
 
 
-def select_notable_runs_for_logs(runs: list[dict[str, Any]], max_log_runs: int) -> list[dict[str, Any]]:
-    if max_log_runs <= 0:
-        return []
-
-    eligible = [
+def _eligible_runs_for_log_selection(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
         run
         for run in runs
         if isinstance(run, dict) and bool(run.get("repository")) and _to_int(run.get("run_id"), 0) > 0
     ]
+
+
+def select_notable_runs_for_logs(runs: list[dict[str, Any]], max_log_runs: int) -> list[dict[str, Any]]:
+    if max_log_runs <= 0:
+        return []
+
+    eligible = _eligible_runs_for_log_selection(runs)
     if not eligible:
         return []
 
@@ -537,6 +557,156 @@ def select_notable_runs_for_logs(runs: list[dict[str, Any]], max_log_runs: int) 
             if len(ordered) >= max_log_runs:
                 return ordered
     return ordered
+
+
+def select_runs_for_log_export_categories(
+    runs: list[dict[str, Any]],
+    max_log_runs: int,
+) -> dict[str, list[dict[str, Any]]]:
+    categories: dict[str, list[dict[str, Any]]] = {key: [] for key in LOG_EXPORT_CATEGORIES}
+    if max_log_runs <= 0:
+        return categories
+
+    eligible = _eligible_runs_for_log_selection(runs)
+    if not eligible:
+        return categories
+
+    error_runs = _sort_runs_by_created_desc(
+        [run for run in eligible if (run.get("conclusion") or "").lower() == "failure"]
+    )
+
+    slow_runs: list[dict[str, Any]] = []
+    repositories = sorted({str(run.get("repository")) for run in eligible})
+    for repository in repositories:
+        repo_runs = [run for run in eligible if str(run.get("repository")) == repository]
+        repo_runs.sort(
+            key=lambda item: (
+                _to_int(item.get("duration_seconds"), 0),
+                _run_created_at(item),
+            ),
+            reverse=True,
+        )
+        slow_runs.extend(repo_runs[:SLOW_RUNS_PER_REPO])
+    slow_runs.sort(
+        key=lambda item: (
+            _to_int(item.get("duration_seconds"), 0),
+            _run_created_at(item),
+        ),
+        reverse=True,
+    )
+
+    recent_runs = _sort_runs_by_created_desc(eligible)
+
+    categories["errors"] = error_runs[:max_log_runs]
+    categories["slow"] = slow_runs[:max_log_runs]
+    categories["recent"] = recent_runs[:max_log_runs]
+    return categories
+
+
+def extract_full_logs(log_archive: bytes) -> list[dict[str, str]]:
+    full_logs: list[dict[str, str]] = []
+    with zipfile.ZipFile(io.BytesIO(log_archive)) as archive:
+        names = sorted(name for name in archive.namelist() if not name.endswith("/"))
+        for name in names:
+            with archive.open(name, "r") as log_file:
+                raw = log_file.read()
+            text = raw.decode("utf-8", errors="replace")
+            if not text:
+                continue
+            full_logs.append(
+                {
+                    "step_name": _extract_step_name(name),
+                    "content": text,
+                }
+            )
+    return full_logs
+
+
+def _sanitize_path_component(value: str, fallback: str) -> str:
+    candidate = re.sub(r"[^a-zA-Z0-9._-]+", "_", value.strip())
+    candidate = candidate.strip("._-")
+    return candidate or fallback
+
+
+def _repo_slug(repository: str) -> str:
+    return _sanitize_path_component(repository.replace("/", "_"), "unknown_repo")
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _write_run_log_bundle(
+    output_dir: Path,
+    category: str,
+    run: dict[str, Any],
+    full_logs: list[dict[str, str]] | None,
+) -> None:
+    repository = str(run.get("repository") or "")
+    family = _sanitize_path_component(str(run.get("workflow_family") or "unknown"), "unknown")
+    run_id = _sanitize_path_component(str(_to_int(run.get("run_id"), 0)), "0")
+
+    run_dir = output_dir / category / _repo_slug(repository) / family / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(run_dir / "metadata.json", run)
+
+    if full_logs is None:
+        return
+    for index, step in enumerate(full_logs, start=1):
+        step_name = _sanitize_path_component(str(step.get("step_name") or ""), f"step_{index:03d}")
+        log_path = run_dir / f"step-{index:03d}-{step_name}.log"
+        log_path.write_text(str(step.get("content") or ""), encoding="utf-8")
+
+
+def export_categorized_logs(
+    output_dir: Path,
+    runs: list[dict[str, Any]],
+    *,
+    max_log_runs: int,
+    token: str,
+    errors: list[dict[str, str]],
+) -> None:
+    categories = select_runs_for_log_export_categories(runs, max_log_runs)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for category in LOG_EXPORT_CATEGORIES:
+        (output_dir / category).mkdir(parents=True, exist_ok=True)
+
+    selected_runs: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    for category in LOG_EXPORT_CATEGORIES:
+        for run in categories[category]:
+            identity = _run_identity(run)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            selected_runs.append(run)
+
+    full_logs_by_identity: dict[tuple[str, int], list[dict[str, str]]] = {}
+    for run in selected_runs:
+        repository = str(run.get("repository") or "")
+        run_id = _to_int(run.get("run_id"), 0)
+        identity = (repository, run_id)
+        if not repository or run_id <= 0:
+            continue
+        try:
+            payload = gh_api_bytes(_build_logs_endpoint(repository, run_id), token=token)
+            full_logs_by_identity[identity] = extract_full_logs(payload)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(
+                {
+                    "repository": repository,
+                    "run_id": str(run_id),
+                    "scope": "logs",
+                    "message": str(exc),
+                }
+            )
+
+    for category in LOG_EXPORT_CATEGORIES:
+        for run in categories[category]:
+            _write_run_log_bundle(output_dir, category, run, full_logs_by_identity.get(_run_identity(run)))
 
 
 def _resolve_since_utc(args: argparse.Namespace) -> datetime:
@@ -657,13 +827,19 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     run_rows.sort(key=lambda item: (item.get("created_at") or ""), reverse=True)
-    report = build_report(repositories, run_rows, errors)
+    if args.log_output_dir:
+        export_categorized_logs(
+            Path(args.log_output_dir),
+            run_rows,
+            max_log_runs=args.max_log_runs,
+            token=token,
+            errors=errors,
+        )
 
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
-    tmp_path.replace(output_path)
+    report = build_report(repositories, run_rows, errors)
+    _write_json_atomic(Path(args.output), report)
+    if args.log_output_dir:
+        _write_json_atomic(Path(args.log_output_dir) / "summary.json", report)
 
     if successful_repo_queries == 0 and errors:
         return 1
