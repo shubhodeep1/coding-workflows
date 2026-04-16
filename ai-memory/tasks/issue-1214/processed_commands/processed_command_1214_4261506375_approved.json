@@ -5,13 +5,25 @@
   "entry_id": "processed_command_1214_4261506375_approved",
   "issue_number": 1214,
   "metadata": {
+    "branch": "ai/issue-1214",
+    "changed_files": [
+      ".github/workflows/comprehensive-test-and-release.yml",
+      "analysis/last_collection_timestamp.txt",
+      "scripts/ai_memory.py",
+      "tests/test_workflow_checkout_integration_ref_audit.py"
+    ],
+    "issue_number": 1214,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1214",
+    "pr_number": 1220,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1220",
+    "run_attempt": "1",
+    "run_id": "24520434456",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24520434456"
   },
   "run_attempt": 1,
   "run_id": "24520434456",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-16T16:00:16Z",
+  "status": "completed",
+  "timestamp": "2026-04-16T16:10:34Z",
   "workflow": "implement"
 }
