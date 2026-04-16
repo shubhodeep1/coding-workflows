@@ -188,6 +188,7 @@ capture_service_logs()
 	local dest="${LOG_DIR}/${safe_service}.log"
 	if [ -f "${COMPOSE_FILE}" ]; then
 		mkdir -p "$(dirname -- "${dest}")" >/dev/null 2>&1 || true
+		: > "${dest}" 2>/dev/null || true
 		local service_log_tmp
 		service_log_tmp="$(mktemp "${TMPDIR:-/tmp}/service_capture.XXXXXX" 2>/dev/null || true)"
 		if [ -n "${service_log_tmp}" ]; then
@@ -513,8 +514,6 @@ wait_for_health()
 			app_log_tail="$(tail -n "${TAIL_LINES}" "${app_service_log}" 2>/dev/null || echo "(no service log)")"
 			{
 				echo "=== ${APP_SERVICE} timeout diagnostics ==="
-				echo "--- ${APP_SERVICE} log tail ---"
-				echo "${app_log_tail}"
 				echo "--- docker compose ps ---"
 				docker compose -f "${COMPOSE_FILE}" ps 2>&1 || true
 				if [ -n "${container_id}" ]; then
@@ -523,8 +522,10 @@ wait_for_health()
 						"${container_id}" 2>&1 || true
 					echo "--- docker inspect health log (${APP_SERVICE}) ---"
 						docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}exit={{.ExitCode}} start={{.Start}} output={{.Output}}{{"\n"}}{{end}}{{else}}no healthcheck configured{{end}}' \
-							"${container_id}" 2>&1 || true
+							"${container_id}" 2>&1 | tail -n 5 || true
 				fi
+				echo "--- ${APP_SERVICE} log tail ---"
+				echo "${app_log_tail}"
 				echo "=== end diagnostics ==="
 			} >> "${app_service_log}" 2>&1 || true
 			capture_compose_logs
