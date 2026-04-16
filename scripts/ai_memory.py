@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -44,6 +45,12 @@ def _emit_telemetry(op: str, **fields: Any) -> None:
     entry: dict[str, Any] = {"op": op}
     entry.update(fields)
     print(f"AI_MEMORY_TELEMETRY: {json.dumps(entry, ensure_ascii=True, sort_keys=True)}", file=sys.stderr)
+
+
+def _sanitize_git_error(text: str) -> str:
+    if not text:
+        return text
+    return re.sub(r"(https?://)([^/@\s]+)@", r"\1<redacted>@", text)
 
 
 def _require_nonempty(value: str, field_name: str) -> str:
@@ -126,15 +133,16 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
                 memory_root_relative=args.memory_root,
             )
         except MemoryGitError as exc:
-            error_text = str(exc)
+            error_text = _sanitize_git_error(str(exc))
             lowered = error_text.lower()
             is_missing_branch = (
                 ("remote branch" in lowered and ("not found" in lowered or "does not exist" in lowered))
                 or "could not find remote ref" in lowered
                 or "couldn't find remote ref" in lowered
                 or "remote ref does not exist" in lowered
+                or "did not match any file(s) known to git" in lowered
             )
-            print(f"AI_MEMORY_WARNING: {exc}", file=sys.stderr)
+            print(f"AI_MEMORY_WARNING: {error_text}", file=sys.stderr)
             context = "AI MEMORY CONTEXT\nstatus: unavailable\n"
             if args.output_file:
                 Path(args.output_file).write_text(context, encoding="utf-8")
@@ -533,19 +541,20 @@ def cmd_processed_command_check(args: argparse.Namespace) -> int:
         _emit_telemetry("processed-command-check", ok=True, enabled=True, exists=bool(entry))
         return 0
     except MemoryGitError as exc:
-        error_text = str(exc)
+        error_text = _sanitize_git_error(str(exc))
         lowered = error_text.lower()
         is_missing_branch = (
             ("remote branch" in lowered and ("not found" in lowered or "does not exist" in lowered))
             or "could not find remote ref" in lowered
             or "couldn't find remote ref" in lowered
             or "remote ref does not exist" in lowered
+            or "did not match any file(s) known to git" in lowered
         )
         if is_missing_branch:
             _print_json({"ok": True, "enabled": False, "exists": False, "entry": None, "warning": error_text})
             _emit_telemetry("processed-command-check", ok=True, enabled=False, exists=False, warning="branch_unavailable")
             return 0
-        print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
+        print(f"AI_MEMORY_ERROR: {error_text}", file=sys.stderr)
         _print_json({"ok": False, "enabled": True, "exists": False, "entry": None, "error": error_text})
         _emit_telemetry("processed-command-check", ok=False, enabled=True, exists=False, error="git_error", warning="git_error")
         return 2
@@ -588,19 +597,20 @@ def cmd_processed_command_list(args: argparse.Namespace) -> int:
         _emit_telemetry("processed-command-list", ok=True, enabled=True, count=len(entries))
         return 0
     except MemoryGitError as exc:
-        error_text = str(exc)
+        error_text = _sanitize_git_error(str(exc))
         lowered = error_text.lower()
         is_missing_branch = (
             ("remote branch" in lowered and ("not found" in lowered or "does not exist" in lowered))
             or "could not find remote ref" in lowered
             or "couldn't find remote ref" in lowered
             or "remote ref does not exist" in lowered
+            or "did not match any file(s) known to git" in lowered
         )
         if is_missing_branch:
             _print_json({"ok": True, "enabled": False, "entries": [], "count": 0, "warning": error_text})
             _emit_telemetry("processed-command-list", ok=True, enabled=False, count=0, warning="branch_unavailable")
             return 0
-        print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
+        print(f"AI_MEMORY_ERROR: {error_text}", file=sys.stderr)
         _print_json({"ok": False, "enabled": True, "entries": [], "count": 0, "error": error_text})
         _emit_telemetry("processed-command-list", ok=False, enabled=True, count=0, error="git_error", warning="git_error")
         return 2
@@ -672,13 +682,14 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
         )
         return 0
     except MemoryGitError as exc:
-        error_text = str(exc)
+        error_text = _sanitize_git_error(str(exc))
         lowered = error_text.lower()
         is_missing_branch = (
             ("remote branch" in lowered and ("not found" in lowered or "does not exist" in lowered))
             or "could not find remote ref" in lowered
             or "couldn't find remote ref" in lowered
             or "remote ref does not exist" in lowered
+            or "did not match any file(s) known to git" in lowered
         )
         if is_missing_branch:
             result = evaluate_clarify_loop_guard([], clarify_hash=clarify_hash, max_cycles=max_cycles)
@@ -693,7 +704,7 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
             )
             _emit_telemetry("clarify-loop-guard", ok=True, enabled=False, blocked=bool(result.get("blocked")), cycle=_safe_int(result.get("cycle")), entries_considered=0, warning="branch_unavailable")
             return 0
-        print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
+        print(f"AI_MEMORY_ERROR: {error_text}", file=sys.stderr)
         _print_json(
             {
                 "ok": False,
