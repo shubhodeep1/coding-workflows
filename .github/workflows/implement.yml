@@ -507,15 +507,6 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_ENV"
 
-      - name: Detect smoke test and tune LLM settings
-        if: env.SKIP_IMPLEMENT != 'true'
-        run: |
-          set -euo pipefail
-          ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
-          if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
-            echo "🔬 Smoke test detected — switching to low reasoning effort"
-            echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
-          fi
 
       - name: Fetch issue comments
         if: env.SKIP_IMPLEMENT != 'true'
@@ -2079,53 +2070,7 @@ jobs:
             cat "${PLAN_FILE}"
           } > "${RUNTIME_DIR}/issue_context_for_summary.txt"
 
-          CONFIG_FILE="${HOME}/.codex/config.toml"
-          CONFIG_BACKUP_FILE="${RUNTIME_DIR}/codex_config_issue_summary_backup.toml"
-          HAD_CONFIG="false"
-          if [ -f "${CONFIG_FILE}" ]; then
-            HAD_CONFIG="true"
-            cp "${CONFIG_FILE}" "${CONFIG_BACKUP_FILE}"
-          fi
-
-          restore_codex_config() {
-            if [ "${HAD_CONFIG}" = "true" ] && [ -f "${CONFIG_BACKUP_FILE}" ]; then
-              cp "${CONFIG_BACKUP_FILE}" "${CONFIG_FILE}"
-              rm -f "${CONFIG_BACKUP_FILE}"
-              return
-            fi
-            rm -f "${CONFIG_FILE}" "${CONFIG_BACKUP_FILE}"
-          }
-          trap 'restore_codex_config; rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt"' EXIT
-
-          mkdir -p "${HOME}/.codex"
-          if [ "${HAD_CONFIG}" = "true" ] && [ -f "${CONFIG_BACKUP_FILE}" ]; then
-            awk '
-              BEGIN { replaced = 0 }
-              /^model_reasoning_effort[[:space:]]*=/ {
-                print "model_reasoning_effort = \"low\""
-                replaced = 1
-                next
-              }
-              { print }
-              END {
-                if (!replaced) {
-                  print "model_reasoning_effort = \"low\""
-                }
-              }
-            ' "${CONFIG_BACKUP_FILE}" > "${CONFIG_FILE}"
-          else
-            {
-              echo 'model_reasoning_effort = "low"'
-              echo 'model_provider = "openrouter"'
-              echo "model = \"${MODEL_EDITOR}\""
-              echo
-              echo '[model_providers.openrouter]'
-              echo 'name = "OpenRouter"'
-              echo 'base_url = "https://openrouter.ai/api/v1"'
-              echo 'env_key = "OPENROUTER_API_KEY"'
-              echo 'wire_api = "responses"'
-            } > "${CONFIG_FILE}"
-          fi
+          trap 'rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt"' EXIT
 
           cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${ISSUE_SUMMARY_FILE}"
 

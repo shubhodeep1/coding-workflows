@@ -309,13 +309,6 @@ jobs:
 
           echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} skip_codex=${SKIP_CODEX}"
 
-      - name: Detect smoke test and tune LLM settings
-        run: |
-          set -euo pipefail
-          if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test\]'; then
-            echo "🔬 Smoke test detected — switching to low reasoning effort"
-            echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"
-          fi
 
       - name: Fetch issue comments
         if: steps.clarify_route.outputs.skip_codex != 'true'

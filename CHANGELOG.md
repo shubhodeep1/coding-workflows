@@ -16,16 +16,16 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 - Extended staged AI memory schema lists to include the new cache schema
   entries for actions runs and workflow log analysis (best-effort staging
   until files exist on support refs).
-- Reduced default reasoning effort where deep reasoning is unnecessary:
-  - `THINKING_LEVEL_CLARIFY_RESPOND`: `medium` -> `low`
-  - `THINKING_LEVEL_VALIDATE`: `xhigh` -> `high`
-  - `THINKING_LEVEL_CONFLICT_RESOLVER`: `xhigh` -> `medium`
-- Added adaptive judge reasoning in `orchestrate_poll_process.sh`: keep `THINKING_LEVEL_JUDGE` for cycles 1-3 and force `high` from cycle 4 onward.
-- Added a regression test in `tests/test_orchestrate_poll_process.py` to assert adaptive judge reasoning logic remains in place.
-- Lowered implement issue-summary generation effort by temporarily overriding `model_reasoning_effort` to `low` for the summary `codex exec` invocation and restoring config afterward.
+- Removed all runtime reasoning effort downgrades — every phase and cycle now
+  uses the configured `THINKING_LEVEL_*` as-is (`xhigh` by default):
+  - Removed adaptive judge downgrade (`xhigh` → `high` after cycle 3) in `orchestrate_poll_process.sh`.
+  - Removed adaptive validate downgrade (`xhigh` → `high` after cycle 3) in `validate_process.sh`.
+  - Removed E2E smoke test reasoning overrides (forced `low`) in `clarify.yml`, `plan.yml`, `implement.yml`, and `review_autofix.yml`.
+  - Removed issue-summary generation reasoning override (forced `low`) in `implement.yml`.
+  - Removed `REVIEW_REASONING_SCHEDULE` / `REVIEW_AUTODOWNGRADE_DISABLED` reviewer cycle schedule machinery in `review_autofix.yml`.
 - Trimmed static prompt assembly in planning, implementation, and review/autofix workflows to reduce token overhead.
 - Updated review/autofix prompt assembly to inline pre-assembled static context directly into editor/reviewer prompts (removed runtime "read pre_assembled_static.txt first" round-trip instructions).
-- Updated README thinking-level defaults and judge adaptive behavior notes to match workflow/script behavior.
+- Updated README to remove all references to adaptive reasoning, reasoning schedules, and smoke test reasoning overrides.
 
 ### Added
 - `test-and-mark-stable.yml`: E2E smoke test workflow that exercises all pipeline phases
