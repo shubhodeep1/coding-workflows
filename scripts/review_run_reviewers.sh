@@ -138,8 +138,8 @@ EOF
   fi
   export CODEX_HOME="${probe_home}"
 
-  codex exec --model "${probe_model}" --full-auto "$(cat "${probe_out}")" >/dev/null 2>"${probe_log_one}" || true
-  codex exec --model "${probe_model}" --full-auto "$(cat "${probe_out}")" >/dev/null 2>"${probe_log_two}" || true
+  codex exec --model "${probe_model}" --full-auto < "${probe_out}" >/dev/null 2>"${probe_log_one}" || true
+  codex exec --model "${probe_model}" --full-auto < "${probe_out}" >/dev/null 2>"${probe_log_two}" || true
 
   normalize_openrouter_usage "${probe_log_one}" "1" "${probe_model}" || true
   normalize_openrouter_usage "${probe_log_two}" "2" "${probe_model}" || true
@@ -821,7 +821,7 @@ run_reviewer() {
       fi
     fi
     (
-      exec "${codex_bin}" exec --model "${model}" --full-auto "$(cat "${prompt_file}")"
+      exec "${codex_bin}" exec --model "${model}" --full-auto < "${prompt_file}"
     ) > "${tmp_output}" 2> >(
       while IFS= read -r line || [ -n "$line" ]; do
         # Atomic heartbeat update: write to tmp then rename
