@@ -87,8 +87,15 @@ _resilient_phase_swap()
 	local _rps_issue="$1" _rps_target="$2"
 	local _rps_phases='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
 	local _rps_cur _rps_new
-	_rps_cur="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
-		--jq '[.[].name]' 2>/dev/null || echo '[]')"
+	if ! _rps_cur="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+		--jq '[.[].name]' 2>/dev/null)"; then
+		echo "::warning::_resilient_phase_swap: GET labels failed for #${_rps_issue} — falling back to POST add." >&2
+		gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+			-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
+			|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
+		return 1
+	fi
+	_rps_cur="${_rps_cur:-[]}"
 	_rps_new="$(echo "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
 		'(. - $p) + [$t] | unique')"
 	if printf '{"labels":%s}' "${_rps_new}" | \
