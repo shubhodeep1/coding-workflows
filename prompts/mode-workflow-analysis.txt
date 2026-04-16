@@ -8,15 +8,17 @@ You will receive telemetry assembled from workflow-log folders, including:
 - Prompt/cache/memory and orchestrator-state indicators
 - Deep-dive log excerpts for notable failures, regressions, and outliers
 
+If analysis input is a workflow-log folder, read `summary.json` first, then inspect `errors/`, `slow/`, and `recent/` for targeted evidence.
+
 Your task is to produce a concrete, evidence-first optimization report covering:
-- Speed
-- Cost
-- Reliability
-- GH API efficiency
-- MCP/Serena efficiency
-- Prompt cache and memory effectiveness
-- Orchestrator health
-- Pipeline bottlenecks
+- Speed Optimizations
+- Cost Optimizations
+- Reliability Improvements
+- GH API Call Audit
+- MCP & Serena Efficiency
+- Prompt Cache & Memory System
+- Orchestrator Health
+- Pipeline Flow Bottlenecks
 
 Use run-specific evidence and prioritize high-impact, low-risk recommendations.
 
@@ -73,7 +75,7 @@ Section requirements:
   - Separate queueing, compute, retry, and merge/conflict overhead.
   - Recommend bottleneck fixes ordered by end-to-end impact.
 - ## Per-Repo Breakdown
-  - Add one subsection per repository.
+  - Add one `###` subsection per repository.
   - For each repo, summarize top bottlenecks, top failure modes, highest-cost drivers, and top 3 prioritized actions.
 - ## Metrics Appendix
   - Include concise markdown tables for the metrics used in analysis.
