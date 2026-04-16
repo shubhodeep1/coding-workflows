@@ -1508,8 +1508,8 @@ jobs:
           # "canonical helpers" like review_apply_fixes.sh — be legitimately
           # modified, while still blocking files the editor never touched from
           # riding along in the commit.
-          # Consumer repos are unchanged: they continue to use the ':!scripts'
-          # full-directory exclusion, which already blocks script leaks there.
+          # Consumer repos use per-file exclusions from scripts/.gitignore
+          # so consumer-owned scripts (e.g. scripts/security/*.js) are staged.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
             PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
             : > "${PRE_EDITOR_STATE_FILE}"
@@ -1726,8 +1726,19 @@ jobs:
             done < "${CODEX_TOUCHED_FILE}"
             rm -f "${CODEX_TOUCHED_FILE}"
           else
-            git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+            # Build per-file exclusions from scripts/.gitignore instead of a
+            # blanket ':!scripts' — consumer-repo-owned scripts must be staged.
+            _ra_script_excludes=()
+            if [ -f scripts/.gitignore ]; then
+              while IFS= read -r _ign_entry; do
+                [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
+                _ra_script_excludes+=(":!scripts/${_ign_entry}")
+              done < scripts/.gitignore
+            else
+              _ra_script_excludes+=(':!scripts')
+            fi
+            git add -u -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
+            git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
           fi
 
           echo "Staged files before commit:"
@@ -2845,8 +2856,19 @@ jobs:
               done < "${RESOLVER_TOUCHED_FILE}"
               rm -f "${RESOLVER_TOUCHED_FILE}"
             else
-              git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+              # Build per-file exclusions from scripts/.gitignore instead of a
+              # blanket ':!scripts' — consumer-repo-owned scripts must be staged.
+              _rs_script_excludes=()
+              if [ -f scripts/.gitignore ]; then
+                while IFS= read -r _ign_entry; do
+                  [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
+                  _rs_script_excludes+=(":!scripts/${_ign_entry}")
+                done < scripts/.gitignore
+              else
+                _rs_script_excludes+=(':!scripts')
+              fi
+              git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
+              git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
             fi
             echo "Staged files before commit:"
             STAGED_FILES="$(git diff --cached --name-only || true)"
