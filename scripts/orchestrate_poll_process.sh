@@ -3220,18 +3220,17 @@ build_active_issue_set() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Shared runs loader: one cache-aware actions/runs retrieval per tick.
-  local actions_runs_blob
-  actions_runs_blob="$(_load_actions_runs_cached)"
-
-  # Preserve historical status selection semantics (in_progress/queued, max 50
-  # each) while sourcing from one shared payload.
+  # Fetch in_progress + queued runs (recent, max 50).
+  # _safe_gh_jq guarantees empty stdout on failure → fallback is valid JSON.
   local runs_json
-  runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
+  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
+    --jq '.workflow_runs' || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
   local queued_json
-  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "queued")] | .[:50]' 2>/dev/null || echo '[]')"
+  queued_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
+    --jq '.workflow_runs' || echo '[]')"
   [ -n "${queued_json}" ] || queued_json='[]'
+
 
   # Merge both lists
   local all_runs
@@ -3300,12 +3299,11 @@ cancel_zombie_runs_for_issue() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Reuse the shared actions-runs blob and preserve prior in_progress+50 scope.
-  local actions_runs_blob
-  actions_runs_blob="$(_load_actions_runs_cached)"
-
+  # Re-fetch in_progress runs and find zombies matching this issue.
+  # _safe_gh_jq guarantees empty stdout on failure → fallback stays valid.
   local runs_json
-  runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
+  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
+    --jq '.workflow_runs' || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
 
   local zombie_run_ids
