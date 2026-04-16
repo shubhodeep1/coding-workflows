@@ -1940,9 +1940,17 @@ jobs:
                 # Strip lines that are blank, match "- none*", or are
                 # informational metadata (e.g. "- Validation executed: ...")
                 # that the editor may emit when no files changed.
-                substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)' || true)"
+                substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|No [^:]*modified|No [^:]*changed|No [^:]*touched|No changes|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context|Missing-context note)' || true)"
                 if [ -n "${substantive}" ]; then
                   has_real_changes="true"
+                fi
+                # Echo the filtered substantive content when the detector
+                # decides changes exist.  This makes future false-positive
+                # investigations tractable — reviewers can see exactly which
+                # bullets tripped the guard.
+                if [ -n "${substantive}" ]; then
+                  echo "Substantive bullets retained by detector regex:"
+                  printf '%s\n' "${substantive}" | head -20
                 fi
               fi
             fi

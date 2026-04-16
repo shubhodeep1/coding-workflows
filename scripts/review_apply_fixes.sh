@@ -593,7 +593,7 @@ while [ "${attempt}" -le 3 ]; do
           /^[[:space:]]*Changes made:/ { in_s=1; next }
           in_s && /^[[:space:]]*[A-Za-z].*:/ { exit }
           in_s { print }
-        ' "${tmp_output}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)' || true)"
+        ' "${tmp_output}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|No [^:]*modified|No [^:]*changed|No [^:]*touched|No changes|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context|Missing-context note)' || true)"
 
         if [ -n "${_claimed_changes}" ]; then
           # Editor claims it made changes — verify git agrees.
@@ -616,6 +616,20 @@ while [ "${attempt}" -le 3 ]; do
         fi
 
         if [ "${reviewer_validation_ok}" = true ]; then
+          # Record on-disk change stats at the moment of success so that a later
+          # "Editor claimed changes but no commit was produced" alert can be
+          # diagnosed against an authoritative baseline instead of speculation.
+          # See: false-positive EDITOR_CHANGES_LOST investigation (Apr 2026).
+          echo "::group::Editor on-disk change stats (attempt ${attempt})"
+          _ed_diff_stat="$(git diff --stat HEAD 2>/dev/null || true)"
+          _ed_diff_bytes="$(git diff HEAD 2>/dev/null | wc -c | tr -d '[:space:]' || echo 0)"
+          _ed_changed_files="$(git diff --name-only HEAD 2>/dev/null | wc -l | tr -d '[:space:]' || echo 0)"
+          _ed_untracked_files="$(git ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d '[:space:]' || echo 0)"
+          printf '%s\n' "${_ed_diff_stat:-<empty>}"
+          echo "diff HEAD bytes: ${_ed_diff_bytes:-0}"
+          echo "changed tracked files: ${_ed_changed_files:-0}"
+          echo "new untracked files: ${_ed_untracked_files:-0}"
+          echo "::endgroup::"
           mv "${tmp_output}" "${EDITOR_SUMMARY_FILE}"
           rm -f "${tmp_err}"
           echo "Editor succeeded on attempt ${attempt}."
