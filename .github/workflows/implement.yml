@@ -1757,6 +1757,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.commit_changes.outputs.destructive_commit_blocked == ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REMAINING_CHANGES: ${{ steps.commit_changes.outputs.remaining_changes }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -1769,7 +1770,7 @@ jobs:
           # treating this as success.
           echo "::warning::Implementation produced no repository changes. Labeling issue #${ISSUE_NUMBER} as ai:implementation-failed."
 
-          remaining_changes="${{ steps.commit_changes.outputs.remaining_changes }}"
+          remaining_changes="${REMAINING_CHANGES:-}"
           noop_body="⚠️ AI implementation produced no repository changes despite an approved plan."
           if [ -n "${remaining_changes}" ]; then
             noop_body="${noop_body}
