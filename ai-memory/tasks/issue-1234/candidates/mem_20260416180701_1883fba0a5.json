@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `5f45a40dd0ab755e59acc8615c20b064879acc59`\n- Checked-out ref: `orchestrator/project-1170`\n- Integration metadata ref: `orchestrator/project-1170`\n- Integration branch mismatch: `false`\n\nClarification interpretation:\n- No `Q<ID>` clarification questions were issued.\n- `/answer [auto-answered-by-orchestrator]` confirms proceed with original scope as written.\n\nImplementation plan\n\n1. Files likely to change\n- `README.md`\n- `agents.md`\n\n2. Functions/modules/behaviors to reflect in docs\n- Source-of-truth workflow behavior for comprehensive release:\n  - `.github/workflows/comprehensive-test-and-release.yml`\n  - `scripts/orchestrate_poll_process.sh` (`handle_comprehensive_release_callback_if_needed`, `dispatch_comprehensive_release_workflow`)\n- Source-of-truth workflow-log-analysis behavior:\n  - `.github/workflows/workflow-log-analysis.yml`\n  - `scripts/analyze_workflow_logs.py` (batch state contract)\n- Anchor targets for surgical edits:\n  - `README.md` `<!-- anchor:required-variables-table -->`\n  - `README.md` `<!-- anchor:orchestrator-pipeline-steps -->`\n  - `agents.md` `<!-- anchor:agents-env-vars -->` (only if env-var wording must change)\n\n3. Data structures affected (documentation only)\n- Workflow-log-analysis deferred batch artifact contract:\n  - Artifact: `workflow-log-analysis-batch-state`\n  - File: `workflow_log_analysis_batch_state.json`\n- Comprehensive release callback metadata/state:\n  - Tracking issue comment marker: `COMPREHENSIVE_RELEASE_METADATA_V1`\n  - Poller state node: `comprehensive_release_callback` (`handled`, `status`, `handled_at`)\n  - Pending label: `ai:comprehensive-test-pending`\n- Timestamp state file:\n  - `analysis/last_collection_timestamp.txt` used to compute `since` for next analysis run\n\n4. API/interface changes to document\n- No runtime API/interface changes; docs alignment only.\n- README updates should explicitly document:\n  - `workflow-log-analysis.yml` manual trigger + `codex_mode=true` path vs non-codex batch path\n  - `comprehensive-test-and-release.yml` phase behavior\n  - callback behavior when orchestrator project status is `complete` vs `failed`/`validation-failed`\n  - timestamp-file fallback behavior (`since` when valid timestamp exists, else `lookback_days`)\n\n5. Risks and edge cases to capture in docs\n- Callback is poller-driven, not a separate phase job in `comprehensive-test-and-release.yml`.\n- Callback dispatch only when status is `complete`; failure statuses send abort notification and do not dispatch release workflow.\n- Callback can still be marked handled even on dispatch failure (prevents infinite redispatch loop); document as operational behavior.\n- Invalid/missing `analysis/last_collection_timestamp.txt` falls back to `lookback_days`.\n- Keep edits append-only around anchors; avoid reordering env-var bullets/table rows to prevent merge conflicts.\n\n6. Testing/verification considerations\n- Diff guard: only `README.md` and `agents.md` changed; no unrelated churn.\n- Consistency checks after edit:\n  - README workflow-log-analysis section matches current inputs (`since`, `lookback_days`, `codex_mode`, `batch_api_disabled`, `repos_override`)\n  - README documents `analysis/last_collection_timestamp.txt` purpose\n  - README and agents mention callback statuses and pending-label flow consistently\n  - Env-var descriptions remain aligned; if unchanged behavior, no env-var table edits\n- Final manual review: anchor-preserving edits and no renumbering/reflow outside touched doc blocks.\n\nConflicts detected between request wording and codebase\n- \u201cCallback behavior\u201d is implemented in `scripts/orchestrate_poll_process.sh`, not as a standalone callback phase/job in `.github/workflows/comprehensive-test-and-release.yml` (which currently has phases 1\u20133 only). Documentation should describe this explicitly to avoid implying nonexistent phase jobs.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "32a4e847cc87e46c8a880f769884d2d40c51fcd95eb1b2d8fc9acc5141c5e168",
+  "lineage": {
+    "issue_number": 1234,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24525810511",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24525810511",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1234"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416180701_1883fba0a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1234,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24525810511"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1234",
+  "timestamps": {
+    "created_at": "2026-04-16T18:07:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
