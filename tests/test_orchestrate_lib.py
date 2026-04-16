@@ -979,6 +979,26 @@ def test_resolve_integration_ref_parity_for_fixtures():
 				assert "::error::" in python_stderr, f"python missing ::error:: for {fixture['name']}"
 
 
+def test_resolve_integration_ref_child_missing_tracking_present_fallback():
+	fixture_path = _fixture_path_by_name("fallback_tracking_issue")
+	fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+	expected_stdout = fixture["expected_stdout"]
+	expected_exit = int(fixture["expected_exit_code"])
+
+	with tempfile.TemporaryDirectory() as tmpdir:
+		bin_dir = Path(tmpdir)
+		_write_mock_gh(bin_dir)
+		bash_rc, bash_stdout, _bash_stderr = _run_bash_resolver(fixture_path, bin_dir)
+		python_rc, python_stdout, _python_stderr = _run_python_resolver(fixture_path, bin_dir)
+
+	assert expected_stdout, "fallback fixture must resolve a tracking integration branch"
+	assert expected_exit == 0, "fallback fixture should resolve successfully"
+	assert bash_rc == expected_exit
+	assert python_rc == expected_exit
+	assert bash_stdout == expected_stdout
+	assert python_stdout == expected_stdout
+
+
 def test_resolve_integration_ref_shell_self_test():
 	proc = subprocess.run(
 		["bash", str(REPO_ROOT / "scripts" / "resolve_integration_ref.sh"), "--self-test"],
