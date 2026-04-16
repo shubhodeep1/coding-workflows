@@ -163,157 +163,6 @@ PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR
 PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
 
 # -----------------------------------------------------------
-# Deterministic fallback: when LLM judge fails, analyse editor
-# summaries programmatically and make a conservative decision.
-#
-# Heuristic: if the latest editor summary classified ALL
-# remaining issues as "ignored" (speculative, cosmetic, out of
-# scope, non-critical) and none contain critical-severity
-# keywords, auto-merge. Otherwise escalate to manual.
-#
-# This function writes to GITHUB_OUTPUT and exits on success.
-# On plumbing failure it returns 1 so the caller can fall
-# through to the original manual-intervention path.
-# -----------------------------------------------------------
-_deterministic_judge_fallback()
-{
-	local _fallback_reason="$1"  # "llm_failed" or "json_parse_failed"
-	echo "Attempting deterministic fallback (reason: ${_fallback_reason})..."
-
-	local _fallback_result=""
-	_fallback_result="$(echo "${PR_COMMENTS}" | PYTHONDONTWRITEBYTECODE=1 python3 -c "
-import json, re, sys
-
-CRITICAL_PATTERNS = [
-    r'security\s+vulnerabilit',
-    r'data\s+loss',
-    r'data\s+corrup',
-    r'build[\s-]+(?:fail|break|error)',
-    r'crash(?:es|ing)?',
-    r'sql[\s-]+injection',
-    r'\bxss\b',
-    r'remote\s+code\s+execution',
-    r'authentication\s+bypass',
-    r'privilege\s+escalation',
-    r'denial[\s-]+of[\s-]+service',
-    r'race[\s-]+condition.*(?:data|corrupt|secur)',
-    r'incorrect[\s-]+(?:result|output|behavior).*(?:production|critical)',
-]
-
-try:
-    comments = json.load(sys.stdin)
-except Exception:
-    print('parse_error', end='')
-    sys.exit(0)
-
-# Find editor summary comments (posted by the autofix workflow)
-summaries = [
-    c for c in comments
-    if 'AI autofix editor summary' in (c.get('body') or '')
-]
-
-if not summaries:
-    print('no_summaries', end='')
-    sys.exit(0)
-
-latest = summaries[-1].get('body', '')
-
-# Extract the 'Ignored suggestions' section from the latest summary.
-# The section ends at the next known heading (Reviewer files, PR comment,
-# Regression, Runtime failure, Files changed, ###, or end of string).
-ignored_match = re.search(
-    r'Ignored suggestions.*?(?=\n(?:Reviewer files|PR comment audit|Regression|'
-    r'Runtime failure|Files changed|###|\Z))',
-    latest, re.DOTALL | re.IGNORECASE
-)
-ignored_text = ignored_match.group(0) if ignored_match else ''
-
-# Check whether any ignored suggestion contains critical-severity keywords.
-has_critical = False
-matched_pattern = ''
-for pat in CRITICAL_PATTERNS:
-    m = re.search(pat, ignored_text, re.IGNORECASE)
-    if m:
-        has_critical = True
-        matched_pattern = m.group(0)
-        break
-
-# Also scan unresolved review-thread bodies for critical keywords that
-# the editor may not have surfaced in its summary.
-all_review_text = ' '.join(c.get('body', '') for c in comments
-                           if 'copilot' in (c.get('author', '') or '').lower()
-                           or 'review' in (c.get('author', '') or '').lower())
-if not has_critical:
-    for pat in CRITICAL_PATTERNS:
-        m = re.search(pat, all_review_text, re.IGNORECASE)
-        if m:
-            has_critical = True
-            matched_pattern = m.group(0)
-            break
-
-if has_critical:
-    print('critical:' + matched_pattern, end='')
-else:
-    print('merge', end='')
-" 2>/dev/null || echo "plumbing_error")"
-
-	case "${_fallback_result}" in
-		merge)
-			echo "Deterministic fallback: all remaining issues non-critical — auto-merging."
-
-			local _fb_comment="## Review-Blocked Judge Decision (deterministic fallback)
-
-**Decision:** merge
-**Reason:** LLM judge ${_fallback_reason//_/ }; deterministic analysis of editor summaries found no critical unresolved issues.
-**Fallback heuristic:** all remaining review items were classified as speculative, cosmetic, or out-of-scope by the editor across multiple autofix iterations."
-
-			gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-				-f body="${_fb_comment}" >/dev/null 2>&1 || true
-
-			# Label linked issues ready-to-merge
-			while IFS= read -r issue_number; do
-				[ -n "${issue_number}" ] || continue
-				gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
-					--remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' \
-					--remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' \
-					--remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' \
-					--add-label 'ai:ready-to-merge' || true
-			done <<< "${ISSUE_NUMBERS}"
-
-			# Attempt merge
-			if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-				gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
-					|| gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
-			fi
-
-			echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-			echo "judge_action=merge" >> "$GITHUB_OUTPUT"
-			echo "judge_skip_reason=${_fallback_reason}_deterministic_merge" >> "$GITHUB_OUTPUT"
-			exit 0
-			;;
-
-		critical:*)
-			local _matched="${_fallback_result#critical:}"
-			echo "Deterministic fallback: found critical keyword '${_matched}' — escalating to manual intervention."
-			echo "judge_skip_reason=${_fallback_reason}_critical_issues" >> "$GITHUB_OUTPUT"
-			return 1
-			;;
-
-		no_summaries)
-			echo "Deterministic fallback: no editor summaries found — cannot assess, escalating."
-			echo "judge_skip_reason=${_fallback_reason}_no_summaries" >> "$GITHUB_OUTPUT"
-			return 1
-			;;
-
-		*)
-			echo "Deterministic fallback: inconclusive (result='${_fallback_result}') — escalating."
-			echo "judge_skip_reason=${_fallback_reason}" >> "$GITHUB_OUTPUT"
-			return 1
-			;;
-	esac
-}
-
-# -----------------------------------------------------------
 # Build judge prompt
 # -----------------------------------------------------------
 RB_JUDGE_PROMPT="${RUNTIME_DIR}/rb_judge_prompt.txt"
@@ -417,19 +266,13 @@ if [ -f "${HOME}/.codex/config.toml" ]; then
 fi
 
 if [ "${JUDGE_SUCCESS}" != "true" ]; then
-  echo "::warning::Review-blocked judge LLM execution failed after 2 attempts."
+  echo "::warning::Review-blocked judge LLM execution failed after 2 attempts — needs human intervention."
   if [ -s "${JUDGE_STDERR_FILE}" ]; then
     echo "::group::Last judge stderr"
     head -100 "${JUDGE_STDERR_FILE}"
     echo "::endgroup::"
   fi
-  # _deterministic_judge_fallback exits 0 on merge (never returns),
-  # or returns 1 on escalate — in which case we exit here.
-  _deterministic_judge_fallback "llm_failed" || {
-    echo "::warning::Deterministic fallback also could not resolve — needs human intervention."
-    exit 0
-  }
-  # Unreachable guard — see comment above.
+  echo "judge_skip_reason=llm_failed" >> "$GITHUB_OUTPUT"
   exit 0
 fi
 
@@ -482,18 +325,11 @@ sys.exit(1)
 " 2>/dev/null || echo "")"
 
 if [ -z "${JUDGE_JSON:-}" ]; then
-  echo "::warning::Could not parse review-blocked judge output."
+  echo "::warning::Could not parse review-blocked judge output — needs human intervention."
   echo "::group::Raw judge output (first 200 lines)"
   head -200 "${RB_JUDGE_OUTPUT}" 2>/dev/null || true
   echo "::endgroup::"
-  # _deterministic_judge_fallback exits 0 on merge (never returns),
-  # or returns 1 on escalate — in which case we exit here.
-  _deterministic_judge_fallback "json_parse_failed" || {
-    echo "::warning::Deterministic fallback also could not resolve — needs human intervention."
-    exit 0
-  }
-  # If we reach here, the fallback succeeded (exit 0 inside function).
-  # This line is unreachable but guards against future refactors.
+  echo "judge_skip_reason=json_parse_failed" >> "$GITHUB_OUTPUT"
   exit 0
 fi
 

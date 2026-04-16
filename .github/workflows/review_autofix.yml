@@ -3530,12 +3530,7 @@ jobs:
           if [ "${JUDGE_HANDLED}" = "true" ]; then
             case "${JUDGE_ACTION}" in
               merge)
-                case "${JUDGE_SKIP_REASON}" in
-                  *deterministic_merge)
-                    MSG="Review-blocked judge: LLM failed, deterministic fallback merged PR (no critical issues)" ;;
-                  *)
-                    MSG="Review-blocked judge merged PR as-is" ;;
-                esac ;;
+                MSG="Review-blocked judge merged PR as-is" ;;
               fix)
                 MSG="Review-blocked judge pushed fix commit" ;;
               close_and_reissue)
