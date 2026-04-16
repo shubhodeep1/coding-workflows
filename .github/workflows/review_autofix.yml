@@ -1997,10 +1997,21 @@ jobs:
             # "- none" variants).
             has_real_changes="false"
             if [ -n "${changes_section}" ]; then
-              # Strip lines that are blank or match "- none*"
-              substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' || true)"
-              if [ -n "${substantive}" ]; then
-                has_real_changes="true"
+              # If the first non-blank line is a "- none" variant (with any
+              # trailing description), treat the entire section as "no changes".
+              # Editors may append informational bullets (validation runs,
+              # missing-context notes) below "- none" that are not real
+              # file-change claims; without this guard those bullets trigger
+              # a false-positive EDITOR_CHANGES_LOST error.
+              first_line="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | head -1 || true)"
+              if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none'; then
+                has_real_changes="false"
+              else
+                # Strip lines that are blank or match "- none*"
+                substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' || true)"
+                if [ -n "${substantive}" ]; then
+                  has_real_changes="true"
+                fi
               fi
             fi
 
