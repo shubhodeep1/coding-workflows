@@ -533,7 +533,11 @@ def build_report(
 def _sort_runs_by_created_desc(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         runs,
-        key=lambda item: _parse_iso8601(item.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=lambda item: (
+            _parse_iso8601(item.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+            str(item.get("repository") or ""),
+            _to_int(item.get("run_id"), _to_int(item.get("id"), 0)),
+        ),
         reverse=True,
     )
 
@@ -579,6 +583,7 @@ def select_notable_runs_for_logs(runs: list[dict[str, Any]], max_log_runs: int) 
             key=lambda item: (
                 _to_int(item.get("duration_seconds"), 0),
                 _run_created_at(item),
+                _to_int(item.get("run_id"), _to_int(item.get("id"), 0)),
             ),
             reverse=True,
         )
@@ -587,6 +592,8 @@ def select_notable_runs_for_logs(runs: list[dict[str, Any]], max_log_runs: int) 
         key=lambda item: (
             _to_int(item.get("duration_seconds"), 0),
             _run_created_at(item),
+            str(item.get("repository") or ""),
+            _to_int(item.get("run_id"), _to_int(item.get("id"), 0)),
         ),
         reverse=True,
     )
@@ -633,6 +640,7 @@ def select_runs_for_log_export_categories(
             key=lambda item: (
                 _to_int(item.get("duration_seconds"), 0),
                 _run_created_at(item),
+                _to_int(item.get("run_id"), _to_int(item.get("id"), 0)),
             ),
             reverse=True,
         )
@@ -641,6 +649,8 @@ def select_runs_for_log_export_categories(
         key=lambda item: (
             _to_int(item.get("duration_seconds"), 0),
             _run_created_at(item),
+            str(item.get("repository") or ""),
+            _to_int(item.get("run_id"), _to_int(item.get("id"), 0)),
         ),
         reverse=True,
     )

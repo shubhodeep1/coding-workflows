@@ -281,6 +281,37 @@ def test_select_runs_for_log_export_categories_deterministic_and_capped():
 	assert [item["run_id"] for item in categories["recent"]] == [12, 11]
 
 
+def test_select_runs_for_log_export_categories_tiebreakers_are_deterministic():
+	runs = [
+		{
+			"repository": "owner/repo",
+			"run_id": 21,
+			"conclusion": "failure",
+			"duration_seconds": 500,
+			"created_at": "2026-04-10T11:00:00Z",
+		},
+		{
+			"repository": "owner/repo",
+			"run_id": 22,
+			"conclusion": "failure",
+			"duration_seconds": 500,
+			"created_at": "2026-04-10T11:00:00Z",
+		},
+		{
+			"repository": "owner/repo",
+			"run_id": 23,
+			"conclusion": "success",
+			"duration_seconds": 500,
+			"created_at": "2026-04-10T11:00:00Z",
+		},
+	]
+
+	categories = collector.select_runs_for_log_export_categories(runs, max_log_runs=3)
+	assert [item["run_id"] for item in categories["errors"]] == [22, 21]
+	assert [item["run_id"] for item in categories["slow"]] == [23, 22, 21]
+	assert [item["run_id"] for item in categories["recent"]] == [23, 22, 21]
+
+
 def test_extract_full_logs_decodes_without_truncation():
 	buffer = io.BytesIO()
 	with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:

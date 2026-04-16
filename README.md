@@ -635,7 +635,10 @@ Collector script: [`scripts/collect_workflow_logs.py`](scripts/collect_workflow_
   - window selector (exactly one): `--lookback-days` or `--since`
   - `--output` (default `workflow_log_report.json`)
   - `--log-output-dir` (optional categorized full-log export directory)
-  - `--per-page`, `--max-pages`, `--max-runs`, `--max-log-runs` (default `15`)
+  - `--per-page` (default `100`)
+  - `--max-pages` (default `10`)
+  - `--max-runs` (default `0`)
+  - `--max-log-runs` (default `15`)
 - Token handling in `main`: uses `GH_TOKEN` with `GITHUB_TOKEN` fallback.
 - Workflow family normalization covers pipeline families: `clarify`, `plan`, `implement`, `review_autofix`, `validate`, `orchestrate`, `orchestrate_poll`, `orchestrate_clarify_respond`, `issue_pr_status`, `cancel_on_pr_close`, and `memory_maintenance`.
 - For notable runs (failed, retries > 0, and top 10 slowest per repository), the collector also downloads raw run logs from `repos/{repo}/actions/runs/{run_id}/logs`, extracts ZIP contents in memory, and stores truncated per-step excerpts.
