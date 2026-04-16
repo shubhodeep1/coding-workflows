@@ -371,7 +371,7 @@ def _parallel_groups_from_edges(
 	while remaining:
 		ready = sorted(
 			[iid for iid in remaining if in_degree[iid] == 0],
-			key=lambda iid: issues_by_id[iid].get("priority", 10),
+			key=lambda iid: (issues_by_id[iid].get("priority", 10), iid),
 		)
 		if not ready:
 			raise OrchestrateError(
@@ -448,10 +448,8 @@ def validate_wave_file_partition(
 					"issue_b": iid_b,
 					"files": hot_common,
 				})
-			# Also report the full pair overlap (may be the same files, but
-			# a non-hot-file overlap is equally fatal). We emit only one
-			# record per pair, choosing pair if there are non-hot overlaps
-			# and hot_file otherwise.
+			# Also report the non-hot overlap for the same pair so callers
+			# can distinguish "hot-file-only" overlap from mixed overlap.
 			non_hot = [p for p in common if p not in hot]
 			if non_hot:
 				overlaps.append({

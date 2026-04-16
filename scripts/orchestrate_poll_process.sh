@@ -226,8 +226,9 @@ _pr_checks_completed()
 #   operates entirely on the fetched refs.
 # - `git merge-tree --write-tree` (git ≥ 2.38) returns 0 on clean
 #   merge and 1 when textual conflicts occur. With `--name-only` it
-#   prints the list of conflicting paths to stdout instead of a full
-#   tree SHA. We rely on both signals.
+#   prints the written tree SHA followed by conflicting paths to
+#   stdout; we defensively handle outputs that omit the SHA line.
+#   We rely on both signals.
 # - Siblings are fetched in a single batched `git fetch` per probe
 #   cycle so the network cost is bounded by wave size.
 # - MAX_MERGE_DEFERRALS caps how many cycles a single PR may be
@@ -361,11 +362,14 @@ probe_sibling_merge_conflicts()
 			# Exit 0 => clean merge
 			continue
 		fi
-		# Non-zero => conflict. First line of output is the written tree
-		# SHA; subsequent lines are the conflicting paths when --name-only
-		# is in effect. Strip the tree SHA defensively.
+		# Non-zero => conflict. Most git versions print the written tree
+		# SHA on the first line; some may emit only paths. Strip the first
+		# line only when it looks like an object ID.
 		local conflict_paths
-		conflict_paths="$(printf '%s\n' "${conflicts_out}" | awk 'NR==1{next} {print}' | sed '/^$/d')"
+		conflict_paths="$(printf '%s\n' "${conflicts_out}" | sed '/^$/d')"
+		if printf '%s\n' "${conflict_paths}" | head -n1 | grep -Eq '^[0-9a-f]{40}([0-9a-f]{24})?$'; then
+			conflict_paths="$(printf '%s\n' "${conflict_paths}" | awk 'NR==1{next} {print}')"
+		fi
 		if [ -z "${conflict_paths}" ]; then
 			# Older git: conflict information may appear on the first line
 			# already. Treat the whole output as conflict context.
