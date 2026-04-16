@@ -1512,14 +1512,21 @@ jobs:
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
-          # Template-owned helper scripts (listed in scripts/.gitignore),
-          # prompts/, .github/prompts/, and .github/scripts/ are fetched from
-          # coding-workflows at runtime in consumer repos, and must NOT be
-          # committed there.  Consumer-repo-owned scripts (e.g.
-          # scripts/security/*.js) ARE committed — the exclusion targets only
-          # the specific fetched helpers, not the whole scripts/ directory.
-          # In the canonical `*/coding-workflows` repository these paths ARE
-          # the source of truth and must be editable, so excludes are dropped.
+          # Template-owned paths (prompts/, .github/prompts/,
+          # .github/scripts/) are fetched from coding-workflows at runtime in
+          # consumer repos, and must NOT be committed there — any edit to them
+          # in a consumer wrapper would either be a no-op (overwritten next run)
+          # or leak a stale copy back into the caller's tree.  In the canonical
+          # `*/coding-workflows` repository these paths ARE the source of truth
+          # and must be editable, so the excludes are dropped.
+          #
+          # NOTE: scripts/ is NOT blanket-excluded here.  The bootstrap step
+          # writes a scripts/.gitignore that ignores only the runtime-fetched
+          # helpers (gh_helpers.sh, tg_helpers.sh, etc.).  A blanket ':!scripts'
+          # would also block legitimate consumer-repo scripts such as
+          # scripts/security/*.js — which was the root cause of
+          # ai:implementation-failed false-positives on repos that keep their
+          # own scripts under scripts/.
           is_self_repo="false"
           if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then
             is_self_repo="true"
@@ -1550,6 +1557,12 @@ jobs:
           fi
           git add -u -- "${add_u_excludes[@]}"
           git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
+          if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
+            while IFS= read -r fetched_script; do
+              case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac
+              git reset -q HEAD -- "scripts/${fetched_script}" 2>/dev/null || true
+            done < scripts/.gitignore
+          fi
           echo "Staged files before commit:"
           git diff --cached --name-only | sed 's/^/ - /' || true
           if [ "${is_self_repo}" = "false" ] && git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
@@ -1631,7 +1644,7 @@ jobs:
           # re-label the issue and post an explanatory comment.
           if [ -z "$(git diff --cached --name-only)" ]; then
             if [ "${is_self_repo}" = "false" ]; then
-              echo "All Codex changes were filtered out (scripts/, .github/prompts/, .github/scripts/, or fetched-manifest cleanup); nothing to commit."
+              echo "All Codex changes were filtered out (.github/prompts/, .github/scripts/, prompts/, or fetched-manifest cleanup); nothing to commit."
             else
               echo "No staged changes after fetched-manifest cleanup; nothing to commit."
             fi
@@ -2131,53 +2144,7 @@ jobs:
             cat "${PLAN_FILE}"
           } > "${RUNTIME_DIR}/issue_context_for_summary.txt"
 
-          CONFIG_FILE="${HOME}/.codex/config.toml"
-          CONFIG_BACKUP_FILE="${RUNTIME_DIR}/codex_config_issue_summary_backup.toml"
-          HAD_CONFIG="false"
-          if [ -f "${CONFIG_FILE}" ]; then
-            HAD_CONFIG="true"
-            cp "${CONFIG_FILE}" "${CONFIG_BACKUP_FILE}"
-          fi
-
-          restore_codex_config() {
-            if [ "${HAD_CONFIG}" = "true" ] && [ -f "${CONFIG_BACKUP_FILE}" ]; then
-              cp "${CONFIG_BACKUP_FILE}" "${CONFIG_FILE}"
-              rm -f "${CONFIG_BACKUP_FILE}"
-              return
-            fi
-            rm -f "${CONFIG_FILE}" "${CONFIG_BACKUP_FILE}"
-          }
-          trap 'restore_codex_config; rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt"' EXIT
-
-          mkdir -p "${HOME}/.codex"
-          if [ "${HAD_CONFIG}" = "true" ] && [ -f "${CONFIG_BACKUP_FILE}" ]; then
-            awk '
-              BEGIN { replaced = 0 }
-              /^model_reasoning_effort[[:space:]]*=/ {
-                print "model_reasoning_effort = \"low\""
-                replaced = 1
-                next
-              }
-              { print }
-              END {
-                if (!replaced) {
-                  print "model_reasoning_effort = \"low\""
-                }
-              }
-            ' "${CONFIG_BACKUP_FILE}" > "${CONFIG_FILE}"
-          else
-            {
-              echo 'model_reasoning_effort = "low"'
-              echo 'model_provider = "openrouter"'
-              echo "model = \"${MODEL_EDITOR}\""
-              echo
-              echo '[model_providers.openrouter]'
-              echo 'name = "OpenRouter"'
-              echo 'base_url = "https://openrouter.ai/api/v1"'
-              echo 'env_key = "OPENROUTER_API_KEY"'
-              echo 'wire_api = "responses"'
-            } > "${CONFIG_FILE}"
-          fi
+          trap 'rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt"' EXIT
 
           for _summary_attempt in 1 2 3; do
             cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" \

@@ -62,8 +62,6 @@ env:
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
-  REVIEW_REASONING_SCHEDULE: ${{ vars.REVIEW_REASONING_SCHEDULE || 'xhigh,xhigh,xhigh' }}
-  REVIEW_AUTODOWNGRADE_DISABLED: ${{ vars.REVIEW_AUTODOWNGRADE_DISABLED || 'false' }}
 
 jobs:
   gate:
@@ -857,7 +855,6 @@ jobs:
 
           if [ "$IS_SMOKE" = "true" ]; then
             echo "🔬 Smoke test PR detected — switching to low reasoning effort and reduced reviewer set"
-            echo "REVIEW_SMOKE_OVERRIDE_ACTIVE=true" >> "$GITHUB_ENV"
             echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             # Use only 2 fast models for smoke tests
@@ -872,7 +869,6 @@ jobs:
               sed -i 's/^[[:space:]]*model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
             fi
           else
-            echo "REVIEW_SMOKE_OVERRIDE_ACTIVE=false" >> "$GITHUB_ENV"
             echo "Standard PR — using default LLM settings"
           fi
 
@@ -921,9 +917,11 @@ jobs:
 
       - name: "Preflight: Warn if protected paths are tracked in consumer repo"
         # Defensive check: in consumer repos, the workflow's runtime helpers
-        # (scripts/, prompts/, .serena/, .github/scripts/, .github/prompts/,
-        # ai-memory/) should never be tracked — they are fetched at runtime
-        # from coding-workflows.  If a prior buggy run leaked them into the
+        # (known scripts/<helper> files, prompts/, .serena/, .github/scripts/,
+        # .github/prompts/, ai-memory/) should never be tracked — they are
+        # fetched at runtime from coding-workflows. Consumer-owned scripts/**
+        # are allowed and intentionally excluded from this warning.
+        # If a prior buggy run leaked runtime helpers into the
         # consumer's history, every merge with the base branch will re-stage
         # them in the conflict-resolver step and trip the downstream guard.
         # We can't fix the leak from here, but we surface it immediately so
@@ -934,10 +932,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          leaked_paths="$(git ls-files -- 'scripts/' 'prompts/' '.serena/' '.github/scripts/' '.github/prompts/' 'ai-memory/' 2>/dev/null || true)"
+          leaked_paths="$(git ls-files -- \
+            'scripts/gh_helpers.sh' 'scripts/setup_serena.sh' 'scripts/git_ref_health_check.sh' \
+            'scripts/render_prompt.sh' 'scripts/validate_changed_files_syntax.sh' 'scripts/serena_efficiency_report.py' \
+            'scripts/tg_helpers.sh' 'scripts/label_helpers.sh' 'scripts/memory_helpers.sh' \
+            'scripts/ai_memory.py' 'scripts/ai_memory_lib.py' 'scripts/openrouter_prompt_cache.py' \
+            'scripts/codex_model_catalog.json' \
+            'prompts/' '.serena/' '.github/scripts/' '.github/prompts/' 'ai-memory/' 2>/dev/null || true)"
           if [ -n "${leaked_paths}" ]; then
             leaked_count="$(printf '%s\n' "${leaked_paths}" | sed '/^$/d' | wc -l | tr -d ' ')"
-            echo "::warning::Consumer repo tracks ${leaked_count} workflow runtime/helper artifact(s) under scripts/, prompts/, .serena/, .github/scripts/, .github/prompts/, or ai-memory/. These will be auto-unstaged before commit, but please remove them from the repo (git rm -r --cached + commit) to prevent repeated friction on every merge with the base branch."
+            echo "::warning::Consumer repo tracks ${leaked_count} workflow runtime/helper artifact(s) (scripts/<known helper>, prompts/, .serena/, .github/scripts/, .github/prompts/, or ai-memory/). Consumer-owned scripts under scripts/ are allowed; remove only leaked workflow artifacts (git rm -r --cached + commit) to prevent repeated merge friction on every merge with the base branch."
             echo "Tracked protected paths found on ${TARGET_BRANCH:-HEAD}:"
             printf '%s\n' "${leaked_paths}" | sed '/^$/d; s/^/ - /'
           else
@@ -982,95 +986,11 @@ jobs:
           echo "Judge-fix commits in history: ${judge_fix_count}"
           echo "judge_fix_count=${judge_fix_count}" >> "$GITHUB_OUTPUT"
 
-      - name: Select reviewer reasoning effort for current cycle
+      - name: Log reviewer reasoning effort
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
-
-          autofix_iteration="${{ steps.retrigger_guard.outputs.autofix_iteration }}"
-          if ! [[ "${autofix_iteration}" =~ ^[0-9]+$ ]]; then
-            echo "::warning::Invalid autofix iteration '${autofix_iteration}'. Falling back to 0."
-            autofix_iteration=0
-          fi
-          cycle_index=$((autofix_iteration + 1))
-
-          base_reviewer_reasoning="${REVIEWER_REASONING_EFFORT:-xhigh}"
-
-          smoke_override=false
-          case "${REVIEW_SMOKE_OVERRIDE_ACTIVE:-false}" in
-            true|TRUE|True|1|yes|YES|on|ON)
-              smoke_override=true
-              ;;
-          esac
-
-          kill_switch_enabled=false
-          case "${REVIEW_AUTODOWNGRADE_DISABLED:-false}" in
-            true|TRUE|True|1|yes|YES|on|ON)
-              kill_switch_enabled=true
-              ;;
-          esac
-
-          selected_reasoning="${base_reviewer_reasoning}"
-          schedule_source="fallback_default"
-          schedule_csv="${REVIEW_REASONING_SCHEDULE:-xhigh,high,medium}"
-
-          if [ "${smoke_override}" = "true" ]; then
-            selected_reasoning="low"
-            schedule_source="smoke_override"
-          elif [ "${kill_switch_enabled}" = "true" ]; then
-            selected_reasoning="${base_reviewer_reasoning}"
-            schedule_source="kill_switch_disabled_schedule"
-          else
-            IFS=',' read -r -a raw_schedule <<< "${schedule_csv}"
-            normalized_schedule=()
-            invalid_schedule_entries=()
-
-            for entry in "${raw_schedule[@]}"; do
-              normalized="$(echo "${entry}" | tr '[:upper:]' '[:lower:]' | xargs)"
-              if [ -z "${normalized}" ]; then
-                continue
-              fi
-
-              case "${normalized}" in
-                xhigh|high|medium|low)
-                  normalized_schedule+=("${normalized}")
-                  ;;
-                *)
-                  invalid_schedule_entries+=("${normalized}")
-                  ;;
-              esac
-            done
-
-            if [ "${#invalid_schedule_entries[@]}" -gt 0 ] || [ "${#normalized_schedule[@]}" -eq 0 ]; then
-              selected_reasoning="${base_reviewer_reasoning}"
-              schedule_source="fallback_default"
-              echo "::warning::Invalid REVIEW_REASONING_SCHEDULE='${schedule_csv}'. Falling back to REVIEWER_REASONING_EFFORT='${selected_reasoning}'."
-            else
-              schedule_index=${autofix_iteration}
-              if [ "${schedule_index}" -ge "${#normalized_schedule[@]}" ]; then
-                schedule_index=$((${#normalized_schedule[@]} - 1))
-              fi
-              selected_reasoning="${normalized_schedule[${schedule_index}]}"
-              schedule_source="schedule"
-            fi
-          fi
-
-          echo "REVIEWER_REASONING_EFFORT=${selected_reasoning}" >> "$GITHUB_ENV"
-
-          if [ -f "${HOME}/.codex/config.toml" ]; then
-            sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${selected_reasoning}\"/" "${HOME}/.codex/config.toml"
-          fi
-
-          reviewer_reasoning_selection_json="$(jq -cn \
-            --argjson cycle_index "${cycle_index}" \
-            --arg selected_reasoning_level "${selected_reasoning}" \
-            --arg schedule_source "${schedule_source}" \
-            --argjson kill_switch_enabled "${kill_switch_enabled}" \
-            --argjson smoke_override "${smoke_override}" \
-            --arg configured_schedule "${schedule_csv}" \
-            '{cycle_index:$cycle_index,selected_reasoning_level:$selected_reasoning_level,schedule_source:$schedule_source,kill_switch_enabled:$kill_switch_enabled,smoke_override:$smoke_override,configured_schedule:$configured_schedule}'
-          )"
-          echo "reviewer_reasoning_selection: ${reviewer_reasoning_selection_json}"
+          echo "Reviewer reasoning effort: ${REVIEWER_REASONING_EFFORT:-xhigh}"
 
       - name: Generate diff context
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
@@ -1756,9 +1676,9 @@ jobs:
             git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
-          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
             echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+            git reset -q HEAD -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
           if [ "${PROTECTED_LEAKED}" = "true" ]; then
@@ -2018,8 +1938,10 @@ jobs:
               if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)'; then
                 has_real_changes="false"
               else
-                # Strip lines that are blank or match "- none*"
-                substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)' || true)"
+                # Strip lines that are blank, match "- none*", or are
+                # informational metadata (e.g. "- Validation executed: ...")
+                # that the editor may emit when no files changed.
+                substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)' || true)"
                 if [ -n "${substantive}" ]; then
                   has_real_changes="true"
                 fi
@@ -2280,7 +2202,7 @@ jobs:
           # Skipped on the workflow source repo, where these paths are
           # tracked source files — removing them here would leave them
           # missing for the rest of this step because the consumer-repo
-          # restore block below (git reset/checkout on 'scripts' etc.) is
+          # restore block below (git reset/checkout on protected paths) is
           # intentionally skipped when IS_WORKFLOW_SOURCE_REPO=true, and
           # `git merge --no-commit` does not rewrite paths whose content
           # is identical between HEAD and BASE.  Downstream
@@ -2396,18 +2318,18 @@ jobs:
 
           # Defensive: `git merge --no-commit` auto-stages merged hunks (and
           # conflict-marked hunks) into the index for every path both sides
-          # touched, including protected paths (scripts/, prompts/, .serena/,
+          # touched, including protected paths (prompts/, .serena/,
           # .github/scripts/, .github/prompts/, ai-memory/) when the consumer
           # repo has leaked tracked copies of workflow runtime helpers from an
-          # older buggy run.  The downstream `git add -u -- ':!scripts' …`
+          # older buggy run.  The downstream `git add -u -- ':!prompts' …`
           # exclusion does NOT unstage already-indexed paths, so without this
           # reset the merge commit would carry protected-path changes and
           # trip the commit-gate guard, wasting the whole review run.
           # Skipped on the workflow source repo itself, where these paths are
           # real source code.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
-            git checkout -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+            git reset -q HEAD -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+            git checkout -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
           fi
 
           # Restore stashed dirs so Codex has its full environment.
@@ -2647,11 +2569,12 @@ jobs:
           # Remove root-level workflow-generated artifacts so they are never
           # committed to caller repos.  Skip when running on coding-workflows
           # itself — these files are actual source code there, not artifacts.
-          # NOTE: scripts/, .serena/, and prompts/ are cleaned up in the final
+          # NOTE: .serena/ and prompts/ are cleaned up in the final
           # "Cleanup temporary artifacts" step because later notification steps
           # (Telegram, labeling) still need scripts/tg_helpers.sh and
-          # scripts/label_helpers.sh.  These directories are already excluded
-          # from git add via ':!scripts', ':!.serena', ':!prompts' patterns.
+          # scripts/label_helpers.sh.  prompts/ and .serena/ are excluded
+          # from git add via ':!.serena', ':!prompts' patterns; fetched
+          # scripts are excluded via the bootstrap-generated scripts/.gitignore.
           if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
@@ -2885,9 +2808,9 @@ jobs:
               git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
-            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
               echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-              git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+              git reset -q HEAD -- 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
             if [ "${PROTECTED_LEAKED}" = "true" ]; then
