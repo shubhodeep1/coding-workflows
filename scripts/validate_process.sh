@@ -469,6 +469,7 @@ ensure_label_exists()
     return 0
   fi
 
+  tg_notify "ensure_label_exists: failed to create label '${label_name}' in repo '${GITHUB_REPOSITORY}': ${_label_err}" "WARNING"
   return 0
 }
 

@@ -924,6 +924,7 @@ ensure_label_exists() {
     return 0
   fi
 
+  echo "::warning::ensure_label_exists: failed to create label '${label_name}' in repo '${GITHUB_REPOSITORY}': ${_label_err}" >&2
   return 0
 }
 
