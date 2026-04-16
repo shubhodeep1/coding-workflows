@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/clarify.yml\n.github/workflows/review_autofix.yml\nscripts/verify_integration_fingerprints.py\nscripts/verify_integration_fingerprints.py\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/implement.yml\n.github/workflows/review_autofix.yml\n/tmp/codex-pr-24485994366-2-17142/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\n/tmp/codex-pr-24485994366-2-17142/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\n/tmp/codex-pr-24485994366-2-17142/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\nscripts/orchestrate_poll_process.sh\nscripts/orchestrate_poll_process.sh",
+  "fingerprint": "c25b74696bf7bbf93cb0e26c60652c4fc292c74b2f607ab850e4b0de2657b6ab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1133,
+    "run_id": "24485994366",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "Copilot",
+    "run_attempt": 2,
+    "run_id": "24485994366",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416010652_545d3d89b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1133,
+    "run_id": "24485994366"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T01:06:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
