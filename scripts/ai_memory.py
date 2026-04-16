@@ -126,14 +126,28 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
                 memory_root_relative=args.memory_root,
             )
         except MemoryGitError as exc:
+            error_text = str(exc)
+            lowered = error_text.lower()
+            is_missing_branch = (
+                ("remote branch" in lowered and ("not found" in lowered or "does not exist" in lowered))
+                or "could not find remote ref" in lowered
+                or "couldn't find remote ref" in lowered
+                or "remote ref does not exist" in lowered
+            )
             print(f"AI_MEMORY_WARNING: {exc}", file=sys.stderr)
             context = "AI MEMORY CONTEXT\nstatus: unavailable\n"
             if args.output_file:
                 Path(args.output_file).write_text(context, encoding="utf-8")
             else:
                 print(context, end="")
-            _print_json({"ok": True, "enabled": False, "records_selected": 0, "estimated_tokens": 0, "warning": str(exc)})
-            _emit_telemetry("retrieve", ok=True, enabled=False, records_selected=0, warning="branch_unavailable")
+            _print_json({"ok": True, "enabled": False, "records_selected": 0, "estimated_tokens": 0, "warning": error_text})
+            _emit_telemetry(
+                "retrieve",
+                ok=True,
+                enabled=False,
+                records_selected=0,
+                warning="branch_unavailable" if is_missing_branch else "git_error",
+            )
             return 0
         memory_root = _resolve_memory_root(branch_dir, args.memory_root)
         profiles_path = branch_dir / args.retrieval_profiles
