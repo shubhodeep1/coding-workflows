@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import math
 import os
+import random
 import re
 import subprocess
 import sys
@@ -18,23 +20,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-SCHEMA_VERSION = "workflow_log_collector.v1"
-CORE_WORKFLOW_FAMILIES = (
-    "clarify",
-    "plan",
-    "implement",
-    "review_autofix",
-    "validate",
-    "orchestrate",
-    "orchestrate_poll",
-    "orchestrate_clarify_respond",
-    "issue_pr_status",
-    "cancel_on_pr_close",
-    "memory_maintenance",
-)
+SCHEMA_VERSION = "workflow_log_collector.v2"
 LOG_EXPORT_CATEGORIES = ("errors", "slow", "recent")
 LOG_EXCERPT_MAX_CHARS = 4000
 SLOW_RUNS_PER_REPO = 10
+DEFAULT_SUCCESS_SAMPLE_RATE = 0.07
 RETRY_MARKERS = (
     "rate limit",
     "secondary",
@@ -122,6 +112,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=15,
         help="Optional cap on notable runs to fetch raw logs for (0 = disabled).",
+    )
+    parser.add_argument(
+        "--success-sample-rate",
+        type=float,
+        default=DEFAULT_SUCCESS_SAMPLE_RATE,
+        help="Fraction of successful runs to randomly sample for log analysis (default 0.07 = ~7%%).",
     )
     parser.add_argument(
         "--log-output-dir",
@@ -256,7 +252,21 @@ def normalize_workflow_family(workflow_name: str | None, workflow_path: str | No
     for marker, family in family_matchers:
         if marker in normalized:
             return family
-    return None
+
+    if "ci" in normalized:
+        return "ci"
+    if "workflow_log_analysis" in normalized:
+        return "workflow_log_analysis"
+
+    path = (workflow_path or "").lower()
+    if path:
+        stem = Path(path).stem.lower()
+        stem = re.sub(r"^(ai-|internal-)", "", stem)
+        stem = stem.replace("-", "_")
+        if stem:
+            return stem
+
+    return "other"
 
 
 def _build_runs_endpoint(repo: str, since_utc: datetime, per_page: int, page: int) -> str:
@@ -494,6 +504,8 @@ def build_report(
     repositories: list[str],
     runs: list[dict[str, Any]],
     errors: list[dict[str, str]],
+    *,
+    success_sample_rate: float = DEFAULT_SUCCESS_SAMPLE_RATE,
 ) -> dict[str, Any]:
     durations = [int(item.get("duration_seconds", 0)) for item in runs]
     success_count = sum(1 for item in runs if (item.get("conclusion") or "").lower() == "success")
@@ -505,15 +517,18 @@ def build_report(
         if (item.get("conclusion") or "").lower() not in {"success", "failure", "cancelled"}
     )
 
+    observed_families = sorted({str(item.get("workflow_family") or "other") for item in runs})
     avg_duration = float(sum(durations) / len(durations)) if durations else 0.0
+    sampled_success_count = sum(1 for item in runs if item.get("_success_sampled"))
 
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": _format_iso8601(datetime.now(timezone.utc)),
         "scope": {
             "repositories": repositories,
-            "workflow_families": list(CORE_WORKFLOW_FAMILIES),
+            "workflow_families": observed_families,
             "source": "github_actions_api",
+            "success_sample_rate": success_sample_rate,
         },
         "runs": runs,
         "summary": {
@@ -525,6 +540,7 @@ def build_report(
             "avg_duration_seconds": avg_duration,
             "p50_duration_seconds": _percentile(durations, 50),
             "p95_duration_seconds": _percentile(durations, 95),
+            "sampled_success_runs": sampled_success_count,
         },
         "errors": errors,
     }
@@ -558,7 +574,18 @@ def _eligible_runs_for_log_selection(runs: list[dict[str, Any]]) -> list[dict[st
     ]
 
 
-def select_notable_runs_for_logs(runs: list[dict[str, Any]], max_log_runs: int) -> list[dict[str, Any]]:
+def _deterministic_seed(runs: list[dict[str, Any]]) -> str:
+    """Build a deterministic seed from the collection window for reproducible sampling."""
+    timestamps = sorted(run.get("created_at") or "" for run in runs if run.get("created_at"))
+    seed_input = f"{timestamps[0]}:{timestamps[-1]}:{len(runs)}" if timestamps else f"empty:{len(runs)}"
+    return hashlib.sha256(seed_input.encode("utf-8")).hexdigest()
+
+
+def select_notable_runs_for_logs(
+    runs: list[dict[str, Any]],
+    max_log_runs: int,
+    success_sample_rate: float = DEFAULT_SUCCESS_SAMPLE_RATE,
+) -> list[dict[str, Any]]:
     if max_log_runs <= 0:
         return []
 
@@ -609,6 +636,31 @@ def select_notable_runs_for_logs(runs: list[dict[str, Any]], max_log_runs: int) 
             ordered.append(run)
             if len(ordered) >= max_log_runs:
                 return ordered
+
+    # Random sampling of successful runs for baseline visibility
+    if success_sample_rate > 0 and len(ordered) < max_log_runs:
+        success_runs = [
+            run for run in eligible
+            if (run.get("conclusion") or "").lower() == "success" and _run_identity(run) not in seen
+        ]
+        if success_runs:
+            sample_count = max(1, math.ceil(len(success_runs) * success_sample_rate))
+            remaining_slots = max_log_runs - len(ordered)
+            sample_count = min(sample_count, remaining_slots)
+            seed = _deterministic_seed(eligible)
+            rng = random.Random(seed)
+            sampled = rng.sample(success_runs, min(sample_count, len(success_runs)))
+            sampled = _sort_runs_by_created_desc(sampled)
+            for run in sampled:
+                identity = _run_identity(run)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                run["_success_sampled"] = True
+                ordered.append(run)
+                if len(ordered) >= max_log_runs:
+                    break
+
     return ordered
 
 
@@ -810,6 +862,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    success_sample_rate = max(0.0, min(1.0, args.success_sample_rate))
+
     try:
         since_utc = _resolve_since_utc(args)
     except ValueError as exc:
@@ -876,7 +930,7 @@ def main(argv: list[str] | None = None) -> int:
 
             run_rows.append(compute_run_metrics(repo, run, jobs))
 
-    for run in select_notable_runs_for_logs(run_rows, args.max_log_runs):
+    for run in select_notable_runs_for_logs(run_rows, args.max_log_runs, success_sample_rate=success_sample_rate):
         repository = str(run.get("repository") or "")
         run_id = _to_int(run.get("run_id"), 0)
         if not repository or run_id <= 0:
@@ -919,7 +973,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     errors = _dedupe_errors(errors)
-    report = build_report(repositories, run_rows, errors)
+    report = build_report(repositories, run_rows, errors, success_sample_rate=success_sample_rate)
     _write_json_atomic(Path(args.output), report)
     if args.log_output_dir:
         _write_json_atomic(Path(args.log_output_dir) / "summary.json", report)

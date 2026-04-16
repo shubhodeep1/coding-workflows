@@ -31,6 +31,7 @@ Output requirements:
   - ## Speed Optimizations
   - ## Cost Optimizations
   - ## Reliability Improvements
+  - ## AI Memory Health
   - ## GH API Call Audit
   - ## MCP & Serena Efficiency
   - ## Prompt Cache & Memory System
@@ -54,6 +55,12 @@ Section requirements:
 - ## Reliability Improvements
   - Rank recommendations by expected failure-rate or rerun-rate reduction.
   - For each item include: failure evidence, root cause category, exact fix, expected reliability impact, and rollback/fail-open considerations.
+- ## AI Memory Health
+  - Look for `AI_MEMORY_TELEMETRY:` lines in deep-dive log excerpts. Each line is a JSON object with `op` (operation name) and operation-specific fields.
+  - Key telemetry operations: `retrieve` (memory context fetch), `record-candidate` (learning), `record-run-event` (ledger), `finalize-task` (lineage), `promote` (candidate elevation), `compact` (archival), `processed-command-claim`/`processed-command-complete` (idempotency).
+  - For `retrieve` operations, report: hit rate (% with `records_selected > 0`), average `estimated_tokens` vs budget, `keyword_method` distribution (`llm` vs `plain` vs `none`).
+  - Flag: retrieves returning 0 records, `fail_open: true` entries (silent failures), `enabled: false` entries (memory disabled), high push retry counts.
+  - If no `AI_MEMORY_TELEMETRY` lines are found in the log excerpts, state that memory telemetry was not observed and recommend verifying telemetry emission in the sampled runs.
 - ## GH API Call Audit
   - Identify high-volume and high-redundancy API call patterns by workflow/job/step.
   - Flag unbatched per-item calls, repeated lookups in loops, and missed cache/prefetch opportunities.

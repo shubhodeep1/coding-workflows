@@ -30,6 +30,8 @@ Key behaviors:
 
 Memory operations are implemented in `scripts/memory_helpers.sh` (shared helper wrappers) and `scripts/ai_memory.py` (CLI). The `ai-memory` branch is created automatically on the first write.
 
+**Telemetry:** Every memory operation emits a structured `AI_MEMORY_TELEMETRY: {...}` line to workflow logs (stderr from Python; shell wrappers use stdout unless stdout is reserved for machine-readable JSON, in which case telemetry is sent to stderr). These lines are picked up by the workflow log analysis pipeline and surfaced in the **AI Memory Health** section of optimization reports. Key fields: `op` (operation name), `ok`, `records_selected`, `estimated_tokens`, `keyword_method` (`llm`/`plain`/`none`), `fail_open`, `did_push`.
+
 ## Quickstart
 
 Get AI-powered issue-to-PR automation running in your repository in a few minutes.
@@ -637,9 +639,11 @@ Collector script: [`scripts/collect_workflow_logs.py`](scripts/collect_workflow_
   - `--max-pages` (default `10`)
   - `--max-runs` (default `0`)
   - `--max-log-runs` (default `15`)
+  - `--success-sample-rate` (default `0.07` = ~7%) — fraction of successful runs randomly sampled for log analysis
 - Token handling in `main`: uses `GH_TOKEN` with `GITHUB_TOKEN` fallback.
-- Workflow family normalization covers pipeline families: `clarify`, `plan`, `implement`, `review_autofix`, `validate`, `orchestrate`, `orchestrate_poll`, `orchestrate_clarify_respond`, `issue_pr_status`, `cancel_on_pr_close`, and `memory_maintenance`.
-- For notable runs (failed, retries > 0, and top 10 slowest per repository), the collector also downloads raw run logs from `repos/{repo}/actions/runs/{run_id}/logs`, extracts ZIP contents in memory, and stores truncated per-step excerpts.
+- All workflow families are collected (no family filter). The `workflow_families` field in the report is derived from observed runs rather than a static list.
+- Workflow family normalization covers pipeline families (`clarify`, `plan`, `implement`, `review_autofix`, `validate`, `orchestrate`, `orchestrate_poll`, `orchestrate_clarify_respond`, `issue_pr_status`, `cancel_on_pr_close`, `memory_maintenance`) and keeps fallback buckets (for example `ci`, `workflow_log_analysis`, and sanitized filename-derived families) so non-pipeline runs remain observable.
+- For notable runs (failed, retries > 0, top 10 slowest per repository, and ~7% randomly sampled successful runs), the collector also downloads raw run logs from `repos/{repo}/actions/runs/{run_id}/logs`, extracts ZIP contents in memory, and stores truncated per-step excerpts. Random sampling uses a deterministic seed derived from the collection window for reproducibility.
 
 When `--log-output-dir` is set, collector additionally writes:
 
@@ -652,11 +656,11 @@ Full-log downloads for disk export are restricted to the selected `errors`/`slow
 
 Generated JSON report (`workflow_log_report.json`) includes:
 
-- `schema_version`
+- `schema_version` (`workflow_log_collector.v2`)
 - `generated_at`
-- `scope` (`repositories`, `workflow_families`, `source`)
-- `runs` (per-run metrics including `workflow_family`, `duration_seconds`, `retries`, `failure_point`, and optional `log_excerpts` as `{step_name, excerpt}` entries for notable runs)
-- `summary` (`total_runs`, success/failure/cancelled/other counts, `avg_duration_seconds`, `p50_duration_seconds`, `p95_duration_seconds`)
+- `scope` (`repositories`, `workflow_families` (observed, not static), `source`, `success_sample_rate`)
+- `runs` (per-run metrics including `workflow_family`, `duration_seconds`, `retries`, `failure_point`, optional `log_excerpts` as `{step_name, excerpt}` entries for notable runs, optional `_success_sampled: true` flag for randomly sampled successful runs)
+- `summary` (`total_runs`, success/failure/cancelled/other counts, `avg_duration_seconds`, `p50_duration_seconds`, `p95_duration_seconds`, `sampled_success_runs`)
 - `errors` (includes `scope: "logs"` entries when run log download/extraction fails; collection continues)
 
 ### Analyzer input/output contract
