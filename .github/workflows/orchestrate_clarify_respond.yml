@@ -153,83 +153,106 @@ jobs:
           CODEX_VERSION="${{ vars.CODEX_VERSION || 'v0.114.0' }}"
           npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
 
-      - name: Fetch workflow support scripts
+      - name: Resolve workflow support ref
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
-          # When running within coding-workflows itself, use the current
-          # commit to avoid version skew with the stable tag (stable is
-          # only updated after e2e tests pass — causes bootstrap failures).
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            script_ref="${{ github.sha }}"
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
-            script_ref="stable"
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
           fi
+
+      - name: Checkout workflow support source
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        id: checkout_support_source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Checkout workflow support source fallback
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.checkout_support_source.outcome == 'failure'
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Ensure workflow support source checkout
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+          if [ ! -d .codex-workflow-src ]; then
+            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+            exit 1
+          fi
+
+      - name: Checkout workflow support source main snapshot
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && env.SCRIPT_REF != 'main'
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src-main
+          fetch-depth: 1
+
+      - name: Stage workflow support files
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
-          # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
-          _rl_wait() {
-            local _reset_ts _wait_secs
-            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
-            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
-              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
-              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
-              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
-            else
-              _wait_secs=30
-            fi
-            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
-            sleep "${_wait_secs}"
-          }
-          _gh_api_fetch() {
-            local outfile="$1"; shift
-            local attempt=1
-            while [ "${attempt}" -le 5 ]; do
-              : > /tmp/_gh_rl_err
-              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
-              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
-                _rl_wait; attempt=$((attempt + 1))
-              else return 1; fi
-            done; return 1
-          }
+
           _fetched_scripts=()
           for f in gh_helpers.sh setup_serena.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py; do
-            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
-              echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main"
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
             fi
-            chmod +x "scripts/${f}"
+            if [ ! -f "${src}" ]; then
+              echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
+              exit 1
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
           done
+
           # Fetch AI memory schema files so consumer repos that lack
           # schemas on their default branch can bootstrap the ai-memory
           # branch (schemas are validated during memory operations).
           mkdir -p ai-memory/schemas
-          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
-            if [ ! -f "ai-memory/schemas/${sf}" ]; then
-              schema_tmp="ai-memory/schemas/${sf}.tmp"
-              if _gh_api_fetch "${schema_tmp}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}"; then
-                mv "${schema_tmp}" "ai-memory/schemas/${sf}"
-              else
-                rm -f "${schema_tmp}"
-              fi
+          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json; do
+            src=".codex-workflow-src/ai-memory/schemas/${sf}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
+              src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
+            fi
+            if [ ! -f "ai-memory/schemas/${sf}" ] && [ -f "${src}" ]; then
+              install -m 0644 "${src}" "ai-memory/schemas/${sf}"
             fi
           done
+
           # Model catalog: try script_ref first, fall back to local copy from checkout.
-          if _gh_api_fetch "scripts/codex_model_catalog.json.tmp" api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}"; then
-            mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
+          catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
+          if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
+            catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
+          fi
+          if [ -f "${catalog_src}" ]; then
+            install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
             _fetched_scripts+=(codex_model_catalog.json)
           else
-            rm -f "scripts/codex_model_catalog.json.tmp"
-            echo "Model catalog not on ${script_ref} yet; using local copy."
+            echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
           fi
+
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -242,38 +265,50 @@ jobs:
           PROMPT_SOURCE="prompts/mode-clarify-respond.txt"
           mkdir -p prompts
           if [ ! -f "${PROMPT_SOURCE}" ]; then
-            if ! _gh_api_fetch "${PROMPT_SOURCE}" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=${script_ref}"; then
-              echo "::warning::${PROMPT_SOURCE} not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "${PROMPT_SOURCE}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${PROMPT_SOURCE}?ref=main"
+            src=".codex-workflow-src/${PROMPT_SOURCE}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${PROMPT_SOURCE}" ]; then
+              src=".codex-workflow-src-main/${PROMPT_SOURCE}"
             fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Missing required support file ${PROMPT_SOURCE}"
+              exit 1
+            fi
+            install -m 0644 "${src}" "${PROMPT_SOURCE}"
           fi
+
           if [ ! -f prompts/serena-efficiency-block.txt ]; then
-            if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
-              echo "::warning::prompts/serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            src=".codex-workflow-src/prompts/serena-efficiency-block.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/serena-efficiency-block.txt" ]; then
+              src=".codex-workflow-src-main/prompts/serena-efficiency-block.txt"
             fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Missing required support file prompts/serena-efficiency-block.txt"
+              exit 1
+            fi
+            install -m 0644 "${src}" prompts/serena-efficiency-block.txt
           fi
 
           # Keep canonical static instructions available in caller repos where
           # these files may not exist yet.
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              if ! _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
-                echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                _gh_api_fetch "${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/${f}?ref=main"
+              src=".codex-workflow-src/${f}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
+                src=".codex-workflow-src-main/${f}"
               fi
+              if [ ! -f "${src}" ]; then
+                echo "::error::Failed to fetch required file ${f}"
+                exit 1
+              fi
+              install -m 0644 "${src}" "${f}"
             fi
             if [ ! -s "${f}" ]; then
               echo "::error::Failed to fetch required file ${f}"
               exit 1
             fi
           done
+
+          rm -rf .codex-workflow-src-main
 
       - name: Record memory run-start event
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
