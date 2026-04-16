@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Comprehensive pre-release test, analysis, and orchestrated release pipeline\",\"issues\":[{\"id\":\"collector-full-family-and-log-export\",\"title\":\"Expand workflow log collector coverage and add disk log export mode\",\"priority\":1},{\"id\":\"analyzer-codex-mode-and-unbounded-context\",\"title\":\"Add Codex mode and no-truncation default to workflow log analyzer\",\"priority\":1},{\"id\":\"prompt-workflow-analysis-comprehensive-rewrite\",\"title\":\"Rewrite workflow analysis prompt for comprehensive Codex-driven reporting\",\"priority\":2},{\"id\":\"workflow-log-analysis-codex-execution-path\",\"title\":\"Wire workflow-log-analysis workflow for Codex-first execution and manual trigger\",\"priority\":2},{\"id\":\"comprehensive-test-and-release-workflow\",\"title\":\"Add comprehensive-test-and-release workflow with dry-run, analysis, and orchestrator dispatch\",\"priority\":3},{\"id\":\"orchestrate-poll-comprehensive-release-callback\",\"title\":\"Add orchestrate poll callback to trigger real release for comprehensive pipeline\",\"priority\":3},{\"id\":\"docs-sync-comprehensive-release-pipeline\",\"title\":\"Document comprehensive release workflow and updated log-analysis behavior\",\"priority\":4}],\"dependency_edges\":[{\"from\":\"collector-full-family-and-log-export\",\"to\":\"workflow-log-analysis-codex-execution-path\"},{\"from\":\"analyzer-codex-mode-and-unbounded-context\",\"to\":\"workflow-log-analysis-codex-execution-path\"},{\"from\":\"workflow-log-analysis-codex-execution-path\",\"to\":\"comprehensive-test-and-release-workflow\"},{\"from\":\"collector-full-family-and-log-export\",\"to\":\"docs-sync-comprehensive-release-pipeline\"},{\"from\":\"analyzer-codex-mode-and-unbounded-context\",\"to\":\"docs-sync-comprehensive-release-pipeline\"},{\"from\":\"prompt-workflow-analysis-comprehensive-rewrite\",\"to\":\"docs-sync-comprehensive-release-pipeline\"},{\"from\":\"workflow-log-analysis-codex-execution-path\",\"to\":\"docs-sync-comprehensive-release-pipeline\"},{\"from\":\"comprehensive-test-and-release-workflow\",\"to\":\"docs-sync-comprehensive-release-pipeline\"},{\"from\":\"orchestrate-poll-comprehensive-release-callback\",\"to\":\"docs-sync-comprehensive-release-pipeline\"}]}",
+  "fingerprint": "5fbcadd8f8f7f6975c6b5626afde6bb45670e37b4450759f701eb799fae33e84",
+  "lineage": {
+    "issue_number": 1170,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24503853950",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24503853950",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260416100831_d13860c445",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1170,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24503853950"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Comprehensive pre-release test, analysis, and orchestrated release pipeline' into 7 issues (tracking #1170)",
+  "timestamps": {
+    "created_at": "2026-04-16T10:08:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
