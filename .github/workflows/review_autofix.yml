@@ -2998,10 +2998,29 @@ jobs:
           fi
 
           ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
+          # Phase labels that are mutually exclusive — at most one should
+          # be present.  Defined as a jq-parseable array for the PUT swap.
+          _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:merged","ai:closed"]'
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:ready-to-merge on issue #${issue_number}"
-            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:ready-to-merge' || true
+            # Fetch current labels (1 call) then atomically replace via PUT
+            # (1 call).  This avoids the `gh issue edit --remove-label`
+            # failure mode where a label that does not exist as a repo
+            # label definition aborts the entire edit command, leaving the
+            # issue with stale phase labels and no target label applied.
+            _cur="$(gh_retry gh api "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+              --jq '[.[].name]' 2>/dev/null || echo '[]')"
+            _new="$(echo "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" \
+              '(. - $p) + ["ai:ready-to-merge"] | unique')"
+            if ! printf '{"labels":%s}' "${_new}" | \
+              gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                --input - >/dev/null 2>&1; then
+              echo "::warning::PUT labels failed for #${issue_number} — falling back to POST add."
+              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                -f 'labels[]=ai:ready-to-merge' >/dev/null 2>&1 \
+                || echo "::warning::POST fallback also failed for #${issue_number}."
+            fi
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Review-blocked judge decision
@@ -3083,14 +3102,34 @@ jobs:
           fi
 
           ensure_label_exists "ai:review-blocked" "${REPOSITORY}"
+          # Phase labels that are mutually exclusive — at most one should
+          # be present.  Defined as a jq-parseable array for the PUT swap.
+          _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:merged","ai:closed"]'
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number}"
-            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:review-blocked'; then
-              echo "::warning::Failed to update labels on issue #${issue_number} — retrying in 2s..."
-              sleep 2
-              gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:review-blocked' \
-                || echo "::warning::Retry also failed for issue #${issue_number}. Label may need manual application."
+            # Fetch current labels (1 call) then atomically replace via PUT
+            # (1 call).  This avoids the `gh issue edit --remove-label`
+            # failure mode where a label that does not exist as a repo
+            # label definition aborts the entire edit command, leaving the
+            # issue with stale phase labels and no target label applied.
+            _cur="$(gh_retry gh api "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+              --jq '[.[].name]' 2>/dev/null || echo '[]')"
+            _new="$(echo "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" \
+              '(. - $p) + ["ai:review-blocked"] | unique')"
+            if ! printf '{"labels":%s}' "${_new}" | \
+              gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                --input - >/dev/null 2>&1; then
+              # Fallback: just ensure ai:review-blocked is present (1 call).
+              # This alone is sufficient for the orchestrator poller to detect
+              # the review-blocked state; stale phase labels are cosmetic.
+              echo "::warning::PUT labels failed for #${issue_number} — falling back to POST add."
+              if gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                -f 'labels[]=ai:review-blocked' >/dev/null 2>&1; then
+                echo "  ai:review-blocked added via POST fallback on #${issue_number}."
+              else
+                echo "::warning::POST fallback also failed for #${issue_number}. Label may need manual application."
+              fi
             fi
           done <<< "${ISSUE_NUMBERS}"
 
@@ -3535,10 +3574,29 @@ jobs:
             echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
           fi
 
+          # Phase labels that are mutually exclusive — at most one should
+          # be present.  Defined as a jq-parseable array for the PUT swap.
+          _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:merged","ai:closed"]'
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number} (workflow failure)"
-            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:review-blocked' || true
+            # Fetch current labels (1 call) then atomically replace via PUT
+            # (1 call).  This avoids the `gh issue edit --remove-label`
+            # failure mode where a label that does not exist as a repo
+            # label definition aborts the entire edit command, leaving the
+            # issue with stale phase labels and no target label applied.
+            _cur="$(gh_retry gh api "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+              --jq '[.[].name]' 2>/dev/null || echo '[]')"
+            _new="$(echo "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" \
+              '(. - $p) + ["ai:review-blocked"] | unique')"
+            if ! printf '{"labels":%s}' "${_new}" | \
+              gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                --input - >/dev/null 2>&1; then
+              echo "::warning::PUT labels failed for #${issue_number} — falling back to POST add."
+              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                -f 'labels[]=ai:review-blocked' >/dev/null 2>&1 \
+                || echo "::warning::POST fallback also failed for #${issue_number}."
+            fi
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (workflow failure)
