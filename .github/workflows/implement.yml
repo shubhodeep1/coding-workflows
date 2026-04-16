@@ -1864,7 +1864,16 @@ jobs:
                     # stale remote rather than failing the entire implementation run.
                     if [[ "${TARGET_BRANCH}" =~ ^ai/issue-[0-9]+$ ]]; then
                       echo "::warning::Rebase failed due to conflicts on bot branch ${TARGET_BRANCH}; falling back to --force-with-lease push."
-                      REMOTE_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
+                      # Ensure the remote-tracking ref is fresh for an accurate
+                      # force-with-lease pin; best-effort - if fetch fails we
+                      # fall back to the previously cached remote SHA.
+                      if ! git fetch --no-tags --prune origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
+                        echo "Fetch before force-with-lease failed; using last-known remote SHA. Push may still fail due to stale lease."
+                      fi
+                      if ! REMOTE_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"; then
+                        echo "::error::Failed to resolve remote SHA for ${TARGET_BRANCH}; refusing force-with-lease fallback."
+                        exit 1
+                      fi
                       if git push -u origin "HEAD:${TARGET_BRANCH}" \
                            --force-with-lease="refs/heads/${TARGET_BRANCH}:${REMOTE_SHA}"; then
                         echo "Force-with-lease push succeeded after rebase conflict on ${TARGET_BRANCH}."
