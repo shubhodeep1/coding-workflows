@@ -2011,7 +2011,7 @@ jobs:
 
               real_audit="$(printf '%s\n' "${audit_section}" \
                 | grep -vE '^[[:space:]]*$' \
-                | grep -viE '^[[:space:]]*-[[:space:]]*none' \
+                | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)' \
                 | grep -viE 'editor failed' \
                 || true)"
 
@@ -2047,7 +2047,6 @@ jobs:
             fi
           fi
 
-          echo "editor_noop_suspicious=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_OUTPUT"
           echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
