@@ -1968,6 +1968,55 @@ jobs:
             echo "::warning::Unable to post editor summary comment after retries."
           fi
 
+      - name: Detect editor-claimed-but-uncommitted changes
+        # The editor LLM reports what it believes it changed in the
+        # EDITOR_SUMMARY_FILE ("Changes made:" section).  The commit step
+        # independently checks `git diff --cached` to determine what actually
+        # changed on disk.  When the editor claims changes but git has no
+        # diff, the Serena MCP tool calls likely failed to persist — this is
+        # NOT a "clean review" signal and must block auto-merge.
+        # See: PR #1136, #1137 where this mismatch caused premature
+        # auto-merge of un-fixed PRs.
+        if: "!cancelled() && steps.commit_changes.outputs.did_commit != 'true' && env.PR_CLOSED != 'true'"
+        run: |
+          set -euo pipefail
+
+          EDITOR_CHANGES_LOST="false"
+
+          if [ -s "${EDITOR_SUMMARY_FILE:-}" ]; then
+            # Extract the "Changes made:" section, stopping at the next
+            # top-level section header (line starting with a non-dash
+            # alphabetic word followed by a colon).
+            changes_section="$(awk '
+              /^[[:space:]]*Changes made:/ { in_section=1; next }
+              in_section && /^[[:space:]]*[A-Za-z].*:/ { exit }
+              in_section { print }
+            ' "${EDITOR_SUMMARY_FILE}")"
+
+            # Check if the section contains substantive entries (not just
+            # "- none" variants).
+            has_real_changes="false"
+            if [ -n "${changes_section}" ]; then
+              # Strip lines that are blank or match "- none*"
+              substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' || true)"
+              if [ -n "${substantive}" ]; then
+                has_real_changes="true"
+              fi
+            fi
+
+            if [ "${has_real_changes}" = "true" ]; then
+              if [ "${CAN_PUSH:-}" = "true" ]; then
+                echo "::error::Editor claimed changes but no commit was produced. This indicates a mismatch between the editor summary and final git state (changes may have failed to persist, or may have been discarded during commit validation)."
+              else
+                echo "::error::Editor claimed changes but no commit was produced. Push is disabled (CAN_PUSH=${CAN_PUSH:-false}), so this does not necessarily indicate a Serena persistence failure."
+              fi
+              echo "Editor-claimed changes:"
+              printf '%s\n' "${changes_section}" | head -20
+              EDITOR_CHANGES_LOST="true"
+            fi
+          fi
+
+          echo "EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
         # Run conflict detection regardless of max_iterations_reached or
@@ -2968,7 +3017,7 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Mark linked issues ready to merge
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3067,15 +3116,16 @@ jobs:
               install -m 0755 .codex-workflow-src-main/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
               source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             else
+              type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
               ensure_label_exists() {
                 local label_name="$1"
                 local repo="$2"
                 case "${label_name}" in
                   ai:review-blocked)
-                    gh label create "${label_name}" --repo "${repo}" --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" 2>/dev/null || true
+                    gh_retry gh label create "${label_name}" --repo "${repo}" --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" 2>/dev/null || true
                     ;;
                   *)
-                    gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
+                    gh_retry gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
                     ;;
                 esac
               }
@@ -3136,7 +3186,7 @@ jobs:
           fi
 
       - name: Enable auto-merge on PR
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -3326,7 +3376,7 @@ jobs:
           fi
 
       - name: Telegram success
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -3349,6 +3399,111 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
+
+      - name: Re-dispatch review on editor-changes-lost
+        # When the editor claims changes but nothing persisted on disk after
+        # all retry attempts, automatically re-dispatch the review workflow
+        # so the next iteration gets a fresh Serena MCP instance.
+        # Guard against an endless re-dispatch loop when no commit is
+        # produced by allowing this auto-redispatch only from workflow_call
+        # runs that still carry the original pull_request event payload.
+        # Re-dispatched wrapper workflow_dispatch runs do not include
+        # github.event.pull_request and therefore cannot re-enter this path.
+        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CAN_PUSH == 'true' && github.event_name == 'workflow_call' && github.event.pull_request.number"
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+
+          echo "Editor changes lost — dispatching fresh review iteration for PR #${PR_NUMBER}."
+          dispatched=false
+
+          if gh workflow run "review_autofix.yml" \
+            --ref "${TARGET_BRANCH}" \
+            -f pr_number="${PR_NUMBER}" \
+            -f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}"; then
+            echo "Dispatched review_autofix.yml on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
+            dispatched=true
+          fi
+
+          if [ "${dispatched}" = "false" ]; then
+            caller_workflow=""
+            if [ -n "${{ github.workflow_ref }}" ]; then
+              caller_ref="${{ github.workflow_ref }}"
+              caller_workflow="$(basename "${caller_ref%%@*}")"
+            fi
+            if [ -z "${caller_workflow}" ]; then
+              caller_workflow="internal-review.yml"
+            fi
+            if [ "${caller_workflow}" != "review_autofix.yml" ]; then
+              if gh workflow run "${caller_workflow}" \
+                --ref "${TARGET_BRANCH}" \
+                -f pr_number="${PR_NUMBER}" \
+                -f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}"; then
+                echo "Dispatched ${caller_workflow} on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
+                dispatched=true
+              fi
+            fi
+          fi
+
+          if [ "${dispatched}" = "false" ]; then
+            echo "::warning::Could not dispatch review workflow for editor-changes-lost recovery. The next synchronize event or manual re-run is needed."
+          fi
+
+          echo "CHANGES_LOST_REDISPATCHED=${dispatched}" >> "$GITHUB_ENV"
+
+      - name: Telegram editor-changes-lost warning
+        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true'"
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [ "${CHANGES_LOST_REDISPATCHED:-false}" = "true" ]; then
+            MSG="⚠️ Editor changes lost (retrying): #${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="Serena MCP tool calls failed to persist. Fresh review dispatched."
+            MSG+=$'\n'
+            MSG+="PR: ${PR_URL}"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+          else
+            if [ "${CAN_PUSH:-}" = "true" ]; then
+              MSG="⚠️ Editor changes lost (exhausted): #${PR_NUMBER}"
+              MSG+=$'\n'
+              MSG+="All retries exhausted. Auto-merge blocked."
+              MSG+=$'\n'
+              MSG+="PR: ${PR_URL}"
+              MSG+=$'\n'
+              MSG+="Run: ${RUN_URL}"
+              tg_send_tracked "${PR_NUMBER}" "${MSG}" "CRITICAL"
+
+              # Post a PR comment only when re-dispatch failed (human attention needed)
+              BODY="⚠️ **Editor changes lost** — the editor reported making changes but no commit was produced."
+              BODY+=$'\n\n'
+              BODY+="Auto-merge has been **blocked**. All automated retry attempts have been exhausted."
+              BODY+=$'\n'
+              BODY+="**Next steps:** re-run the review workflow manually or apply the changes from the editor summary above."
+              gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+            else
+              MSG="⚠️ Editor changes lost (push disabled): #${PR_NUMBER}"
+              MSG+=$'\n'
+              MSG+="Editor claimed changes but push is disabled (CAN_PUSH=${CAN_PUSH:-false}); changes cannot be committed to the PR."
+              MSG+=$'\n'
+              MSG+="PR: ${PR_URL}"
+              MSG+=$'\n'
+              MSG+="Run: ${RUN_URL}"
+              tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+            fi
+          fi
 
       - name: Telegram review-blocked judge decision
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true'
