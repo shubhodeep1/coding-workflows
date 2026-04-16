@@ -26,6 +26,11 @@ if [ -f "scripts/tg_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/tg_helpers.sh
 fi
+# shellcheck source=memory_helpers.sh
+if [ -f "scripts/memory_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/memory_helpers.sh
+fi
 
 # Process-lifetime cache of labels we've already verified exist on the
 # repo.  `ensure_label_exists` is called from 10+ code paths with a
@@ -286,14 +291,18 @@ _merge_probe_refresh()
 # be merged without conflicts against every other open sibling PR
 # targeting the same integration branch, 1 when a conflict is
 # detected. On conflict, prints the conflicting sibling PR number and
-# the colliding paths to stdout for caller logging.
+# the colliding paths to stdout for caller logging AND records a
+# telemetry event on the ai-memory branch so the next orchestrator
+# run's planner guard can promote these paths to "learned hot"
+# without any human updating .github/ai/hot_files.json.
 #
-# Usage: probe_sibling_merge_conflicts <candidate_pr> <candidate_head_ref> <integration_branch>
+# Usage: probe_sibling_merge_conflicts <candidate_pr> <candidate_head_ref> <integration_branch> [<project_id>]
 probe_sibling_merge_conflicts()
 {
 	local candidate_pr="$1"
 	local candidate_head_ref="$2"
 	local integration_branch="$3"
+	local project_id="${4:-${TRACKING_NUM:-}}"
 
 	if [ -z "${candidate_pr}" ] || [ -z "${candidate_head_ref}" ] || [ -z "${integration_branch}" ]; then
 		# Missing inputs => probe cannot run; fall through to existing merge.
@@ -365,6 +374,19 @@ probe_sibling_merge_conflicts()
 		echo "  [merge-probe] PR #${candidate_pr} conflicts with sibling PR #${sib_num} on paths:"
 		printf '      %s\n' "${conflict_paths}" | sed 's/^      $//' | sed '/^$/d'
 		any_conflict=1
+
+		# Append a telemetry event to the ai-memory branch so the NEXT
+		# orchestrator run's planner can auto-promote these paths to
+		# the effective hot-file set. Fail-open: best-effort only,
+		# never blocks the defer path below.
+		local -a _tel_paths=()
+		while IFS= read -r _tp; do
+			[ -n "${_tp}" ] || continue
+			_tel_paths+=("${_tp}")
+		done <<< "${conflict_paths}"
+		if [ "${#_tel_paths[@]}" -gt 0 ]; then
+			_record_merge_conflict_telemetry "${project_id}" "${candidate_pr}" "${sib_num}" "${_tel_paths[@]}" || true
+		fi
 		# Keep scanning so the log captures all colliding siblings for
 		# this cycle; early-return is fine if we only care about the
 		# boolean.
@@ -373,6 +395,107 @@ probe_sibling_merge_conflicts()
 	if [ "${any_conflict}" -eq 1 ]; then
 		return 1
 	fi
+	return 0
+}
+
+# _record_merge_conflict_telemetry — append a conflict-detection
+# event to the append-only JSONL at
+# ``<AI_MEMORY_ROOT>/orchestrator/merge_conflicts.jsonl`` on the
+# ``ai-memory`` branch. Used by the orchestrate.yml planner step on
+# the NEXT run to automatically learn which files are hot across
+# projects, without any human updating .github/ai/hot_files.json.
+#
+# Contract: fail-open (telemetry is best-effort; never blocks the
+# merge flow). Zero GitHub API calls — uses git protocol via a
+# throwaway worktree on the ai-memory branch. Concurrency-safe via
+# fetch+retry; if two poller runs push simultaneously, the loser
+# retries up to 3 times before giving up.
+#
+# Usage:
+#   _record_merge_conflict_telemetry <project_id> <pr_a> <pr_b> <path> [<path>...]
+_record_merge_conflict_telemetry()
+{
+	local project="${1:-}"
+	local pr_a="${2:-}"
+	local pr_b="${3:-}"
+	shift 3 || true
+	local -a paths=("$@")
+	[ "${#paths[@]}" -gt 0 ] || return 0
+
+	# Respect the existing memory kill switch.
+	if ! type _memory_enabled >/dev/null 2>&1; then
+		return 0
+	fi
+	_memory_enabled || return 0
+
+	# Ensure branch exists (idempotent; no-op when already present).
+	if type memory_ensure_branch >/dev/null 2>&1; then
+		memory_ensure_branch >/dev/null 2>&1 || return 0
+	fi
+
+	local branch="${AI_MEMORY_BRANCH:-ai-memory}"
+	local mem_root="${AI_MEMORY_ROOT:-ai-memory}"
+	local runtime_dir="${RUNTIME_DIR:-/tmp}"
+	local wt="${runtime_dir}/ai-memory-wt-$$-${RANDOM:-0}"
+
+	local ts paths_json record_json
+	ts="$(date -u +%s)"
+	paths_json="$(printf '%s\n' "${paths[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+	record_json="$(jq -cn \
+		--argjson ts "${ts}" \
+		--arg project "${project}" \
+		--arg pr_a "${pr_a}" \
+		--arg pr_b "${pr_b}" \
+		--argjson paths "${paths_json}" \
+		'{ts: $ts, project: $project, pr_a: $pr_a, pr_b: $pr_b, paths: $paths}' 2>/dev/null || echo "")"
+	[ -n "${record_json}" ] || return 0
+
+	local attempt
+	for attempt in 1 2 3; do
+		rm -rf "${wt}" 2>/dev/null || true
+		if ! git fetch --quiet origin "${branch}:refs/remotes/origin/${branch}" 2>/dev/null; then
+			# Branch may not exist yet despite memory_ensure_branch; fall
+			# through and try to create the worktree from an orphan.
+			:
+		fi
+		if git rev-parse --verify --quiet "refs/remotes/origin/${branch}" >/dev/null 2>&1; then
+			if ! git worktree add --quiet -B "${branch}" "${wt}" "refs/remotes/origin/${branch}" 2>/dev/null; then
+				sleep 1
+				continue
+			fi
+		else
+			# Orphan init: produce a fresh branch locally.
+			if ! git worktree add --quiet --detach "${wt}" "$(git rev-parse HEAD 2>/dev/null || echo "")" 2>/dev/null; then
+				return 0
+			fi
+			( cd "${wt}" && git checkout --quiet --orphan "${branch}" && git rm -rf --quiet . 2>/dev/null || true ) || true
+		fi
+		mkdir -p "${wt}/${mem_root}/orchestrator"
+		printf '%s\n' "${record_json}" >> "${wt}/${mem_root}/orchestrator/merge_conflicts.jsonl"
+		local push_rc=0
+		(
+			cd "${wt}"
+			git config user.name "codex-bot"
+			git config user.email "codex@users.noreply.github.com"
+			git add "${mem_root}/orchestrator/merge_conflicts.jsonl" || exit 1
+			if git diff --cached --quiet; then
+				exit 0
+			fi
+			git commit --quiet -m "orchestrator: merge-conflict telemetry (${project}/${pr_a}↔${pr_b})" 2>/dev/null || exit 1
+			git push --quiet origin "${branch}:${branch}" 2>/dev/null || exit 2
+		) || push_rc=$?
+		git worktree remove --force "${wt}" 2>/dev/null || true
+		if [ "${push_rc}" -eq 0 ]; then
+			echo "  [merge-probe] telemetry append: recorded conflict for ${project} PR #${pr_a}↔#${pr_b} (${#paths[@]} path(s)) to ${branch}/${mem_root}/orchestrator/merge_conflicts.jsonl"
+			return 0
+		fi
+		if [ "${push_rc}" -eq 2 ] && [ "${attempt}" -lt 3 ]; then
+			# Push race; sleep briefly and retry with fresh fetch.
+			sleep 1
+			continue
+		fi
+		return 0
+	done
 	return 0
 }
 

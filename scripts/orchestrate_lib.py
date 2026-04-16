@@ -197,6 +197,136 @@ def load_hot_files(path: str | Path | None = None) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
+# Effective hot-file resolution (committed seed + learned telemetry)
+# ---------------------------------------------------------------------------
+
+DEFAULT_TELEMETRY_WINDOW_DAYS = 90
+DEFAULT_TELEMETRY_MIN_EVENTS = 3
+DEFAULT_TELEMETRY_MIN_PROJECTS = 2
+
+
+def compute_effective_hot_files(
+	committed_hot_files: set[str],
+	telemetry_jsonl_path: str | Path | None = None,
+	window_days: int = DEFAULT_TELEMETRY_WINDOW_DAYS,
+	min_events: int = DEFAULT_TELEMETRY_MIN_EVENTS,
+	min_distinct_projects: int = DEFAULT_TELEMETRY_MIN_PROJECTS,
+	now_ts: int | None = None,
+) -> tuple[set[str], dict[str, Any]]:
+	"""Compose the *effective* hot-file set from two sources:
+
+	1. **Committed seed** — optional per-consumer-repo JSON at
+	   ``.github/ai/hot_files.json`` (already loaded via
+	   :func:`load_hot_files`). This is a human override, NOT required.
+	2. **Learned telemetry** — an append-only JSONL at
+	   ``ai-memory/orchestrator/merge_conflicts.jsonl`` on the
+	   ``ai-memory`` branch, written by the poller every time
+	   :func:`probe_sibling_merge_conflicts` in
+	   ``orchestrate_poll_process.sh`` detects a real byte-level
+	   conflict. Records have the shape::
+
+	       {"ts": <epoch>, "project": "<tracking_issue>", "pr_a": "<num>",
+	        "pr_b": "<num>", "paths": ["path/a", "path/b", ...]}
+
+	Promotion rule (Option D from the design thread): a path is
+	"learned hot" when it appears in at least ``min_events`` distinct
+	conflict events across at least ``min_distinct_projects`` distinct
+	orchestrator projects within the last ``window_days``. The window
+	naturally handles stale demotion — files with zero recent events
+	drop out of the learned set on the next run without any persistent
+	state needed.
+
+	Returns ``(effective_set, audit)`` where ``audit`` is a
+	JSON-serialisable dict so the orchestrate.yml partition-guard step
+	can log which files were promoted and why.
+	"""
+	now_ts = now_ts if now_ts is not None else int(time.time())
+	audit: dict[str, Any] = {
+		"committed_seed_count": len(committed_hot_files),
+		"telemetry_events_total": 0,
+		"telemetry_events_in_window": 0,
+		"window_days": window_days,
+		"min_events": min_events,
+		"min_distinct_projects": min_distinct_projects,
+		"learned_count": 0,
+		"learned_files": [],
+		"telemetry_source": None,
+	}
+	effective = set(committed_hot_files)
+
+	if not telemetry_jsonl_path:
+		return effective, audit
+
+	p = Path(telemetry_jsonl_path)
+	audit["telemetry_source"] = str(p)
+	try:
+		if not p.exists() or p.stat().st_size == 0:
+			return effective, audit
+	except OSError:
+		return effective, audit
+
+	window_start = now_ts - (window_days * 86400)
+
+	# path -> {"events": int, "projects": set[str]}
+	tallies: dict[str, dict[str, Any]] = {}
+	try:
+		with p.open("r", encoding="utf-8") as f:
+			for raw_line in f:
+				line = raw_line.strip()
+				if not line:
+					continue
+				try:
+					rec = json.loads(line)
+				except json.JSONDecodeError:
+					continue
+				if not isinstance(rec, dict):
+					continue
+				audit["telemetry_events_total"] += 1
+				ts = rec.get("ts")
+				try:
+					ts_int = int(ts)
+				except (TypeError, ValueError):
+					continue
+				if ts_int < window_start:
+					continue
+				audit["telemetry_events_in_window"] += 1
+				project = str(rec.get("project", "") or "").strip()
+				raw_paths = rec.get("paths")
+				if not isinstance(raw_paths, list):
+					continue
+				for raw_path in raw_paths:
+					if not isinstance(raw_path, str):
+						continue
+					path = raw_path.strip().replace("\\", "/")
+					while path.startswith("./"):
+						path = path[2:]
+					if not path:
+						continue
+					entry = tallies.setdefault(path, {"events": 0, "projects": set()})
+					entry["events"] += 1
+					if project:
+						entry["projects"].add(project)
+	except OSError:
+		return effective, audit
+
+	learned_records: list[dict[str, Any]] = []
+	for path, t in tallies.items():
+		if t["events"] >= min_events and len(t["projects"]) >= min_distinct_projects:
+			effective.add(path)
+			learned_records.append({
+				"path": path,
+				"events": t["events"],
+				"distinct_projects": len(t["projects"]),
+			})
+
+	# Sort learned records for stable audit logs
+	learned_records.sort(key=lambda r: (-r["events"], r["path"]))
+	audit["learned_count"] = len(learned_records)
+	audit["learned_files"] = learned_records
+	return effective, audit
+
+
+# ---------------------------------------------------------------------------
 # Partition guard: detect and auto-serialize sibling file-touch overlaps
 # ---------------------------------------------------------------------------
 
@@ -1166,12 +1296,36 @@ def cmd_validate(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _resolve_hot_files_from_args(args: argparse.Namespace) -> tuple[set[str], dict[str, Any]]:
+	"""Shared helper for CLI commands that need the effective hot-file set.
+
+	Composes the committed seed (optional) with the learned-telemetry
+	compute from the ai-memory JSONL (optional). Either source may be
+	missing — both missing means an empty effective set, which is a
+	valid state: the planner guard still detects pairwise file-touch
+	overlaps and the poller probe still catches byte-level conflicts.
+	"""
+	committed = load_hot_files(getattr(args, "hot_files_path", None) or None)
+	telemetry_path = getattr(args, "conflict_telemetry_jsonl", None) or None
+	window_days = int(getattr(args, "telemetry_window_days", DEFAULT_TELEMETRY_WINDOW_DAYS) or DEFAULT_TELEMETRY_WINDOW_DAYS)
+	min_events = int(getattr(args, "telemetry_min_events", DEFAULT_TELEMETRY_MIN_EVENTS) or DEFAULT_TELEMETRY_MIN_EVENTS)
+	min_projects = int(getattr(args, "telemetry_min_projects", DEFAULT_TELEMETRY_MIN_PROJECTS) or DEFAULT_TELEMETRY_MIN_PROJECTS)
+	effective, audit = compute_effective_hot_files(
+		committed_hot_files=committed,
+		telemetry_jsonl_path=telemetry_path,
+		window_days=window_days,
+		min_events=min_events,
+		min_distinct_projects=min_projects,
+	)
+	return effective, audit
+
+
 def cmd_compute_waves(args: argparse.Namespace) -> int:
 	path = Path(args.input_file).resolve()
 	with path.open("r", encoding="utf-8") as f:
 		data = json.load(f)
 	data = validate_decomposition(data)
-	hot_files = load_hot_files(getattr(args, "hot_files_path", None) or None)
+	hot_files, hot_files_audit = _resolve_hot_files_from_args(args)
 	waves = compute_waves(data, hot_files=hot_files)
 	output = []
 	for wave_idx, wave in enumerate(waves):
@@ -1192,6 +1346,7 @@ def cmd_compute_waves(args: argparse.Namespace) -> int:
 		"total_waves": len(waves),
 		"waves": output,
 		"hot_files": sorted(hot_files),
+		"hot_files_audit": hot_files_audit,
 		"partition_serializations": data.get("partition_serializations", []),
 	})
 	# Also write the (possibly serialized) decomposition back to disk so
@@ -1216,7 +1371,7 @@ def cmd_check_partition(args: argparse.Namespace) -> int:
 	with path.open("r", encoding="utf-8") as f:
 		data = json.load(f)
 	data = validate_decomposition(data)
-	hot_files = load_hot_files(getattr(args, "hot_files_path", None) or None)
+	hot_files, hot_files_audit = _resolve_hot_files_from_args(args)
 
 	# Dry-run pass: compute waves WITHOUT auto-serialize to see what the raw
 	# decomposer produced, and then report overlaps per wave.
@@ -1246,12 +1401,14 @@ def cmd_check_partition(args: argparse.Namespace) -> int:
 			"error": str(exc),
 			"total_overlaps": total_overlaps,
 			"wave_reports": wave_reports,
+			"hot_files_audit": hot_files_audit,
 		})
 		return 3
 
 	_print_json({
 		"ok": True,
 		"hot_files": sorted(hot_files),
+		"hot_files_audit": hot_files_audit,
 		"total_overlaps": total_overlaps,
 		"wave_reports": wave_reports,
 		"planned_serializations": planned,
@@ -1492,15 +1649,22 @@ def build_parser() -> argparse.ArgumentParser:
 	p_validate.add_argument("--input-file", required=True)
 	p_validate.set_defaults(func=cmd_validate)
 
+	def _add_hot_file_args(sp: argparse.ArgumentParser) -> None:
+		sp.add_argument("--hot-files-path", default=None, help="Path to committed hot_files.json seed (optional; default: .github/ai/hot_files.json in CWD; absent file => empty seed). Consumer repos do NOT need to create this file; the effective hot-file set is learned from telemetry if --conflict-telemetry-jsonl is supplied.")
+		sp.add_argument("--conflict-telemetry-jsonl", default=None, help="Path to merge_conflicts.jsonl extracted from the ai-memory branch (one JSON record per line with fields ts, project, pr_a, pr_b, paths). When provided, paths meeting --telemetry-min-events and --telemetry-min-projects thresholds within --telemetry-window-days are promoted to the effective hot-file set automatically. Absent file or empty JSONL degrades cleanly to the committed seed (which may also be empty).")
+		sp.add_argument("--telemetry-window-days", type=int, default=DEFAULT_TELEMETRY_WINDOW_DAYS, help=f"Lookback window for telemetry-learned hot files in days (default: {DEFAULT_TELEMETRY_WINDOW_DAYS}). Events older than this drop out automatically, providing implicit demotion without persistent state.")
+		sp.add_argument("--telemetry-min-events", type=int, default=DEFAULT_TELEMETRY_MIN_EVENTS, help=f"Minimum distinct conflict events within the window before a path is promoted (default: {DEFAULT_TELEMETRY_MIN_EVENTS}).")
+		sp.add_argument("--telemetry-min-projects", type=int, default=DEFAULT_TELEMETRY_MIN_PROJECTS, help=f"Minimum distinct orchestrator projects within the window before a path is promoted (default: {DEFAULT_TELEMETRY_MIN_PROJECTS}). Prevents a single runaway project from skewing the learned set.")
+
 	p_waves = subparsers.add_parser("compute-waves", help="Compute execution waves from decomposition")
 	p_waves.add_argument("--input-file", required=True)
-	p_waves.add_argument("--hot-files-path", default=None, help="Path to hot_files.json (default: .github/ai/hot_files.json in CWD; absent file => empty set)")
+	_add_hot_file_args(p_waves)
 	p_waves.add_argument("--write-back", action="store_true", help="Write the serialized decomposition (with injected dependency_edges) back to --input-file")
 	p_waves.set_defaults(func=cmd_compute_waves)
 
 	p_partition = subparsers.add_parser("check-partition", help="Dry-run partition check for sibling file-touch overlaps")
 	p_partition.add_argument("--input-file", required=True)
-	p_partition.add_argument("--hot-files-path", default=None, help="Path to hot_files.json (default: .github/ai/hot_files.json in CWD)")
+	_add_hot_file_args(p_partition)
 	p_partition.set_defaults(func=cmd_check_partition)
 
 	p_body = subparsers.add_parser("build-tracking-body", help="Build tracking issue markdown body")

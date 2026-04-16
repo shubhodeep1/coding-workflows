@@ -1150,6 +1150,246 @@ def test_cli_check_partition_reports_planned_serializations():
 		assert roundtrip["dependency_edges"] == []
 
 
+def test_compute_effective_hot_files_no_telemetry_returns_seed():
+	"""Zero-config baseline: no committed seed, no telemetry => empty set."""
+	import orchestrate_lib as ol
+	eff, audit = ol.compute_effective_hot_files(set())
+	assert eff == set()
+	assert audit["committed_seed_count"] == 0
+	assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_only_committed_seed():
+	import orchestrate_lib as ol
+	eff, audit = ol.compute_effective_hot_files({"README.md", "src/a.py"})
+	assert eff == {"README.md", "src/a.py"}
+	assert audit["committed_seed_count"] == 2
+	assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_learns_from_telemetry_meeting_threshold():
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 5, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 10, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["scripts/god.sh", "README.md"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p)
+		assert "scripts/god.sh" in eff, "3 events / 2 projects should promote"
+		assert "README.md" not in eff, "1 event is below threshold"
+		assert audit["learned_count"] == 1
+		assert audit["learned_files"][0]["path"] == "scripts/god.sh"
+		assert audit["learned_files"][0]["events"] == 3
+		assert audit["learned_files"][0]["distinct_projects"] == 2
+
+
+def test_compute_effective_hot_files_window_excludes_old_events():
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			# Plenty of events — but all outside the 90-day window.
+			{"ts": now - 86400 * 120, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["old.py"]},
+			{"ts": now - 86400 * 130, "project": "B", "pr_a": 3, "pr_b": 4, "paths": ["old.py"]},
+			{"ts": now - 86400 * 140, "project": "C", "pr_a": 5, "pr_b": 6, "paths": ["old.py"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p, window_days=90)
+		assert "old.py" not in eff, "events outside window should not promote"
+		assert audit["telemetry_events_total"] == 3
+		assert audit["telemetry_events_in_window"] == 0
+		assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_distinct_projects_required():
+	"""Even with many events, a single project cannot promote on its own."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * i, "project": "only_one", "pr_a": i, "pr_b": i + 100, "paths": ["runaway.py"]}
+			for i in range(1, 10)
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p, min_distinct_projects=2)
+		assert "runaway.py" not in eff, "single project should not promote even with high event count"
+		assert audit["telemetry_events_in_window"] == 9
+		assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_unions_seed_and_learned():
+	"""Committed seed and learned telemetry compose via set union."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["learned.py"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["learned.py"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["learned.py"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files({"seeded.py"}, p)
+		assert eff == {"seeded.py", "learned.py"}
+		assert audit["committed_seed_count"] == 1
+		assert audit["learned_count"] == 1
+
+
+def test_compute_effective_hot_files_handles_missing_file_gracefully():
+	"""A missing JSONL path is equivalent to an empty telemetry source."""
+	import orchestrate_lib as ol
+	eff, audit = ol.compute_effective_hot_files({"seed.py"}, "/nonexistent/path/merge.jsonl")
+	assert eff == {"seed.py"}
+	assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_skips_malformed_records():
+	"""Non-JSON lines and records with wrong shapes are silently skipped."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		lines = [
+			"not json at all",
+			"{}",  # empty object
+			'{"ts": "not_an_int", "project": "X", "paths": ["x.py"]}',
+			'{"ts": %d, "project": "A", "paths": "not-a-list"}' % now,
+			# Three valid records across two projects meeting threshold
+			'{"ts": %d, "project": "A", "paths": ["valid.py"]}' % (now - 86400),
+			'{"ts": %d, "project": "A", "paths": ["valid.py"]}' % (now - 86400 * 2),
+			'{"ts": %d, "project": "B", "paths": ["valid.py"]}' % (now - 86400 * 3),
+		]
+		p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+		eff, audit = ol.compute_effective_hot_files(set(), p)
+		assert "valid.py" in eff
+		assert audit["telemetry_events_total"] >= 3
+
+
+def test_compute_effective_hot_files_normalizes_learned_paths():
+	"""Learned paths are normalized the same way the committed seed is."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["./src/a.py"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["src\\a.py"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["src/a.py"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p)
+		assert eff == {"src/a.py"}, f"paths should normalize to a single entry, got {eff}"
+		assert audit["learned_files"][0]["events"] == 3
+
+
+def test_cli_check_partition_uses_telemetry_jsonl():
+	"""End-to-end CLI: check-partition accepts --conflict-telemetry-jsonl
+	and promotes learned hot files into the effective set."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		decomp_p = Path(td) / "decomp.json"
+		_write_json(decomp_p, _make_decomposition(issues=[
+			{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["scripts/god.sh"]},
+			{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["scripts/god.sh"]},
+		]))
+		tel_p = Path(td) / "tel.jsonl"
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": []})
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["scripts/god.sh"]},
+		]
+		with tel_p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+
+		argv = [
+			"check-partition",
+			"--input-file", str(decomp_p),
+			"--hot-files-path", str(hot_p),
+			"--conflict-telemetry-jsonl", str(tel_p),
+		]
+		import io
+		from contextlib import redirect_stdout
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = ol.main(argv)
+		assert rc == 0
+		report = json.loads(buf.getvalue())
+		assert "scripts/god.sh" in report["hot_files"]
+		assert report["hot_files_audit"]["learned_count"] == 1
+		# The overlap is reported as hot_file (not just plain pair) because
+		# the learned set now includes scripts/god.sh.
+		hot_overlaps = [o for o in report["wave_reports"][0]["overlaps"] if o["type"] == "hot_file"]
+		assert len(hot_overlaps) >= 1
+
+
+def test_cli_compute_waves_uses_telemetry_for_serialization():
+	"""Auto-serialize uses the effective (seed ∪ learned) hot-file set."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		decomp_p = Path(td) / "decomp.json"
+		_write_json(decomp_p, _make_decomposition(issues=[
+			{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["shared.md"]},
+			{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["shared.md"]},
+		]))
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": []})
+		tel_p = Path(td) / "tel.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["shared.md"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["shared.md"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["shared.md"]},
+		]
+		with tel_p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		argv = [
+			"compute-waves",
+			"--input-file", str(decomp_p),
+			"--hot-files-path", str(hot_p),
+			"--conflict-telemetry-jsonl", str(tel_p),
+			"--write-back",
+		]
+		import io
+		from contextlib import redirect_stdout
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = ol.main(argv)
+		assert rc == 0
+		report = json.loads(buf.getvalue())
+		assert "shared.md" in report["hot_files"]
+		# b should be serialized into wave 2 because shared.md is learned hot
+		assert report["total_waves"] == 2
+
+
 def test_cli_compute_waves_write_back_mutates_input():
 	"""compute-waves --write-back persists serialized edges back to disk."""
 	with tempfile.TemporaryDirectory() as td:

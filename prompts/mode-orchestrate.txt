@@ -54,8 +54,14 @@ sibling issues within the same wave):
 - Hot files: the orchestrator infrastructure considers certain files "hot"
   (contended by many tasks at once — for example, top-level README.md,
   agents.md, god-files like scripts/orchestrate_poll_process.sh, and shared
-  workflow YAMLs). Consumer repositories may publish their own hot-file list
-  at `.github/ai/hot_files.json`. When planning a wave, assume at most ONE
+  workflow YAMLs). The effective hot-file set is computed automatically at
+  plan time as the union of (a) an optional committed seed at
+  `.github/ai/hot_files.json` and (b) files learned from real conflict
+  telemetry on the ai-memory branch (`ai-memory/orchestrator/merge_conflicts.jsonl`,
+  populated by the poller every time a sibling merge-tree conflict is
+  detected). Consumer repos do NOT need to create either file; the set
+  simply starts empty on a new repo and builds itself as the poller
+  observes real conflicts. When planning a wave, assume at most ONE
   sibling in any given wave may touch each hot file. If multiple proposed
   tasks all need to touch the same hot file, prefer one of these patterns:
     (a) Funnel all hot-file edits for the wave into a single trailing

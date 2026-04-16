@@ -551,20 +551,59 @@ jobs:
           python3 scripts/orchestrate_lib.py validate --input-file "${DECOMPOSITION_FILE}"
           echo "Decomposition validated successfully."
 
+          # Fetch the conflict-telemetry JSONL from the ai-memory branch
+          # so the partition guard can compute the EFFECTIVE hot-file
+          # set (committed seed ∪ learned telemetry). Uses git protocol
+          # exclusively — zero GitHub API calls. Absence of the branch
+          # or file is a valid state: consumer repos that have never
+          # recorded a conflict simply degrade to the committed seed
+          # (which is also optional — the planner guard still detects
+          # pairwise file-touch overlaps and the poller probe still
+          # catches byte-level conflicts).
+          TELEMETRY_JSONL="${RUNTIME_DIR}/merge_conflicts.jsonl"
+          : > "${TELEMETRY_JSONL}"
+          AI_MEMORY_BRANCH_NAME="${AI_MEMORY_BRANCH:-ai-memory}"
+          AI_MEMORY_ROOT_NAME="${AI_MEMORY_ROOT:-ai-memory}"
+          if git fetch --quiet --depth=50 origin "${AI_MEMORY_BRANCH_NAME}:refs/remotes/origin/${AI_MEMORY_BRANCH_NAME}" 2>/dev/null; then
+            if git show "refs/remotes/origin/${AI_MEMORY_BRANCH_NAME}:${AI_MEMORY_ROOT_NAME}/orchestrator/merge_conflicts.jsonl" > "${TELEMETRY_JSONL}" 2>/dev/null; then
+              _tel_lines="$(wc -l < "${TELEMETRY_JSONL}" 2>/dev/null || echo 0)"
+              echo "Loaded ${_tel_lines} line(s) of merge-conflict telemetry from ${AI_MEMORY_BRANCH_NAME}."
+            else
+              : > "${TELEMETRY_JSONL}"
+              echo "No ${AI_MEMORY_ROOT_NAME}/orchestrator/merge_conflicts.jsonl on ${AI_MEMORY_BRANCH_NAME} yet (first run, nothing learned)."
+            fi
+          else
+            echo "ai-memory branch '${AI_MEMORY_BRANCH_NAME}' not present (first run — auto-created later by the poller); no learned telemetry this cycle."
+          fi
+
           # Partition-guard dry-run: report any sibling file-touch overlaps
           # in the raw (pre-serialization) decomposition so the tracking
           # issue and job log surface the rewrite plan BEFORE the
-          # destructive compute-waves pass runs. This uses the
-          # .github/ai/hot_files.json in the consumer repo checkout when
-          # present; absence of the file is fine (hot-file set is empty).
+          # destructive compute-waves pass runs. The effective hot-file
+          # set is (committed .github/ai/hot_files.json if present) ∪
+          # (telemetry-learned files meeting threshold). Both sources
+          # are optional — empty is a valid state.
+          HOT_FILE_WINDOW_DAYS="${ORCHESTRATOR_HOT_FILE_WINDOW_DAYS:-90}"
+          HOT_FILE_MIN_EVENTS="${ORCHESTRATOR_HOT_FILE_MIN_EVENTS:-3}"
+          HOT_FILE_MIN_PROJECTS="${ORCHESTRATOR_HOT_FILE_MIN_PROJECTS:-2}"
           PARTITION_REPORT_FILE="${RUNTIME_DIR}/partition_report.json"
           python3 scripts/orchestrate_lib.py check-partition \
-            --input-file "${DECOMPOSITION_FILE}" > "${PARTITION_REPORT_FILE}" || {
+            --input-file "${DECOMPOSITION_FILE}" \
+            --conflict-telemetry-jsonl "${TELEMETRY_JSONL}" \
+            --telemetry-window-days "${HOT_FILE_WINDOW_DAYS}" \
+            --telemetry-min-events "${HOT_FILE_MIN_EVENTS}" \
+            --telemetry-min-projects "${HOT_FILE_MIN_PROJECTS}" > "${PARTITION_REPORT_FILE}" || {
               echo "::error::Partition check failed (likely cycle/structural overlap). See report:"
               cat "${PARTITION_REPORT_FILE}" || true
               exit 1
             }
           PARTITION_OVERLAP_COUNT="$(jq -r '.total_overlaps // 0' "${PARTITION_REPORT_FILE}")"
+          HOT_FILE_LEARNED_COUNT="$(jq -r '.hot_files_audit.learned_count // 0' "${PARTITION_REPORT_FILE}")"
+          HOT_FILE_SEED_COUNT="$(jq -r '.hot_files_audit.committed_seed_count // 0' "${PARTITION_REPORT_FILE}")"
+          echo "Effective hot-file set: ${HOT_FILE_SEED_COUNT} committed seed + ${HOT_FILE_LEARNED_COUNT} learned from telemetry."
+          if [ "${HOT_FILE_LEARNED_COUNT}" -gt 0 ]; then
+            jq -r '.hot_files_audit.learned_files[]? | "  Learned hot: " + .path + " (" + (.events | tostring) + " events across " + (.distinct_projects | tostring) + " projects)"' "${PARTITION_REPORT_FILE}" || true
+          fi
           if [ "${PARTITION_OVERLAP_COUNT}" -gt 0 ]; then
             echo "::notice::Partition guard detected ${PARTITION_OVERLAP_COUNT} sibling file-touch overlap(s); auto-serialize will resolve them by injecting dependency_edges."
             jq -r '.wave_reports[]? | select(.overlap_count > 0) | "  Wave " + (.wave | tostring) + ": " + (.overlap_count | tostring) + " overlap(s): " + ([.overlaps[] | "\(.issue_a)\u2194\(.issue_b) on \(.files | join(\", \"))"] | join("; "))' "${PARTITION_REPORT_FILE}" || true
@@ -578,6 +617,10 @@ jobs:
           # build + Wave 1 dispatch consume the post-serialization graph.
           python3 scripts/orchestrate_lib.py compute-waves \
             --input-file "${DECOMPOSITION_FILE}" \
+            --conflict-telemetry-jsonl "${TELEMETRY_JSONL}" \
+            --telemetry-window-days "${HOT_FILE_WINDOW_DAYS}" \
+            --telemetry-min-events "${HOT_FILE_MIN_EVENTS}" \
+            --telemetry-min-projects "${HOT_FILE_MIN_PROJECTS}" \
             --write-back
 
       - name: Ensure orchestrator labels exist
