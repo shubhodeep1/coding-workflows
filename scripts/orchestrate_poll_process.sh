@@ -5087,6 +5087,7 @@ recover_stalled_issue() {
         # status to dispatch the appropriate corrective action.
         local _opr_json=""
         local _opr_mergeable=""
+        local _opr_mergeable_state=""
         local _opr_head_ref=""
         local _opr_review_comments=""
 
@@ -5098,10 +5099,11 @@ recover_stalled_issue() {
           _opr_json="$(_fetch_pr_json "${_lpr_num}")"
         fi
         _opr_mergeable="$(_jq_field "${_opr_json}" '.mergeable' 'true|false')"
+        _opr_mergeable_state="$(_jq_field "${_opr_json}" '.mergeable_state')"
         _opr_head_ref="$(_jq_field "${_opr_json}" '.head.ref')"
 
         # Sub-case 1: PR has merge conflicts → dispatch conflict resolver
-        if [ "${_opr_mergeable}" = "false" ] && [ -n "${_opr_head_ref}" ]; then
+        if { [ "${_opr_mergeable}" = "false" ] || [ "${_opr_mergeable_state}" = "dirty" ]; } && [ -n "${_opr_head_ref}" ]; then
           local _opr_dispatch_rc=0
           _dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_dispatch_rc=$?
           if [ "${_opr_dispatch_rc}" -eq 0 ]; then
