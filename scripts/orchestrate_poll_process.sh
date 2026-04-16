@@ -7155,6 +7155,30 @@ with open('${STATE_FILE}', 'w') as f:
     echo "Clean wave skip eligible on wave ${CURRENT_WAVE}; advancing to next wave without judge invocation."
   fi
 
+  # ---------------------------------------------------------------
+  # Fast-path: skip LLM judge for clean project completions.
+  # When all waves are complete, no failures occurred, and no stuck
+  # issues exist, the verdict is deterministic ("complete") — running
+  # the LLM judge wastes tokens and risks empty-output failures.
+  # Gated by the same ENABLE_CLEAN_WAVE_JUDGE_SKIP flag.
+  # ---------------------------------------------------------------
+  if [ "${SKIP_JUDGE_FOR_CLEAN_WAVE}" != "true" ] \
+    && [ "${ENABLE_CLEAN_WAVE_JUDGE_SKIP}" = "true" ] \
+    && [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ] \
+    && [ "${WAVE_COMPLETE}" = "true" ] \
+    && [ "${ANY_FAILED}" != "true" ] \
+    && [ "${ANY_REVIEW_BLOCKED}" != "true" ] \
+    && [ "${PROJECT_COMPLETE}" = "true" ]; then
+    SKIP_JUDGE_FOR_CLEAN_WAVE="true"
+    JUDGE_STATUS="complete"
+    JUDGE_JUSTIFICATION="clean_project_completion_skip"
+    JUDGE_ASSESSMENT="All ${TOTAL_WAVES} wave(s) completed with every issue merged and no failures. Skipping LLM judge — verdict is deterministic."
+    NEW_ISSUES_COUNT=0
+    REVERT_COUNT=0
+    JUDGE_JSON='{"status":"complete","justification":"clean_project_completion_skip","assessment":"All waves completed with every issue merged and no failures. Skipping LLM judge — verdict is deterministic.","new_issues":[],"issues_to_revert":[]}'
+    echo "Clean project completion on wave ${CURRENT_WAVE}/${TOTAL_WAVES}; finalizing without judge invocation."
+  fi
+
   if [ "${SKIP_JUDGE_FOR_CLEAN_WAVE}" != "true" ]; then
 
   # ---------------------------------------------------------------
