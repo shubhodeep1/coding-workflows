@@ -32,6 +32,10 @@ permissions:
   actions: write
   issues: write
 
+concurrency:
+  group: comprehensive-test-and-release-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   phase1-first-pass-test:
     runs-on: ubuntu-latest
@@ -654,8 +658,8 @@ jobs:
           gh issue edit "${TRACKING_ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "${PENDING_LABEL}" >/dev/null
 
           METADATA_MARKER="COMPREHENSIVE_RELEASE_METADATA_V1"
-          METADATA_COMMENT_COUNT="$(gh_api_safe "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUMBER}/comments?per_page=100" \
-            --jq '[.[] | select((.body // "") | contains("<!-- COMPREHENSIVE_RELEASE_METADATA_V1 -->"))] | length' || echo '0')"
+          METADATA_COMMENT_COUNT="$(gh_api_safe "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUMBER}/comments?per_page=100" --paginate | \
+            jq -s --arg marker "<!-- ${METADATA_MARKER} -->" 'map(. // []) | add // [] | [.[] | select((.body // "") | contains($marker))] | length' 2>/dev/null || echo '0')"
 
           if [ "${METADATA_COMMENT_COUNT}" = "0" ]; then
             DISPATCHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
