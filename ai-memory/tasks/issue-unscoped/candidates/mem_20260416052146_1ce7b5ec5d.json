@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\nscripts/review_apply_fixes.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml\n/tmp/codex-pr-24493350790-1-527/previous_reviews/review_deepseek_deepseek-v3_2.txt:-\n`.github/workflows/review_autofix.yml`",
+  "fingerprint": "bd6174f899531d34a7281c7437c71dc3c80d422e097eeb6aaa79c4c0d8f4ad48",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1147,
+    "run_id": "24493350790",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24493350790",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416052146_1ce7b5ec5d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1147,
+    "run_id": "24493350790"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T05:21:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
