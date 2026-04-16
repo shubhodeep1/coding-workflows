@@ -637,7 +637,7 @@ while [ "${attempt}" -le 3 ]; do
           /^[[:space:]]*Changes made:/ { in_s=1; next }
           in_s && /^[[:space:]]*[A-Za-z].*:/ { exit }
           in_s { print }
-        ' "${tmp_output}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)' || true)"
+        ' "${tmp_output}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)|^[[:space:]]{2,}-' || true)"
 
         if [ -n "${_claimed_changes}" ]; then
           # Editor claims it made changes — verify git agrees.

@@ -2026,29 +2026,28 @@ jobs:
               # made / no modifications" declaration (with any trailing
               # description), treat the entire section as "no changes".
               # Editors may append informational bullets (validation runs,
-              # missing-context notes, action summaries that reference
-              # backtick-quoted filenames) below such declarations that are
-              # not real file-change claims; without this guard those bullets
-              # trigger a false-positive EDITOR_CHANGES_LOST error because
-              # edit_claim_regex loosely matches substrings like `change`
-              # in informational text or any backtick-wrapped filename
-              # reference.
+              # missing-context notes, action summaries with file mentions)
+              # below such declarations that are not real file-change claims;
+              # without this guard those bullets trigger a false-positive
+              # EDITOR_CHANGES_LOST error because edit_claim_regex loosely
+              # matches generic edit-like substrings (for example `change`)
+              # in informational text.
               first_line="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | head -1 || true)"
               # Strip lines that are blank, match "- none*", are indented
               # nested sub-bullets (continuations of validation/assumption
               # headers), or are informational metadata bullets
               # (e.g. "- Validation executed").
               substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed|^[[:space:]]{2,}-' || true)"
-              edit_claim_regex='modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)|`[^`]+\.[[:alpha:]]+`'
+              edit_claim_regex='modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)'
               # Stricter bullet-start edit regex for multi-line contradiction checks.
               bullet_edit_regex='^[[:space:]]*-[[:space:]]*(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))([[:space:][:punct:]]|$)'
               if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*(no (repository )?files (were )?modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$'; then
                 # Explicit "no files modified / no changes made / no
                 # modifications" first-bullet is a deliberate declaration
                 # from the editor. Trust it and short-circuit to "no real
-                # changes" — the remainder check below is too loose
-                # (edit_claim_regex matches backtick-wrapped filename
-                # references in purely informational bullets), and
+                # changes" — the remainder check below is intentionally
+                # conservative and can match generic edit-like words in
+                # purely informational bullets, and
                 # would fire a false-positive EDITOR_CHANGES_LOST error.
                 # Same-line contradictions ("no files modified but updated
                 # X") and multi-line explicit edit bullets are still caught.
