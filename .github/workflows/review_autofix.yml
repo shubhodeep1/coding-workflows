@@ -1999,8 +1999,8 @@ jobs:
             fi
 
             # ── Check 2: Reviewer audit sanity ──
-            # When reviewers found issues (REVIEWERS_SUCCESSFUL > 0) but
-            # the editor claims no changes, verify the audit section has
+            # When reviewer execution succeeded (REVIEWERS_SUCCESSFUL > 0)
+            # but the editor claims no changes, verify the audit section has
             # real entries and the arithmetic adds up.
             if [ "${EDITOR_NOOP_SUSPICIOUS}" = "false" ] && [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ]; then
               audit_section="$(awk '
@@ -2011,7 +2011,7 @@ jobs:
 
               real_audit="$(printf '%s\n' "${audit_section}" \
                 | grep -vE '^[[:space:]]*$' \
-                | grep -vE '^[[:space:]]*-[[:space:]]*none' \
+                | grep -viE '^[[:space:]]*-[[:space:]]*none' \
                 | grep -viE 'editor failed' \
                 || true)"
 
@@ -2020,7 +2020,6 @@ jobs:
                 EDITOR_NOOP_SUSPICIOUS="true"
               else
                 # Parse each audit entry and verify total == applied + already_applied + ignored.
-                total_sum=0
                 mismatch_found=false
                 while IFS= read -r line; do
                   [ -n "${line}" ] || continue
@@ -2033,7 +2032,6 @@ jobs:
                   [ -n "${t}" ] || continue
 
                   t="${t:-0}"; a="${a:-0}"; aa="${aa:-0}"; ig="${ig:-0}"
-                  total_sum=$((total_sum + t))
                   sum=$((a + aa + ig))
 
                   if [ "${t}" -gt 0 ] && [ "${sum}" -ne "${t}" ]; then
@@ -2043,13 +2041,6 @@ jobs:
                 done <<< "${real_audit}"
 
                 if [ "${mismatch_found}" = true ]; then
-                  EDITOR_NOOP_SUSPICIOUS="true"
-                fi
-
-                # If all reviewers found issues but the editor reports 0 total
-                # across ALL files, the editor likely failed to parse them.
-                if [ "${total_sum}" -eq 0 ] && [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ]; then
-                  echo "::warning::${REVIEWERS_SUCCESSFUL} reviewer(s) succeeded but editor audit reports 0 total issues across all files."
                   EDITOR_NOOP_SUSPICIOUS="true"
                 fi
               fi
