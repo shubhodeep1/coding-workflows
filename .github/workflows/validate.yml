@@ -60,11 +60,64 @@ jobs:
       metadata_file: ${{ steps.collect_status.outputs.metadata_file }}
 
     steps:
+      - name: Resolve integration ref
+        id: refctx
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_ISSUE: ${{ inputs.tracking_issue }}
+        run: |
+          set -euo pipefail
+          issue_number="${TRACKING_ISSUE:-}"
+          if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
+            echo "::notice::No tracking issue provided for integration ref resolution; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! issue_body="$(gh api "repos/${{ github.repository }}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null)"; then
+            echo "::warning::Failed to read tracking issue body for integration ref resolution; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          integration_branch="$(printf '%s\n' "${issue_body}" | sed -nE 's/^- Integration branch:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p; s/^\*\*Integration branch:\*\*[[:space:]]*`([^`]+)`[[:space:]]*$/\1/p' | head -n1 | tr -d '\r')"
+          if [ -z "${integration_branch}" ]; then
+            echo "::notice::No integration branch metadata found; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! printf '%s' "${integration_branch}" | grep -Eq '^orchestrator/project-[0-9]+$'; then
+            echo "::warning::Ignoring integration branch with invalid format: ${integration_branch}"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          integration_branch_ref="$(printf '%s' "${integration_branch}" | jq -sRr @uri)"
+          if gh api "repos/${{ github.repository }}/git/ref/heads/${integration_branch_ref}" >/dev/null 2>&1; then
+            echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Integration branch from metadata does not exist: ${integration_branch}"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
+          ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+
+      - name: Log checkout ref
+        run: |
+          set -euo pipefail
+          echo "Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "HEAD commit: $(git rev-parse HEAD)"
+          if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
+            echo "HEAD branch: ${branch_name}"
+          else
+            echo "HEAD branch: DETACHED"
+          fi
 
       - name: Configure git auth for memory helper clones
         env:
@@ -107,57 +160,92 @@ jobs:
           fi
           mkdir -p scripts prompts .github/ai
 
-          _rl_wait() {
-            local _reset_ts _wait_secs
-            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
-            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
-              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
-              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
-              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
-            else
-              _wait_secs=30
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
+
+          support_stage_root="${RUNNER_TEMP}/codex-validate-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          support_primary_dir="${support_stage_root}/primary"
+          support_main_dir="${support_stage_root}/main"
+          is_self_repo="false"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            is_self_repo="true"
+          fi
+
+          checkout_support_ref() {
+            local ref="$1"
+            local dest="$2"
+            rm -rf "${dest}"
+            mkdir -p "$(dirname "${dest}")"
+            if git clone --quiet --no-tags --depth 1 --branch "${ref}" "${WF_REMOTE_URL}" "${dest}" 2>/dev/null; then
+              return 0
             fi
-            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
-            sleep "${_wait_secs}"
+            rm -rf "${dest}"
+            return 1
           }
-          fetch_from_ref_or_local() {
+
+          support_primary_root=""
+          resolved_script_ref="${script_ref}"
+          if [ "${is_self_repo}" = "true" ]; then
+            support_primary_root="${GITHUB_WORKSPACE}"
+          elif checkout_support_ref "${script_ref}" "${support_primary_dir}"; then
+            support_primary_root="${support_primary_dir}"
+          elif checkout_support_ref "main" "${support_primary_dir}"; then
+            echo "::warning::Support checkout ref ${script_ref} is unavailable; using main."
+            support_primary_root="${support_primary_dir}"
+            resolved_script_ref="main"
+          fi
+
+          support_main_root=""
+          if [ "${resolved_script_ref}" != "main" ] && checkout_support_ref "main" "${support_main_dir}"; then
+            support_main_root="${support_main_dir}"
+          fi
+
+          copy_from_ref_or_local() {
             local repo_path="$1"
             local target_path="$2"
             local require_remote="${3:-false}"
-            local tmp_path="${target_path}.tmp"
-            local attempt=1
-            while [ "${attempt}" -le 5 ]; do
-              if gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${repo_path}?ref=${script_ref}" > "${tmp_path}" 2>/tmp/_gh_rl_err; then
-                mv "${tmp_path}" "${target_path}"
+            local allow_main_fallback="${4:-true}"
+            local source_path=""
+
+            mkdir -p "$(dirname "${target_path}")"
+
+            if [ -n "${support_primary_root}" ] && [ -f "${support_primary_root}/${repo_path}" ]; then
+              source_path="${support_primary_root}/${repo_path}"
+            elif [ "${allow_main_fallback}" = "true" ] && [ -n "${support_main_root}" ] && [ -f "${support_main_root}/${repo_path}" ]; then
+              echo "::warning::${repo_path} not found on ${resolved_script_ref}; falling back to main"
+              source_path="${support_main_root}/${repo_path}"
+            fi
+
+            if [ -n "${source_path}" ]; then
+              if [ -e "${target_path}" ] && [ "$(realpath -m "${source_path}")" = "$(realpath -m "${target_path}")" ]; then
                 return 0
               fi
-              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit (attempt ${attempt}/5), waiting for reset…" >&2
-                _rl_wait; attempt=$((attempt + 1))
-              else
-                break
-              fi
-            done
+              cp "${source_path}" "${target_path}" || {
+                echo "Failed to copy ${repo_path} from ${source_path} to ${target_path}" >&2
+                return 1
+              }
+              return 0
+            fi
 
-            rm -f "${tmp_path}"
             if [ "${require_remote}" != "true" ] && [ -f "${target_path}" ]; then
-              echo "Using local fallback for ${target_path} (not found on ${script_ref}: ${repo_path})"
+              echo "Using local fallback for ${target_path} (not found on ${resolved_script_ref}: ${repo_path})"
               return 0
             fi
 
             if [ "${require_remote}" = "true" ]; then
-              echo "Missing required remote file: ${repo_path} (${script_ref}); local fallback is disabled for this file." >&2
-              exit 1
+              echo "Missing required remote file: ${repo_path} (${resolved_script_ref}); local fallback is disabled for this file." >&2
+              return 1
             fi
 
-            echo "Missing required file: ${repo_path} (${script_ref}) and local fallback ${target_path}" >&2
-            exit 1
+            echo "Missing required file: ${repo_path} (${resolved_script_ref}) and local fallback ${target_path}" >&2
+            return 1
           }
 
           _fetched_scripts=()
           for f in gh_helpers.sh setup_serena.sh ai_labels.py render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
-            fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"
+            copy_from_ref_or_local "scripts/${f}" "scripts/${f}"
             chmod +x "scripts/${f}"
             _fetched_scripts+=("${f}")
           done
@@ -168,36 +256,39 @@ jobs:
           fi
 
           canonical_validate_driver="scripts/validate_driver.sh"
-          fetch_from_ref_or_local "${canonical_validate_driver}" "${canonical_validate_driver}" "${require_remote_canonical_scripts}"
+          copy_from_ref_or_local "${canonical_validate_driver}" "${canonical_validate_driver}" "${require_remote_canonical_scripts}"
           chmod +x "${canonical_validate_driver}"
           _fetched_scripts+=(validate_driver.sh)
 
           canonical_validate_process="scripts/validate_process.sh"
-          fetch_from_ref_or_local "${canonical_validate_process}" "${canonical_validate_process}" "${require_remote_canonical_scripts}"
+          copy_from_ref_or_local "${canonical_validate_process}" "${canonical_validate_process}" "${require_remote_canonical_scripts}"
           chmod +x "${canonical_validate_process}"
           _fetched_scripts+=(validate_process.sh)
 
           # The self-heal helper (scripts/self_heal_validation.sh) is
-          # fetched below using the best-effort gh_retry_to_file pattern,
-          # AFTER gh_helpers.sh has been sourced. fetch_from_ref_or_local
-          # cannot be used here because it exits the step (not returns)
-          # when the file is missing both remotely and locally, which
-          # would break consumer repos on older @stable tags that predate
-          # self-heal — see docs/validation-improvements.md rollout notes.
-
-          # Source rate-limit helpers as soon as gh_helpers.sh is available.
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          type gh_retry_to_file >/dev/null 2>&1 || gh_retry_to_file() { local _outfile="$1"; shift; "$@" > "${_outfile}"; }
+          # fetched below using best-effort copy from staged support refs.
+          # It is fetched below inside a conditional best-effort
+          # copy_from_ref_or_local block so missing files return non-zero
+          # and the fallback path preserves compatibility with older
+          # @stable tags that predate self-heal — see
+          # docs/validation-improvements.md rollout notes.
 
           # Fetch AI memory schema files so consumer repos that lack
           # schemas on their default branch can bootstrap the ai-memory
           # branch (schemas are validated during memory operations).
+          # Include H5/H6 cache schemas; fetch remains best-effort until
+          # these files exist on the selected support ref.
           mkdir -p ai-memory/schemas
-          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
+          for sf in \
+            memory_record.v1.json \
+            processed_command_entry.v1.json \
+            run_ledger_entry.v1.json \
+            task_lineage.v1.json \
+            actions_runs_cache.v1.json \
+            workflow_log_analysis_cache.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
               schema_tmp="ai-memory/schemas/${sf}.tmp"
-              if gh_retry_to_file "${schema_tmp}" gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}" 2>/dev/null; then
+              if copy_from_ref_or_local "ai-memory/schemas/${sf}" "${schema_tmp}" "false" "true"; then
                 mv "${schema_tmp}" "ai-memory/schemas/${sf}"
               else
                 rm -f "${schema_tmp}"
@@ -205,10 +296,14 @@ jobs:
             fi
           done
 
-          if gh_retry_to_file "scripts/codex_model_catalog.json.tmp" gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}" 2>/dev/null; then
-            mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
-            _fetched_scripts+=(codex_model_catalog.json)
+          if copy_from_ref_or_local "scripts/codex_model_catalog.json" "scripts/codex_model_catalog.json.tmp" "false" "false"; then
+            if [ -s "scripts/codex_model_catalog.json.tmp" ]; then
+              mv "scripts/codex_model_catalog.json.tmp" "scripts/codex_model_catalog.json"
+              _fetched_scripts+=(codex_model_catalog.json)
+            else
+              rm -f "scripts/codex_model_catalog.json.tmp"
+              echo "Model catalog not on ${script_ref} yet; using local copy."
+            fi
           else
             rm -f "scripts/codex_model_catalog.json.tmp"
             echo "Model catalog not on ${script_ref} yet; using local copy."
@@ -219,8 +314,7 @@ jobs:
           # stable tags during rollout). Best-effort fetch: skip silently
           # on missing remote, do not overwrite an existing local copy.
           if [ ! -f "scripts/self_heal_validation.sh" ]; then
-            if gh_retry_to_file "scripts/self_heal_validation.sh.tmp" gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/self_heal_validation.sh?ref=${script_ref}" 2>/dev/null; then
+            if copy_from_ref_or_local "scripts/self_heal_validation.sh" "scripts/self_heal_validation.sh.tmp" "false" "true"; then
               mv "scripts/self_heal_validation.sh.tmp" "scripts/self_heal_validation.sh"
               chmod +x "scripts/self_heal_validation.sh"
               _fetched_scripts+=(self_heal_validation.sh)
@@ -242,17 +336,16 @@ jobs:
           fi
 
           for pf in mode-validate-generate.txt mode-validate-diagnose.txt mode-validate-discover.txt mode-validate-fix-harness.txt serena-efficiency-block.txt; do
-            fetch_from_ref_or_local "prompts/${pf}" "prompts/${pf}"
+            copy_from_ref_or_local "prompts/${pf}" "prompts/${pf}"
           done
           # Self-heal prompt (optional; backward-compatible with older
           # stable tags that predate self-heal). Best-effort fetch: skip
           # silently on missing remote, do not overwrite an existing
-          # local copy. We do NOT use fetch_from_ref_or_local here
-          # because it `exit 1`s on missing-both, which `|| true` cannot
-          # intercept (shell exit vs function return).
+          # local copy. We fetch via a conditional
+          # copy_from_ref_or_local call so missing optional prompts return
+          # non-zero and are handled in the `else` fallback branch.
           if [ ! -f "prompts/mode-validate-self-heal.txt" ]; then
-            if gh_retry_to_file "prompts/mode-validate-self-heal.txt.tmp" gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-validate-self-heal.txt?ref=${script_ref}" 2>/dev/null; then
+            if copy_from_ref_or_local "prompts/mode-validate-self-heal.txt" "prompts/mode-validate-self-heal.txt.tmp" "false" "true"; then
               mv "prompts/mode-validate-self-heal.txt.tmp" "prompts/mode-validate-self-heal.txt"
             else
               rm -f "prompts/mode-validate-self-heal.txt.tmp"
@@ -262,14 +355,12 @@ jobs:
 
           for f in codex_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
-              gh_retry_to_file "${f}" gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=${script_ref}"
+              copy_from_ref_or_local "${f}" "${f}"
             fi
           done
 
           if [ ! -f .github/ai/label_contract.v1.json ]; then
-            gh_retry_to_file .github/ai/label_contract.v1.json gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/.github/ai/label_contract.v1.json?ref=${script_ref}" 2>/dev/null || true
+            copy_from_ref_or_local ".github/ai/label_contract.v1.json" ".github/ai/label_contract.v1.json" "false" "true" || true
           fi
 
       - name: Restore validate hints cache

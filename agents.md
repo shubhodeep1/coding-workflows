@@ -157,10 +157,22 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
-- Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
+- Clarify orchestrator override: `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` (default `high`) applies only when clarify LLM runs for `ai:orchestrator-managed` issues via forced human `/reclarify`; non-forced orchestrator-managed clarify runs skip Codex and auto-post `/answer [auto-answered-by-orchestrator]`.
+- Stall recovery controls include `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`): legacy autonomous ladder remains default; stall-judge `escalate_human` outputs are terminalization-gated to the non-human fallback action unless explicitly enabled.
+- Orchestrator pre-LLM short-circuit control: `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` (default `1200`) allows `orchestrate.yml` to skip decomposer and open one plain issue when description length is below threshold and no multi-step markers are detected.
+- Orchestrator clarify loop guard: `ORCHESTRATOR_MAX_CLARIFY_CYCLES` (default `3`) caps auto-answer clarification cycles before escalating to `ai:blocked`.
+- Implementation no-op reissue cap: `MAX_IMPL_NOOP_REISSUES` (default `2`) limits automatic re-issues for `ai:implementation-failed` before the poller closes the issue and lets the judge verify whether work is already present.
 - GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
 - Orchestrator merge-conflict probe: `MAX_MERGE_DEFERRALS` (default `5`) caps how many consecutive poll cycles a single sub-PR may be deferred by `probe_sibling_merge_conflicts` in `scripts/orchestrate_poll_process.sh`. The probe uses local `git merge-tree --write-tree --name-only` against every other open sibling PR targeting the same integration branch, spending zero GH API calls per probe (one batched `gh pr list` + one batched `git fetch` per cycle). Exceeding the threshold emits a Telegram WARNING but does not fail the PR.
 - Orchestrator auto-learning hot-file registry: consumer repos get partitioning with ZERO manual setup. On every detected sibling conflict, the poller appends a record to `ai-memory/orchestrator/merge_conflicts.jsonl` on the `ai-memory` branch (git protocol only, 0 GH API calls, auto-creates the branch via `memory_ensure_branch`). On the next orchestrator run, the planner step in `.github/workflows/orchestrate.yml` does `git fetch --depth=50 origin ai-memory` (git protocol, 0 GH API calls), reads the JSONL via `git show`, and unions telemetry-learned files meeting `ORCHESTRATOR_HOT_FILE_MIN_EVENTS` (default `3`) across `ORCHESTRATOR_HOT_FILE_MIN_PROJECTS` (default `2`) distinct projects within `ORCHESTRATOR_HOT_FILE_WINDOW_DAYS` (default `90`) with the optional committed seed at `.github/ai/hot_files.json`. The committed seed is OPTIONAL — consumer repos do not need to create it. Both sources missing is a valid state: the partition guard degrades to pairwise file-touch overlap detection and the poller probe still catches byte-level conflicts.
+
+## 4a. Post-Codex Recovery Docs Sync
+
+- Recovery order for implementation failures must stay documented as: (1) syntax/step failure capture, (2) in-place repair attempt layer (`MAX_POST_CODEX_REPAIR_ATTEMPTS`-capped), (3) #829 diagnose/fix-up fallback, (4) poller handling of `ai:implementation-failed` reissue/closure (capped by `MAX_IMPL_NOOP_REISSUES`).
+- Current branch reality: step (2) is implemented and consumed by `implement.yml`; docs must keep the non-negative-integer validation/fallback semantics (including `0` disable mode) aligned with runtime behavior.
+- Implement diagnose fix-up issues use metadata type `implement-fix-up (post-codex-validation)` and enter pipeline via `ai:clarification`; an additive `ai:implement-fix-up` label is also applied for operations visibility.
+- `fix_issues[].depends_on` is additive metadata from diagnose output; `implement.yml` maps local IDs to created issue numbers via dependency-note comments. Poller state updates for implementation-failed reissues are additive (`waves[].issues[].github_issue`, `issue_number_map`) and backward-compatible with older state missing `impl_noop_count` (treated as `0`).
+- Out-of-scope failures (for example missing/empty post-Codex capture artifacts) must remain on the legacy generic failure path; do not document them as part of the targeted fix-up lane.
 
 ---
 
@@ -311,7 +323,23 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ---
 
-## 17. Internal Wrapper Pin Policy
+## 17. GitHub API Call Hygiene (MANDATORY)
+
+GitHub REST and GraphQL rate limits are a shared resource across every orchestrator and issue-processing job. Before writing **any** new `gh api`, `gh_retry`, `_safe_gh_jq`, `gh issue ... --json`, `gh pr ... --json`, `gh run list`, or direct `curl https://api.github.com/...` call, you MUST check whether the data can be obtained from an existing call in the same code path and merged or batched with it.
+
+Rules:
+
+- **Check first, add second.** Search the surrounding function and file for existing `gh` invocations hitting the same issue/PR/repo scope. If one exists, extend it (add a JSON field, add a GraphQL alias, reuse its cached result) instead of creating a new call.
+- **Prefer batched GraphQL over per-item REST.** For N-item data needs (issues, PRs, comments, labels, timeline events), use aliased GraphQL queries. Canonical examples in this repo: `_fetch_candidate_issue_details_graphql` and `_fetch_linked_pr_status_graphql` in `scripts/orchestrate_poll_process.sh`. Both return a dict keyed by issue number so the caller can drop the result into a cycle-local cache.
+- **Cycle-local caches are first-class.** Orchestrator loops that need the same data for many iterations MUST prefetch once into a shell/file cache (`ACTIVE_WORKFLOW_ISSUES`, `STALL_MANAGED_LINKED_PR_CACHE`, `_candidate_details_json`) and have the inner loop read from the cache. Adding a per-iteration `gh api` call inside such a loop is a review-blocker.
+- **Fail open on cache miss.** A cache/prefetch failure must never block the caller — fall back to the smallest safe legacy call, not a tight retry loop.
+- **Document the batching contract.** When you add a batched helper, spell out in the function docstring the input shape, output shape, number of API calls issued, and fail-open behaviour so future callers can reuse it without re-reading the implementation.
+
+If you need a new data shape that truly cannot be satisfied by any existing call, add a comment above the new invocation explaining which existing calls you audited and why they were insufficient.
+
+---
+
+## 18. Internal Wrapper Pin Policy
 
 - The `.github/workflows/internal-*.yml` wrappers in this repo MUST pin
   `uses:` to `shubhodeep1/coding-workflows/.github/workflows/<wf>.yml@main`.
@@ -347,6 +375,17 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
   up immediately. Only run `test-and-mark-stable.yml` when promoting the
   fix to the `@stable` channel for consumer repos — it is not on the
   critical path for recovering this repo's own runtime.
+
+## 19. Workflow Checkout Integration-Ref Contract
+
+- Orchestrator-managed issue-phase workflows that checkout repository state from issue/issue_comment context (`.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/orchestrate_clarify_respond.yml`, `.github/workflows/implement.yml`) plus validation runs keyed by `inputs.tracking_issue` (`.github/workflows/validate.yml`) MUST resolve integration branch metadata before `actions/checkout@v5`.
+- Required checkout wiring in those workflows:
+  - pre-checkout step `- name: Resolve integration ref` with `id: refctx`
+  - checkout ref binding: `ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}`
+  - post-checkout logging of resolved ref + `git rev-parse HEAD` + `git symbolic-ref --short HEAD` (with detached fallback)
+- Resolver behavior must fail open: missing metadata, invalid format, missing branch, or GH API failure must emit warning/notice and leave `steps.refctx.outputs.ref` empty (checkout falls back to default branch).
+- `orchestrate_poll.yml` is an explicit exception: one run can process multiple tracking issues, so a single integration ref cannot be chosen safely for a shared checkout.
+- Regression guard: `tests/test_workflow_checkout_integration_ref_audit.py` scans all `.github/workflows/*.yml` checkout@v5 usages and fails unless each file is either in the required-resolver set above or in an explicit allow-list with rationale.
 
 ---
 

@@ -70,11 +70,15 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.evaluate.outputs.should_run }}
+      post_merge_dispatch: ${{ steps.evaluate.outputs.post_merge_dispatch }}
     steps:
       - name: Evaluate review gate
         id: evaluate
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
           PR_IS_DRAFT: ${{ inputs.pr_is_draft }}
           PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
           PR_TITLE: ${{ inputs.pr_title }}
@@ -83,8 +87,28 @@ jobs:
           set -euo pipefail
 
           SHOULD_RUN="true"
+          POST_MERGE_DISPATCH="false"
+
           if [ "${EVENT_NAME}" = "workflow_call" ]; then
-            if [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
+            pr_state=""
+            pr_merged="false"
+            if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+              SHOULD_RUN="false"
+              echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
+            else
+              pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
+              pr_merged="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.merged // false' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "false")"
+            fi
+
+            if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
+              SHOULD_RUN="false"
+              echo "::warning::Unable to determine PR state for #${PR_NUMBER}; skipping review run."
+            elif [ "${pr_state}" = "closed" ]; then
+              SHOULD_RUN="false"
+              if [ "${pr_merged}" = "true" ]; then
+                POST_MERGE_DISPATCH="true"
+              fi
+            elif [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
               SHOULD_RUN="false"
             elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
               SHOULD_RUN="false"
@@ -92,6 +116,84 @@ jobs:
           fi
 
           echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
+          echo "post_merge_dispatch=${POST_MERGE_DISPATCH}" >> "${GITHUB_OUTPUT}"
+
+  post-merge-validate-dispatch:
+    needs: gate
+    runs-on: ubuntu-latest
+    if: ${{ needs.gate.outputs.post_merge_dispatch == 'true' }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
+    steps:
+      - name: Dispatch standalone validate for orchestrator short-circuit issues
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Skipping post-merge validate dispatch: invalid PR number '${PR_NUMBER}'."
+            exit 0
+          fi
+
+          issue_nodes_json="$(gh api graphql \
+            -f owner="${REPOSITORY%/*}" \
+            -f name="${REPOSITORY#*/}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
+
+          if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
+            pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            repository_escaped="${REPOSITORY//./\\.}"
+            issue_numbers="$(echo "${pr_data}" | grep -oiE "(github\\.com/${repository_escaped}/issues/[0-9]+|${repository_escaped}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
+            if [ -z "${issue_numbers}" ]; then
+              echo "No linked issues found for merged PR #${PR_NUMBER}."
+              exit 0
+            fi
+            echo "Found linked issues via PR body/title fallback: ${issue_numbers}"
+
+            issue_nodes_json="$(printf '%s\n' "${issue_numbers}" | jq -Rsc 'split("\n") | map(select(length > 0)) | map({number: tonumber, labels: null})')"
+          fi
+
+          validation_dispatched="false"
+          validate_workflow="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
+          while IFS=$'\t' read -r issue_number has_validate_label labels_known; do
+            [ -n "${issue_number}" ] || continue
+
+            if [ "${labels_known}" != "true" ]; then
+              issue_labels="$(gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null || true)"
+              if echo "${issue_labels}" | grep -Fxq 'ai:orchestrator-validate-required'; then
+                has_validate_label="true"
+              else
+                has_validate_label="false"
+              fi
+            fi
+
+            if [ "${has_validate_label}" != "true" ]; then
+              echo "Issue #${issue_number} does not have ai:orchestrator-validate-required; skipping."
+              continue
+            fi
+
+            if [ "${validation_dispatched}" = "false" ]; then
+              echo "Dispatching standalone validation for linked issue #${issue_number} (tracking_issue=0)."
+              if gh workflow run "${validate_workflow}" --repo "${REPOSITORY}" -f tracking_issue="0" || { [ "${validate_workflow}" != "internal-validate.yml" ] && gh workflow run "internal-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0"; }; then
+                validation_dispatched="true"
+              else
+                echo "::warning::Failed to dispatch ${validate_workflow}/internal-validate.yml for issue #${issue_number}; continuing without failing workflow."
+                continue
+              fi
+            fi
+
+            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:orchestrator-validate-required'; then
+              echo "::warning::Standalone validation dispatched for issue #${issue_number}, but failed to remove ai:orchestrator-validate-required."
+            fi
+          done < <(printf '%s' "${issue_nodes_json}" | jq -r '.[] | [.number, (if (.labels | type) == "array" then ((.labels | index("ai:orchestrator-validate-required")) != null) else false end), ((.labels | type) == "array")] | @tsv')
+
+          if [ "${validation_dispatched}" = "false" ]; then
+            echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
+          fi
 
   codex-agent:
     needs: gate
@@ -132,21 +234,61 @@ jobs:
           SERVER_HOST="${SERVER_HOST%/}"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
-      - name: Fetch workflow support scripts
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+      - name: Resolve workflow support ref
         run: |
           set -euo pipefail
-          # When called as a reusable workflow from another repo, the caller's
-          # repo is checked out and this repo's scripts/ directory is absent.
-          # NOTE: github.workflow_ref resolves to the *caller* workflow, not
-          # this reusable workflow, so we cannot derive the source repo from it.
-          wf_source="${{ github.repository_owner }}/coding-workflows"
-          # When running within coding-workflows itself, use the current
-          # commit to avoid version skew with the stable tag (stable is
-          # only updated after e2e tests pass — causes bootstrap failures).
+          wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            script_ref="${{ github.sha }}"
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        id: checkout_support_source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Checkout workflow support source fallback
+        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Ensure workflow support source checkout
+        run: |
+          set -euo pipefail
+          if [ ! -d .codex-workflow-src ]; then
+            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+            exit 1
+          fi
+
+      - name: Checkout workflow support source main snapshot
+        if: ${{ env.SCRIPT_REF != 'main' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src-main
+          fetch-depth: 1
+
+      - name: Stage workflow support files
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
             SUPPORT_ROOT_DIR="$(pwd)"
             SUPPORT_SCRIPTS_DIR="scripts"
             SUPPORT_PROMPTS_DIR="prompts"
@@ -154,7 +296,6 @@ jobs:
             SUPPORT_AI_MEMORY_DIR="ai-memory"
             IS_WORKFLOW_SOURCE_REPO="true"
           else
-            script_ref="stable"
             SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
             SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
@@ -162,7 +303,7 @@ jobs:
             SUPPORT_AI_MEMORY_DIR="${SUPPORT_ROOT_DIR}/ai-memory"
             IS_WORKFLOW_SOURCE_REPO="false"
           fi
-          mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_DIR}/schemas"
+          mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_SERENA_DIR}" "${SUPPORT_AI_MEMORY_DIR}/schemas"
           {
             echo "SUPPORT_ROOT_DIR=${SUPPORT_ROOT_DIR}"
             echo "SUPPORT_SCRIPTS_DIR=${SUPPORT_SCRIPTS_DIR}"
@@ -174,144 +315,99 @@ jobs:
             echo "SUPPORT_CODEX_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/codex_system_instructions.md"
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
-          # ALWAYS fetch canonical scripts from coding-workflows, even if the
-          # caller repo ships its own scripts/ directory. Stale caller-repo
-          # scripts cause silent MCP failures.
-          # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
-          _rl_wait() {
-            local _reset_ts _wait_secs
-            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
-            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
-              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
-              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
-              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
-            else
-              _wait_secs=30
-            fi
-            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
-            sleep "${_wait_secs}"
-          }
-          _gh_api_fetch() {
-            local outfile="$1"; shift
-            local attempt=1
-            while [ "${attempt}" -le 5 ]; do
-              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
-              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
-                _rl_wait; attempt=$((attempt + 1))
-              else return 1; fi
-            done; return 1
-          }
-          # Required bootstrap scripts: must be available on ${script_ref}
-          # OR the main branch.  When a required script is missing from
-          # both refs — which typically means review_autofix.yml was
-          # modified to reference a script that never landed (e.g.
-          # hallucinated by the merge-conflict resolver) — abort with a
-          # clear, actionable error rather than letting bash -e propagate
-          # an opaque "Process completed with exit code 1" that masks the
-          # root cause and cascades into unrelated "unbound variable"
-          # errors in downstream cleanup steps.
+
           REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh"
-          # Optional bootstrap scripts: allowed to be missing from both
-          # refs.  The bootstrap emits a warning and continues — callers
-          # that depend on these must themselves tolerate absence.  Keep
-          # this list empty unless a genuinely optional helper is added;
-          # the default should always be "required".
           OPTIONAL_BOOTSTRAP_SCRIPTS=""
           for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
-            if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
-              echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
-                echo "::error::Required bootstrap script '${f}' is missing from both ${script_ref} and main in ${wf_source}. This usually means review_autofix.yml references a file that was never committed (common cause: a hallucinated [ai-merge-resolve] commit added a new bootstrap entry without its corresponding script). Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the current contents of scripts/ on main."
-                exit 1
-              fi
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
             fi
-            chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
+            if [ ! -f "${src}" ]; then
+              echo "::error::Required bootstrap script '${f}' is missing from checked-out support sources (${SCRIPT_REF} and optional main snapshot) in ${wf_source}. This usually means review_autofix.yml references a file that was never committed (common cause: a hallucinated [ai-merge-resolve] commit added a new bootstrap entry without its corresponding script). Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the current contents of scripts/."
+              exit 1
+            fi
+            install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
           done
           for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
-            if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
-              if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
-                echo "::warning::Optional bootstrap script '${f}' not available on ${script_ref} or main; downstream features relying on this helper will be unavailable."
-                continue
-              fi
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
             fi
-            chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
+            if [ ! -f "${src}" ]; then
+              echo "::warning::Optional bootstrap script '${f}' not available in checked-out support sources; downstream features relying on this helper will be unavailable."
+              continue
+            fi
+            install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
           done
-          # Fetch AI memory schema files so consumer repos that lack
-          # schemas on their default branch can bootstrap the ai-memory
-          # branch (schemas are validated during memory operations).
-          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json; do
-            if [ ! -f "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}" ]; then
-              schema_tmp="${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}.tmp"
-              if _gh_api_fetch "${schema_tmp}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/ai-memory/schemas/${sf}?ref=${script_ref}"; then
-                mv "${schema_tmp}" "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}"
-              else
-                rm -f "${schema_tmp}"
-              fi
+
+          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json; do
+            src=".codex-workflow-src/ai-memory/schemas/${sf}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
+              src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
+            fi
+            if [ ! -f "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}" ] && [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}"
             fi
           done
-          # Model catalog: try script_ref first, fall back to local copy from checkout.
-          # Write to a temp file first so the redirect doesn't clobber the
-          # local copy when the gh api call fails (the file doesn't exist on
-          # the stable tag yet).
-          if _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json.tmp" api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/${wf_source}/contents/scripts/codex_model_catalog.json?ref=${script_ref}"; then
-            mv "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json.tmp" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
-          else
-            rm -f "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json.tmp"
-            echo "Model catalog not on ${script_ref} yet; using local copy."
+
+          catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
+          if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
+            catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
           fi
-          # Always use the canonical instruction files from coding-workflows
-          # (must be outside the if-block so they're fetched even when the
-          # caller repo ships its own scripts/ directory)
+          if [ -f "${catalog_src}" ]; then
+            install -m 0644 "${catalog_src}" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+          else
+            echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
+          fi
+
           for f in unattended_llm_system_instructions.md codex_system_instructions.md; do
             target_path="${SUPPORT_ROOT_DIR}/${f}"
             if [ ! -f "${target_path}" ]; then
-              if ! _gh_api_fetch "${target_path}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/${f}?ref=${script_ref}"; then
-                echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                _gh_api_fetch "${target_path}" api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/${f}?ref=main"
+              src=".codex-workflow-src/${f}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
+                src=".codex-workflow-src-main/${f}"
               fi
+              if [ ! -f "${src}" ]; then
+                echo "::error::Missing required support file ${f}"
+                exit 1
+              fi
+              install -m 0644 "${src}" "${target_path}"
             fi
           done
-          # Fetch judge prompt and Serena canonical block for review-blocked judge feature
+
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
-            if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=${script_ref}"; then
-              echo "::warning::mode-judge-review-blocked.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=main"
+            src=".codex-workflow-src/prompts/mode-judge-review-blocked.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-judge-review-blocked.txt" ]; then
+              src=".codex-workflow-src-main/prompts/mode-judge-review-blocked.txt"
             fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Missing required support file prompts/mode-judge-review-blocked.txt"
+              exit 1
+            fi
+            install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
           fi
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" ]; then
-            if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
-              echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            src=".codex-workflow-src/prompts/serena-efficiency-block.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/serena-efficiency-block.txt" ]; then
+              src=".codex-workflow-src-main/prompts/serena-efficiency-block.txt"
             fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Missing required support file prompts/serena-efficiency-block.txt"
+              exit 1
+            fi
+            install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt"
           fi
-          # Conflict resolver prompt template. Extracted from an inline heredoc
-          # in the "Prepare merge-conflict resolver prompt and pre-snapshot"
-          # step so that run: block stays under GitHub Actions' 21,000-char
-          # template-expression limit. Missing file is a hard error when the
-          # conflict resolver actually runs; fetched here so consumer repos
-          # that don't ship the file themselves still get it from stable/main.
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
-            if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/conflict-resolver.txt?ref=${script_ref}"; then
-              echo "::warning::conflict-resolver.txt not found on ${script_ref}; falling back to main"
-              if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/conflict-resolver.txt?ref=main"; then
-                echo "::warning::conflict-resolver.txt not found on main either; downstream conflict resolution will fail with a specific missing-template error."
-                rm -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
-              fi
+            src=".codex-workflow-src/prompts/conflict-resolver.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/conflict-resolver.txt" ]; then
+              src=".codex-workflow-src-main/prompts/conflict-resolver.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+            else
+              echo "::warning::conflict-resolver.txt not found in checked-out support sources for ${SCRIPT_REF}; downstream conflict resolution will fail with a specific missing-template error."
+              rm -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
             fi
           fi
 
@@ -1604,8 +1700,8 @@ jobs:
             done < "${CODEX_TOUCHED_FILE}"
             rm -f "${CODEX_TOUCHED_FILE}"
           else
-            git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+            git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
+            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
           fi
 
           echo "Staged files before commit:"
@@ -1623,9 +1719,9 @@ jobs:
             git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
-          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
             echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
           if [ "${PROTECTED_LEAKED}" = "true" ]; then
@@ -1885,62 +1981,25 @@ jobs:
           # Use -ffdx: double-force clears nested git repos (-ff), and -x also
           # removes files matching .gitignore (e.g. .serena/) so nothing
           # ignored can survive to block the upcoming merge simulation.
-          git clean -ffdx
+          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main
 
           # The scripts may have been removed during artifact cleanup in the
           # commit step (caller repos delete fetched scripts before committing)
           # or wiped by git clean -ffdx above.
-          # Re-fetch any missing scripts so later steps (merge-conflict check,
-          # Telegram notifications) can use them.
-          wf_source="${{ github.repository_owner }}/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            script_ref="${{ github.sha }}"
-          else
-            script_ref="stable"
-          fi
-          # Rate-limit-aware fetch
-          _rl_wait() {
-            local _reset_ts _wait_secs
-            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
-            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
-              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
-              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
-              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
-            else
-              _wait_secs=30
-            fi
-            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
-            sleep "${_wait_secs}"
-          }
-          _gh_api_fetch() {
-            local outfile="$1"; shift
-            local attempt=1
-            while [ "${attempt}" -le 5 ]; do
-              if gh "$@" > "${outfile}" 2>/tmp/_gh_rl_err; then return 0; fi
-              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit during fetch (attempt ${attempt}/5), waiting for reset…" >&2
-                _rl_wait; attempt=$((attempt + 1))
-              else return 1; fi
-            done; return 1
-          }
+          # Re-stage any missing scripts from checked-out support source.
           for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              # Defensive: see the longer comment on the matching loop in
-              # the "Fetch support scripts" step above.  Both fallback
-              # branches are guarded so a missing file degrades to a
-              # warning rather than aborting the whole job.
-              if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
-                echo "::warning::${f} not found on ${script_ref}; falling back to main"
-                if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                  "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
-                  echo "::warning::${f} not found on main either; downstream steps that need it will fail with a specific error."
-                  rm -f "${SUPPORT_SCRIPTS_DIR}/${f}"
-                  continue
-                fi
+              src=".codex-workflow-src/scripts/${f}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+                src=".codex-workflow-src-main/scripts/${f}"
               fi
-              chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
+              if [ ! -f "${src}" ]; then
+                echo "::warning::${f} not found in checked-out support source; downstream steps that need it will fail with a specific error."
+                rm -f "${SUPPORT_SCRIPTS_DIR}/${f}"
+                continue
+              fi
+              install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
             fi
           done
           bash "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" repair
@@ -1964,7 +2023,7 @@ jobs:
           # "Entry … not uptodate. Cannot merge." errors and prevents
           # git merge --abort from resetting cleanly afterward.
           MERGE_STASH="$(mktemp -d)"
-          for d in scripts .serena prompts ai-memory; do
+          for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
             if [ -d "${d}" ]; then
               if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
                 # Directory contains tracked files — move only the untracked
@@ -1990,7 +2049,7 @@ jobs:
           # git merge refuses to proceed when an untracked working-tree file
           # would be overwritten; this ensures the tree is fully clean before
           # the merge simulation.  Tracked files are never removed by git clean.
-          git clean -ffdx 2>/dev/null || true
+          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main 2>/dev/null || true
 
           # Guardrail diagnostics: emit working tree state before merge so any
           # future untracked-file collision is immediately obvious in CI logs.
@@ -2007,7 +2066,7 @@ jobs:
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" || merge_exit=$?
 
           # Restore the stashed dirs so later steps have them available.
-          for d in scripts .serena prompts ai-memory; do
+          for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
             if [ -d "${MERGE_STASH}/${d}" ]; then
               # Use cp + rm instead of mv to handle the case where the merge
               # already created the directory (e.g. scripts/ from main).
@@ -2133,7 +2192,7 @@ jobs:
             rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh 2>/dev/null || true
           fi
           RESOLVE_STASH="$(mktemp -d)"
-          for d in scripts .serena prompts ai-memory; do
+          for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
             if [ -d "${d}" ]; then
               if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
                 # Directory contains tracked files — move only the untracked
@@ -2156,7 +2215,7 @@ jobs:
           # Safety net: remove any remaining untracked files (including
           # .gitignore'd ones) that the loop above may have missed, preventing
           # "Untracked working tree file … would be overwritten by merge."
-          git clean -ffdx 2>/dev/null || true
+          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main 2>/dev/null || true
 
           # Capture the merge exit code explicitly rather than swallowing
           # it with `|| true`.  We must distinguish:
@@ -2221,7 +2280,7 @@ jobs:
               if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
                 git merge --abort 2>/dev/null || true
               fi
-              for d in scripts .serena prompts ai-memory; do
+              for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
                 if [ -d "${RESOLVE_STASH}/${d}" ]; then
                   cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
                 fi
@@ -2249,12 +2308,12 @@ jobs:
           # Skipped on the workflow source repo itself, where these paths are
           # real source code.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
-            git checkout -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+            git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+            git checkout -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
           fi
 
           # Restore stashed dirs so Codex has its full environment.
-          for d in scripts .serena prompts ai-memory; do
+          for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
             if [ -d "${RESOLVE_STASH}/${d}" ]; then
               cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
             fi
@@ -2592,8 +2651,8 @@ jobs:
               done < "${RESOLVER_TOUCHED_FILE}"
               rm -f "${RESOLVER_TOUCHED_FILE}"
             else
-              git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
-              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+              git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
+              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!scripts' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
             fi
             echo "Staged files before commit:"
             STAGED_FILES="$(git diff --cached --name-only || true)"
@@ -2610,9 +2669,9 @@ jobs:
               git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
-            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/)'; then
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^(scripts/|prompts/|\.serena/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'; then
               echo "::warning::workflow runtime/helper artifacts were staged in consumer repo; unstaging protected paths and continuing."
-              git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' 2>/dev/null || true
+              git reset -q HEAD -- 'scripts' 'prompts' '.serena' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
             if [ "${PROTECTED_LEAKED}" = "true" ]; then
@@ -2639,6 +2698,26 @@ jobs:
             echo "No conflict resolution changes to commit"
           fi
 
+      - name: Cache linked issues references
+        if: always() && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set +e
+          if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
+            source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          fi
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          LINKED_ISSUES_JSON="$(gh_retry gh api graphql \
+            -f owner="${REPOSITORY%/*}" \
+            -f name="${REPOSITORY#*/}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null || echo '[]')"
+          LINKED_ISSUES_JSON="$(printf '%s' "${LINKED_ISSUES_JSON}" | jq -c '.' 2>/dev/null || echo '[]')"
+          printf 'LINKED_ISSUES_JSON=%s\n' "${LINKED_ISSUES_JSON}" >> "$GITHUB_ENV"
+
       - name: Telegram conflict resolution message
         if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true'
         env:
@@ -2651,12 +2730,7 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ISSUE_NUM="$(gh api graphql \
-            -f owner="${{ github.repository_owner }}" \
-            -f name="${{ github.event.repository.name }}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+          ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           MSG="Merge conflicts resolved automatically"
           MSG+=$'\n'
           MSG+="PR: ${PR_URL}"
@@ -2699,12 +2773,7 @@ jobs:
             }
           fi
 
-          ISSUE_NUMBERS="$(gh_retry gh api graphql \
-            -f owner="${REPOSITORY%/*}" \
-            -f name="${REPOSITORY#*/}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
@@ -2752,19 +2821,14 @@ jobs:
           if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
             :
           else
-            wf_source="${{ github.repository_owner }}/coding-workflows"
-            if [ "${{ github.repository }}" = "${wf_source}" ]; then
-              script_ref="${{ github.sha }}"
-            else
-              script_ref="stable"
-            fi
-            mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-            if { gh api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=${script_ref}" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || \
-               gh api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/label_helpers.sh?ref=main" > "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; } && \
-              [ -s "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
-              chmod +x "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
+            if [ -f .codex-workflow-src/scripts/label_helpers.sh ]; then
+              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
+              install -m 0755 .codex-workflow-src/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
+              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
+            elif [ -f .codex-workflow-src-main/scripts/label_helpers.sh ]; then
+              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
+              install -m 0755 .codex-workflow-src-main/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
+              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             else
               ensure_label_exists() {
                 local label_name="$1"
@@ -2781,12 +2845,7 @@ jobs:
             fi
           fi
 
-          ISSUE_NUMBERS="$(gh api graphql \
-            -f owner="${REPOSITORY%/*}" \
-            -f name="${REPOSITORY#*/}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
@@ -3042,12 +3101,7 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ISSUE_NUM="$(gh_retry gh api graphql \
-            -f owner="${{ github.repository_owner }}" \
-            -f name="${{ github.event.repository.name }}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+          ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           MSG="PR processed: #${PR_NUMBER}"
           MSG+=$'\n'
           MSG+="PR: ${PR_URL}"
@@ -3076,12 +3130,7 @@ jobs:
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ISSUE_NUM="$(gh api graphql \
-            -f owner="${{ github.repository_owner }}" \
-            -f name="${{ github.event.repository.name }}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+          ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           ISSUE_LINE=""
           if [ -n "${ISSUE_NUM}" ]; then
             ISSUE_LINE=$'\n'"Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
@@ -3140,12 +3189,7 @@ jobs:
             --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" \
             2>/dev/null || true
 
-          ISSUE_NUMBERS="$(gh_retry gh api graphql \
-            -f owner="${REPOSITORY%/*}" \
-            -f name="${REPOSITORY#*/}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title when closing keywords are missing
@@ -3202,12 +3246,7 @@ jobs:
 
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          ISSUE_NUM="$(gh_retry gh api graphql \
-            -f owner="${{ github.repository_owner }}" \
-            -f name="${{ github.event.repository.name }}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:1){nodes{number}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' 2>/dev/null || true)"
+          ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           MSG="PR autofix failed"
           MSG+=$'\n'
           MSG+="PR: ${PR_URL}"
@@ -3269,6 +3308,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          rm -rf .codex-workflow-src-main
 
           # Guard: RUNTIME_DIR is only written to $GITHUB_ENV by the
           # Create runtime workspace step.  If an earlier step failed
