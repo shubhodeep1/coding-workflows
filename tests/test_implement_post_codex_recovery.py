@@ -883,13 +883,12 @@ def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid
 			assert created["title"] == "Implement phase post-Codex validation failure fallback"
 			assert created["args"].count("--label") == 2
 			assert "ai:clarification" in created["args"]
-			assert "ai:orchestrator-managed" in created["args"]
+			assert "ai:implement-fix-up" in created["args"]
+			assert "ai:orchestrator-managed" not in created["args"]
 			assert "The diagnose step could not produce a valid JSON contract" in created["body"]
 			assert "yaml parse failed on alpha.yml" in created["body"]
 			assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
 			assert "Tracking issue: #829" in created["body"]
-			assert "ai:clarification" in created["args"]
-			assert "ai:implement-fix-up" in created["args"]
 			assert "ai:implementation-failed" in state.get("issue_labels", [])
 
 
