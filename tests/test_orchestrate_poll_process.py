@@ -1470,8 +1470,12 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
+		# 4 open entries absorb: sync-superseded timeline enrichment,
+		# sync-superseded _fetch_pr_json, reconciliation timeline
+		# enrichment, reconciliation _fetch_pr_json.  The merged entry
+		# is first seen by the review-blocked handler.
 		pr_api_sequence={
-			901: [_open_pr] * 4 + [_merged_pr],
+			901: [dict(_open_pr) for _ in range(4)] + [dict(_merged_pr)],
 		},
 		prs=[
 			{
@@ -1545,8 +1549,11 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
+		# 4 open entries absorb pre-handler PR API calls (sync timeline
+		# enrichment, sync _fetch_pr_json, reconciliation timeline
+		# enrichment, reconciliation _fetch_pr_json).
 		pr_api_sequence={
-			901: [_open_pr] * 4 + [_merged_pr],
+			901: [dict(_open_pr) for _ in range(4)] + [dict(_merged_pr)],
 		},
 		prs=[
 			{
@@ -1617,8 +1624,11 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
+		# 2 open entries absorb: reconciliation timeline enrichment and
+		# reconciliation _fetch_pr_json (no sync calls — no integration
+		# branch configured).
 		pr_api_sequence={
-			901: [_open_pr] * 4 + [_merged_pr],
+			901: [dict(_open_pr) for _ in range(2)] + [dict(_merged_pr), dict(_merged_pr)],
 		},
 		prs=[
 			{
@@ -1663,6 +1673,7 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 		"number": 901,
 		"state": "open",
 		"merged": False,
+		"merged_at": None,
 		"baseRefName": "main",
 		"headRefName": "ai/issue-10",
 		"headRefFromApi": "ai/issue-10",
@@ -1690,8 +1701,11 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
+		# 4 open entries absorb pre-handler PR API calls (sync timeline
+		# enrichment, sync _fetch_pr_json, reconciliation timeline
+		# enrichment, reconciliation _fetch_pr_json).
 		pr_api_sequence={
-			901: [_open_pr] * 4 + [_merged_pr],
+			901: [dict(_open_pr) for _ in range(4)] + [dict(_merged_pr)],
 		},
 		prs=[
 			{
