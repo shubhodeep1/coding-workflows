@@ -2030,6 +2030,103 @@ jobs:
 
           echo "EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST}" >> "$GITHUB_ENV"
 
+      - name: Validate editor no-op disposition
+        # When the editor claims no changes are needed (did_commit=false,
+        # EDITOR_CHANGES_LOST=false), verify the claim is trustworthy
+        # before allowing auto-merge.  Two failure modes can reach here
+        # with a false "clean review" signal:
+        #
+        # 1. Editor completely failed (all retries exhausted) and the
+        #    fallback summary was used — its "- none (editor failed...)"
+        #    text passes the Changes-Lost filter but the editor never
+        #    actually reviewed the code.
+        #
+        # 2. Editor ran but silently errored during code analysis,
+        #    dismissing all reviewer issues without validating them.
+        #    The audit section would show inconsistent counts.
+        #
+        # Sets EDITOR_NOOP_SUSPICIOUS=true to block auto-merge when
+        # the no-op claim cannot be verified.
+        if: "!cancelled() && steps.commit_changes.outputs.did_commit != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true'"
+        run: |
+          set -euo pipefail
+
+          EDITOR_NOOP_SUSPICIOUS="false"
+
+          if [ ! -s "${EDITOR_SUMMARY_FILE:-}" ]; then
+            echo "::warning::Editor summary file is missing or empty — editor never produced output."
+            EDITOR_NOOP_SUSPICIOUS="true"
+          else
+            # ── Check 1: Detect editor fallback/failure markers ──
+            # The fallback summary (review_apply_fixes.sh) writes known
+            # sentinel phrases when all editor attempts fail.  These must
+            # never reach auto-merge.
+            if grep -qiE 'editor failed before producing|unavailable \(editor fallback\)' "${EDITOR_SUMMARY_FILE}"; then
+              echo "::warning::Editor summary contains failure/fallback markers — editor never completed a validated review."
+              EDITOR_NOOP_SUSPICIOUS="true"
+            fi
+
+            # ── Check 2: Reviewer audit sanity ──
+            # When reviewers found issues (REVIEWERS_SUCCESSFUL > 0) but
+            # the editor claims no changes, verify the audit section has
+            # real entries and the arithmetic adds up.
+            if [ "${EDITOR_NOOP_SUSPICIOUS}" = "false" ] && [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ]; then
+              audit_section="$(awk '
+                /^[[:space:]]*Review file issue audit:/ { in_s=1; next }
+                in_s && /^[[:space:]]*[A-Za-z].*:/ { exit }
+                in_s { print }
+              ' "${EDITOR_SUMMARY_FILE}")"
+
+              real_audit="$(printf '%s\n' "${audit_section}" \
+                | grep -vE '^[[:space:]]*$' \
+                | grep -vE '^[[:space:]]*-[[:space:]]*none' \
+                | grep -viE 'editor failed' \
+                || true)"
+
+              if [ -z "${real_audit}" ]; then
+                echo "::warning::${REVIEWERS_SUCCESSFUL} reviewer(s) succeeded but editor audit section is empty or contains only fallback text."
+                EDITOR_NOOP_SUSPICIOUS="true"
+              else
+                # Parse each audit entry and verify total == applied + already_applied + ignored.
+                total_sum=0
+                mismatch_found=false
+                while IFS= read -r line; do
+                  [ -n "${line}" ] || continue
+                  t="$(printf '%s' "${line}" | grep -oP 'total issues listed[^0-9]*\K[0-9]+' || echo "")"
+                  a="$(printf '%s' "${line}" | grep -oP '(?<!already )issues applied[^0-9]*\K[0-9]+' || echo "")"
+                  aa="$(printf '%s' "${line}" | grep -oP 'issues already applied[^0-9]*\K[0-9]+' || echo "")"
+                  ig="$(printf '%s' "${line}" | grep -oP 'issues ignored[^0-9]*\K[0-9]+' || echo "")"
+
+                  # Skip entries that don't have parseable counts (not audit lines)
+                  [ -n "${t}" ] || continue
+
+                  t="${t:-0}"; a="${a:-0}"; aa="${aa:-0}"; ig="${ig:-0}"
+                  total_sum=$((total_sum + t))
+                  sum=$((a + aa + ig))
+
+                  if [ "${t}" -gt 0 ] && [ "${sum}" -ne "${t}" ]; then
+                    echo "::warning::Audit entry arithmetic mismatch: total=${t} but applied(${a})+already_applied(${aa})+ignored(${ig})=${sum}"
+                    mismatch_found=true
+                  fi
+                done <<< "${real_audit}"
+
+                if [ "${mismatch_found}" = true ]; then
+                  EDITOR_NOOP_SUSPICIOUS="true"
+                fi
+
+                # If all reviewers found issues but the editor reports 0 total
+                # across ALL files, the editor likely failed to parse them.
+                if [ "${total_sum}" -eq 0 ] && [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ]; then
+                  echo "::warning::${REVIEWERS_SUCCESSFUL} reviewer(s) succeeded but editor audit reports 0 total issues across all files."
+                  EDITOR_NOOP_SUSPICIOUS="true"
+                fi
+              fi
+            fi
+          fi
+
+          echo "editor_noop_suspicious=${EDITOR_NOOP_SUSPICIOUS}"
+          echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"
+
       - name: Detect merge conflicts
         # Run conflict detection regardless of max_iterations_reached or
         # did_commit — merge conflicts are independent of the autofix cycle.
@@ -3029,7 +3126,7 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Mark linked issues ready to merge
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3198,7 +3295,7 @@ jobs:
           fi
 
       - name: Enable auto-merge on PR
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -3388,7 +3485,7 @@ jobs:
           fi
 
       - name: Telegram success
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -3516,6 +3613,37 @@ jobs:
               tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
             fi
           fi
+
+      - name: Telegram editor-noop-suspicious warning
+        if: "success() && env.EDITOR_NOOP_SUSPICIOUS == 'true' && env.PR_CLOSED != 'true'"
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          MSG="⚠️ Editor no-op suspicious: #${PR_NUMBER}"
+          MSG+=$'\n'
+          MSG+="Editor claimed no changes needed but disposition could not be verified."
+          MSG+=$'\n'
+          MSG+="Auto-merge blocked. Manual review or re-run required."
+          MSG+=$'\n'
+          MSG+="PR: ${PR_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+
+          BODY="⚠️ **Editor no-op suspicious** — the editor claimed no changes were needed but the disposition could not be verified."
+          BODY+=$'\n\n'
+          BODY+="Possible causes: editor failed silently, did not read reviewer files, or audit counts are inconsistent."
+          BODY+=$'\n'
+          BODY+="Auto-merge has been **blocked**. Please review the editor summary and re-run the workflow if appropriate."
+          gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
 
       - name: Telegram review-blocked judge decision
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true'
