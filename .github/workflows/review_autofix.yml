@@ -1994,11 +1994,23 @@ jobs:
             ' "${EDITOR_SUMMARY_FILE}")"
 
             # Check if the section contains substantive entries (not just
-            # "- none" variants).
+            # "- none" variants or investigation-report lines that explicitly
+            # state no changes were made).
             has_real_changes="false"
             if [ -n "${changes_section}" ]; then
-              # Strip lines that are blank or match "- none*"
-              substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' || true)"
+              # Strip lines that are blank, match "- none*", or explicitly
+              # declare that no file/code/repository changes were required.
+              # The editor sometimes writes descriptive investigation bullets
+              # under "Changes made:" even when no actual modifications were
+              # performed (e.g. "- Validated ... no repository file changes
+              # were required").  These must not be counted as claimed changes.
+              substantive="$(printf '%s\n' "${changes_section}" \
+                | grep -vE '^[[:space:]]*$' \
+                | grep -vE '^[[:space:]]*-[[:space:]]*none' \
+                | grep -viE 'no (repository |repo |code |file )?changes (were |was )?(required|needed|made|necessary)' \
+                | grep -viE 'no (repository |repo |code |file )?(modifications|edits) (were |was )?(required|needed|made|necessary)' \
+                | grep -viE 'no .* file changes were required' \
+                || true)"
               if [ -n "${substantive}" ]; then
                 has_real_changes="true"
               fi

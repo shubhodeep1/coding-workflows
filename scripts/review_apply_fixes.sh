@@ -572,7 +572,13 @@ while [ "${attempt}" -le 3 ]; do
           /^[[:space:]]*Changes made:/ { in_s=1; next }
           in_s && /^[[:space:]]*[A-Za-z].*:/ { exit }
           in_s { print }
-        ' "${tmp_output}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' || true)"
+        ' "${tmp_output}" \
+          | grep -vE '^[[:space:]]*$' \
+          | grep -vE '^[[:space:]]*-[[:space:]]*none' \
+          | grep -viE 'no (repository |repo |code |file )?changes (were |was )?(required|needed|made|necessary)' \
+          | grep -viE 'no (repository |repo |code |file )?(modifications|edits) (were |was )?(required|needed|made|necessary)' \
+          | grep -viE 'no .* file changes were required' \
+          || true)"
 
         if [ -n "${_claimed_changes}" ]; then
           # Editor claims it made changes — verify git agrees.
