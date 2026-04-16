@@ -350,6 +350,7 @@ def _run_poller(
 	gql_labels: dict[int, list[str]] | None = None,
 	codex_json: dict | None = None,
 	fail_validation_dispatch: bool = False,
+	fail_release_dispatch: bool = False,
 	prs: list[dict] | None = None,
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
@@ -460,6 +461,7 @@ def _run_poller(
 			"label_batch_graphql_calls": 0,
 			"issue_label_calls": {},
 			"fail_validation_dispatch": fail_validation_dispatch,
+			"fail_release_dispatch": fail_release_dispatch,
 			"default_branch": "main",
 			"prs": prs,
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
@@ -591,6 +593,9 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 		save()
 		sys.exit(0)
 	if wf == 'test-and-mark-stable.yml':
+		if store.get('fail_release_dispatch'):
+			print('dispatch failed', file=sys.stderr)
+			sys.exit(1)
 		dispatch = {'workflow': wf}
 		for i, arg in enumerate(args):
 			if arg == '-f' and i + 1 < len(args):
@@ -1516,6 +1521,22 @@ def test_comprehensive_pending_failed_does_not_dispatch_release():
 	assert result["latest_state"]["status"] == "failed"
 	assert result["release_dispatches"] == []
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
+
+
+def test_comprehensive_pending_complete_dispatch_failure_is_retryable():
+	state = _base_state(status="complete")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		issue_labels={10: ["ai:merged"]},
+		fail_release_dispatch=True,
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["release_dispatches"] == []
+	assert "ai:comprehensive-test-pending" in result["tracking_labels"]
 
 
 def test_wave_judge_uses_integration_branch_context_when_available():

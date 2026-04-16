@@ -2824,6 +2824,11 @@ handle_comprehensive_release_callback_if_needed() {
         msg+=$'\n'"test_repo: ${test_repo}"
       fi
       tg_notify "${msg}" "DEBUG"
+
+      jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at}' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment
     else
       msg="Comprehensive release callback failed for project #${TRACKING_NUM}."
       msg+=$'\n'"Workflow: test-and-mark-stable.yml"
@@ -2832,12 +2837,8 @@ handle_comprehensive_release_callback_if_needed() {
         msg+=$'\n'"Error: ${COMPREHENSIVE_RELEASE_DISPATCH_ERROR}"
       fi
       tg_notify "${msg}" "CRITICAL"
+      return 0
     fi
-
-    jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at}' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
   elif [ "${project_status}" = "failed" ] || [ "${project_status}" = "validation-failed" ]; then
     tg_notify "Comprehensive pipeline aborted for project #${TRACKING_NUM} (status: ${project_status}). Release workflow not dispatched." "CRITICAL"
 
