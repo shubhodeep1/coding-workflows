@@ -888,7 +888,7 @@ jobs:
           - If any answer is missing, contradictory, or unclear after best-effort interpretation,
             do NOT guess: return clarification questions in the codex_system_instructions.md
             mandatory Q<ID>/Choices format and state that clarification is required before planning.
-          - Use web search when needed to validate unknowns.
+          - Use repo documentation only; no external web searches.
           - If implementation requires calling external APIs/services, read their official API
             docs and include concrete endpoint/method/parameter details in the plan so the
             implementation editor can execute without web access.
@@ -1075,12 +1075,12 @@ jobs:
             --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
 
           {
-            echo "Planning blocked: human input required."
-            echo
-            echo "Reason: ${BLOCKED_REASON}"
-            echo
-            echo "Auto-answer has been paused to avoid unsatisfiable clarification loops."
-            echo "Provide the required input, then reply with /answer."
+            printf '%s\n' "Planning blocked: human input required."
+            printf '\n'
+            printf '%s\n' "Reason: ${BLOCKED_REASON}"
+            printf '\n'
+            printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
+            printf '%s\n' "Provide the required input, then reply with /answer."
           } > "${PLAN_COMMENT_FILE}"
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \

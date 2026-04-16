@@ -1576,18 +1576,20 @@ prepare_tracking_judge_checkout() {
   fi
 
   if target_ref="$(resolve_branch_analysis_ref "${target_branch}")"; then
-    if ! git checkout -q "${target_ref}" >/dev/null 2>&1 && ! git checkout -q "${target_branch}" >/dev/null 2>&1; then
+    if ! git checkout -q "${target_branch}" >/dev/null 2>&1 && ! git checkout -q "${target_ref}" >/dev/null 2>&1; then
       if [ -n "${integration_branch}" ]; then
-        mark_integration_branch_missing_failed "${integration_branch}"
+        echo "::error::Integration branch '${integration_branch}' exists but could not be checked out for judge context (resolved ref '${target_ref}')." >&2
         return 1
       fi
+      JUDGE_EXECUTION_SOURCE="current_ref"
       echo "::warning::Could not check out '${target_branch}' for judge context; continuing on current ref." >&2
     fi
   else
     if [ -n "${integration_branch}" ]; then
-      mark_integration_branch_missing_failed "${integration_branch}"
+      echo "::error::Integration branch '${integration_branch}' exists but its analysis ref could not be resolved for judge context." >&2
       return 1
     fi
+    JUDGE_EXECUTION_SOURCE="current_ref"
     echo "::warning::Could not resolve '${target_branch}' for judge context; continuing on current ref." >&2
   fi
 

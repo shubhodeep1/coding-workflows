@@ -733,7 +733,7 @@ jobs:
           1. Determine if the issue is clear enough to implement.
           2. If clarification is required, ask concise clarification questions.
           3. Ask only essential questions needed for implementation.
-          4. Use web search when needed to resolve unknowns before asking questions.
+          4. Use repo documentation only; no external web searches.
           5. If external APIs/services are likely required, review their official API docs and identify the expected endpoints and parameters so planning can include concrete call details for an offline editor.
           6. Use Serena MCP tools (get_symbols_overview, find_symbol) when available to explore
              the codebase efficiently. This helps you understand code structure with fewer tokens.
@@ -985,12 +985,12 @@ jobs:
 
           BLOCKED_COMMENT_FILE="${RUNTIME_DIR}/blocked_comment.md"
           {
-            echo "Clarification blocked: human input required."
-            echo
-            echo "Reason: ${BLOCKED_REASON}"
-            echo
-            echo "Auto-answer has been paused to avoid unsatisfiable clarification loops."
-            echo "Provide the required input, then run /reclarify or continue with /answer as appropriate."
+            printf '%s\n' "Clarification blocked: human input required."
+            printf '\n'
+            printf '%s\n' "Reason: ${BLOCKED_REASON}"
+            printf '\n'
+            printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
+            printf '%s\n' "Provide the required input, then run /reclarify or continue with /answer as appropriate."
           } > "${BLOCKED_COMMENT_FILE}"
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
