@@ -1,0 +1,15 @@
+{
+	"$schema_version": "hot_files.v1",
+	"description": "OPTIONAL human-curated seed for the orchestrator partition guard. Consumer repositories do NOT need to create this file — the effective hot-file set is learned automatically from real merge-conflict telemetry stored on the ai-memory branch at ai-memory/orchestrator/merge_conflicts.jsonl. The poller writes a JSONL record every time probe_sibling_merge_conflicts() in scripts/orchestrate_poll_process.sh detects a byte-level conflict; the orchestrator reads it at plan time and promotes files meeting a threshold (≥3 conflict events across ≥2 distinct projects in the last 90 days) to the effective set, unioning with this committed seed if present. Both sources are optional — empty is a valid state that still gets pairwise partition detection + byte-level merge-tree probing. Use this file when you want to pre-educate the orchestrator about known god-files BEFORE they accumulate telemetry. The seed list below reflects THIS repo's hot spots as observed on projects like #1017.",
+	"hot_files": [
+		"README.md",
+		"agents.md",
+		"scripts/orchestrate_poll_process.sh",
+		"scripts/orchestrate_lib.py",
+		".github/workflows/implement.yml",
+		".github/workflows/orchestrate.yml",
+		".github/workflows/orchestrate_poll.yml",
+		"prompts/mode-orchestrate.txt",
+		"prompts/mode-implement.txt"
+	]
+}

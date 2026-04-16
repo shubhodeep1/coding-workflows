@@ -690,6 +690,11 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 
 ## Required Variables
 
+<!-- anchor:required-variables-table -->
+<!-- Parallel orchestrator sub-issues: append new env vars to the BOTTOM
+     of this table directly under this anchor. Do NOT reorder existing
+     rows or reflow the table — parallel sub-issues inserting rows in
+     the middle is a classic merge-conflict generator. -->
 | Variable | Default | Description |
 |---|---|---|
 | `WORKFLOW_EDITOR_MODEL` | `openai/gpt-5.3-codex` | Model for code editing tasks |
@@ -787,6 +792,10 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `SEMANTIC_CACHE_MAX_CANONICAL_CHARS` | `50000` | Maximum canonical input length for cache key generation (longer inputs skip cache lookup/store) |
 | `SERENA_WARN_THRESHOLD_IMPLEMENT` | `50` | Minimum Serena efficiency (%) before implement emits low-adoption warning |
 | `SERENA_WARN_THRESHOLD_REVIEW` | `50` | Minimum Serena efficiency (%) before review_autofix emits low-adoption warning |
+| `MAX_MERGE_DEFERRALS` | `5` | Max consecutive poll cycles a single sub-PR may be deferred by the pre-merge sibling-conflict probe (`probe_sibling_merge_conflicts` in `scripts/orchestrate_poll_process.sh`). The probe runs `git merge-tree --write-tree --name-only` locally against every other open sub-PR targeting the same integration branch before invoking `gh pr merge --squash`. When a textual conflict is detected, the candidate PR is skipped for the cycle and the deferral counter on its wave entry is incremented. Exceeding `MAX_MERGE_DEFERRALS` triggers a Telegram WARNING for human review but does not mark the PR failed — the probe is a merge-ordering nudge, not a gate. Set lower for more aggressive human escalation or higher to give auto-serialization more room. Every detected conflict also emits a telemetry event to `ai-memory/orchestrator/merge_conflicts.jsonl` on the `ai-memory` branch (git protocol only, zero GH API calls) so the next orchestrator run can auto-learn hot files without any manual seed file. |
+| `ORCHESTRATOR_HOT_FILE_WINDOW_DAYS` | `90` | Lookback window for the auto-learned hot-file set computed at plan time from `ai-memory/orchestrator/merge_conflicts.jsonl`. A path is promoted to "hot" when it appears in at least `ORCHESTRATOR_HOT_FILE_MIN_EVENTS` distinct conflict events across at least `ORCHESTRATOR_HOT_FILE_MIN_PROJECTS` distinct orchestrator projects within this window. Older events drop out automatically — no persistent "demotion" state is kept. |
+| `ORCHESTRATOR_HOT_FILE_MIN_EVENTS` | `3` | Minimum distinct conflict events required to promote a path to the learned hot-file set. Lower for faster reaction, higher for less noise. |
+| `ORCHESTRATOR_HOT_FILE_MIN_PROJECTS` | `2` | Minimum distinct orchestrator projects required to promote a path. Prevents a single runaway project from skewing the set. |
 
 ## Semantic Cache (Clarification Only)
 
@@ -911,6 +920,14 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 
 ### How it works
 
+<!-- anchor:orchestrator-pipeline-steps -->
+<!-- Parallel orchestrator sub-issues: when you need to document a new
+     pipeline step or behavior here, insert new prose directly under this
+     anchor with an append-only `Na.` / `Nb.` suffixed bullet. Do NOT
+     renumber existing steps and do NOT reflow the paragraphs below —
+     multiple siblings editing this list in parallel is a known conflict
+     generator, and the partition guard will serialize waves that touch
+     the same anchor. See prompts/mode-orchestrate.txt. -->
 1. **Pre-LLM short-circuit (cost guard):** If `project_description` is short (`<= ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS`, default `1200`) and has no multi-step markers (`step\s*\d|phase\s*\d|wave\s*\d|\bthen\b|\bafter\b|\band\s+then\b|multi[- ]?step`), orchestrate skips decomposer entirely and creates exactly one plain issue from the description. This path does not apply orchestrator labels and does not create tracking issue, integration branch, state comment, or wave dispatch.
 2. **Decomposition (default path):** When the short-circuit condition is not met, the LLM reads your repo and breaks the project into scoped issues with a dependency graph. If decomposition returns exactly one issue, orchestrate creates a single standalone issue (labels: `ai:clarification`, `ai:orchestrator-managed`, `ai:orchestrator-validate-required`) without creating a tracking issue or integration branch. Otherwise it creates a tracking issue (labeled `ai:orchestrator-tracking`).
 3. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically. If clarification questions are raised, the `orchestrate_clarify_respond` workflow answers them automatically using an LLM. When `plan.yml` emits structured `Q<ID>` clarification blocks with single-letter `(RECOMMENDED)` options for every question, `plan.yml` now posts a synthesized `/answer Q1: A, ... [auto-answered-by-orchestrator]`; if parsing fails or any recommendation is non-single-letter (for example `A+C`), it does not auto-answer and keeps the human `/answer` loop.
