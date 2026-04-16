@@ -1,0 +1,22 @@
+{
+  "etag": null,
+  "fetched_at": "2026-04-16T21:40:04Z",
+  "repository": "owner/repo",
+  "runs": [
+    {
+      "conclusion": null,
+      "created_at": "2026-04-16T00:00:00Z",
+      "event": "pull_request",
+      "head_branch": "ai/issue-1",
+      "html_url": "https://x",
+      "id": 1,
+      "name": "n",
+      "run_attempt": 1,
+      "status": "in_progress",
+      "updated_at": "2026-04-16T00:00:00Z",
+      "workflow_id": 1
+    }
+  ],
+  "schema_version": "v1",
+  "ttl_seconds": 60
+}
