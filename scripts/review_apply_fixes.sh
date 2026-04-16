@@ -560,10 +560,45 @@ while [ "${attempt}" -le 3 ]; do
       done < "${REVIEWER_MANIFEST_FILE}"
 
       if [ "${reviewer_validation_ok}" = true ]; then
-        mv "${tmp_output}" "${EDITOR_SUMMARY_FILE}"
-        rm -f "${tmp_err}"
-        echo "Editor succeeded on attempt ${attempt}."
-        exit 0
+        # ── Verify claimed changes actually persisted on disk ──
+        # The editor LLM may report "Changes made: [X]" in its text output
+        # while Serena MCP tool calls silently fail to write.  When the
+        # editor claims substantive changes but git sees no diff from HEAD,
+        # treat this attempt as failed so the retry loop can try again.
+        # See: PR #1136, #1137 where this mismatch caused premature
+        # auto-merge of un-fixed PRs.
+        _claimed_changes="$(awk '
+          /^Changes made:/ { in_s=1; next }
+          in_s && /^[A-Za-z].*:/ { exit }
+          in_s { print }
+        ' "${tmp_output}" | grep -vE '^\s*$' | grep -vE '^\s*-\s*none' || true)"
+
+        if [ -n "${_claimed_changes}" ]; then
+          # Editor claims it made changes — verify git agrees.
+          _git_has_diff=false
+          if ! git diff --quiet HEAD 2>/dev/null; then
+            _git_has_diff=true
+          elif [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+            _git_has_diff=true
+          fi
+
+          if [ "${_git_has_diff}" = false ]; then
+            echo "::warning::Editor claimed changes but git shows no diff from HEAD on attempt ${attempt}. Serena tool calls likely failed to persist."
+            echo "Claimed changes (attempt ${attempt}):"
+            printf '%s\n' "${_claimed_changes}" | head -10
+            cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}_changes_lost.txt" || true
+            # Fall through to retry instead of exiting
+            reviewer_validation_ok=false
+          fi
+        fi
+
+        if [ "${reviewer_validation_ok}" = true ]; then
+          mv "${tmp_output}" "${EDITOR_SUMMARY_FILE}"
+          rm -f "${tmp_err}"
+          echo "Editor succeeded on attempt ${attempt}."
+          exit 0
+        fi
+        echo "Editor output passed format/manifest validation but claimed changes did not persist on attempt ${attempt}; retrying."
       fi
       echo "Editor output failed reviewer manifest validation on attempt ${attempt}."
     fi
@@ -598,7 +633,17 @@ if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
   exit 0
 fi
 
-cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
+# If any attempt had changes-lost (editor claimed changes but nothing
+# persisted), prefer that output over the generic fallback so the
+# workflow-level EDITOR_CHANGES_LOST detection can fire and trigger
+# a re-dispatch.  The _changes_lost.txt files are saved by the
+# changes-lost check in the retry loop above.
+_last_changes_lost_file="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*_changes_lost.txt 2>/dev/null | sort -V | tail -n 1 || true)"
+if [ -n "${_last_changes_lost_file}" ] && [ -s "${_last_changes_lost_file}" ]; then
+  cp "${_last_changes_lost_file}" "${EDITOR_SUMMARY_FILE}"
+  echo "Editor failed after retries; using last changes-lost output as summary to trigger workflow-level recovery."
+else
+  cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
 Changes made:
 - none (editor failed before producing a validated summary)
 
@@ -620,8 +665,8 @@ Regression fingerprint:
 Runtime failure path:
 - unavailable (editor fallback)
 __EDITOR_SUMMARY__
-
-echo "Editor failed after retries; continuing with fallback summary."
+  echo "Editor failed after retries; continuing with fallback summary."
+fi
 final_editor_err="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"
 if [ -n "${final_editor_err}" ] && [ -s "${final_editor_err}" ]; then
   echo "Editor stderr from final attempt:"

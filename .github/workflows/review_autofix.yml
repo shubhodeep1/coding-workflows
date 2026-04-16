@@ -3370,6 +3370,52 @@ jobs:
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
+      - name: Re-dispatch review on editor-changes-lost
+        # When the editor claims changes but nothing persisted on disk after
+        # all retry attempts, automatically re-dispatch the review workflow
+        # so the next iteration gets a fresh Serena MCP instance.  Bounded
+        # by the retrigger guard (MAX_AUTOFIX_ITERATIONS) — if the guard is
+        # already exhausted this step is a no-op and the Telegram warning
+        # below escalates to manual review.
+        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true'"
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+
+          echo "Editor changes lost — dispatching fresh review iteration for PR #${PR_NUMBER}."
+          dispatched=false
+
+          if gh workflow run "review_autofix.yml" \
+            --ref "${TARGET_BRANCH}" \
+            -f pr_number="${PR_NUMBER}" \
+            -f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}"; then
+            echo "Dispatched review_autofix.yml on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
+            dispatched=true
+          fi
+
+          if [ "${dispatched}" = "false" ]; then
+            caller_workflow=""
+            if [ -n "${{ github.workflow_ref }}" ]; then
+              caller_workflow="$(printf '%s' "${{ github.workflow_ref }}" | sed -n 's|^[^/]*/[^/]*/\(\.github/workflows/[^@]*\)@.*$|\1|p')"
+            fi
+            if [ -n "${caller_workflow}" ] && [ "${caller_workflow}" != ".github/workflows/review_autofix.yml" ]; then
+              if gh workflow run "${caller_workflow}" \
+                --ref "${TARGET_BRANCH}" \
+                -f pr_number="${PR_NUMBER}"; then
+                echo "Dispatched ${caller_workflow} on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
+                dispatched=true
+              fi
+            fi
+          fi
+
+          if [ "${dispatched}" = "false" ]; then
+            echo "::warning::Could not dispatch review workflow for editor-changes-lost recovery. The next synchronize event or manual re-run is needed."
+          fi
+
+          echo "CHANGES_LOST_REDISPATCHED=${dispatched}" >> "$GITHUB_ENV"
+
       - name: Telegram editor-changes-lost warning
         if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true'"
         env:
@@ -3383,30 +3429,33 @@ jobs:
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          MSG="⚠️ Editor changes lost: #${PR_NUMBER}"
-          MSG+=$'\n'
-          MSG+="Editor claimed changes but nothing was committed."
-          MSG+=$'\n'
-          MSG+="Serena MCP tool calls likely failed to persist."
-          MSG+=$'\n'
-          MSG+="Auto-merge blocked. Manual review required."
-          MSG+=$'\n'
-          MSG+="PR: ${PR_URL}"
-          MSG+=$'\n'
-          MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "CRITICAL"
+          if [ "${CHANGES_LOST_REDISPATCHED:-false}" = "true" ]; then
+            MSG="⚠️ Editor changes lost (retrying): #${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="Serena MCP tool calls failed to persist. Fresh review dispatched."
+            MSG+=$'\n'
+            MSG+="PR: ${PR_URL}"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+          else
+            MSG="⚠️ Editor changes lost (exhausted): #${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="All retries exhausted. Auto-merge blocked."
+            MSG+=$'\n'
+            MSG+="PR: ${PR_URL}"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "CRITICAL"
 
-          # Also post a warning comment on the PR so the issue is visible
-          BODY="⚠️ **Editor changes lost** — the editor reported making changes but no files were modified on disk."
-          BODY+=$'\n\n'
-          BODY+="Auto-merge has been **blocked** to prevent merging without the intended fixes."
-          BODY+=$'\n'
-          BODY+="The Serena MCP tool calls likely failed to persist the edits."
-          BODY+=$'\n\n'
-          BODY+="**Next steps:** re-run the review workflow or apply the changes manually."
-          BODY+=$'\n'
-          BODY+="See the editor summary comment above for the intended changes."
-          gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+            # Post a PR comment only when re-dispatch failed (human attention needed)
+            BODY="⚠️ **Editor changes lost** — the editor reported making changes but no files were modified on disk."
+            BODY+=$'\n\n'
+            BODY+="Auto-merge has been **blocked**. All automated retry attempts have been exhausted."
+            BODY+=$'\n'
+            BODY+="**Next steps:** re-run the review workflow manually or apply the changes from the editor summary above."
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+          fi
 
       - name: Telegram review-blocked judge decision
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true'
