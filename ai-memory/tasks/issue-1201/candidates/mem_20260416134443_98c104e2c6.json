@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping\n- No clarification Q-IDs were issued for this issue.\n- Interpreted answer context: `/answer [auto-answered-by-orchestrator]` means proceed with planning.\n\nPlanning ref context\n- `HEAD`: `a900f1bbc73232d5582c9489c36a9e9c21139564`\n- Checked-out branch: `orchestrator/project-1170`\n- Integration metadata branch: `orchestrator/project-1170`\n- Mismatch: `false` (planning can proceed)\n\nRepresentative pattern to follow\n- Use `.github/workflows/plan.yml` as the implementation pattern for Codex CLI lifecycle: cache/install Codex, write `~/.codex/config.toml` with OpenRouter provider, then run `codex exec` with retries.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/workflow-log-analysis.yml`\n- `README.md` (Workflow Log Analysis trigger/input docs and pending-run wording)\n- `agents.md` only if new env var names are introduced (likely avoid by reusing existing vars/inputs)\n\n2. Functions/modules to implement\n- Workflow trigger/input schema in `.github/workflows/workflow-log-analysis.yml`:\n  - Remove `schedule`.\n  - Keep `workflow_dispatch`.\n  - Add dispatch inputs: `since`, `codex_mode`, `batch_api_disabled`.\n  - Keep compatible existing inputs: `lookback_days`, `repos_override`.\n- Collect phase argument resolution:\n  - In `collect-logs` job, choose `--since` when provided, otherwise `--lookback-days`.\n  - Keep repository resolution logic unchanged.\n- Codex-first analysis path in `analyze-commit-notify`:\n  - Add Codex install/restore steps (same pattern as `plan.yml`).\n  - Add Codex config step with OpenRouter, `web_search=\"live\"`, reasoning effort forced to `medium`.\n  - Codex path flow:\n    - Run `python3 scripts/analyze_workflow_logs.py --codex-mode ...` to emit `analysis_context.json`.\n    - Build prompt from `prompts/mode-workflow-analysis.txt` + generated context.\n    - Run `codex exec --model <workflow-analysis-model> --full-auto`.\n    - Persist markdown report path and expose `report_file` / `analysis_status=completed`.\n- Non-codex fallback path:\n  - Preserve existing analyzer execution and batch-state polling behavior.\n  - Respect `batch_api_disabled` input as override while retaining existing env default behavior.\n- Output/notification alignment:\n  - Keep commit target branch behavior (`github.ref_name`) and current commit step gating.\n  - Keep batch-state artifact behavior for fallback mode.\n  - Update pending message text to reference future manual dispatch (not scheduled run).\n\n3. Data structures affected\n- `workflow_dispatch.inputs` object in workflow YAML.\n- `COLLECT_ARGS` construction in collect job (window arg now `since` or `lookback_days`).\n- `steps.analyze.outputs` contract (`report_file`, `analysis_status`, optional `batch_state_file`) across both codex and fallback paths.\n\n4. API/interface changes\n- Manual workflow interface changes:\n  - New optional input `since` (ISO-8601 timestamp; forwarded to collector).\n  - New input `codex_mode` (default codex-first execution on workflow_dispatch).\n  - New input `batch_api_disabled` (dispatch-time override for analyzer batch behavior).\n- Backward compatibility:\n  - Keep `lookback_days` and `repos_override`.\n  - Keep fallback non-codex mode executable from dispatch.\n\n5. Potential risks and edge cases\n- Invalid `since` format causes collector failure; surface explicit error without silent fallback.\n- Removing cron means pending async batch fallback will only progress on future manual dispatches; notification copy must reflect this.\n- Codex output may be empty/non-markdown; keep retry and non-empty validation before commit.\n- Ensure codex-mode path does not break existing commit/no-op detection.\n- Avoid introducing additional `gh api` calls; reuse current artifact fetch/poll logic as-is for fallback mode.\n\n6. Testing considerations\n- Static checks: `actionlint` and YAML lint on modified workflow/docs.\n- Manual dispatch tests:\n  - `codex_mode=true` + `since` provided.\n  - `codex_mode=true` + only `lookback_days`.\n  - `codex_mode=false` with default batch behavior.\n  - `codex_mode=false` with `batch_api_disabled=true`.\n- Behavioral verification:\n  - Report file generated and committed when changed.\n  - No-op commit path still clean.\n  - Batch-state artifact upload/download still works in fallback mode.\n  - Telegram message text matches no-schedule behavior.\n\nConflict detection (issue vs current codebase)\n- Issue expects no scheduled trigger; current workflow still has `schedule` cron.\n- Issue expects codex-first dispatch analysis; current workflow runs only Python analyzer inference path (no Codex CLI path).\n- Issue expects `since`, `codex_mode`, `batch_api_disabled` dispatch inputs; current workflow only has `lookback_days` and `repos_override`.\n- Current pending notification says \u201cdeferred to future scheduled run\u201d, which conflicts with requested schedule removal.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9aa1c81ea9fa776b9370b3d8537d6f63791575e9b74e45ee92dbe5e86d7c5868",
+  "lineage": {
+    "issue_number": 1201,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24513412068",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24513412068",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1201"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416134443_98c104e2c6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1201,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24513412068"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1201",
+  "timestamps": {
+    "created_at": "2026-04-16T13:44:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
