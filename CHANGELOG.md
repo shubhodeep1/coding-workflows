@@ -17,6 +17,10 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 - Extended staged AI memory schema lists to include the new cache schema
   entries for actions runs and workflow log analysis (best-effort staging
   until files exist on support refs).
+- Added H6 cross-run workflow log analysis cache persistence in
+  `scripts/collect_workflow_logs.py` + `scripts/ai_memory_lib.py` using
+  ai-memory branch fail-open reads/writes, ETag-aware run collection, 304
+  snapshot reuse, and 500-entry LRU seen-set trimming for jobs/log archives.
 - Removed all cycle-based runtime reasoning effort downgrades — every phase now
   uses the configured `THINKING_LEVEL_*` as-is (`xhigh` by default) for all cycles:
   - Removed adaptive judge downgrade (`xhigh` → `high` after cycle 3) in `orchestrate_poll_process.sh`.
