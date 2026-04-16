@@ -592,7 +592,11 @@ CRITICAL — importlib dynamic module loading for dependency_auditing import che
     assert spec is not None and spec.loader is not None
     m = importlib.util.module_from_spec(spec)
     sys.modules[mod_name] = m            # must precede exec_module
-    spec.loader.exec_module(m)
+    try:
+        spec.loader.exec_module(m)
+    except Exception:
+        sys.modules.pop(mod_name, None)
+        raise
 - Preferred: avoid low-level `importlib.util.spec_from_file_location` +
   `exec_module` import auditing. Use the sidecar
   pattern from "Preferred pattern A" above with a simple `PYTHONPATH`-based
