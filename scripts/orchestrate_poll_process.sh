@@ -1577,12 +1577,33 @@ prepare_tracking_judge_checkout() {
 
   if target_ref="$(resolve_branch_analysis_ref "${target_branch}")"; then
     if ! git checkout -q "${target_branch}" >/dev/null 2>&1 && ! git checkout -q "${target_ref}" >/dev/null 2>&1; then
-      if [ -n "${integration_branch}" ]; then
-        echo "::error::Integration branch '${integration_branch}' exists but could not be checked out for judge context (resolved ref '${target_ref}')." >&2
-        return 1
+      # Workflow support files (scripts/, prompts/, .github/ai/) installed
+      # from coding-workflows are untracked and can block checkout when the
+      # target branch has overlapping paths.  Back them up, force-checkout,
+      # then restore so render_prompt.sh et al. remain available.
+      local _wf_backup
+      _wf_backup="$(mktemp -d)"
+      for _d in scripts prompts; do
+        [ -d "${_d}" ] && cp -a "${_d}" "${_wf_backup}/${_d}" 2>/dev/null || true
+      done
+      [ -d ".github/ai" ] && { mkdir -p "${_wf_backup}/github_ai"; cp -a ".github/ai/." "${_wf_backup}/github_ai/" 2>/dev/null || true; }
+
+      if git checkout -f -q "${target_ref}" >/dev/null 2>&1; then
+        # Force checkout succeeded — restore workflow support files
+        for _d in scripts prompts; do
+          [ -d "${_wf_backup}/${_d}" ] && { mkdir -p "${_d}"; cp -a "${_wf_backup}/${_d}/." "${_d}/" 2>/dev/null || true; }
+        done
+        [ -d "${_wf_backup}/github_ai" ] && { mkdir -p ".github/ai"; cp -a "${_wf_backup}/github_ai/." ".github/ai/" 2>/dev/null || true; }
+        rm -rf "${_wf_backup}"
+      else
+        rm -rf "${_wf_backup}"
+        if [ -n "${integration_branch}" ]; then
+          echo "::error::Integration branch '${integration_branch}' exists but could not be checked out for judge context (resolved ref '${target_ref}')." >&2
+          return 1
+        fi
+        JUDGE_EXECUTION_SOURCE="current_ref"
+        echo "::warning::Could not check out '${target_branch}' for judge context; continuing on current ref." >&2
       fi
-      JUDGE_EXECUTION_SOURCE="current_ref"
-      echo "::warning::Could not check out '${target_branch}' for judge context; continuing on current ref." >&2
     fi
   else
     if [ -n "${integration_branch}" ]; then
@@ -8735,10 +8756,15 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 
 	echo "  PR #${S_PR} (${S_HEAD_REF}) is in conflicted mergeable state. Attempting conflict recovery..."
 
-	# Stage 1: Try the GitHub API update-branch endpoint (clean merge)
+	# Stage 1: Try the GitHub API update-branch endpoint (clean merge).
+	# A real merge conflict returns HTTP 422 with a JSON body on stdout —
+	# retrying is pointless (the conflict won't resolve itself) and the
+	# body would leak into the log with no newline. Cap retries at 1 and
+	# silence stdout while preserving stderr diagnostics; stage 2 handles
+	# the permanent-failure path.
 	S_HEAD_SHA="$(echo "${S_PR_JSON}" | jq -r '.head.sha // ""')"
-	if [ -n "${S_HEAD_SHA}" ] && gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}/update-branch" \
-		-X PUT -f expected_head_sha="${S_HEAD_SHA}" 2>/dev/null; then
+	if [ -n "${S_HEAD_SHA}" ] && GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}/update-branch" \
+		-X PUT -f expected_head_sha="${S_HEAD_SHA}" >/dev/null; then
 		echo "  PR #${S_PR} branch updated via API. Synchronize event will re-trigger review."
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
 		continue

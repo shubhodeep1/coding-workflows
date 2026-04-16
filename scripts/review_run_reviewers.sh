@@ -168,8 +168,16 @@ PROMPT_RUNTIME_CONTEXT_HINT="$(printf '%s\n' \
   "Example command: cat ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
 
 # Detect whether this is the first review iteration (no prior AI autofix run).
+# Two conditions cover all first-run states:
+# 1. Missing or empty file — workflow never wrote a diff (very first run).
+# 2. Sentinel text — workflow wrote a placeholder string (e.g. "Initial run —
+#    no previous commit" or "No previous AI autofix") instead of a real diff.
+# Without both checks, runs where the workflow writes "Initial run — no
+# previous commit" would fall through and be classified as subsequent.
 IS_FIRST_ITERATION=false
-if grep -q '^No previous AI autofix' "${LAST_RUN_DIFF_FILE}" 2>/dev/null; then
+if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
+  IS_FIRST_ITERATION=true
+elif grep -qE '^(No previous AI autofix|Initial run — no previous commit)' "${LAST_RUN_DIFF_FILE}" 2>/dev/null; then
   IS_FIRST_ITERATION=true
 fi
 
@@ -813,11 +821,11 @@ run_reviewer() {
     # codex config inside the isolated CODEX_HOME so the model uses the
     # desired thinking level without affecting other reviewers.
     if [ -n "${reasoning_level}" ] && [ -f "${reviewer_codex_home}/config.toml" ]; then
-      sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/config.toml" 2>/dev/null || true
+      sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/config.toml" 2>/dev/null || true
     elif [ -n "${reasoning_level}" ] && [ -f "${HOME}/.codex/config.toml" ] && [ -d "${reviewer_codex_home}" ]; then
       # Config might be at the standard location within the isolated home
       if [ -f "${reviewer_codex_home}/.codex/config.toml" ]; then
-        sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/.codex/config.toml" 2>/dev/null || true
+        sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/.codex/config.toml" 2>/dev/null || true
       fi
     fi
     (
@@ -930,8 +938,8 @@ run_reviewer() {
 # ────────────────────────────────────────────────────────────────────────
 
 TWO_PASS_ENABLED=true
-case "${ENABLE_REVIEWER_TWO_PASS:-true}" in
-  0|false|FALSE|no|NO|off|OFF) TWO_PASS_ENABLED=false ;;
+case "$(printf '%s' "${ENABLE_REVIEWER_TWO_PASS:-true}" | tr '[:upper:]' '[:lower:]')" in
+  0|false|no|off) TWO_PASS_ENABLED=false ;;
 esac
 
 # Helper: fan out all reviewer models in parallel for a given pass.
@@ -998,7 +1006,7 @@ build_cross_pollination_summary() {
     for pass1_file in "${PREVIOUS_REVIEWS_DIR}"/pass1_*.txt; do
       [ -f "${pass1_file}" ] || continue
       local model_name
-      model_name="$(basename "${pass1_file}" .txt | sed 's/^pass1_//' | tr '___' '/.:')"
+      model_name="$(basename "${pass1_file}" .txt | sed 's/^pass1_//')"
       # Skip files that contain only failure messages
       if grep -q '^.*failed after retries' "${pass1_file}" 2>/dev/null; then
         continue

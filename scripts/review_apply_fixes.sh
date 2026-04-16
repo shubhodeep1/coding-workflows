@@ -72,6 +72,17 @@ Use ${PR_META_FILE} to understand:
 - PR description
 - overall intent of the change
 
+LINKED ISSUE (ORIGINAL TASK DESCRIPTION)
+$(if [ -s "${LINKED_ISSUE_CONTEXT_FILE:-}" ]; then
+  echo "The following file contains the original issue that triggered this PR."
+  echo "Use it to verify the PR fully implements the requested task and to judge"
+  echo "whether reviewer suggestions align with or contradict the original intent."
+  echo ""
+  echo "File: ${LINKED_ISSUE_CONTEXT_FILE}"
+else
+  echo "No linked issue context available for this PR."
+fi)
+
 REVIEWER INPUTS
 Multiple independent reviewer models have produced review reports.
 Reviewer artifacts are bundled into:
@@ -121,6 +132,26 @@ Before applying any fix:
 Ignore reviewer suggestions that lack clear evidence.
 
 Do not apply fixes based on speculative or hypothetical problems.
+
+PRE-FIX PLANNING STEP (MANDATORY)
+
+Before making ANY code changes, you MUST complete this planning step:
+
+1. Read ALL reviewer outputs from the bundle file
+2. Read the reviewer consensus file
+3. Read all PR comments
+4. Create a complete issue list — write down EVERY issue from ALL sources:
+   - For each issue: file, line, problem summary, source (which reviewer(s) or comment), confidence
+5. Classify each issue as one of:
+   - WILL_FIX: real issue with concrete evidence, within scope
+   - ALREADY_FIXED: the code already handles this correctly
+   - REJECT: speculative, out-of-scope, or incorrect suggestion (note reason)
+6. Sort WILL_FIX issues by priority: confidence score × severity
+7. Execute fixes in priority order, ensuring ALL WILL_FIX items are addressed
+
+This planning step ensures comprehensive coverage. Do not start editing files
+until you have classified every issue. The goal is to fix everything in one pass
+so that subsequent review iterations find minimal remaining issues.
 
 REVIEWER CONSENSUS SIGNAL
 The reviewer consensus file indicates which issues were detected by multiple reviewer models.
@@ -287,6 +318,7 @@ FINAL RESPONSE FORMAT
 Plain text only.
 Output exactly these sections in this order:
 Changes made:
+Change status:
 Already satisfied (suggested but already present):
 Ignored suggestions (with short reason):
 Reviewer files processed:
@@ -309,6 +341,18 @@ Under PR comment audit: include one bullet per bot PR review/review_comment entr
 - path and line (if available)
 - disposition: applied / already satisfied / ignored
 - short reason for the disposition
+Under Change status: emit exactly one bullet whose value is one of:
+- edited
+- not-edited
+This bullet is the authoritative machine-readable signal of whether
+the final working tree ended up with repository file changes. It
+MUST agree with
+"Changes made:": if that section contains any concrete file-change
+claim, emit "- edited"; if it only contains "- none" or equivalent
+no-modification statements (optionally with informational sub-bullets
+for validation runs, assumptions, or missing-context notes), emit
+"- not-edited". Do NOT put any other text, qualifier, or sub-bullet
+under this section — exactly one of those two values, on its own line.
 Under Regression fingerprint: and Runtime failure path:
 - ALWAYS emit both sections, even when no previously changed hunk was
   touched. Each section must contain at least one bullet. The commit
@@ -523,7 +567,7 @@ while [ "${attempt}" -le 3 ]; do
 
   if [ "${cmd_rc}" -eq 0 ]; then
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
-    if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints" "${tmp_output}"; then
+    if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Change status:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints" "${tmp_output}"; then
       reviewer_validation_ok=true
       changes_lost_detected=false
       while IFS= read -r manifest_path; do
@@ -593,7 +637,7 @@ while [ "${attempt}" -le 3 ]; do
           /^[[:space:]]*Changes made:/ { in_s=1; next }
           in_s && /^[[:space:]]*[A-Za-z].*:/ { exit }
           in_s { print }
-        ' "${tmp_output}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|No [^:]*modified|No [^:]*changed|No [^:]*touched|No changes|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' || true)"
+        ' "${tmp_output}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' || true)"
 
         if [ -n "${_claimed_changes}" ]; then
           # Editor claims it made changes — verify git agrees.
@@ -694,6 +738,9 @@ else
   cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
 Changes made:
 - none (editor failed before producing a validated summary)
+
+Change status:
+- not-edited
 
 Already satisfied (suggested but already present):
 - none (editor failed before producing a validated summary)
