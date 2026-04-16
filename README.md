@@ -117,23 +117,23 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `BATCH_API_PROVIDER` | No | `auto` | workflow-log-analysis, memory_maintenance | Batch provider routing hint for OpenRouter Responses API capability checks/submission (`auto`, `openai`, `anthropic`). Unsupported hints fall back to sync with structured warnings. |
 | `BATCH_API_POLL_TIMEOUT_HOURS` | No | `24` | workflow-log-analysis, memory_maintenance | Maximum pending batch age before workflow-log-analysis falls back to synchronous generation. |
 
-**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Defaults are tuned per phase: `medium` for clarify (gap analysis doesn't need deep reasoning), `xhigh` for plan (architectural decisions benefit from maximum reasoning), `high` for implement (follows an existing plan), and `xhigh` for review (last line of defense for catching bugs). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. In `review_autofix`, reviewer effort also auto-schedules by autofix cycle via `REVIEW_REASONING_SCHEDULE` (default: cycle 1 `xhigh`, cycle 2 `high`, cycle 3+ `medium`) unless `REVIEW_AUTODOWNGRADE_DISABLED=true`. **E2E smoke test override has highest precedence:** when an issue title contains `[E2E Smoke Test]`, review/edit still force `low` reasoning regardless of schedule/kill-switch so release smoke runs stay cheap and fast.
+**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. All phases default to `xhigh` (maximum reasoning depth). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. In `review_autofix`, reviewer effort also auto-schedules by autofix cycle via `REVIEW_REASONING_SCHEDULE` (default: `xhigh,xhigh,xhigh`) unless `REVIEW_AUTODOWNGRADE_DISABLED=true`. **E2E smoke test override has highest precedence:** when an issue title contains `[E2E Smoke Test]`, review/edit still force `low` reasoning regardless of schedule/kill-switch so release smoke runs stay cheap and fast.
 
 | Variable | Default | Used By | Description |
 |---|---|---|---|
-| `THINKING_LEVEL_CLARIFY` | `medium` | clarify | Reasoning effort for the clarification phase |
-| `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `high` | clarify | Reasoning effort used only when clarify runs Codex for `ai:orchestrator-managed` issues on forced human `/reclarify` |
+| `THINKING_LEVEL_CLARIFY` | `xhigh` | clarify | Reasoning effort for the clarification phase |
+| `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `xhigh` | clarify | Reasoning effort used only when clarify runs Codex for `ai:orchestrator-managed` issues on forced human `/reclarify` |
 | `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
-| `THINKING_LEVEL_IMPLEMENT` | `high` | implement | Reasoning effort for the implementation phase |
-| `THINKING_LEVEL_ANALYSIS` | `medium` | workflow-log-analysis | Reasoning effort for the workflow log analysis report generation. |
+| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
+| `THINKING_LEVEL_ANALYSIS` | `xhigh` | workflow-log-analysis | Reasoning effort for the workflow log analysis report generation. |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
-| `THINKING_LEVEL_EDITOR` | `high` | review_autofix | Reasoning effort for the editor model (applying fixes) |
+| `THINKING_LEVEL_EDITOR` | `xhigh` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
-| `THINKING_LEVEL_ORCHESTRATE` | `medium` | orchestrate | Reasoning effort for project decomposition |
+| `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | orchestrate | Reasoning effort for project decomposition |
 | `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation (`xhigh` for cycles 1-3, automatically `high` from cycle 4 onward) |
-| `THINKING_LEVEL_CLARIFY_RESPOND` | `low` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
-| `THINKING_LEVEL_VALIDATE` | `high` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
-| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | orchestrate_poll | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
+| `THINKING_LEVEL_CLARIFY_RESPOND` | `xhigh` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
+| `THINKING_LEVEL_VALIDATE` | `xhigh` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
+| `THINKING_LEVEL_CONFLICT_RESOLVER` | `xhigh` | orchestrate_poll | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 **Tool call budgets** — soft limits on the number of MCP + shell tool calls per phase. The LLM treats these as guidelines; it may exceed them for large refactors that span many files.
 
 | Variable | Default | Used By | Description |
@@ -703,7 +703,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ALLOW_WORKFLOW_EDITS` | `true` | Allow AI edits to workflow files and automatic wrapper updates |
 | `ENABLE_AUTO_MERGE` | `true` | Auto-merge PRs (squash) when review passes and checks are green |
 | `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before marking `ai:review-blocked` |
-| `REVIEW_REASONING_SCHEDULE` | `xhigh,high,medium` | Reviewer autofix-cycle reasoning schedule (`cycle1,cycle2,cycle3+`) |
+| `REVIEW_REASONING_SCHEDULE` | `xhigh,xhigh,xhigh` | Reviewer autofix-cycle reasoning schedule (`cycle1,cycle2,cycle3+`) |
 | `REVIEW_AUTODOWNGRADE_DISABLED` | `false` | Disable reviewer cycle schedule and keep fixed `THINKING_LEVEL_REVIEWER` |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | `true` | Enable review-blocked judge for non-orchestrator PRs |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | Reasoning effort for review-blocked judge |
@@ -746,14 +746,14 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `AI_MEMORY_KEYWORD_MODEL` | `openai/gpt-5-mini` | Model for semantic keyword extraction during retrieval |
 | `AI_MEMORY_KEYWORD_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL for keyword model |
 | `AI_MEMORY_TOKEN_BUDGET_<ROLE>` | _(from profile)_ | Per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`) |
-| `THINKING_LEVEL_CLARIFY` | `medium` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
-| `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `high` | Clarify-only override for forced human `/reclarify` on `ai:orchestrator-managed` issues (normal clarify path auto-posts `/answer [auto-answered-by-orchestrator]` without Codex) |
+| `THINKING_LEVEL_CLARIFY` | `xhigh` | Reasoning effort for clarification (`xhigh`, `high`, `medium`, `low`) |
+| `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` | `xhigh` | Clarify-only override for forced human `/reclarify` on `ai:orchestrator-managed` issues (normal clarify path auto-posts `/answer [auto-answered-by-orchestrator]` without Codex) |
 | `THINKING_LEVEL_PLAN` | `xhigh` | Reasoning effort for planning |
-| `THINKING_LEVEL_IMPLEMENT` | `high` | Reasoning effort for implementation |
-| `THINKING_LEVEL_ANALYSIS` | `medium` | Reasoning effort for workflow log analysis report generation |
+| `THINKING_LEVEL_IMPLEMENT` | `xhigh` | Reasoning effort for implementation |
+| `THINKING_LEVEL_ANALYSIS` | `xhigh` | Reasoning effort for workflow log analysis report generation |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | Reasoning effort for reviewer models (bug detection) |
-| `THINKING_LEVEL_EDITOR` | `high` | Reasoning effort for editor model (applying fixes) |
-| `REVIEW_REASONING_SCHEDULE` | `xhigh,high,medium` | Reviewer autofix-cycle schedule override (`xhigh|high|medium|low`, comma-separated) |
+| `THINKING_LEVEL_EDITOR` | `xhigh` | Reasoning effort for editor model (applying fixes) |
+| `REVIEW_REASONING_SCHEDULE` | `xhigh,xhigh,xhigh` | Reviewer autofix-cycle schedule override (`xhigh|high|medium|low`, comma-separated) |
 | `REVIEW_AUTODOWNGRADE_DISABLED` | `false` | Reviewer schedule kill switch (`true` keeps fixed reviewer effort) |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
 | `TOOL_CALL_BUDGET_PLAN` | `40` | Tool call budget for planning |
@@ -762,7 +762,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `TOKEN_WARN_THRESHOLD_PLAN` | `200000` | Token warning threshold for planning |
 | `TOKEN_WARN_THRESHOLD_IMPLEMENT` | `200000` | Token warning threshold for implementation |
 | `WORKFLOW_ORCHESTRATE_MODEL` | (falls back to `WORKFLOW_EDITOR_MODEL`) | Model override for orchestrator/judge |
-| `THINKING_LEVEL_ORCHESTRATE` | `medium` | Reasoning effort for project decomposition |
+| `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | Reasoning effort for project decomposition |
 | `THINKING_LEVEL_JUDGE` | `xhigh` | Reasoning effort for judge evaluation (`xhigh` for cycles 1-3, automatically `high` from cycle 4 onward) |
 | `ORCHESTRATE_POLL_INTERVAL` | `30` | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
 | `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` | `1200` | Pre-LLM short-circuit threshold for creating a single plain issue when no multi-step markers are detected |
@@ -776,9 +776,9 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `TOOL_CALL_BUDGET_ORCHESTRATE` | `40` | Tool call budget for decomposer |
 | `TOOL_CALL_BUDGET_JUDGE` | `60` | Tool call budget for judge (needs deep repo inspection) |
 | `TOKEN_WARN_THRESHOLD_ORCHESTRATE` | `200000` | Token warning threshold for orchestration |
-| `THINKING_LEVEL_CLARIFY_RESPOND` | `low` | Reasoning effort for auto-answering clarification questions |
-| `THINKING_LEVEL_VALIDATE` | `high` | Reasoning effort for runtime validation harness generation and diagnosis |
-| `THINKING_LEVEL_CONFLICT_RESOLVER` | `medium` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
+| `THINKING_LEVEL_CLARIFY_RESPOND` | `xhigh` | Reasoning effort for auto-answering clarification questions |
+| `THINKING_LEVEL_VALIDATE` | `xhigh` | Reasoning effort for runtime validation harness generation and diagnosis |
+| `THINKING_LEVEL_CONFLICT_RESOLVER` | `xhigh` | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
 | `TOOL_CALL_BUDGET_CLARIFY_RESPOND` | `15` | Tool call budget for auto-answering clarification questions |
 | `TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND` | `80000` | Token warning threshold for auto-answering clarification questions |
 | `SEMANTIC_CACHE_BACKEND` | `none` | Semantic cache backend selector for clarification workloads: `none`, `redis`, `sqlite-vec` |
