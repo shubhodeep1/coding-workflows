@@ -1987,25 +1987,57 @@ jobs:
             # "- none" variants or explicit "no modifications" statements).
             has_real_changes="false"
             if [ -n "${changes_section}" ]; then
-              # If the first non-blank line is a "- none" variant (with any
-              # trailing description), treat the entire section as "no changes".
+              # If the first non-blank line is a "- none" variant or an
+              # explicit "no (repository) files were modified / no changes
+              # made / no modifications" declaration (with any trailing
+              # description), treat the entire section as "no changes".
               # Editors may append informational bullets (validation runs,
-              # missing-context notes) below "- none" that are not real
-              # file-change claims; without this guard those bullets trigger
-              # a false-positive EDITOR_CHANGES_LOST error.
+              # missing-context notes, action summaries that reference
+              # backtick-quoted filenames) below such declarations that are
+              # not real file-change claims; without this guard those bullets
+              # trigger a false-positive EDITOR_CHANGES_LOST error because
+              # edit_claim_regex loosely matches substrings like `change`
+              # inside `last_run_changed_files.txt` or any backtick-wrapped
+              # filename reference.
               first_line="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | head -1 || true)"
               # Strip lines that are blank, match "- none*", or are
               # informational metadata bullets (e.g. "- Validation executed").
               substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed' || true)"
               edit_claim_regex='modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)|`[^`]+\.[[:alpha:]]+`'
-              if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)'; then
+              # Stricter bullet-start edit regex for multi-line contradiction checks.
+              bullet_edit_regex='^[[:space:]]*-[[:space:]]*(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))([[:space:][:punct:]]|$)'
+              if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*(no (repository )?files (were )?modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$'; then
+                # Explicit "no files modified / no changes made / no
+                # modifications" first-bullet is a deliberate declaration
+                # from the editor. Trust it and short-circuit to "no real
+                # changes" — the remainder check below is too loose
+                # (edit_claim_regex matches backtick-wrapped filename
+                # references in purely informational bullets like
+                # "- Actions taken: reviewed `pr_meta.json`" or
+                # "- Missing-context note: `AGENTS.md` was absent"), and
+                # would fire a false-positive EDITOR_CHANGES_LOST error.
+                # Same-line contradictions ("no files modified but updated
+                # X") and multi-line explicit edit bullets are still caught.
+                if [ -n "${substantive}" ]; then
+                  if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files (were )?modified|no changes (were )?made|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
+                    has_real_changes="true"
+                  else
+                    # Multi-line contradiction detection: check remaining
+                    # bullets for explicit edit verbs at bullet start.
+                    remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files (were )?modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$' || true)"
+                    if printf '%s\n' "${remainder}" | grep -qiE "${bullet_edit_regex}"; then
+                      has_real_changes="true"
+                    fi
+                  fi
+                fi
+              elif printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)'; then
                 # Preserve contradictory summaries such as "- none" followed
                 # by "- created ...".
                 if [ -n "${substantive}" ]; then
-                  if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files were modified|no changes (were )?made|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
+                  if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files (were )?modified|no changes (were )?made|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
                     has_real_changes="true"
                   else
-                    remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files were modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$' || true)"
+                    remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files (were )?modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$' || true)"
                     if printf '%s\n' "${remainder}" | grep -qiE "${edit_claim_regex}"; then
                       has_real_changes="true"
                     fi
@@ -2018,15 +2050,15 @@ jobs:
                 # explicit "no changes" lines for contradiction detection.
                 substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed' || true)"
                 if [ -n "${substantive}" ]; then
-                  if printf '%s\n' "${substantive}" | grep -qiE 'no (repository )?files were modified|no changes (were )?made|no modifications'; then
+                  if printf '%s\n' "${substantive}" | grep -qiE 'no (repository )?files (were )?modified|no changes (were )?made|no modifications'; then
                     # Preserve contradictory mixed lines ("no changes, but
                     # updated ...") so they still count as real change claims.
-                    if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files were modified|no changes (were )?made|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
+                    if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files (were )?modified|no changes (were )?made|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
                       has_real_changes="true"
                     else
                       # Remove standalone no-modification declarations, but
                       # still detect mixed sections that claim concrete edits.
-                      remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files were modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$' || true)"
+                      remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files (were )?modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$' || true)"
                       if printf '%s\n' "${remainder}" | grep -qiE "${edit_claim_regex}"; then
                         has_real_changes="true"
                       fi
