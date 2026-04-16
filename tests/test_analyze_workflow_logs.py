@@ -72,6 +72,25 @@ def test_truncate_to_budget_drops_deep_dive_before_recent_runs():
 	assert trimmed["truncation"]["removed"]["recent_runs"] == 0
 
 
+def test_truncate_to_budget_zero_budget_preserves_fields():
+	context = {
+		"summary": {"total_runs": 2},
+		"deep_dive_logs": [{"name": "a.log", "excerpt": "x" * 1000}],
+		"recent_runs": [{"run_id": 1, "detail": "y" * 200}],
+		"slow_runs": [{"run_id": 2}],
+		"failing_runs": [],
+		"errors": [],
+		"per_repo": {"owner/repo": {"total_runs": 2}},
+		"per_workflow_family": {"plan": {"total_runs": 2}},
+	}
+	trimmed = analyzer.truncate_to_budget(context, 0)
+	assert trimmed["deep_dive_logs"] == context["deep_dive_logs"]
+	assert trimmed["recent_runs"] == context["recent_runs"]
+	assert trimmed["truncation"]["prompt_token_budget"] == 0
+	assert trimmed["truncation"]["removed"]["deep_dive_logs"] == 0
+	assert "truncation" not in context
+
+
 def test_build_parser_thinking_level_defaults_to_xhigh():
 	args = analyzer.build_parser().parse_args([])
 	assert args.thinking_level == "xhigh"
