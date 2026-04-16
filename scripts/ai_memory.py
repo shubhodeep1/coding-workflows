@@ -613,6 +613,7 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
                 "result": result,
             }
         )
+        _emit_telemetry("clarify-loop-guard", ok=True, enabled=False, blocked=bool(result.get("blocked")), cycle=_safe_int(result.get("cycle")), entries_considered=0)
         return 0
 
     repo_root = _resolve_repo_root(args.repo_root)
@@ -674,6 +675,7 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
                     "warning": error_text,
                 }
             )
+            _emit_telemetry("clarify-loop-guard", ok=True, enabled=False, blocked=bool(result.get("blocked")), cycle=_safe_int(result.get("cycle")), entries_considered=0, warning="branch_unavailable")
             return 0
         print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
         _print_json(
