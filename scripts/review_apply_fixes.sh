@@ -568,8 +568,8 @@ while [ "${attempt}" -le 3 ]; do
         # See: PR #1136, #1137 where this mismatch caused premature
         # auto-merge of un-fixed PRs.
         _claimed_changes="$(awk '
-          /^Changes made:/ { in_s=1; next }
-          in_s && /^[A-Za-z].*:/ { exit }
+          /^[[:space:]]*Changes made:/ { in_s=1; next }
+          in_s && /^[[:space:]]*[A-Za-z].*:/ { exit }
           in_s { print }
         ' "${tmp_output}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' || true)"
 

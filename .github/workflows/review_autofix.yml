@@ -1975,8 +1975,8 @@ jobs:
             # top-level section header (line starting with a non-dash
             # alphabetic word followed by a colon).
             changes_section="$(awk '
-              /^Changes made:/ { in_section=1; next }
-              in_section && /^[A-Za-z].*:/ { exit }
+              /^[[:space:]]*Changes made:/ { in_section=1; next }
+              in_section && /^[[:space:]]*[A-Za-z].*:/ { exit }
               in_section { print }
             ' "${EDITOR_SUMMARY_FILE}")"
 
@@ -3091,6 +3091,7 @@ jobs:
               install -m 0755 .codex-workflow-src-main/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
               source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             else
+              type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
               ensure_label_exists() {
                 local label_name="$1"
                 local repo="$2"
@@ -3402,9 +3403,13 @@ jobs:
           if [ "${dispatched}" = "false" ]; then
             caller_workflow=""
             if [ -n "${{ github.workflow_ref }}" ]; then
-              caller_workflow="$(printf '%s' "${{ github.workflow_ref }}" | sed -n 's|^[^/]*/[^/]*/\(\.github/workflows/[^@]*\)@.*$|\1|p')"
+              caller_ref="${{ github.workflow_ref }}"
+              caller_workflow="$(basename "${caller_ref%%@*}")"
             fi
-            if [ -n "${caller_workflow}" ] && [ "${caller_workflow}" != ".github/workflows/review_autofix.yml" ]; then
+            if [ -z "${caller_workflow}" ]; then
+              caller_workflow="internal-review.yml"
+            fi
+            if [ "${caller_workflow}" != "review_autofix.yml" ]; then
               if gh workflow run "${caller_workflow}" \
                 --ref "${TARGET_BRANCH}" \
                 -f pr_number="${PR_NUMBER}"; then
