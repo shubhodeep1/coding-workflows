@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml**\nREADME.md**\n`scripts/orchestrate_poll_process.sh`\n`scripts/validate_process.sh`\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/clarify.yml**\n.github/workflows/implement.yml**\n.github/workflows/plan.yml**\nCHANGELOG.md**\n`.github/workflows/implement.yml`\n`.github/workflows/review_autofix.yml`\nscripts/orchestrate_poll_process.sh**\nscripts/validate_process.sh**\ntests/test_orchestrate_poll_process.py**\ntests/test_review_autofix_reasoning_schedule.py**",
+  "fingerprint": "9afc43ec8172bb090ec7ca25435a9384908f3ebb118f930de82f0d62b7d2046c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1182,
+    "run_id": "24506645806",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24506645806",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416111653_437eacd8d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1182,
+    "run_id": "24506645806"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T11:16:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
