@@ -1361,6 +1361,39 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 	state["integration_branch"] = "orchestrator/project-192"
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	# The pr_api_sequence entries are consumed sequentially by every
+	# gh api /pulls/N call.  The reconciliation loop calls
+	# _issue_cross_ref_pr_number_last (which triggers the REST timeline
+	# enrichment path — one extra /pulls/N call) PLUS _fetch_pr_json,
+	# consuming 2 entries before the review-blocked handler even starts.
+	# Provide enough "open" entries so the reconciliation sees the PR as
+	# open (keeping the issue review-blocked) and the review-blocked
+	# handler's own flow sees the open→merged transition.
+	_open_pr = {
+		"number": 901,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+	_merged_pr = {
+		"number": 901,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-04-15T00:00:00Z",
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -1368,45 +1401,7 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
 		pr_api_sequence={
-			901: [
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "closed",
-					"merged": True,
-					"merged_at": "2026-04-15T00:00:00Z",
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-			]
+			901: [_open_pr] * 4 + [_merged_pr],
 		},
 		prs=[
 			{
@@ -1448,6 +1443,32 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 	state["integration_branch"] = "orchestrator/project-192"
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	# Extra open entries for reconciliation timeline enrichment (see
+	# test_review_blocked_merged_followup_retargets_to_integration_branch).
+	_open_pr = {
+		"number": 901,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+	_merged_pr = {
+		"number": 901,
+		"state": "closed",
+		"merged": True,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -1455,44 +1476,7 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
 		pr_api_sequence={
-			901: [
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "closed",
-					"merged": True,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-			]
+			901: [_open_pr] * 4 + [_merged_pr],
 		},
 		prs=[
 			{
@@ -1530,6 +1514,33 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	# Extra open entries for reconciliation timeline enrichment (see
+	# test_review_blocked_merged_followup_retargets_to_integration_branch).
+	_open_pr = {
+		"number": 901,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+	_merged_pr = {
+		"number": 901,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-04-15T00:00:00Z",
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -1537,46 +1548,7 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
 		pr_api_sequence={
-			901: [
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "closed",
-					"merged": True,
-					"merged_at": "2026-04-15T00:00:00Z",
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "closed",
-					"merged": True,
-					"merged_at": "2026-04-15T00:00:00Z",
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-			]
+			901: [_open_pr] * 4 + [_merged_pr],
 		},
 		prs=[
 			{
@@ -1615,6 +1587,33 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 	state["integration_branch"] = "orchestrator/project-192"
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	# Extra open entries for reconciliation timeline enrichment (see
+	# test_review_blocked_merged_followup_retargets_to_integration_branch).
+	_open_pr = {
+		"number": 901,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+	_merged_pr = {
+		"number": 901,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-04-15T00:00:00Z",
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -1622,46 +1621,7 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
 		pr_api_sequence={
-			901: [
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"merged_at": None,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "closed",
-					"merged": True,
-					"merged_at": "2026-04-15T00:00:00Z",
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-			]
+			901: [_open_pr] * 4 + [_merged_pr],
 		},
 		prs=[
 			{
