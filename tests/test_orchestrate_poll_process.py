@@ -81,6 +81,20 @@ def _make_poller_sandbox(target: Path) -> None:
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
+	# Defensively neutralise commit signing for the throwaway repo. Some
+	# CI/dev environments install a global commit.gpgsign hook (or a
+	# git-credential signing helper) that blocks `git commit` with a
+	# non-trivial exit code unrelated to the test itself. The sandbox
+	# repo never leaves the tempdir, so signing has no security value
+	# here and an unsigned commit is identical to the signed one for
+	# every assertion the suite makes.
+	for _key in ("commit.gpgsign", "commit.gpgSign", "tag.gpgsign", "tag.gpgSign"):
+		subprocess.run(
+			["git", "-C", str(target), "config", _key, "false"],
+			check=False,
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+		)
 	subprocess.run(
 		["git", "-C", str(target), "checkout", "-B", "main"],
 		check=True,
@@ -88,7 +102,12 @@ def _make_poller_sandbox(target: Path) -> None:
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
-		["git", "-C", str(target), "commit", "--allow-empty", "-m", "sandbox init", "--quiet"],
+		[
+			"git", "-C", str(target),
+			"-c", "commit.gpgsign=false",
+			"-c", "commit.gpgSign=false",
+			"commit", "--allow-empty", "-m", "sandbox init", "--quiet",
+		],
 		check=True,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
@@ -4049,6 +4068,327 @@ sys.exit(1)
 			"Expected a warning about invalid JSON in poller output\n"
 			f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
 		)
+
+
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+
+# ============================================================
+# #1057 auto-heal hardening — additive coverage for:
+#   - INTEGRATION_SYNC_CONFLICT_MAX_RETRIES env var (#3)
+#   - merged_issue_fingerprints state field + capture helper (#2 capture)
+#   - prompts/integration-sync-conflict-resolver.txt placeholders (#4)
+#   - scripts/verify_integration_fingerprints.py (#2 verify + #5)
+# ============================================================
+
+
+def test_integration_sync_conflict_uses_sync_specific_retry_budget_default_one():
+	# With the new INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1 default, an
+	# orchestrator/project-* head ref should escalate to the integration
+	# judge after exactly ONE unresolved tick — not three. This test sets
+	# unresolved_ticks=1 (one prior dispatch) and asserts the judge is
+	# invoked on this tick instead of dispatching a second resolver.
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 1
+	# Keep the dispatch timestamp inside cooldown so this test verifies that
+	# retry-budget exhaustion takes priority over cooldown deferral.
+	state["integration_conflict_dispatch_ts"] = 9999999999
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Integration judge invoked" in body for body in tracking_bodies), (
+		"expected integration judge invocation comment after a single unresolved tick "
+		"on an orchestrator/project-* branch (INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1)"
+	)
+	assert result["review_dispatches"] == [], (
+		"expected NO additional resolver dispatch when the sync-specific retry "
+		"budget is exhausted; got: " + str(result["review_dispatches"])
+	)
+
+
+def test_integration_sync_conflict_non_orchestrator_branch_keeps_global_budget():
+	# A non-orchestrator integration branch (e.g. a manually-named
+	# integration ref) should NOT trip the new tighter budget; it must
+	# continue to honour the historical INTEGRATION_CONFLICT_MAX_RETRIES=3
+	# default. unresolved_ticks=1 should NOT escalate; the resolver
+	# should still be dispatched.
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "feature/manual-integration"
+	state["integration_conflict_unresolved_ticks"] = 1
+	# Allow a fresh dispatch (no cooldown gating).
+	state["integration_conflict_dispatch_ts"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "feature/manual-integration"],
+		merge_conflict_on_sync=True,
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert not any("Integration judge invoked" in body for body in tracking_bodies), (
+		"expected NO integration judge invocation for non-orchestrator/project-* "
+		"branch with unresolved_ticks=1 (global budget INTEGRATION_CONFLICT_MAX_RETRIES=3 still applies)"
+	)
+
+
+def test_integration_sync_conflict_existing_three_tick_test_still_escalates():
+	# Belt-and-braces: the historical
+	# test_sync_conflict_escalates_to_judge_immediately_after_retry_budget_exhausted
+	# scenario (unresolved_ticks=3 on an orchestrator/project-* branch)
+	# must continue to escalate after this change — 3 >= effective max
+	# (1) so the judge is still invoked. This guards against accidental
+	# regressions in the budget gate ordering.
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 3
+	state["integration_conflict_dispatch_ts"] = 9999999999
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Integration judge invoked" in body for body in tracking_bodies)
+
+
+def test_orchestrator_state_seeds_merged_issue_fingerprints_field():
+	# ensure_integration_conflict_state_fields must seed the new
+	# merged_issue_fingerprints field so downstream jq arithmetic and
+	# the verifier renderer have a stable shape to read.
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	# No conflict, no fingerprints — just exercise a single poll tick
+	# and confirm the field is present in the final state comment.
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	final_state = result["latest_state"]
+	assert "merged_issue_fingerprints" in final_state, (
+		"expected merged_issue_fingerprints field to be seeded by "
+		"ensure_integration_conflict_state_fields on every poll tick"
+	)
+	assert isinstance(final_state["merged_issue_fingerprints"], dict)
+
+
+def test_capture_intent_fingerprints_helper_is_defined_and_idempotent():
+	# Static check that the helper function exists in the poll script
+	# and the env-var defaults are wired through.
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "capture_intent_fingerprints_for_merged_subissue()" in script
+	assert "FINGERPRINT_PER_FILE_CAP" in script
+	assert "FINGERPRINT_MIN_PATTERN_CHARS" in script
+	# Idempotency guard — must short-circuit when fingerprints are
+	# already recorded for that issue.
+	assert ".merged_issue_fingerprints[$k]" in script
+
+
+def test_integration_sync_conflict_max_retries_env_var_is_documented_and_defaulted():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'INTEGRATION_SYNC_CONFLICT_MAX_RETRIES="${INTEGRATION_SYNC_CONFLICT_MAX_RETRIES:-1}"' in script
+	# The select case in heal_integration_branch_conflict must select
+	# the new var only for orchestrator/project-* branches.
+	assert "orchestrator/project-*" in script
+	assert "effective_max_retries=" in script
+
+
+def test_integration_sync_conflict_resolver_template_has_required_placeholders():
+	tpl_path = REPO_ROOT / "prompts" / "integration-sync-conflict-resolver.txt"
+	assert tpl_path.exists(), (
+		"integration-sync-conflict-resolver.txt template must exist for "
+		"the review_autofix.yml prompt-rendering branch"
+	)
+	body = tpl_path.read_text(encoding="utf-8")
+	for placeholder in (
+		"{{CONFLICTED_FILES_COUNT}}",
+		"{{CONFLICTED_FILES_LIST}}",
+		"{{INTEGRATION_BRANCH}}",
+		"{{TRACKING_ISSUE_NUMBER}}",
+		"{{TRACKING_ISSUE_TITLE}}",
+		"{{TRACKING_ISSUE_BODY}}",
+		"{{MERGED_SUB_ISSUES_LIST}}",
+		"{{MERGED_SUB_ISSUE_COUNT}}",
+		"{{INTENT_FINGERPRINTS_JSON}}",
+	):
+		assert placeholder in body, f"missing placeholder {placeholder} in template"
+	# Hard-rule sanity check: the template must instruct the model to
+	# treat fingerprints as load-bearing and to synthesize when
+	# necessary.
+	assert "must_contain" in body
+	assert "must_not_contain" in body
+	assert "synthesize" in body.lower()
+
+
+def _verifier_module():
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"verify_integration_fingerprints",
+		REPO_ROOT / "scripts" / "verify_integration_fingerprints.py",
+	)
+	mod = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(mod)
+	return mod
+
+
+def _verifier_sandbox(files: dict[str, str], fingerprints: dict) -> tuple[Path, Path]:
+	td = Path(tempfile.mkdtemp(prefix="verifier-test-"))
+	for rel, content in files.items():
+		p = td / rel
+		p.parent.mkdir(parents=True, exist_ok=True)
+		p.write_text(content, encoding="utf-8")
+	fp_path = td / "fingerprints.json"
+	fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
+	return td, fp_path
+
+
+def test_verify_integration_fingerprints_passes_when_intent_preserved():
+	mod = _verifier_module()
+	files = {
+		".github/workflows/implement.yml": (
+			'install -m 0755 "${src}" "${health_script}"\n'
+			'bash "${health_script}" repair\n'
+		),
+	}
+	fingerprints = {
+		"1059": {
+			"issue": 1059,
+			"pr": 1066,
+			"must_contain": [
+				{"file": ".github/workflows/implement.yml", "regex": r"install\ \-m\ 0755"},
+			],
+			"must_not_contain": [
+				{"file": ".github/workflows/implement.yml", "regex": r"gh\ api\ \-H"},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 0
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_rejects_missing_must_contain():
+	mod = _verifier_module()
+	files = {
+		# Resolver took main's verbatim, dropping H1's install line.
+		".github/workflows/implement.yml": (
+			'gh api -H "Accept: x" "stuff"\n'
+			'chmod +x "${health_script}"\n'
+		),
+	}
+	fingerprints = {
+		"1059": {
+			"issue": 1059,
+			"pr": 1066,
+			"must_contain": [
+				{"file": ".github/workflows/implement.yml", "regex": r"install\ \-m\ 0755"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 1
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_rejects_reappeared_must_not_contain():
+	mod = _verifier_module()
+	files = {
+		".github/workflows/implement.yml": (
+			'install -m 0755 "${src}" "${health_script}"\n'
+			'gh api -H "Accept: x" "/repos/foo/contents/scripts/g.sh"\n'
+		),
+	}
+	fingerprints = {
+		"1059": {
+			"issue": 1059,
+			"pr": 1066,
+			"must_contain": [
+				{"file": ".github/workflows/implement.yml", "regex": r"install\ \-m\ 0755"},
+			],
+			"must_not_contain": [
+				{"file": ".github/workflows/implement.yml", "regex": r"gh\ api\ \-H"},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 1
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_fails_open_on_missing_file():
+	mod = _verifier_module()
+	# Pass a path that does not exist anywhere — must return exit 2
+	# (plumbing failure) rather than 1 (violation).
+	with tempfile.TemporaryDirectory() as td:
+		missing = Path(td) / "nope.json"
+		assert mod.main([str(missing)]) == 2
+
+
+def test_verify_integration_fingerprints_fails_open_on_unparseable_json():
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td:
+		bad = Path(td) / "bad.json"
+		bad.write_text("not json at all", encoding="utf-8")
+		assert mod.main([str(bad)]) == 2
+
+
+def test_verify_integration_fingerprints_skips_empty_object():
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td:
+		empty = Path(td) / "empty.json"
+		empty.write_text("{}", encoding="utf-8")
+		assert mod.main([str(empty)]) == 0
+
+
+def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
+	wf_path = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+	body = wf_path.read_text(encoding="utf-8")
+	# Verifier bootstrap must be in OPTIONAL list so older script_refs
+	# do not hard-fail.
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"' in body
+	# The resolver step must dispatch the verifier under the
+	# IS_INTEGRATION_SYNC gate and handle exit codes 0/1/2.
+	assert "IS_INTEGRATION_SYNC" in body
+	assert "verify_integration_fingerprints.py" in body
+	assert "Aborting [ai-merge-resolve] commit: integration fingerprint verification" in body
+	# The integration template selection must look for orchestrator/project-* head refs.
+	assert "orchestrator/project-*" in body
+	assert "integration-sync-conflict-resolver.txt" in body
+
+
 def main() -> int:
 	# Force line-buffered stdout so PASS/FAIL messages surface to CI logs as
 	# each test completes, instead of sitting in Python's default block buffer
