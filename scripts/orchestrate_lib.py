@@ -233,17 +233,17 @@ def compute_effective_hot_files(
 	"""Compose the *effective* hot-file set from two sources:
 
 	1. **Committed seed** — optional per-consumer-repo JSON at
-	   ``.github/ai/hot_files.json`` (already loaded via
-	   :func:`load_hot_files`). This is a human override, NOT required.
+		``.github/ai/hot_files.json`` (already loaded via
+		:func:`load_hot_files`). This is a human override, NOT required.
 	2. **Learned telemetry** — an append-only JSONL at
-	   ``ai-memory/orchestrator/merge_conflicts.jsonl`` on the
-	   ``ai-memory`` branch, written by the poller every time
-	   :func:`probe_sibling_merge_conflicts` in
-	   ``orchestrate_poll_process.sh`` detects a real byte-level
-	   conflict. Records have the shape::
+		``ai-memory/orchestrator/merge_conflicts.jsonl`` on the
+		``ai-memory`` branch, written by the poller every time
+		:func:`probe_sibling_merge_conflicts` in
+		``orchestrate_poll_process.sh`` detects a real byte-level
+		conflict. Records have the shape::
 
-	       {"ts": <epoch>, "project": "<tracking_issue>", "pr_a": "<num>",
-	        "pr_b": "<num>", "paths": ["path/a", "path/b", ...]}
+			{"ts": <epoch>, "project": "<tracking_issue>", "pr_a": "<num>",
+			"pr_b": "<num>", "paths": ["path/a", "path/b", ...]}
 
 	Promotion rule (Option D from the design thread): a path is
 	"learned hot" when it appears in at least ``min_events`` distinct
@@ -403,12 +403,12 @@ def validate_wave_file_partition(
 		}
 
 	- ``pair`` overlaps: any two siblings that share at least one
-	  ``files_touched`` entry. The caller should serialize them.
+		``files_touched`` entry. The caller should serialize them.
 	- ``hot_file`` overlaps: any two siblings that both touch the same hot
-	  file (even if it's their ONLY overlap). Deliberately reported
-	  separately from pair overlaps so the caller can treat them with a
-	  different policy if desired; at present they are serialized the same
-	  way.
+		file (even if it's their ONLY overlap). Deliberately reported
+		separately from pair overlaps so the caller can treat them with a
+		different policy if desired; at present they are serialized the same
+		way.
 
 	Issues whose ``files_touched`` list is empty are never flagged — there is
 	nothing to compare. The byte-level pre-merge probe in the poller handles
