@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `81ef2763897b480dd94f0c311f2c9c7f12ed8af0`\n- Checked-out branch: `orchestrator/project-1057`\n- Integration metadata branch: `orchestrator/project-1057`\n- Mismatch: `false` (planning can proceed)\n\nClarification mapping:\n- No Q<ID> clarification questions were asked in this issue.\n- Interpreted answer `/answer [auto-answered-by-orchestrator]` as explicit \u201cproceed with provided scope.\u201d\n\nConflicts detected:\n- The issue asks for shared-helper handling, but both target scripts currently define their own `ensure_label_exists` and do not source `scripts/label_helpers.sh`. Plan accounts for this by updating all three helpers to keep behavior aligned.\n- \u201cDEBUG-level\u201d logging is requested, but these scripts do not currently use a single standardized debug logger. Plan uses an equivalent low-severity log pattern consistently.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/orchestrate_poll_process.sh`\n- `scripts/validate_process.sh`\n- `scripts/label_helpers.sh`\n- `CHANGELOG.md`\n\n2. Functions/modules to implement\n- `scripts/orchestrate_poll_process.sh` \u2192 `ensure_label_exists`\n  - Remove both `gh api \"repos/${GITHUB_REPOSITORY}/labels/${encoded_name}\"` probes.\n  - Keep create path as `gh_retry gh label create ...`.\n  - Add idempotent handling for failed create when stderr indicates `already_exists` / HTTP 422.\n  - Preserve `_ENSURED_LABELS_CACHE` fast-path semantics.\n  - Emit debug-equivalent log `label already exists, skipping`.\n- `scripts/validate_process.sh` \u2192 `ensure_label_exists`\n  - Remove pre-check `gh api .../labels/{name}` probe.\n  - Keep `gh_retry gh label create ...` create path.\n  - Treat `already_exists` / 422 as success and log debug-equivalent skip message.\n  - Keep non-fatal behavior unchanged for the script flow.\n- `scripts/label_helpers.sh` \u2192 `ensure_label_exists`\n  - Add same idempotent create-failure classification (`already_exists` / 422 => success + debug log).\n  - Keep function signature and fail-open behavior unchanged.\n\n3. Data structures affected\n- `_ENSURED_LABELS_CACHE` in `orchestrate_poll_process.sh` (no schema change; only when cache is set is adjusted to create-or-idempotent-success path).\n- Temporary stderr capture variables/files in helpers for classifying create failures (implementation detail only; no persisted state changes).\n\n4. API/interface changes\n- Removed API probe pattern in target scripts:\n  - `GET /repos/{owner}/{repo}/labels/{name}` (via `gh api`) for existence checks.\n- Label creation path remains:\n  - `gh label create <name> --repo <owner/repo> --color <hex> --description <text>` via `gh_retry`.\n- No env var, CLI flag, workflow input, or contract format changes.\n\n5. Potential risks / edge cases\n- GitHub/gh error text variability: matcher should include both machine-like (`already_exists`, `422`, `Unprocessable`) and common human-readable variants.\n- Avoid over-broad 422 masking: matcher should only be applied in this label-create context and still surface non-idempotency failures via existing warning/error channels.\n- Maintain existing fail-open behavior for genuine failures (no new hard failures in orchestration/validation paths).\n\n6. Testing considerations\n- Update `tests/test_orchestrate_poll_process.py`\n  - Track and assert zero calls to repo label-existence GET (`/repos/.../labels/<name>`).\n  - Add scenario where `gh label create` returns 422/already_exists and verify flow continues plus skip log appears.\n- Update `tests/test_validate_process_fixup_labels.py`\n  - Extend mock call capture to assert no label-existence GET probes.\n  - Add 422/already_exists simulation and verify script path remains successful.\n- Run targeted tests:\n  - `pytest tests/test_orchestrate_poll_process.py`\n  - `pytest tests/test_validate_process_fixup_labels.py`\n- Changelog:\n  - Add H7 entry under `CHANGELOG.md` `[Unreleased]` documenting probe removal + idempotent create handling + observability log behavior.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b87b3261e277cef101195f2309c5f512a1d48380324a3979fe0c9fcdeec70351",
+  "lineage": {
+    "issue_number": 1235,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24525821641",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24525821641",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1235"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416180909_567a9e2ca2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1235,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24525821641"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1235",
+  "timestamps": {
+    "created_at": "2026-04-16T18:09:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
