@@ -3020,7 +3020,19 @@ jobs:
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
         run: |
           set -euo pipefail
-          bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh"
+          # Retry wrapper: transient CI runner issues (filesystem
+          # corruption, IO races after git reset) can cause spurious
+          # bash syntax errors in the judge script.  Retry once with
+          # a short pause to let the runner stabilise.
+          _judge_exit=0
+          bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh" || _judge_exit=$?
+          if [ "${_judge_exit}" -eq 2 ]; then
+            echo "::warning::review_rb_judge.sh exited 2 (syntax error) — retrying once after 5 s"
+            sleep 5
+            bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh"
+          elif [ "${_judge_exit}" -ne 0 ]; then
+            exit "${_judge_exit}"
+          fi
       - name: Mark linked issues review-blocked (autofix exhaustion)
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true'
         env:
