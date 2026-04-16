@@ -1945,7 +1945,7 @@ jobs:
               substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed' || true)"
               edit_claim_regex='modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)|`[^`]+\.[[:alpha:]]+`'
               # Stricter bullet-start edit regex for multi-line contradiction checks.
-              bullet_edit_regex='^[[:space:]]*-[[:space:]]*(modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))([[:space:][:punct:]]|$)'
+              bullet_edit_regex='^[[:space:]]*-[[:space:]]*(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))([[:space:][:punct:]]|$)'
               if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*(no (repository )?files (were )?modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$'; then
                 # Explicit "no files modified / no changes made / no
                 # modifications" first-bullet is a deliberate declaration
