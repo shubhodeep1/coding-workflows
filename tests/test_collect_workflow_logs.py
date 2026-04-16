@@ -240,7 +240,9 @@ def test_select_notable_runs_success_sampling():
 	# Slow bucket picks 10 (SLOW_RUNS_PER_REPO); sampling picks from the remaining 20
 	assert len(non_sampled) == collector.SLOW_RUNS_PER_REPO
 	# ceil(20 * 0.07) = 2
-	assert len(sampled) >= 1
+	assert len(sampled) == 2
+	assert all(item.get("_success_sampled") for item in sampled)
+	assert all(not item.get("_success_sampled") for item in non_sampled)
 
 	# Deterministic: same input produces same selection
 	selected2 = collector.select_notable_runs_for_logs(runs, max_log_runs=20, success_sample_rate=0.07)

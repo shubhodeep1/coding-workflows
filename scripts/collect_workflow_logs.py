@@ -227,7 +227,7 @@ def normalize_workflow_family(workflow_name: str | None, workflow_path: str | No
     path = (workflow_path or "").lower()
     combined = f"{name} {path}"
 
-    if any(tag in combined for tag in ("clarify_respond", "orchestrate_clarify_respond")):
+    if any(tag in combined for tag in ("clarify_respond", "orchestrate_clarify_respond", "clarify respond", "orchestrate clarify respond")):
         return "orchestrate_clarify_respond"
     if any(tag in combined for tag in ("clarify", "ai-clarify", "internal-clarify")):
         return "clarify"

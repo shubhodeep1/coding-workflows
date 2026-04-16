@@ -151,7 +151,7 @@ memory_processed_command_check()
 {
 	if ! _memory_enabled; then
 		echo '{"exists": false}'
-		_memory_telemetry '{"op":"processed-command-check","ok":true,"enabled":false,"source":"shell"}'
+		_memory_telemetry '{"op":"processed-command-check","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
@@ -163,7 +163,7 @@ memory_processed_command_check()
 
 	{
 		_memory_warn "processed-command-check failed (fail-open)"
-		_memory_telemetry '{"op":"processed-command-check","ok":false,"fail_open":true,"source":"shell"}'
+		_memory_telemetry '{"op":"processed-command-check","ok":false,"fail_open":true,"source":"shell"}' >&2
 		echo '{"exists": false}'
 		return 0
 	}
@@ -173,7 +173,7 @@ memory_processed_command_list()
 {
 	if ! _memory_enabled; then
 		echo '{"entries": [], "count": 0}'
-		_memory_telemetry '{"op":"processed-command-list","ok":true,"enabled":false,"source":"shell"}'
+		_memory_telemetry '{"op":"processed-command-list","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
@@ -185,7 +185,7 @@ memory_processed_command_list()
 
 	{
 		_memory_warn "processed-command-list failed (fail-open)"
-		_memory_telemetry '{"op":"processed-command-list","ok":false,"fail_open":true,"source":"shell"}'
+		_memory_telemetry '{"op":"processed-command-list","ok":false,"fail_open":true,"source":"shell"}' >&2
 		echo '{"entries": [], "count": 0}'
 		return 0
 	}
@@ -195,7 +195,7 @@ memory_clarify_loop_guard()
 {
 	if ! _memory_enabled; then
 		echo '{"result": {"blocked": false, "reason": "none", "cycle": 1, "max_cycles": null}}'
-		_memory_telemetry '{"op":"clarify-loop-guard","ok":true,"enabled":false,"source":"shell"}'
+		_memory_telemetry '{"op":"clarify-loop-guard","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
@@ -207,7 +207,7 @@ memory_clarify_loop_guard()
 
 	{
 		_memory_warn "clarify-loop-guard failed (fail-open)"
-		_memory_telemetry '{"op":"clarify-loop-guard","ok":false,"fail_open":true,"source":"shell"}'
+		_memory_telemetry '{"op":"clarify-loop-guard","ok":false,"fail_open":true,"source":"shell"}' >&2
 		echo '{"result": {"blocked": false, "reason": "none", "cycle": 1, "max_cycles": null}}'
 		return 0
 	}
@@ -236,7 +236,8 @@ memory_promote()
 memory_processed_command_claim()
 {
 	if ! _memory_enabled; then
-		_memory_telemetry '{"op":"processed-command-claim","ok":true,"enabled":false,"source":"shell"}'
+		echo '{"ok": true, "enabled": false, "operation_result": {"claimed": true, "entry": null}}'
+		_memory_telemetry '{"op":"processed-command-claim","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
@@ -246,7 +247,8 @@ memory_processed_command_claim()
 memory_processed_command_complete()
 {
 	if ! _memory_enabled; then
-		_memory_telemetry '{"op":"processed-command-complete","ok":true,"enabled":false,"source":"shell"}'
+		echo '{"ok": true, "enabled": false, "entry": null}'
+		_memory_telemetry '{"op":"processed-command-complete","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
