@@ -70,7 +70,7 @@ def _read_env_defaults(args: argparse.Namespace) -> argparse.Namespace:
         args.memory_branch = os.getenv("AI_MEMORY_BRANCH", "ai-memory")
     if not getattr(args, "memory_root", None):
         args.memory_root = os.getenv("AI_MEMORY_ROOT", "ai-memory")
-    if not getattr(args, "push_retries", None):
+    if getattr(args, "push_retries", None) is None:
         args.push_retries = int(os.getenv("AI_MEMORY_PUSH_RETRIES", "5"))
     if not getattr(args, "enabled", None):
         args.enabled = parse_bool(os.getenv("AI_MEMORY_ENABLED", "true"), default=True)

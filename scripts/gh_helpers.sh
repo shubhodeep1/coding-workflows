@@ -8,6 +8,7 @@
 #   gh_retry             — run a gh CLI command with rate-limit detection + retry
 #   gh_retry_to_file     — like gh_retry but captures stdout to a specified file
 #   gh_api_json_to_file  — like gh_retry_to_file but also validates JSON output
+#   gh_pr_with_all_comments — PR meta + issue comments + review comments (GraphQL-first)
 #   curl_gh_api          — run a curl command against GitHub API with retry
 #
 # Rate limit detection: on 403/429 "rate limit" responses the helper
@@ -536,6 +537,227 @@ gh_api_json_to_file()
 	rm -f "${stderr_file}"
 	: > "${outfile}"
 	return 1
+}
+
+# ---------------------------------------------------------------
+# _gh_pr_with_all_comments_rest — legacy REST parity fetch path.
+#
+# Emits JSON object:
+# {
+#   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
+#   "comments": [{"author", "body", "created_at"}],
+#   "review_comments": [{"author", "path", "line", "body"}]
+# }
+#
+# Manual fixture capture (H4 parity):
+#   source scripts/gh_helpers.sh
+#   _gh_pr_with_all_comments_rest OWNER REPO PR_NUMBER \
+#     > scripts/fixtures/issue-timeline/rest_pr_with_comments_fixture.json
+#   gh_pr_with_all_comments OWNER REPO PR_NUMBER \
+#     > scripts/fixtures/issue-timeline/graphql_pr_with_comments_fixture.json
+# ---------------------------------------------------------------
+_gh_pr_with_all_comments_rest()
+{
+	local owner="$1"
+	local repo="$2"
+	local pr_number="$3"
+	local preloaded_meta_json="${4:-}"
+	local repo_path="${owner}/${repo}"
+
+	local meta_json comments_json review_comments_json
+	if [ -n "${preloaded_meta_json}" ] && echo "${preloaded_meta_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		meta_json="$(echo "${preloaded_meta_json}" | jq -c '{
+			title: (.title // ""),
+			body: (.body // ""),
+			head_ref: (.head_ref // .head.ref // .headRefName // ""),
+			base_ref: (.base_ref // .base.ref // .baseRefName // ""),
+			head_sha: (.head_sha // .head.sha // .headSha // "")
+		}' 2>/dev/null || echo '{}')"
+	else
+		meta_json="$(gh_retry gh api "repos/${repo_path}/pulls/${pr_number}" 2>/dev/null \
+			| jq -c '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null \
+			|| echo '{}')"
+	fi
+	comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/issues/${pr_number}/comments" 2>/dev/null \
+		| jq -c -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null \
+		|| echo '[]')"
+	review_comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/pulls/${pr_number}/comments" 2>/dev/null \
+		| jq -c -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null \
+		|| echo '[]')"
+
+	jq -cn \
+		--argjson meta "${meta_json}" \
+		--argjson comments "${comments_json}" \
+		--argjson review_comments "${review_comments_json}" \
+		'{meta: $meta, comments: $comments, review_comments: $review_comments}'
+}
+
+# ---------------------------------------------------------------
+# gh_pr_with_all_comments — GraphQL-first consolidated PR context.
+#
+# Inputs:
+#   gh_pr_with_all_comments <owner> <repo> <pr_number> [preloaded_meta_json]
+#
+# Optional:
+#   preloaded_meta_json — JSON object with pre-fetched PR metadata.
+#   Accepts either legacy flat keys (`headRefName`/`baseRefName`) or
+#   normalized keys (`head_ref`/`base_ref`/`head_sha`).
+#
+# Emits JSON object:
+# {
+#   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
+#   "comments": [{"author", "body", "created_at"}],
+#   "review_comments": [{"author", "path", "line", "body"}]
+# }
+#
+# Mandatory fail-open fallback to REST parity path when:
+# - GraphQL request fails after retry budget
+# - GraphQL payload has errors or transform fails
+# - Any pagination boundary is hit (`hasNextPage=true` for PR comments,
+#   reviews, or nested review comments)
+#
+# All fallback paths emit:
+#   ::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments ...
+# ---------------------------------------------------------------
+gh_pr_with_all_comments()
+{
+	local owner="$1"
+	local repo="$2"
+	local pr_number="$3"
+	local preloaded_meta_json="${4:-}"
+
+	local _fallback_reason=""
+	local _gql_file
+	local goto_fallback=0
+	if ! _gql_file=$(mktemp "${TMPDIR:-/tmp}/gh_pr_with_all_comments.XXXXXX" 2>/dev/null); then
+		_fallback_reason="mktemp_failed"
+		goto_fallback=1
+	fi
+
+	if [ "${goto_fallback:-0}" -eq 0 ]; then
+		local gql_query
+		gql_query='query($owner: String!, $name: String!, $number: Int!) {
+		repository(owner: $owner, name: $name) {
+			pullRequest(number: $number) {
+				title
+				body
+				headRefName
+				baseRefName
+				headRefOid
+				comments(first: 100) {
+					nodes {
+						author { login }
+						body
+						createdAt
+					}
+					pageInfo { hasNextPage }
+				}
+				reviews(first: 50) {
+					nodes {
+						comments(first: 100) {
+							nodes {
+								author { login }
+								path
+								line
+								body
+							}
+							pageInfo { hasNextPage }
+						}
+					}
+					pageInfo { hasNextPage }
+				}
+			}
+		}
+	}'
+
+		if ! gh_api_json_to_file "${_gql_file}" \
+			gh api graphql \
+			-f query="${gql_query}" \
+			-F owner="${owner}" \
+			-F name="${repo}" \
+			-F number="${pr_number}"; then
+			_fallback_reason="graphql_request_failed"
+			goto_fallback=1
+		fi
+	fi
+
+	if [ "${goto_fallback:-0}" -eq 0 ]; then
+		if ! jq -e '.errors | not or length == 0' "${_gql_file}" >/dev/null 2>&1; then
+			_fallback_reason="graphql_errors"
+			goto_fallback=1
+		fi
+	fi
+
+	if [ "${goto_fallback:-0}" -eq 0 ]; then
+		if ! jq -e '.data.repository.pullRequest != null' "${_gql_file}" >/dev/null 2>&1; then
+			_fallback_reason="graphql_missing_pr"
+			goto_fallback=1
+		fi
+	fi
+
+	if [ "${goto_fallback:-0}" -eq 0 ]; then
+		local has_next
+		has_next="$(jq -r '
+			.data.repository.pullRequest as $pr
+			| (
+				($pr.comments.pageInfo.hasNextPage // false)
+				or ($pr.reviews.pageInfo.hasNextPage // false)
+				or ([$pr.reviews.nodes[]?.comments.pageInfo.hasNextPage // false] | any)
+			)
+		' "${_gql_file}" 2>/dev/null || echo 'true')"
+		if [ "${has_next}" = "true" ]; then
+			_fallback_reason="graphql_has_next_page"
+			goto_fallback=1
+		fi
+	fi
+
+	if [ "${goto_fallback:-0}" -eq 0 ]; then
+		if jq -c '
+			.data.repository.pullRequest as $pr
+			| {
+				meta: {
+					title: ($pr.title // ""),
+					body: ($pr.body // ""),
+					head_ref: ($pr.headRefName // ""),
+					base_ref: ($pr.baseRefName // ""),
+					head_sha: ($pr.headRefOid // "")
+				},
+				comments: (
+					[
+						($pr.comments.nodes // [])[]
+						| {
+							author: (.author.login // null),
+							body: (.body // ""),
+							created_at: (.createdAt // null)
+						}
+					]
+					| sort_by((.created_at // ""), (.author // ""), (.body // ""))
+				),
+				review_comments: (
+					[
+						($pr.reviews.nodes // [])[]
+						| (.comments.nodes // [])[]
+						| {
+							author: (.author.login // null),
+							path: (.path // null),
+							line: (.line // null),
+							body: (.body // "")
+						}
+					]
+					| sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))
+				)
+			}
+		' "${_gql_file}"; then
+			rm -f "${_gql_file}"
+			return 0
+		fi
+		_fallback_reason="graphql_transform_failed"
+		goto_fallback=1
+	fi
+
+	rm -f "${_gql_file:-}"
+	echo "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments reason=${_fallback_reason:-unknown} owner=${owner} repo=${repo} pr=${pr_number}" >&2
+	_gh_pr_with_all_comments_rest "${owner}" "${repo}" "${pr_number}" "${preloaded_meta_json}"
 }
 
 # ---------------------------------------------------------------
