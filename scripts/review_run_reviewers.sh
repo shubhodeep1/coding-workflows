@@ -938,8 +938,8 @@ run_reviewer() {
 # ────────────────────────────────────────────────────────────────────────
 
 TWO_PASS_ENABLED=true
-case "${ENABLE_REVIEWER_TWO_PASS:-true}" in
-  0|false|FALSE|no|NO|off|OFF) TWO_PASS_ENABLED=false ;;
+case "$(printf '%s' "${ENABLE_REVIEWER_TWO_PASS:-true}" | tr '[:upper:]' '[:lower:]')" in
+  0|false|no|off) TWO_PASS_ENABLED=false ;;
 esac
 
 # Helper: fan out all reviewer models in parallel for a given pass.
