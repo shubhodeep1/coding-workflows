@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -14,6 +15,135 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import orchestrate_lib
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+INTEGRATION_FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "integration_ref_resolver"
+
+
+def _iter_integration_fixtures() -> list[dict]:
+	fixtures: list[dict] = []
+	for path in sorted(INTEGRATION_FIXTURE_DIR.glob("*.json")):
+		fixtures.append(json.loads(path.read_text(encoding="utf-8")))
+	return fixtures
+
+
+def _fixture_path_by_name(name: str) -> Path:
+	return INTEGRATION_FIXTURE_DIR / f"{name}.json"
+
+
+def _write_mock_gh(bin_dir: Path) -> None:
+	script = """#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+from urllib.parse import unquote
+
+
+def _load_fixture() -> dict:
+	path = pathlib.Path(os.environ['GH_FIXTURE_FILE'])
+	return json.loads(path.read_text(encoding='utf-8'))
+
+
+def _parse_issue(endpoint: str):
+	parts = endpoint.split('/')
+	if len(parts) < 5:
+		return None
+	if parts[0] != 'repos' or parts[3] != 'issues':
+		return None
+	try:
+		return int(parts[4])
+	except ValueError:
+		return None
+
+
+def main() -> int:
+	args = sys.argv[1:]
+	if len(args) < 2 or args[0] != 'api':
+		print('mock gh only supports gh api', file=sys.stderr)
+		return 2
+	fixture = _load_fixture()
+	endpoint = args[1]
+	if endpoint.startswith('repos/') and '/issues/' in endpoint:
+		issue_num = _parse_issue(endpoint)
+		if issue_num is None:
+			print('invalid issue endpoint', file=sys.stderr)
+			return 2
+		body = fixture.get('issues', {}).get(str(issue_num), {}).get('body', '')
+		if '--jq' in args:
+			jq_expr = args[args.index('--jq') + 1]
+			if jq_expr == '.body // ""':
+				print(body)
+				return 0
+		print(json.dumps({'number': issue_num, 'body': body}))
+		return 0
+	if endpoint.startswith('repos/') and '/git/ref/heads/' in endpoint:
+		ref = unquote(endpoint.split('/git/ref/heads/', 1)[1])
+		exists = bool(fixture.get('branch_exists', {}).get(ref, False))
+		if exists:
+			print(json.dumps({'ref': f'refs/heads/{ref}'}))
+			return 0
+		print('gh: Not Found (HTTP 404)', file=sys.stderr)
+		return 1
+	print(f'unsupported endpoint: {endpoint}', file=sys.stderr)
+	return 2
+
+
+if __name__ == '__main__':
+	raise SystemExit(main())
+"""
+	gh_path = bin_dir / "gh"
+	gh_path.write_text(script, encoding="utf-8")
+	gh_path.chmod(0o755)
+
+
+def _run_bash_resolver(fixture_path: Path, bin_dir: Path) -> tuple[int, str, str]:
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GH_TOKEN": "test-token",
+			"GH_FIXTURE_FILE": str(fixture_path),
+			"REPO": "owner/repo",
+			"ISSUE": "101",
+		}
+	)
+	proc = subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "resolve_integration_ref.sh")],
+		check=False,
+		capture_output=True,
+		text=True,
+		env=env,
+		cwd=str(REPO_ROOT),
+	)
+	return proc.returncode, proc.stdout.strip(), proc.stderr
+
+
+def _run_python_resolver(fixture_path: Path, bin_dir: Path) -> tuple[int, str, str]:
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GH_TOKEN": "test-token",
+			"GH_FIXTURE_FILE": str(fixture_path),
+			"REPO": "owner/repo",
+		}
+	)
+	proc = subprocess.run(
+		[
+			"python3",
+			str(REPO_ROOT / "scripts" / "orchestrate_lib.py"),
+			"--print-integration-ref",
+			"101",
+		],
+		check=False,
+		capture_output=True,
+		text=True,
+		env=env,
+		cwd=str(REPO_ROOT),
+	)
+	return proc.returncode, proc.stdout.strip(), proc.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +345,7 @@ def _run_check_stalls(
 	phase_thresholds_json: str | None = None,
 	stall_judge_trigger_count: int = 0,
 	enable_stall_judge: str = "false",
+	enable_stall_human_terminalization: str = "false",
 ) -> dict:
 	"""Run check-stalls via the CLI and return parsed JSON."""
 	with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -237,11 +368,12 @@ def _run_check_stalls(
 						"threshold_minutes": str(threshold_minutes),
 						"max_recoveries": str(max_recoveries),
 						"phase_thresholds_json": phase_thresholds_json,
-						"now_ts": str(now_ts),
-						"stall_judge_trigger_count": str(stall_judge_trigger_count),
-						"enable_stall_judge": enable_stall_judge,
-					},
-				)()
+					"now_ts": str(now_ts),
+					"stall_judge_trigger_count": str(stall_judge_trigger_count),
+					"enable_stall_judge": enable_stall_judge,
+					"enable_stall_human_terminalization": enable_stall_human_terminalization,
+				},
+			)()
 			)
 		return json.loads(buf.getvalue())
 	finally:
@@ -415,7 +547,30 @@ def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_implementing_ph
 	)
 
 	assert len(stalls) == 1
-	assert stalls[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][2]
+	assert stalls[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][1]
+
+
+def test_resolve_stall_recovery_action_allows_human_terminalization_when_enabled():
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:implementing",
+		2,
+		max_recoveries=5,
+		enable_stall_human_terminalization=True,
+	)
+
+	assert action == "escalate_human"
+
+
+def test_resolve_stall_recovery_action_fails_open_for_terminal_only_malformed_ladder():
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:planning",
+		2,
+		max_recoveries=5,
+		enable_stall_human_terminalization=False,
+		actions_by_phase={"ai:planning": ["escalate_human"]},
+	)
+
+	assert action == "retrigger_pipeline"
 
 
 def test_detect_stalls_skips_needs_human_label():
@@ -472,6 +627,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 		phase_thresholds: dict[str, int] | None = None,
 		stall_judge_trigger_count: int = 2,
 		enable_stall_judge: bool = True,
+		enable_stall_human_terminalization: bool = False,
 	) -> list[dict[str, object]]:
 		captured["state"] = state
 		captured["issue_labels"] = issue_labels
@@ -481,6 +637,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 		captured["phase_thresholds"] = phase_thresholds
 		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
 		captured["enable_stall_judge"] = enable_stall_judge
+		captured["enable_stall_human_terminalization"] = enable_stall_human_terminalization
 		return []
 
 	orchestrate_lib.detect_stalls = _fake_detect_stalls
@@ -506,6 +663,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 	assert captured["phase_thresholds"] == {"ai:planning": 90}
 	assert captured["stall_judge_trigger_count"] == 3
 	assert captured["enable_stall_judge"] is True
+	assert captured["enable_stall_human_terminalization"] is False
 
 
 def test_detect_stalls_returns_run_stall_judge_at_trigger():
@@ -601,6 +759,38 @@ def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_planning_phase_
 	assert result[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:planning"][1]
 
 
+def test_detect_stalls_human_terminalization_enabled_preserves_escalate_human():
+	now_ts = 5000
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{
+					"id": "issue-1",
+					"github_issue": 10,
+					"status": "pending",
+					"status_since_ts": 1000,
+					"stall_recovery_count": 2,
+				}
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:planning"]}
+	result = orchestrate_lib.detect_stalls(
+		state,
+		labels,
+		threshold_minutes=1,
+		now_ts=now_ts,
+		max_recoveries=5,
+		stall_judge_trigger_count=0,
+		enable_stall_judge=False,
+		enable_stall_human_terminalization=True,
+	)
+	assert len(result) == 1
+	assert result[0]["recovery_action"] == "escalate_human"
+
+
 def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_explicitly_enabled():
 	captured: dict[str, object] = {}
 	original_detect_stalls = orchestrate_lib.detect_stalls
@@ -614,6 +804,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 		phase_thresholds: dict[str, int] | None = None,
 		stall_judge_trigger_count: int = 0,
 		enable_stall_judge: bool = False,
+		enable_stall_human_terminalization: bool = False,
 	) -> list[dict[str, object]]:
 		captured["state"] = state
 		captured["issue_labels"] = issue_labels
@@ -623,6 +814,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 		captured["phase_thresholds"] = phase_thresholds
 		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
 		captured["enable_stall_judge"] = enable_stall_judge
+		captured["enable_stall_human_terminalization"] = enable_stall_human_terminalization
 		return []
 
 	orchestrate_lib.detect_stalls = _fake_detect_stalls
@@ -648,6 +840,41 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 	assert captured["phase_thresholds"] == {"ai:planning": 90}
 	assert captured["stall_judge_trigger_count"] == 3
 	assert captured["enable_stall_judge"] is True
+	assert captured["enable_stall_human_terminalization"] is False
+
+
+def test_cmd_check_stalls_forwards_human_terminalization_flag_to_detect_stalls():
+	captured: dict[str, object] = {}
+	original_detect_stalls = orchestrate_lib.detect_stalls
+
+	def _fake_detect_stalls(
+		state: dict,
+		issue_labels: dict[str, list[str]],
+		threshold_minutes: int,
+		now_ts: int,
+		max_recoveries: int = 5,
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 0,
+		enable_stall_judge: bool = False,
+		enable_stall_human_terminalization: bool = False,
+	) -> list[dict[str, object]]:
+		captured["enable_stall_human_terminalization"] = enable_stall_human_terminalization
+		return []
+
+	orchestrate_lib.detect_stalls = _fake_detect_stalls
+	try:
+		state = _make_state()
+		labels = {"10": ["ai:planning"], "11": ["ai:planning"]}
+		_ = _run_check_stalls(
+			state,
+			labels,
+			stall_judge_trigger_count=1,
+			enable_stall_human_terminalization="true",
+		)
+	finally:
+		orchestrate_lib.detect_stalls = original_detect_stalls
+
+	assert captured["enable_stall_human_terminalization"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -696,23 +923,10 @@ def test_build_tracking_issue_body_includes_integration_branch():
 
 
 def test_parse_tracking_body_extracts_integration_branch():
-	body = """## Project: Test Project
-
-Summary
-
----
-
-**Total issues:** 1 | **Waves:** 1
-**Integration branch:** `orchestrator/project-66`
-
-### Wave 1
-
-- [ ] **issue-1**: First task (priority 1)
-
----
-"""
+	fixture = json.loads(_fixture_path_by_name("child_footer_backticks").read_text(encoding="utf-8"))
+	body = fixture["issues"]["1047"]["body"] + "\n### Wave 1\n\n- [ ] **issue-1**: First task (priority 1)\n"
 	parsed = orchestrate_lib.parse_tracking_body(body)
-	assert parsed["integration_branch"] == "orchestrator/project-66"
+	assert parsed["integration_branch"] == fixture["expected_stdout"]
 
 
 def test_rebuild_tracking_state_preserves_integration_defaults():
@@ -736,6 +950,45 @@ Summary
 	assert state["final_merge_strategy"] == "squash"
 	assert state["final_merge_pr"] is None
 	assert state["final_merge_status"] == "pending"
+
+
+def test_resolve_integration_ref_parity_for_fixtures():
+	fixtures = _iter_integration_fixtures()
+	assert fixtures, "integration-ref fixtures are required"
+
+	with tempfile.TemporaryDirectory() as tmpdir:
+		bin_dir = Path(tmpdir)
+		_write_mock_gh(bin_dir)
+		for fixture in fixtures:
+			fixture_path = _fixture_path_by_name(fixture["name"])
+			expected_stdout = fixture["expected_stdout"]
+			expected_exit = int(fixture["expected_exit_code"])
+
+			bash_rc, bash_stdout, bash_stderr = _run_bash_resolver(fixture_path, bin_dir)
+			python_rc, python_stdout, python_stderr = _run_python_resolver(fixture_path, bin_dir)
+
+			assert bash_rc == expected_exit, f"bash exit mismatch for {fixture['name']}"
+			assert python_rc == expected_exit, f"python exit mismatch for {fixture['name']}"
+			assert bash_stdout == expected_stdout, f"bash stdout mismatch for {fixture['name']}"
+			assert python_stdout == expected_stdout, f"python stdout mismatch for {fixture['name']}"
+			assert bash_rc == python_rc, f"parity exit mismatch for {fixture['name']}"
+			assert bash_stdout == python_stdout, f"parity stdout mismatch for {fixture['name']}"
+
+			if expected_exit != 0:
+				assert "::error::" in bash_stderr, f"bash missing ::error:: for {fixture['name']}"
+				assert "::error::" in python_stderr, f"python missing ::error:: for {fixture['name']}"
+
+
+def test_resolve_integration_ref_shell_self_test():
+	proc = subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "resolve_integration_ref.sh"), "--self-test"],
+		check=False,
+		capture_output=True,
+		text=True,
+		cwd=str(REPO_ROOT),
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "self-test passed" in proc.stdout
 
 
 # ---------------------------------------------------------------------------

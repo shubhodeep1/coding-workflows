@@ -5,15 +5,32 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 
 class OrchestrateError(ValueError):
 	"""Raised when orchestrator data is invalid."""
+
+
+class IntegrationBranchMissingError(OrchestrateError):
+	"""Raised when integration metadata points to a missing branch ref."""
+
+
+INTEGRATION_BRANCH_LINE_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$",
+	re.MULTILINE,
+)
+TRACKING_ISSUE_LINE_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$",
+	re.MULTILINE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +331,7 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:merged",
 	"ai:closed",
 	"ai:needs-human",
+	"ai:blocked",
 	"ai:ready-to-merge",
 	"ai:review-blocked",
 	"ai:implementation-failed",
@@ -334,7 +352,7 @@ TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"
 
 # Phases already handled by dedicated logic in the poller — stall detector
 # should not double-act on these.
-DEDICATED_HANDLER_PHASES: set[str] = {"ai:needs-human", "ai:review-blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
+DEDICATED_HANDLER_PHASES: set[str] = {"ai:needs-human", "ai:blocked", "ai:review-blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
 
 # Escalating recovery actions per detected phase.
 # The poller indexes into this list using the per-issue stall_recovery_count.
@@ -392,6 +410,83 @@ STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
 		"escalate_human",
 	],
 }
+
+VALID_STALL_RECOVERY_ACTIONS: set[str] = {
+	action
+	for ladder in STALL_RECOVERY_ACTIONS.values()
+	for action in ladder
+}
+VALID_STALL_RECOVERY_ACTIONS.update({
+	"close_and_reissue",
+	"resolve_merge_conflict",
+})
+
+
+def _nearest_non_human_stall_action(actions: list[str], start_idx: int) -> str | None:
+	"""Return the nearest prior non-human action, if any."""
+	if not actions:
+		return None
+	start = min(start_idx, len(actions) - 1)
+	for idx in range(start, -1, -1):
+		action = actions[idx]
+		if isinstance(action, str) and action and action != "escalate_human":
+			return action
+	return None
+
+
+def resolve_stall_recovery_action(
+	phase: str,
+	recovery_count: int,
+	max_recoveries: int = 5,
+	enable_stall_human_terminalization: bool = False,
+	actions_by_phase: dict[str, list[str]] | None = None,
+	fallback_action: str = "retrigger_pipeline",
+) -> str:
+	"""Resolve the declarative stall recovery action for a phase/recovery count."""
+	if recovery_count >= max_recoveries:
+		return "skip"
+
+	recovery_idx = max(recovery_count, 0)
+	ladders = actions_by_phase if actions_by_phase is not None else STALL_RECOVERY_ACTIONS
+	actions = ladders.get(phase, [fallback_action])
+	if not isinstance(actions, list) or not actions:
+		return fallback_action
+
+	action_idx = min(recovery_idx, len(actions) - 1)
+	action = actions[action_idx]
+	if not isinstance(action, str) or not action:
+		return fallback_action
+
+	if action == "escalate_human" and not enable_stall_human_terminalization:
+		prior_non_human = _nearest_non_human_stall_action(actions, action_idx - 1)
+		if prior_non_human:
+			return prior_non_human
+		return fallback_action
+	return action
+
+
+def resolve_effective_stall_recovery_action(
+	phase: str,
+	recovery_count: int,
+	candidate_action: str | None,
+	max_recoveries: int = 5,
+	enable_stall_human_terminalization: bool = False,
+) -> str:
+	"""Normalize a candidate action (e.g. stall judge output) into a safe action."""
+	fallback_action = resolve_stall_recovery_action(
+		phase,
+		recovery_count,
+		max_recoveries=max_recoveries,
+		enable_stall_human_terminalization=enable_stall_human_terminalization,
+	)
+
+	if not isinstance(candidate_action, str) or not candidate_action:
+		return fallback_action
+	if candidate_action not in VALID_STALL_RECOVERY_ACTIONS:
+		return fallback_action
+	if candidate_action == "escalate_human" and not enable_stall_human_terminalization:
+		return fallback_action
+	return candidate_action
 
 
 def determine_phase(labels: list[str]) -> str:
@@ -464,6 +559,7 @@ def detect_stalls(
 	phase_thresholds: dict[str, int] | None = None,
 	stall_judge_trigger_count: int = 2,
 	enable_stall_judge: bool = True,
+	enable_stall_human_terminalization: bool = False,
 ) -> list[dict[str, Any]]:
 	"""Detect stalled issues in the current wave.
 
@@ -527,7 +623,12 @@ def detect_stalls(
 		if elapsed < threshold_secs:
 			continue
 
-		recovery_count = issue.get("stall_recovery_count", 0)
+		raw_recovery_count = issue.get("stall_recovery_count", 0)
+		try:
+			recovery_count = int(raw_recovery_count or 0)
+		except (TypeError, ValueError):
+			recovery_count = 0
+		recovery_count = max(0, recovery_count)
 
 		# Determine recovery action
 		if recovery_count >= max_recoveries:
@@ -535,9 +636,12 @@ def detect_stalls(
 		elif enable_stall_judge and stall_judge_trigger_count >= 1 and recovery_count >= stall_judge_trigger_count:
 			action = RUN_STALL_JUDGE_ACTION
 		else:
-			actions = STALL_RECOVERY_ACTIONS.get(phase, ["retrigger_pipeline"])
-			action_idx = min(recovery_count, len(actions) - 1)
-			action = actions[action_idx]
+			action = resolve_stall_recovery_action(
+				phase,
+				recovery_count,
+				max_recoveries=max_recoveries,
+				enable_stall_human_terminalization=enable_stall_human_terminalization,
+			)
 
 		stalled.append({
 			"id": issue["id"],
@@ -610,7 +714,13 @@ def increment_stall_recovery(
 	now_ts = int(time.time())
 	for issue in waves[current_wave_idx]["issues"]:
 		if issue.get("id") == issue_id:
-			issue["stall_recovery_count"] = issue.get("stall_recovery_count", 0) + 1
+			raw_recovery_count = issue.get("stall_recovery_count", 0)
+			try:
+				recovery_count = int(raw_recovery_count or 0)
+			except (TypeError, ValueError):
+				print(f"::warning::Malformed stall_recovery_count for issue {issue.get('id')}; resetting to 0", file=sys.stderr)
+				recovery_count = 0
+			issue["stall_recovery_count"] = max(0, recovery_count) + 1
 			issue["status_since_ts"] = now_ts
 			break
 
@@ -671,12 +781,120 @@ def get_impl_noop_count(
 # State reconstruction (recovery from missing initial state)
 # ---------------------------------------------------------------------------
 
+def extract_integration_branch(body: str) -> str:
+	"""Extract integration-branch metadata from markdown body text."""
+	if not body:
+		return ""
+	match = INTEGRATION_BRANCH_LINE_RE.search(body)
+	if not match:
+		return ""
+	return match.group(1).strip()
+
+
+def extract_tracking_issue_number(body: str) -> int | None:
+	"""Extract the first tracking-issue number from markdown body text."""
+	if not body:
+		return None
+	match = TRACKING_ISSUE_LINE_RE.search(body)
+	if not match:
+		return None
+	return int(match.group(1))
+
+
+def _gh_api_json(endpoint: str) -> dict[str, Any]:
+	env = os.environ.copy()
+	token = env.get("GH_TOKEN", "")
+	if token and not env.get("GITHUB_TOKEN"):
+		env["GITHUB_TOKEN"] = token
+
+	try:
+		proc = subprocess.run(
+			["gh", "api", endpoint],
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+	except OSError as exc:
+		raise OrchestrateError(f"gh api failed for {endpoint}: {exc}") from exc
+	if proc.returncode != 0:
+		error_text = (proc.stderr or proc.stdout).strip()
+		raise OrchestrateError(f"gh api failed for {endpoint}: {error_text}")
+
+	try:
+		payload = json.loads(proc.stdout or "{}")
+	except json.JSONDecodeError as exc:
+		raise OrchestrateError(f"Invalid JSON from gh api ({endpoint}): {exc}") from exc
+	if not isinstance(payload, dict):
+		raise OrchestrateError(f"Expected JSON object from gh api ({endpoint})")
+	return payload
+
+
+def _gh_ref_exists(repo: str, ref_name: str) -> bool:
+	encoded_ref = quote(ref_name, safe="")
+	endpoint = f"repos/{repo}/git/ref/heads/{encoded_ref}"
+	env = os.environ.copy()
+	token = env.get("GH_TOKEN", "")
+	if token and not env.get("GITHUB_TOKEN"):
+		env["GITHUB_TOKEN"] = token
+
+	try:
+		proc = subprocess.run(
+			["gh", "api", endpoint],
+			check=False,
+			capture_output=True,
+			text=True,
+			env=env,
+		)
+	except OSError as exc:
+		raise OrchestrateError(f"gh api failed while checking branch ref {ref_name!r}: {exc}") from exc
+	if proc.returncode == 0:
+		return True
+
+	error_text = (proc.stderr or proc.stdout).strip()
+	if "404" in error_text or "Not Found" in error_text:
+		return False
+
+	raise OrchestrateError(f"gh api failed while checking branch ref {ref_name!r}: {error_text}")
+
+
+def resolve_integration_ref(repo: str, issue: int) -> str:
+	"""Resolve integration branch from child issue, falling back to tracking issue."""
+	repo_name = (repo or "").strip()
+	if not repo_name:
+		raise OrchestrateError("REPO (or GITHUB_REPOSITORY) is required")
+
+	child_payload = _gh_api_json(f"repos/{repo_name}/issues/{issue}")
+	child_body = str(child_payload.get("body", "") or "")
+	child_branch = extract_integration_branch(child_body)
+	if child_branch:
+		if not _gh_ref_exists(repo_name, child_branch):
+			raise IntegrationBranchMissingError(
+				f"Integration branch {child_branch!r} declared in child issue #{issue} does not exist"
+			)
+		return child_branch
+
+	tracking_issue = extract_tracking_issue_number(child_body)
+	if tracking_issue is None:
+		return ""
+
+	tracking_payload = _gh_api_json(f"repos/{repo_name}/issues/{tracking_issue}")
+	tracking_body = str(tracking_payload.get("body", "") or "")
+	tracking_branch = extract_integration_branch(tracking_body)
+	if not tracking_branch:
+		return ""
+	if not _gh_ref_exists(repo_name, tracking_branch):
+		raise IntegrationBranchMissingError(
+			f"Integration branch {tracking_branch!r} declared in tracking issue #{tracking_issue} does not exist"
+		)
+	return tracking_branch
+
 def parse_tracking_body(body: str) -> dict[str, Any]:
 	"""Parse a tracking issue markdown body to extract wave structure.
 
 	Returns a dict with keys:
 		project_title, waves (list of lists of {id, title, priority}),
-		dependency_edges (list of {from, to}).
+		dependency_edges (list of {from, to}), integration_branch.
 	"""
 	result: dict[str, Any] = {
 		"project_title": "",
@@ -689,9 +907,7 @@ def parse_tracking_body(body: str) -> dict[str, Any]:
 	if title_match:
 		result["project_title"] = title_match.group(1).strip()
 
-	integration_match = re.search(r"^\*\*Integration branch:\*\*\s*`?([^`\n]+)`?$", body, re.MULTILINE)
-	if integration_match:
-		result["integration_branch"] = integration_match.group(1).strip()
+	result["integration_branch"] = extract_integration_branch(body)
 
 	# Split on wave headers and parse each section
 	wave_sections = re.split(r"### Wave \d+", body)
@@ -1023,6 +1239,19 @@ def cmd_rebuild_state(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_print_integration_ref(args: argparse.Namespace) -> int:
+	"""Resolve and print integration branch metadata for a child issue."""
+	repo = (args.repo or os.getenv("REPO") or os.getenv("GITHUB_REPOSITORY") or "").strip()
+	issue = int(args.print_integration_ref)
+	try:
+		ref = resolve_integration_ref(repo=repo, issue=issue)
+	except IntegrationBranchMissingError as exc:
+		print(f"::error::{exc}", file=sys.stderr)
+		raise
+	print(ref)
+	return 0
+
+
 def cmd_check_stalls(args: argparse.Namespace) -> int:
 	"""Detect stalled issues and return recommended recovery actions."""
 	path = Path(args.state_file).resolve()
@@ -1041,6 +1270,11 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 		enable_stall_judge = enable_stall_judge_raw
 	else:
 		enable_stall_judge = str(enable_stall_judge_raw).lower() == "true"
+	enable_stall_human_terminalization_raw = getattr(args, "enable_stall_human_terminalization", "false")
+	if isinstance(enable_stall_human_terminalization_raw, bool):
+		enable_stall_human_terminalization = enable_stall_human_terminalization_raw
+	else:
+		enable_stall_human_terminalization = str(enable_stall_human_terminalization_raw).lower() == "true"
 
 	phase_thresholds: dict[str, int] | None = None
 	if args.phase_thresholds_json:
@@ -1053,6 +1287,7 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 		phase_thresholds=phase_thresholds,
 		stall_judge_trigger_count=stall_judge_trigger_count,
 		enable_stall_judge=enable_stall_judge,
+		enable_stall_human_terminalization=enable_stall_human_terminalization,
 	)
 	_print_json({"ok": True, "stalls": stalls, "count": len(stalls)})
 	return 0
@@ -1082,7 +1317,17 @@ def cmd_update_timestamps(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description="Orchestrator helper utilities")
-	subparsers = parser.add_subparsers(dest="command", required=True)
+	parser.add_argument(
+		"--print-integration-ref",
+		dest="print_integration_ref",
+		help="Resolve integration branch for child issue number",
+	)
+	parser.add_argument(
+		"--repo",
+		default="",
+		help="GitHub repository owner/name (defaults to REPO or GITHUB_REPOSITORY)",
+	)
+	subparsers = parser.add_subparsers(dest="command")
 
 	p_validate = subparsers.add_parser("validate", help="Validate decomposition JSON")
 	p_validate.add_argument("--input-file", required=True)
@@ -1122,6 +1367,13 @@ def build_parser() -> argparse.ArgumentParser:
 	p_stalls.add_argument("--max-recoveries", default="5", help="Max recovery attempts per issue")
 	p_stalls.add_argument("--stall-judge-trigger-count", default="2", help="Recovery-count threshold to switch stall recovery to run_stall_judge")
 	p_stalls.add_argument("--enable-stall-judge", default="true", choices=("true", "false"), help="Enable/disable stall judge escalation action")
+	p_stalls.add_argument(
+		"--enable-stall-human-terminalization",
+		"--allow-human-terminalization",
+		default="false",
+		choices=("true", "false"),
+		help="Allow terminal escalate_human actions in the stall recovery ladder",
+	)
 	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
 	p_stalls.set_defaults(func=cmd_check_stalls)
 
@@ -1137,6 +1389,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
 	parser = build_parser()
 	args = parser.parse_args(argv)
+	if args.print_integration_ref and getattr(args, "command", None):
+		parser.error("--print-integration-ref cannot be combined with a subcommand")
+	if args.print_integration_ref:
+		try:
+			return int(cmd_print_integration_ref(args))
+		except IntegrationBranchMissingError:
+			return 1
+		except (OrchestrateError, ValueError, json.JSONDecodeError) as exc:
+			print(f"ORCHESTRATE_ERROR: {exc}", file=sys.stderr)
+			return 2
+	if not hasattr(args, "func"):
+		parser.error("a command is required unless --print-integration-ref is used")
 
 	try:
 		return int(args.func(args))

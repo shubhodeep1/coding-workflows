@@ -70,11 +70,15 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.evaluate.outputs.should_run }}
+      post_merge_dispatch: ${{ steps.evaluate.outputs.post_merge_dispatch }}
     steps:
       - name: Evaluate review gate
         id: evaluate
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
           PR_IS_DRAFT: ${{ inputs.pr_is_draft }}
           PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
           PR_TITLE: ${{ inputs.pr_title }}
@@ -83,8 +87,28 @@ jobs:
           set -euo pipefail
 
           SHOULD_RUN="true"
+          POST_MERGE_DISPATCH="false"
+
           if [ "${EVENT_NAME}" = "workflow_call" ]; then
-            if [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
+            pr_state=""
+            pr_merged="false"
+            if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+              SHOULD_RUN="false"
+              echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
+            else
+              pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
+              pr_merged="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.merged // false' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "false")"
+            fi
+
+            if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
+              SHOULD_RUN="false"
+              echo "::warning::Unable to determine PR state for #${PR_NUMBER}; skipping review run."
+            elif [ "${pr_state}" = "closed" ]; then
+              SHOULD_RUN="false"
+              if [ "${pr_merged}" = "true" ]; then
+                POST_MERGE_DISPATCH="true"
+              fi
+            elif [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
               SHOULD_RUN="false"
             elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
               SHOULD_RUN="false"
@@ -92,6 +116,84 @@ jobs:
           fi
 
           echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
+          echo "post_merge_dispatch=${POST_MERGE_DISPATCH}" >> "${GITHUB_OUTPUT}"
+
+  post-merge-validate-dispatch:
+    needs: gate
+    runs-on: ubuntu-latest
+    if: ${{ needs.gate.outputs.post_merge_dispatch == 'true' }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
+    steps:
+      - name: Dispatch standalone validate for orchestrator short-circuit issues
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Skipping post-merge validate dispatch: invalid PR number '${PR_NUMBER}'."
+            exit 0
+          fi
+
+          issue_nodes_json="$(gh api graphql \
+            -f owner="${REPOSITORY%/*}" \
+            -f name="${REPOSITORY#*/}" \
+            -F number="${PR_NUMBER}" \
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
+
+          if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
+            pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            repository_escaped="${REPOSITORY//./\\.}"
+            issue_numbers="$(echo "${pr_data}" | grep -oiE "(github\\.com/${repository_escaped}/issues/[0-9]+|${repository_escaped}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
+            if [ -z "${issue_numbers}" ]; then
+              echo "No linked issues found for merged PR #${PR_NUMBER}."
+              exit 0
+            fi
+            echo "Found linked issues via PR body/title fallback: ${issue_numbers}"
+
+            issue_nodes_json="$(printf '%s\n' "${issue_numbers}" | jq -Rsc 'split("\n") | map(select(length > 0)) | map({number: tonumber, labels: null})')"
+          fi
+
+          validation_dispatched="false"
+          validate_workflow="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
+          while IFS=$'\t' read -r issue_number has_validate_label labels_known; do
+            [ -n "${issue_number}" ] || continue
+
+            if [ "${labels_known}" != "true" ]; then
+              issue_labels="$(gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null || true)"
+              if echo "${issue_labels}" | grep -Fxq 'ai:orchestrator-validate-required'; then
+                has_validate_label="true"
+              else
+                has_validate_label="false"
+              fi
+            fi
+
+            if [ "${has_validate_label}" != "true" ]; then
+              echo "Issue #${issue_number} does not have ai:orchestrator-validate-required; skipping."
+              continue
+            fi
+
+            if [ "${validation_dispatched}" = "false" ]; then
+              echo "Dispatching standalone validation for linked issue #${issue_number} (tracking_issue=0)."
+              if gh workflow run "${validate_workflow}" --repo "${REPOSITORY}" -f tracking_issue="0" || { [ "${validate_workflow}" != "internal-validate.yml" ] && gh workflow run "internal-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0"; }; then
+                validation_dispatched="true"
+              else
+                echo "::warning::Failed to dispatch ${validate_workflow}/internal-validate.yml for issue #${issue_number}; continuing without failing workflow."
+                continue
+              fi
+            fi
+
+            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:orchestrator-validate-required'; then
+              echo "::warning::Standalone validation dispatched for issue #${issue_number}, but failed to remove ai:orchestrator-validate-required."
+            fi
+          done < <(printf '%s' "${issue_nodes_json}" | jq -r '.[] | [.number, (if (.labels | type) == "array" then ((.labels | index("ai:orchestrator-validate-required")) != null) else false end), ((.labels | type) == "array")] | @tsv')
+
+          if [ "${validation_dispatched}" = "false" ]; then
+            echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
+          fi
 
   codex-agent:
     needs: gate
@@ -202,6 +304,99 @@ jobs:
               else return 1; fi
             done; return 1
           }
+          # Batch-fetch helper: pulls scripts/ and prompts/ trees from
+          # both ${script_ref} and main in a single GraphQL request so
+          # individual file resolution below can be served from an
+          # in-memory cache instead of issuing one REST call per file
+          # (and a second REST call per file when the ${script_ref} →
+          # main fallback fires). In the typical case this collapses
+          # ~17 required + 3 prompt REST fetches (~17-40 calls counting
+          # fallbacks) into a single GraphQL call.
+          #
+          # Failure mode: if the GraphQL call fails for any reason
+          # (rate-limit, auth, schema mismatch), the per-file resolver
+          # falls back to the original `_gh_api_fetch` REST path so
+          # behavior is preserved end-to-end.
+          _wf_owner="${wf_source%%/*}"
+          _wf_name="${wf_source##*/}"
+          _gh_batch_fetch_trees() {
+            local query
+            query="query {
+              repository(owner: \"${_wf_owner}\", name: \"${_wf_name}\") {
+                stable_scripts: object(expression: \"${script_ref}:scripts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                main_scripts: object(expression: \"main:scripts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                stable_prompts: object(expression: \"${script_ref}:prompts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                main_prompts: object(expression: \"main:prompts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+              }
+            }"
+            local attempt=1
+            local response
+            while [ "${attempt}" -le 5 ]; do
+              if response="$(gh api graphql -f query="${query}" 2>/tmp/_gh_rl_err)"; then
+                if printf '%s' "${response}" | jq -e '.data.repository' >/dev/null 2>&1; then
+                  printf '%s' "${response}"
+                  return 0
+                fi
+                return 1
+              fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::GraphQL batch fetch rate-limited (attempt ${attempt}/5), waiting…" >&2
+                _rl_wait; attempt=$((attempt + 1))
+              else
+                return 1
+              fi
+            done
+            return 1
+          }
+          _BATCH_TREES_JSON=""
+          _BATCH_TREES_TRIED="false"
+          _ensure_batch_trees() {
+            if [ "${_BATCH_TREES_TRIED}" = "true" ]; then
+              [ -n "${_BATCH_TREES_JSON}" ]
+              return $?
+            fi
+            _BATCH_TREES_TRIED="true"
+            if _BATCH_TREES_JSON="$(_gh_batch_fetch_trees)"; then
+              return 0
+            fi
+            _BATCH_TREES_JSON=""
+            return 1
+          }
+          # Resolve a directory file: try the batch (${script_ref}
+          # entries first, main entries as fallback), then fall back
+          # to per-file REST fetches if the batch was unavailable or
+          # did not contain the file.
+          # Args: <outpath> <category=scripts|prompts> <filename>
+          _resolve_dir_file() {
+            local outpath="$1"
+            local category="$2"
+            local fname="$3"
+            local stable_section="stable_${category}"
+            local main_section="main_${category}"
+            local _tmp section
+            if _ensure_batch_trees; then
+              _tmp="${outpath}.batch_tmp"
+              for section in "${stable_section}" "${main_section}"; do
+                : > "${_tmp}"
+                printf '%s' "${_BATCH_TREES_JSON}" | jq -j --arg section "${section}" --arg name "${fname}" '
+                  .data.repository[$section].entries[]?
+                  | select(.name == $name and .type == "blob" and .object.isBinary != true and .object.text != null)
+                  | .object.text
+                ' > "${_tmp}" 2>/dev/null || true
+                if [ -s "${_tmp}" ]; then
+                  mv "${_tmp}" "${outpath}"
+                  return 0
+                fi
+              done
+              rm -f "${_tmp}"
+            fi
+            if _gh_api_fetch "${outpath}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${category}/${fname}?ref=${script_ref}"; then
+              return 0
+            fi
+            _gh_api_fetch "${outpath}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${category}/${fname}?ref=main"
+          }
           # Required bootstrap scripts: must be available on ${script_ref}
           # OR the main branch.  When a required script is missing from
           # both refs — which typically means review_autofix.yml was
@@ -227,25 +422,16 @@ jobs:
           # warning when missing.
           OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"
           for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
-            if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
-              echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
-                echo "::error::Required bootstrap script '${f}' is missing from both ${script_ref} and main in ${wf_source}. This usually means review_autofix.yml references a file that was never committed (common cause: a hallucinated [ai-merge-resolve] commit added a new bootstrap entry without its corresponding script). Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the current contents of scripts/ on main."
-                exit 1
-              fi
+            if ! _resolve_dir_file "${SUPPORT_SCRIPTS_DIR}/${f}" "scripts" "${f}"; then
+              echo "::error::Required bootstrap script '${f}' is missing from both ${script_ref} and main in ${wf_source}. This usually means review_autofix.yml references a file that was never committed (common cause: a hallucinated [ai-merge-resolve] commit added a new bootstrap entry without its corresponding script). Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the current contents of scripts/ on main."
+              exit 1
             fi
             chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
           done
           for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
-            if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
-              if ! _gh_api_fetch "${SUPPORT_SCRIPTS_DIR}/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main"; then
-                echo "::warning::Optional bootstrap script '${f}' not available on ${script_ref} or main; downstream features relying on this helper will be unavailable."
-                continue
-              fi
+            if ! _resolve_dir_file "${SUPPORT_SCRIPTS_DIR}/${f}" "scripts" "${f}"; then
+              echo "::warning::Optional bootstrap script '${f}' not available on ${script_ref} or main; downstream features relying on this helper will be unavailable."
+              continue
             fi
             chmod +x "${SUPPORT_SCRIPTS_DIR}/${f}"
           done
@@ -290,19 +476,13 @@ jobs:
           done
           # Fetch judge prompt and Serena canonical block for review-blocked judge feature
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
-            if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=${script_ref}"; then
-              echo "::warning::mode-judge-review-blocked.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/mode-judge-review-blocked.txt?ref=main"
+            if ! _resolve_dir_file "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" "prompts" "mode-judge-review-blocked.txt"; then
+              echo "::warning::mode-judge-review-blocked.txt not found on ${script_ref} or main"
             fi
           fi
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" ]; then
-            if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
-              echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            if ! _resolve_dir_file "${SUPPORT_PROMPTS_DIR}/serena-efficiency-block.txt" "prompts" "serena-efficiency-block.txt"; then
+              echo "::warning::serena-efficiency-block.txt not found on ${script_ref} or main"
             fi
           fi
           # Conflict resolver prompt template. Extracted from an inline heredoc
@@ -312,14 +492,9 @@ jobs:
           # conflict resolver actually runs; fetched here so consumer repos
           # that don't ship the file themselves still get it from stable/main.
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
-            if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/conflict-resolver.txt?ref=${script_ref}"; then
-              echo "::warning::conflict-resolver.txt not found on ${script_ref}; falling back to main"
-              if ! _gh_api_fetch "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/conflict-resolver.txt?ref=main"; then
-                echo "::warning::conflict-resolver.txt not found on main either; downstream conflict resolution will fail with a specific missing-template error."
-                rm -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
-              fi
+            if ! _resolve_dir_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" "prompts" "conflict-resolver.txt"; then
+              echo "::warning::conflict-resolver.txt not found on ${script_ref} or main; downstream conflict resolution will fail with a specific missing-template error."
+              rm -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
             fi
           fi
 

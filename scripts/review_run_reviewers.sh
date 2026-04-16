@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Source rate-limit-aware GH API helpers (provides gh_retry and the
+# Telegram admin alert on GH API rate-limit events).
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
+fi
+# Fallback: if gh_helpers.sh was not sourced (missing file, unset
+# SUPPORT_SCRIPTS_DIR), define a pass-through so subsequent
+# `gh_retry gh ...` calls still execute — without the rate-limit
+# retry/alert behaviour, but without hard-failing under `set -e`.
+if ! command -v gh_retry >/dev/null 2>&1; then
+  gh_retry() { "$@"; }
+fi
 
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty; using placeholder context for this run."
@@ -24,7 +37,7 @@ fi
 # Safe to skip on local/manual invocation where PR_NUMBER or REPOSITORY are
 # unset — downstream watchdog polling remains the fallback.
 if [ -n "${PR_NUMBER:-}" ] && [ -n "${REPOSITORY:-}" ] && command -v gh >/dev/null 2>&1; then
-  preflight_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+  preflight_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
   if [ "${preflight_state}" != "open" ]; then
     echo "Pre-flight: PR #${PR_NUMBER} is ${preflight_state} — skipping reviewer fan-out."
     mkdir -p "${PREVIOUS_REVIEWS_DIR}"
@@ -40,7 +53,7 @@ normalize_openrouter_usage() {
   local log_file="$1"
   local call_label="$2"
   local model_name="$3"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "$log_file" "$call_label" "$model_name" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$log_file" "$call_label" "$model_name" <<'PY'
 import json
 import os
 import sys
@@ -701,7 +714,7 @@ run_reviewer() {
           # stdout on 403/429 rate-limit responses (--jq is not applied
           # to error bodies, so raw JSON leaks into the variable and
           # defeats the || echo "open" fallback).
-          pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+          pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
           if [ "${pr_state}" != "open" ]; then
             echo "Reviewer ${model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
             printf 'pr_closed_api' > "${wd_reason_file}"

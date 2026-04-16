@@ -127,6 +127,12 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
 
+      - name: Clarify loop guard unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_clarify_loop_guard.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py
+
       - name: Workflow log collector coverage gate
         run: |
           set -euo pipefail
@@ -176,10 +182,13 @@ jobs:
             prompts/mode-plan.txt
             prompts/mode-implement.txt
             prompts/mode-implement-diagnose.txt
+            prompts/mode-implement-repair.txt
+            prompts/mode-implement-repair-syntax.txt
             prompts/mode-orchestrate.txt
             prompts/mode-workflow-analysis.txt
             prompts/mode-judge.txt
             prompts/mode-judge-review-blocked.txt
+            prompts/mode-judge-stall-recovery.txt
             prompts/mode-clarify-respond.txt
             prompts/mode-validate-generate.txt
             prompts/mode-validate-diagnose.txt

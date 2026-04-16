@@ -16,6 +16,7 @@ env:
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'high' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+  MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '1' }}
 
 jobs:
   implement:
@@ -168,12 +169,66 @@ jobs:
           echo "Existing PR already present for this issue; exiting safely."
           exit 0
 
+      - name: Resolve integration ref
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: refctx
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          issue_number="${ISSUE_NUMBER:-}"
+          if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
+            echo "::notice::No issue number available for integration ref resolution; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! issue_body="$(gh api "repos/${{ github.repository }}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null)"; then
+            echo "::warning::Failed to read issue body for integration ref resolution; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          integration_branch="$(printf '%s\n' "${issue_body}" | sed -nE 's/^- Integration branch:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p; s/^\*\*Integration branch:\*\*[[:space:]]*`([^`]+)`[[:space:]]*$/\1/p' | head -n1 | tr -d '\r')"
+          if [ -z "${integration_branch}" ]; then
+            echo "::notice::No integration branch metadata found; falling back to default branch."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! printf '%s' "${integration_branch}" | grep -Eq '^orchestrator/project-[0-9]+$'; then
+            echo "::warning::Ignoring integration branch with invalid format: ${integration_branch}"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          integration_branch_ref="$(printf '%s' "${integration_branch}" | jq -sRr @uri)"
+          if gh api "repos/${{ github.repository }}/git/ref/heads/${integration_branch_ref}" >/dev/null 2>&1; then
+            echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Integration branch from metadata does not exist: ${integration_branch}"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
         if: env.SKIP_IMPLEMENT != 'true'
         uses: actions/checkout@v5
         with:
+          ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+
+      - name: Log checkout ref
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          echo "Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "HEAD commit: $(git rev-parse HEAD)"
+          if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
+            echo "HEAD branch: ${branch_name}"
+          else
+            echo "HEAD branch: DETACHED"
+          fi
 
       - name: Configure git auth for memory helper clones
         if: env.SKIP_IMPLEMENT != 'true'
@@ -222,6 +277,20 @@ jobs:
           # ALWAYS fetch canonical scripts from coding-workflows, even if the
           # caller repo ships its own scripts/ directory. Stale caller-repo
           # scripts cause silent MCP failures.
+          #
+          # NOTE: Fetched scripts/* and prompts/* files are intentionally
+          # NOT added to FETCHED_MANIFEST.  Post-commit steps (Push branch,
+          # Capture post-Codex validation errors, Diagnose post-Codex
+          # failure, Post AI issue summary, etc.) source
+          # scripts/gh_helpers.sh to get the real rate-limit-aware
+          # gh_retry; if the manifest cleanup at commit time deletes the
+          # file, those `source` calls silently fall back to a no-op stub
+          # and the next gh API call dies on a 403/429 with no retry/wait
+          # (this caused the implement.yml Push branch failure analysed in
+          # the analyze-job-logs run).  These files are still kept out of
+          # consumer commits via the `:!scripts` / `:!prompts` pathspecs
+          # in the commit step and the `scripts/.gitignore` generated
+          # below, so persisting them for the lifetime of the job is safe.
           mkdir -p scripts
           # Bootstrap: rate-limit-aware fetch (gh_helpers.sh not yet available)
           _rl_wait() {
@@ -248,13 +317,99 @@ jobs:
               else return 1; fi
             done; return 1
           }
+          # Batch-fetch helper: pulls scripts/ and prompts/ trees from
+          # both ${script_ref} and main in a single GraphQL request so
+          # individual file resolution below can be served from an
+          # in-memory cache instead of issuing one REST call per file
+          # (and a second REST call per file when the ${script_ref} →
+          # main fallback fires). Collapses ~13 script + 2 prompt REST
+          # fetches into a single GraphQL call in the typical case.
+          # See review_autofix.yml for the rationale and full design.
+          _wf_owner="${wf_source%%/*}"
+          _wf_name="${wf_source##*/}"
+          _gh_batch_fetch_trees() {
+            local query
+            query="query {
+              repository(owner: \"${_wf_owner}\", name: \"${_wf_name}\") {
+                stable_scripts: object(expression: \"${script_ref}:scripts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                main_scripts: object(expression: \"main:scripts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                stable_prompts: object(expression: \"${script_ref}:prompts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+                main_prompts: object(expression: \"main:prompts\") { ... on Tree { entries { name type object { ... on Blob { text isBinary } } } } }
+              }
+            }"
+            local attempt=1
+            local response
+            while [ "${attempt}" -le 5 ]; do
+              if response="$(gh api graphql -f query="${query}" 2>/tmp/_gh_rl_err)"; then
+                if printf '%s' "${response}" | jq -e '.data.repository' >/dev/null 2>&1; then
+                  printf '%s' "${response}"
+                  return 0
+                fi
+                return 1
+              fi
+              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
+                echo "::warning::GraphQL batch fetch rate-limited (attempt ${attempt}/5), waiting…" >&2
+                _rl_wait; attempt=$((attempt + 1))
+              else
+                return 1
+              fi
+            done
+            return 1
+          }
+          _BATCH_TREES_JSON=""
+          _BATCH_TREES_TRIED="false"
+          _ensure_batch_trees() {
+            if [ "${_BATCH_TREES_TRIED}" = "true" ]; then
+              [ -n "${_BATCH_TREES_JSON}" ]
+              return $?
+            fi
+            _BATCH_TREES_TRIED="true"
+            if _BATCH_TREES_JSON="$(_gh_batch_fetch_trees)"; then
+              return 0
+            fi
+            _BATCH_TREES_JSON=""
+            return 1
+          }
+          # Resolve a directory file: try the batch (${script_ref}
+          # entries first, main entries as fallback), then fall back
+          # to per-file REST fetches if the batch was unavailable or
+          # did not contain the file.
+          # Args: <outpath> <category=scripts|prompts> <filename>
+          _resolve_dir_file() {
+            local outpath="$1"
+            local category="$2"
+            local fname="$3"
+            local stable_section="stable_${category}"
+            local main_section="main_${category}"
+            local _tmp section
+            if _ensure_batch_trees; then
+              _tmp="${outpath}.batch_tmp"
+              for section in "${stable_section}" "${main_section}"; do
+                : > "${_tmp}"
+                printf '%s' "${_BATCH_TREES_JSON}" | jq -j --arg section "${section}" --arg name "${fname}" '
+                  .data.repository[$section].entries[]?
+                  | select(.name == $name and .type == "blob" and .object.isBinary != true and .object.text != null)
+                  | .object.text
+                ' > "${_tmp}" 2>/dev/null || true
+                if [ -s "${_tmp}" ]; then
+                  mv "${_tmp}" "${outpath}"
+                  return 0
+                fi
+              done
+              rm -f "${_tmp}"
+            fi
+            if _gh_api_fetch "${outpath}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${category}/${fname}?ref=${script_ref}"; then
+              return 0
+            fi
+            _gh_api_fetch "${outpath}" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/${category}/${fname}?ref=main"
+          }
           _fetched_scripts=()
-          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
-            if ! _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/scripts/${f}?ref=${script_ref}"; then
-              echo "::warning::${f} not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "scripts/${f}" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/scripts/${f}?ref=main"
+          for f in gh_helpers.sh setup_serena.sh git_ref_health_check.sh render_prompt.sh validate_changed_files_syntax.sh serena_efficiency_report.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
+            if ! _resolve_dir_file "scripts/${f}" "scripts" "${f}"; then
+              echo "::error::Required support script '${f}' not found on ${script_ref} or main"
+              exit 1
             fi
             case "${f}" in
               *.sh|*.py)
@@ -262,9 +417,8 @@ jobs:
                 ;;
             esac
             _fetched_scripts+=("${f}")
-            if [ "${is_self_repo}" = "false" ]; then
-              echo "scripts/${f}" >> "${FETCHED_MANIFEST}"
-            fi
+            # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
+            # see the persistence note above the loop.
           done
           # Block fetched scripts from being committed in consumer repos.
           if [ "${is_self_repo}" = "false" ]; then
@@ -311,25 +465,31 @@ jobs:
 
           mkdir -p prompts
           if [ ! -f prompts/serena-efficiency-block.txt ]; then
-            if ! _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=${script_ref}"; then
-              echo "::warning::serena-efficiency-block.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "prompts/serena-efficiency-block.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/serena-efficiency-block.txt?ref=main"
+            if ! _resolve_dir_file "prompts/serena-efficiency-block.txt" "prompts" "serena-efficiency-block.txt"; then
+              echo "::warning::serena-efficiency-block.txt not found on ${script_ref} or main"
             fi
-            if [ "${is_self_repo}" = "false" ]; then
-              echo "prompts/serena-efficiency-block.txt" >> "${FETCHED_MANIFEST}"
-            fi
+            # Intentionally NOT adding to FETCHED_MANIFEST — the
+            # `:!prompts` exclusion in the commit step keeps this file
+            # out of consumer commits, and the ensure_diagnose_asset()
+            # helper in the post-Codex diagnose step needs it to still
+            # be on disk after the manifest cleanup.
           fi
           if [ ! -f prompts/mode-implement-diagnose.txt ]; then
-            if ! _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=${script_ref}"; then
-              echo "::warning::mode-implement-diagnose.txt not found on ${script_ref}; falling back to main"
-              _gh_api_fetch "prompts/mode-implement-diagnose.txt" api -H 'Accept: application/vnd.github.raw+json' \
-                "repos/${wf_source}/contents/prompts/mode-implement-diagnose.txt?ref=main"
+            if ! _resolve_dir_file "prompts/mode-implement-diagnose.txt" "prompts" "mode-implement-diagnose.txt"; then
+              echo "::warning::mode-implement-diagnose.txt not found on ${script_ref} or main"
+            fi
+            # Intentionally NOT adding to FETCHED_MANIFEST — same
+            # rationale as serena-efficiency-block.txt above.
+          fi
+          if [ ! -f prompts/mode-implement-repair.txt ]; then
+            if ! _gh_api_fetch "prompts/mode-implement-repair.txt" api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${wf_source}/contents/prompts/mode-implement-repair.txt?ref=${script_ref}"; then
+              echo "::warning::mode-implement-repair.txt not found on ${script_ref}; falling back to main"
+              _gh_api_fetch "prompts/mode-implement-repair.txt" api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/${wf_source}/contents/prompts/mode-implement-repair.txt?ref=main"
             fi
             if [ "${is_self_repo}" = "false" ]; then
-              echo "prompts/mode-implement-diagnose.txt" >> "${FETCHED_MANIFEST}"
+              echo "prompts/mode-implement-repair.txt" >> "${FETCHED_MANIFEST}"
             fi
           fi
 
@@ -355,24 +515,7 @@ jobs:
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
-          PR_BASE_BRANCH="${{ github.event.repository.default_branch }}"
-          INTEGRATION_BRANCH_RAW="$(printf '%s\n' "${ISSUE_BODY}" | awk '
-            /^\*\*Orchestrator metadata\*\* \(do not edit\)$/ { in_meta = 1; next }
-            in_meta && /^- Integration branch: / { sub(/^- Integration branch: /, ""); print; exit }
-          ' | tr -d '\r')"
-
-          if [ -n "${INTEGRATION_BRANCH_RAW}" ]; then
-            if printf '%s' "${INTEGRATION_BRANCH_RAW}" | grep -Eq '^orchestrator/project-[0-9]+$'; then
-              INTEGRATION_BRANCH_REF="$(printf '%s' "${INTEGRATION_BRANCH_RAW}" | jq -sRr @uri)"
-              if gh_retry gh api "repos/${{ github.repository }}/git/ref/heads/${INTEGRATION_BRANCH_REF}" >/dev/null 2>&1; then
-                PR_BASE_BRANCH="${INTEGRATION_BRANCH_RAW}"
-              else
-                echo "::warning::Ignoring integration branch from metadata because it does not exist: ${INTEGRATION_BRANCH_RAW}"
-              fi
-            else
-              echo "::warning::Ignoring integration branch from metadata because format is invalid: ${INTEGRATION_BRANCH_RAW}"
-            fi
-          fi
+          PR_BASE_BRANCH="${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
 
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
 
@@ -435,7 +578,20 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           source scripts/label_helpers.sh
-          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          # Reuse the issue snapshot fetched in "Fetch issue metadata"
+          # rather than re-hitting the API.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it
+          # (partial write, truncated download, etc.) — under
+          # `set -euo pipefail` an unsuppressed jq failure would kill
+          # the whole step instead of degrading safely (Copilot review
+          # on PR #1044).
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          fi
           # Refuse redispatch of any issue that previously tripped the
           # destructive-commit guard (P2/P3), regardless of phase label.
           # A destructive rejection latches this label onto the issue; a
@@ -1019,94 +1175,229 @@ jobs:
       - name: Validate syntax of changed files
         if: env.SKIP_IMPLEMENT != 'true'
         id: validate_syntax_changed_files
+        continue-on-error: true
         run: |
           set -euo pipefail
-          ERRORS=0
-
           CAPTURE_FILE=""
           if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
             CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
           fi
+          CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash scripts/validate_changed_files_syntax.sh
 
-          append_checker_error() {
-            local file="$1"
-            local checker="$2"
-            local stderr_file="$3"
-            [ -n "${CAPTURE_FILE}" ] || return 0
-            {
-              printf '===== %s (%s) =====\n' "${file}" "${checker}"
-              if [ -s "${stderr_file}" ]; then
-                cat "${stderr_file}"
-              else
-                echo "(no stderr output)"
-              fi
-              printf '\n'
-            } >> "${CAPTURE_FILE}" || true
-          }
+      - name: Attempt post-Codex syntax repair
+        if: env.SKIP_IMPLEMENT != 'true' && steps.validate_syntax_changed_files.outcome == 'failure'
+        id: post_codex_syntax_repair
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          echo "repaired=false" >> "$GITHUB_OUTPUT"
 
-          # Check all modified/added Python files for syntax errors
-          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.py'); do
-            if [ -f "$f" ]; then
-              checker_stderr="$(mktemp)"
-              if ! python3 -m py_compile "$f" 2>"${checker_stderr}"; then
-                echo "::error file=${f}::Syntax error in ${f}"
-                cat "${checker_stderr}" >&2
-                append_checker_error "${f}" "python3 -m py_compile" "${checker_stderr}"
-                ERRORS=$((ERRORS + 1))
-              fi
-              rm -f "${checker_stderr}"
-            fi
-          done
+          REPAIR_PROMPT_TEMPLATE="prompts/mode-implement-repair.txt"
+          REPAIR_VALIDATOR_SCRIPT="scripts/validate_changed_files_syntax.sh"
+          CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+          INITIAL_CHANGED_FILE="${RUNTIME_DIR}/post_codex_initial_changed_files.txt"
+          CAPTURED_FILES_FILE="${RUNTIME_DIR}/post_codex_captured_files.txt"
+          ALLOW_LIST_FILE="${RUNTIME_DIR}/post_codex_repair_allow_list.txt"
 
-          # Check all modified/added JS files for syntax errors
-          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.js'); do
-            if [ -f "$f" ]; then
-              checker_stderr="$(mktemp)"
-              if ! node --check "$f" 2>"${checker_stderr}"; then
-                echo "::error file=${f}::Syntax error in ${f}"
-                cat "${checker_stderr}" >&2
-                append_checker_error "${f}" "node --check" "${checker_stderr}"
-                ERRORS=$((ERRORS + 1))
-              fi
-              rm -f "${checker_stderr}"
-            fi
-          done
-
-          # Check all modified/added shell scripts for syntax errors
-          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.sh'); do
-            if [ -f "$f" ]; then
-              checker_stderr="$(mktemp)"
-              if ! bash -n "$f" 2>"${checker_stderr}"; then
-                echo "::error file=${f}::Shell syntax error in ${f}"
-                cat "${checker_stderr}" >&2
-                append_checker_error "${f}" "bash -n" "${checker_stderr}"
-                ERRORS=$((ERRORS + 1))
-              fi
-              rm -f "${checker_stderr}"
-            fi
-          done
-
-          # Check all modified/added YAML files for syntax errors using a YAML
-          # parser - bash -n must NOT be used on YAML files as it parses them
-          # as shell and produces false failures (e.g. 'name: foo (bar)').
-          for f in $(git diff --name-only --diff-filter=ACM HEAD -- '*.yml' '*.yaml'); do
-            if [ -f "$f" ]; then
-              checker_stderr="$(mktemp)"
-              if ! python3 -c "import yaml, sys; f=open(sys.argv[1]); yaml.safe_load(f); f.close()" "$f" 2>"${checker_stderr}"; then
-                echo "::error file=${f}::YAML syntax error in ${f}"
-                cat "${checker_stderr}" >&2
-                append_checker_error "${f}" "python3 yaml.safe_load" "${checker_stderr}"
-                ERRORS=$((ERRORS + 1))
-              fi
-              rm -f "${checker_stderr}"
-            fi
-          done
-
-          if [ "${ERRORS}" -gt 0 ]; then
-            echo "::error::${ERRORS} file(s) failed syntax validation."
+          if [ ! -s "${REPAIR_PROMPT_TEMPLATE}" ] || [ ! -s "${REPAIR_VALIDATOR_SCRIPT}" ]; then
+            echo "::error::Required repair artifacts are missing from repair-prompt-and-validator-split dependency."
+            echo "Expected prompt: ${REPAIR_PROMPT_TEMPLATE} (non-empty)"
+            echo "Expected validator: ${REPAIR_VALIDATOR_SCRIPT} (non-empty)"
             exit 1
           fi
-          echo "All changed files passed syntax validation."
+
+          max_attempts_raw="${MAX_POST_CODEX_REPAIR_ATTEMPTS:-1}"
+          if ! [[ "${max_attempts_raw}" =~ ^[0-9]+$ ]] || [ "${max_attempts_raw}" -lt 0 ]; then
+            echo "::warning::Invalid MAX_POST_CODEX_REPAIR_ATTEMPTS='${max_attempts_raw}'. Falling back to 1."
+            max_attempts=1
+          else
+            max_attempts="${max_attempts_raw}"
+          fi
+
+          if [ "${max_attempts}" -eq 0 ]; then
+            echo "::notice::MAX_POST_CODEX_REPAIR_ATTEMPTS=0; skipping in-job post-Codex syntax repair attempts."
+            exit 1
+          fi
+
+          : > "${INITIAL_CHANGED_FILE}"
+          while IFS= read -r -d '' path; do
+            printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"
+          done < <(git diff --name-only --diff-filter=ACMR -z HEAD)
+          while IFS= read -r -d '' path; do
+            printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"
+          done < <(git ls-files --others --exclude-standard -z -- '*.py' '*.js' '*.sh' '*.yml' '*.yaml')
+          sort -u "${INITIAL_CHANGED_FILE}" -o "${INITIAL_CHANGED_FILE}" || true
+
+          : > "${CAPTURED_FILES_FILE}"
+          if [ -s "${CAPTURE_FILE}" ]; then
+            awk '/^===== / && / \([^)]*\) =====$/ { line=$0; sub(/^===== /, "", line); sub(/ \([^)]*\) =====$/, "", line); print line }' "${CAPTURE_FILE}" > "${CAPTURED_FILES_FILE}" || true
+            sort -u "${CAPTURED_FILES_FILE}" -o "${CAPTURED_FILES_FILE}" || true
+          fi
+
+          : > "${ALLOW_LIST_FILE}"
+          if [ -s "${CAPTURED_FILES_FILE}" ]; then
+            comm -12 "${INITIAL_CHANGED_FILE}" "${CAPTURED_FILES_FILE}" > "${ALLOW_LIST_FILE}" || true
+          else
+            cp "${INITIAL_CHANGED_FILE}" "${ALLOW_LIST_FILE}"
+          fi
+
+          if [ ! -s "${ALLOW_LIST_FILE}" ]; then
+            echo "::error::Effective post-Codex repair allow-list is empty. Failing repair path deterministically."
+            exit 1
+          fi
+
+          is_allowed_path() {
+            local p="$1"
+            grep -Fqx -- "${p}" "${ALLOW_LIST_FILE}" 2>/dev/null
+          }
+
+          repair_succeeded=false
+          for attempt in $(seq 1 "${max_attempts}"); do
+            echo "Post-Codex syntax repair attempt ${attempt}/${max_attempts}"
+
+            BASELINE_COMMIT="$(git stash create "post-codex-repair-attempt-${attempt}" || true)"
+            if [ -z "${BASELINE_COMMIT}" ]; then
+              BASELINE_COMMIT="HEAD"
+            fi
+
+            PRE_UNTRACKED_FILE="${RUNTIME_DIR}/post_codex_pre_untracked_attempt_${attempt}.txt"
+            : > "${PRE_UNTRACKED_FILE}"
+            while IFS= read -r -d '' pre_untracked; do
+              [ -n "${pre_untracked}" ] || continue
+              if ! is_allowed_path "${pre_untracked}"; then
+                printf '%s\n' "${pre_untracked}" >> "${PRE_UNTRACKED_FILE}"
+              fi
+            done < <(git ls-files --others --exclude-standard -z)
+            sort -u "${PRE_UNTRACKED_FILE}" -o "${PRE_UNTRACKED_FILE}" || true
+
+            get_blob_for_source() {
+              local source_ref="$1"
+              local file_path="$2"
+              if git cat-file -e "${source_ref}:${file_path}" >/dev/null 2>&1; then
+                git rev-parse "${source_ref}:${file_path}" 2>/dev/null || true
+              else
+                echo "__MISSING__"
+              fi
+            }
+
+            REPAIR_PROMPT_FILE="${RUNTIME_DIR}/mode-implement-repair-attempt-${attempt}.txt"
+            {
+              cat "${REPAIR_PROMPT_TEMPLATE}"
+              echo
+              echo "=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ==="
+              if [ -s "${CAPTURE_FILE}" ]; then
+                cat "${CAPTURE_FILE}"
+              else
+                echo "(capture file missing or empty)"
+              fi
+              echo
+              echo "=== INITIAL POST-CODEX CHANGED FILES ==="
+              cat "${INITIAL_CHANGED_FILE}"
+              echo
+              echo "=== EFFECTIVE REPAIR ALLOW-LIST ==="
+              cat "${ALLOW_LIST_FILE}"
+              echo
+              echo "=== CURRENT DIFF FOR ALLOW-LIST FILES ==="
+              while IFS= read -r allowed_file; do
+                [ -n "${allowed_file}" ] || continue
+                echo "----- ${allowed_file} -----"
+                if git ls-files --error-unmatch -- "${allowed_file}" >/dev/null 2>&1; then
+                  git diff -- "${allowed_file}" || true
+                elif [ -f "${allowed_file}" ]; then
+                  git diff --no-index -- /dev/null "${allowed_file}" || true
+                else
+                  echo "(file not found in working tree)"
+                fi
+              done < "${ALLOW_LIST_FILE}"
+            } > "${REPAIR_PROMPT_FILE}"
+
+            REPAIR_OUTPUT_FILE="${RUNTIME_DIR}/post_codex_repair_output_attempt_${attempt}.txt"
+            REPAIR_LOG_FILE="${RUNTIME_DIR}/post_codex_repair_log_attempt_${attempt}.txt"
+            if ! codex exec --model "${MODEL_EDITOR}" --full-auto < "${REPAIR_PROMPT_FILE}" > "${REPAIR_OUTPUT_FILE}" 2> >(tee -a "${REPAIR_LOG_FILE}" >&2); then
+              echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
+              continue
+            fi
+
+            tracked_strays=()
+            while IFS= read -r -d '' changed_path; do
+              [ -n "${changed_path}" ] || continue
+              if ! is_allowed_path "${changed_path}"; then
+                baseline_blob="$(get_blob_for_source "${BASELINE_COMMIT}" "${changed_path}")"
+                if [ -f "${changed_path}" ]; then
+                  current_blob="$(git hash-object -- "${changed_path}" 2>/dev/null || echo "__MISSING__")"
+                else
+                  current_blob="__MISSING__"
+                fi
+                if [ "${baseline_blob}" != "${current_blob}" ]; then
+                  tracked_strays+=("${changed_path}")
+                fi
+              fi
+            done < <(git diff --name-only -z HEAD)
+
+            untracked_strays=()
+            while IFS= read -r -d '' untracked_path; do
+              [ -n "${untracked_path}" ] || continue
+              if ! is_allowed_path "${untracked_path}"; then
+                if ! grep -Fqx -- "${untracked_path}" "${PRE_UNTRACKED_FILE}" 2>/dev/null; then
+                  untracked_strays+=("${untracked_path}")
+                fi
+              fi
+            done < <(git ls-files --others --exclude-standard -z)
+
+            if [ "${#tracked_strays[@]}" -gt 0 ] || [ "${#untracked_strays[@]}" -gt 0 ]; then
+              echo "::warning::Repair attempt ${attempt} produced out-of-scope edits. Rolling back stray files."
+              if [ "${#tracked_strays[@]}" -gt 0 ]; then
+                restore_from_baseline=()
+                remove_from_baseline=()
+                for stray_tracked in "${tracked_strays[@]}"; do
+                  if git cat-file -e "${BASELINE_COMMIT}:${stray_tracked}" >/dev/null 2>&1; then
+                    restore_from_baseline+=("${stray_tracked}")
+                  else
+                    remove_from_baseline+=("${stray_tracked}")
+                  fi
+                done
+                if [ "${#restore_from_baseline[@]}" -gt 0 ]; then
+                  git restore --source="${BASELINE_COMMIT}" --staged --worktree -- "${restore_from_baseline[@]}"
+                fi
+                if [ "${#remove_from_baseline[@]}" -gt 0 ]; then
+                  git rm -r -f --ignore-unmatch -- "${remove_from_baseline[@]}"
+                fi
+              fi
+              if [ "${#untracked_strays[@]}" -gt 0 ]; then
+                safe_untracked=()
+                for stray in "${untracked_strays[@]}"; do
+                  case "${stray}" in
+                    /*|../*|*/../*|*/..)
+                      echo "::error::Refusing to delete unsafe untracked stray path: ${stray}"
+                      ;;
+                    *)
+                      safe_untracked+=("${stray}")
+                      ;;
+                  esac
+                done
+                if [ "${#safe_untracked[@]}" -gt 0 ]; then
+                  rm -rf -- "${safe_untracked[@]}"
+                fi
+              fi
+              continue
+            fi
+
+            rm -f "${CAPTURE_FILE}"
+            if CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash "${REPAIR_VALIDATOR_SCRIPT}"; then
+              repair_succeeded=true
+              break
+            fi
+          done
+
+          if [ "${repair_succeeded}" != 'true' ]; then
+            echo "::error::Post-Codex syntax repair did not succeed after ${max_attempts} attempt(s)."
+            exit 1
+          fi
+
+          rm -f "${CAPTURE_FILE}"
+          echo "repaired=true" >> "$GITHUB_OUTPUT"
 
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1166,6 +1457,15 @@ jobs:
               git restore --source=HEAD --staged --worktree .github/workflows || true
             fi
             git clean -fd -- .github/workflows
+          fi
+
+      - name: Enforce syntax validation outcome
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.validate_syntax_changed_files.outcome }}" = "failure" ] && [ "${{ steps.post_codex_syntax_repair.outputs.repaired || 'false' }}" != "true" ]; then
+            echo "::error::Syntax validation failed and post-Codex repair did not recover."
+            exit 1
           fi
 
       - name: Commit changes
@@ -1519,7 +1819,10 @@ jobs:
           else
             script_ref="stable"
           fi
-          health_script="$(mktemp -t git_ref_health_check.XXXXXX.sh)"
+          if ! health_script="$(mktemp -t git_ref_health_check.XXXXXX.sh)"; then
+            echo "::error::failed to create temporary file for git_ref_health_check.sh"
+            exit 1
+          fi
           # Ensure the temp file is always cleaned up even if `gh api`,
           # `chmod`, or the script itself fails under `set -euo pipefail`.
           trap 'rm -f "${health_script}"' EXIT
@@ -2064,7 +2367,19 @@ jobs:
 
           echo "handled=false" >> "$GITHUB_OUTPUT"
 
-          ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+          # Reuse the cached issue snapshot when available — see the
+          # "Fetch issue metadata" step.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it
+          # (partial write, truncated download, etc.); the API path
+          # itself falls back to '[]' so the failure path still
+          # degrades safely.
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+          fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementation-failed") != null' >/dev/null 2>&1; then
             echo "Issue #${ISSUE_NUMBER} already has ai:implementation-failed label; skipping post-Codex diagnosis."
             echo "handled=true" >> "$GITHUB_OUTPUT"
@@ -2102,6 +2417,21 @@ jobs:
               --add-label 'ai:implementation-failed' >/dev/null 2>&1 || true
           }
 
+          ensure_implement_fixup_labels() {
+            if [ -f scripts/label_helpers.sh ]; then
+              source scripts/label_helpers.sh
+              ensure_label_exists "ai:clarification" "${{ github.repository }}"
+              ensure_label_exists "ai:implement-fix-up" "${{ github.repository }}"
+            else
+              gh_retry gh label create "ai:clarification" --repo "${{ github.repository }}" \
+                --color "f9d0c4" --description "AI clarification required before planning" \
+                2>/dev/null || true
+              gh_retry gh label create "ai:implement-fix-up" --repo "${{ github.repository }}" \
+                --color "d4c5f9" --description "Implement-phase post-Codex fix-up issue" \
+                2>/dev/null || true
+            fi
+          }
+
           FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
             --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' || true)"
           if [ -z "${FAILED_STEP_NAME}" ] && [ "${{ job.status }}" = "cancelled" ]; then
@@ -2118,7 +2448,17 @@ jobs:
 
           if [ -z "${ISSUE_BODY_FILE:-}" ] || [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
             ISSUE_BODY_FILE="${RUNTIME_DIR}/issue_body_from_api.txt"
-            gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+            # Prefer the cached issue snapshot from "Fetch issue
+            # metadata" before re-hitting the API.  jq failure (e.g.
+            # truncated/partial file) falls through to the API path
+            # rather than killing the step under set -euo pipefail.
+            : > "${ISSUE_BODY_FILE}"
+            if [ -s "${ISSUE_META_FILE:-}" ]; then
+              jq -er '.body // ""' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null || : > "${ISSUE_BODY_FILE}"
+            fi
+            if [ ! -s "${ISSUE_BODY_FILE}" ]; then
+              gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+            fi
           fi
 
           TRACKING_ISSUE_NUM="$(sed -nE 's/.*Tracking issue:[[:space:]]*#([0-9]+).*/\1/p' "${ISSUE_BODY_FILE}" | head -n1 | tr -d '\r')"
@@ -2384,6 +2724,7 @@ jobs:
 
               CREATED_FIX_ISSUES_JSON='[]'
               local_to_issue_map='{}'
+              ensure_implement_fixup_labels
 
               for idx in $(seq 0 $((FIX_COUNT - 1))); do
                 FIX_ID="$(jq -r ".fix_issues[${idx}].id // \"implement-fix-$((idx + 1))\"" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
@@ -2408,7 +2749,9 @@ jobs:
                 if FIX_URL="$(gh_retry gh issue create \
                   --repo "${{ github.repository }}" \
                   --title "${FIX_TITLE}" \
-                  --body "${FIX_BODY_FULL}" 2>"${CREATE_ERR_FILE}")"; then
+                  --body "${FIX_BODY_FULL}" \
+                  --label "ai:clarification" \
+                  --label "ai:implement-fix-up" 2>"${CREATE_ERR_FILE}")"; then
                   FIX_NUM="$(echo "${FIX_URL}" | grep -oE '[0-9]+$' || true)"
                   if [ -n "${FIX_NUM}" ]; then
                     CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${FIX_NUM}" '. + [$num]')"
@@ -2450,8 +2793,23 @@ jobs:
                 issue_list_md="- (no issue numbers captured; issue creation failed)"
               fi
 
+              BLOCKER_METADATA_JSON="$(jq -cn \
+                --argjson fixups "${CREATED_FIX_ISSUES_JSON}" \
+                --arg source_issue "${ISSUE_NUMBER}" \
+                '{
+                  fixup_issue_numbers: ($fixups | if type == "array" then map(select(type == "number")) | unique else [] end),
+                  blocks_source_issue: ($source_issue | tonumber?)
+                }')"
+              BLOCKER_METADATA_BLOCK="$(printf '<!-- IMPLEMENT_FIXUP_BLOCKERS_V1\n%s\nIMPLEMENT_FIXUP_BLOCKERS_V1 -->' "${BLOCKER_METADATA_JSON}")"
+
+              SUMMARY_COMMENT_BODY="$(printf '## Post-Codex validation diagnosed follow-up fixes\n\n%s\n\nFailed step: %s\n\nCreated fix-up issues:\n%s\n\n%s\n' \
+                "${DIAG_TEXT}" \
+                "${FAILED_STEP_NAME}" \
+                "${issue_list_md}" \
+                "${BLOCKER_METADATA_BLOCK}")"
+
               gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-                -f body="## Post-Codex validation diagnosed follow-up fixes\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nCreated fix-up issues:\n${issue_list_md}" >/dev/null || true
+                -f body="${SUMMARY_COMMENT_BODY}" >/dev/null || true
 
               ensure_implementation_failed_label
               ;;
@@ -2487,7 +2845,16 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
-          ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          # Reuse the cached issue snapshot when available — see the
+          # "Fetch issue metadata" step.  Falls back to a fresh API
+          # call when the file is missing OR jq fails to parse it.
+          ISSUE_LABELS_JSON=""
+          if [ -s "${ISSUE_META_FILE:-}" ]; then
+            ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+          fi
+          if [ -z "${ISSUE_LABELS_JSON}" ]; then
+            ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+          fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
             gh_retry gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
               --color "fbca04" --description "Awaiting human approval to implement" \
