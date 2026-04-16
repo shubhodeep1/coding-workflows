@@ -626,6 +626,26 @@ CRITICAL — dependency_auditing sidecar scripts MUST set sys.path to repo root:
   This is the single most common cause of false `No module named 'scripts'`
   harness failures. Omitting these lines is a harness defect.
 
+CRITICAL — sibling imports when dynamically loading modules from subdirectories:
+- When a Python entry point lives in a subdirectory (e.g.
+  `backend/appsflyer_event_worker.py`) and uses bare sibling imports such as
+  `from db_indexes import ...`, the module's parent directory MUST be on
+  `sys.path` before `exec_module` / `importlib.import_module` is called.
+  In production `python -B backend/appsflyer_event_worker.py` puts
+  `/workspace/backend` on `sys.path[0]` automatically; `importlib` does NOT.
+- Any helper function (e.g. `_load_worker_module()`) that loads a module via
+  `importlib.util.spec_from_file_location` + `exec_module` MUST insert the
+  target file's parent directory into `sys.path` first:
+    parent = str(pathlib.Path(path).resolve().parent)
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+  Omitting this causes `ModuleNotFoundError` for every bare sibling import
+  in the loaded module. This is a harness defect, not an app defect.
+- The same rule applies to PYTHONPATH-based sidecar scripts: set PYTHONPATH
+  to include BOTH `/workspace` (repo root) AND the entry point's parent
+  directory (e.g. `/workspace/backend`) when the entry point uses bare
+  sibling imports.
+
 Validation coverage (implement only when concretely applicable):
 1. Build verification
 2. Startup and health checks

@@ -243,6 +243,26 @@ CRITICAL — "command not found" for a tool the canary claims is present:
 - If a login shell is genuinely required (for example because the tool is installed via `nvm`/`rbenv`/`pyenv`/`sdkman`), keep `/bin/sh -lc` but also add `/etc/profile.d/<tool>.sh` to the Dockerfile that exports the tool's bin directory onto PATH, so the login shell sees it. In that case the canary tool-presence assertion MUST also run under `/bin/sh -lc` so the two modes stay in lockstep.
 - When applying this fix, update BOTH `validation/tests/00_canary.sh` (the tool-presence assertion) AND the failing test script (for example `validation/tests/01_build_and_tests.sh`) in the same patch so their shell modes match.
 
+CRITICAL — sibling imports when dynamically loading modules from subdirectories:
+- When a Python entry point lives in a subdirectory (e.g.
+  `backend/appsflyer_event_worker.py`) and uses bare sibling imports such as
+  `from db_indexes import ...`, the module's parent directory MUST be on
+  `sys.path` before `exec_module` / `importlib.import_module` is called.
+  In production `python -B backend/appsflyer_event_worker.py` puts
+  `/workspace/backend` on `sys.path[0]` automatically; `importlib` does NOT.
+- Any helper function (e.g. `_load_worker_module()`) that loads a module via
+  `importlib.util.spec_from_file_location` + `exec_module` MUST insert the
+  target file's parent directory into `sys.path` first:
+    parent = str(pathlib.Path(path).resolve().parent)
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+  Omitting this causes `ModuleNotFoundError` for every bare sibling import
+  in the loaded module. This is a harness defect, not an app defect.
+- The same rule applies to PYTHONPATH-based sidecar scripts: set PYTHONPATH
+  to include BOTH `/workspace` (repo root) AND the entry point's parent
+  directory (e.g. `/workspace/backend`) when the entry point uses bare
+  sibling imports.
+
 Output contract:
 - Return exactly one valid JSON object.
 - Do not wrap JSON in markdown fences.
