@@ -5111,12 +5111,13 @@ recover_stalled_issue() {
             add_healing_note "Issue #${issue_num}: open PR #${_lpr_num} has merge conflicts (phase=${phase}); dispatching conflict resolver instead of '${action}'"
             STALL_HEALING_CHANGED=true
             tg_notify "Stall recovery: PR #${_lpr_num} for issue #${issue_num} has merge conflicts. Dispatched conflict resolver."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
+            return 0  # Signal: corrective action taken
           elif [ "${_opr_dispatch_rc}" -eq 2 ]; then
             echo "STALL_SKIP issue=${issue_num} reason=open_pr_merge_conflict_dispatch_skipped pr=${_lpr_num} phase=${phase} action=${action}"
           else
             echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict_dispatch_failed pr=${_lpr_num} phase=${phase} action=${action} rc=${_opr_dispatch_rc}"
           fi
-          return 1  # Signal: corrective action taken, don't increment stall counter
+          return 1  # Signal: no action taken (skipped/failed dispatch)
         fi
 
         # Sub-case 2: PR has unresolved review comments → dispatch review/autofix
@@ -5138,12 +5139,13 @@ recover_stalled_issue() {
             add_healing_note "Issue #${issue_num}: open PR #${_lpr_num} has ${_opr_review_comments} review(s) requesting changes (phase=${phase}); dispatching autofix instead of '${action}'"
             STALL_HEALING_CHANGED=true
             tg_notify "Stall recovery: PR #${_lpr_num} for issue #${issue_num} has changes-requested reviews. Dispatched autofix."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
+            return 0  # Signal: corrective action taken
           elif [ "${_opr_autofix_rc}" -eq 2 ]; then
             echo "STALL_SKIP issue=${issue_num} reason=open_pr_changes_requested_dispatch_skipped pr=${_lpr_num} phase=${phase} action=${action}"
           else
             echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_changes_requested_dispatch_failed pr=${_lpr_num} phase=${phase} action=${action} rc=${_opr_autofix_rc}"
           fi
-          return 1  # Signal: open-PR guard handled path, don't increment stall counter
+          return 1  # Signal: no action taken (skipped/failed dispatch)
         fi
 
         # Sub-case 3: PR is open but clean/progressing → skip (legacy behavior)
