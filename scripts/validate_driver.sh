@@ -513,6 +513,8 @@ wait_for_health()
 			app_log_tail="$(tail -n "${TAIL_LINES}" "${app_service_log}" 2>/dev/null || echo "(no service log)")"
 			{
 				echo "=== ${APP_SERVICE} timeout diagnostics ==="
+				echo "--- ${APP_SERVICE} log tail ---"
+				echo "${app_log_tail}"
 				echo "--- docker compose ps ---"
 				docker compose -f "${COMPOSE_FILE}" ps 2>&1 || true
 				if [ -n "${container_id}" ]; then
@@ -523,8 +525,6 @@ wait_for_health()
 						docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}exit={{.ExitCode}} start={{.Start}} output={{.Output}}{{"\n"}}{{end}}{{else}}no healthcheck configured{{end}}' \
 							"${container_id}" 2>&1 || true
 				fi
-				echo "--- ${APP_SERVICE} log tail ---"
-				echo "${app_log_tail}"
 				echo "=== end diagnostics ==="
 			} >> "${app_service_log}" 2>&1 || true
 			capture_compose_logs
