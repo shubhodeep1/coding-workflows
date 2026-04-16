@@ -634,6 +634,7 @@ _gh_issue_timeline_with_cross_refs_rest()
 				.
 			end
 		)
+		| map(select((.event == "cross-referenced") or (.event == "closed")))
 	' 2>/dev/null
 }
 
