@@ -76,6 +76,7 @@ fi
 _pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
 if [ -n "${_pr_state}" ] && [ "${_pr_state}" != "open" ]; then
   echo "PR #${PR_NUMBER} is ${_pr_state} — skipping review-blocked judge (PR not open)."
+  echo "PR_CLOSED=true" >> "$GITHUB_ENV"
   echo "judge_skip_reason=pr_not_open" >> "$GITHUB_OUTPUT"
   exit 0
 fi
