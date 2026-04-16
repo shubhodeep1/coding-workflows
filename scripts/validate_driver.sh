@@ -179,7 +179,15 @@ capture_service_log()
 	local dest="$2"
 	if [ -f "${COMPOSE_FILE}" ]; then
 		mkdir -p "$(dirname -- "${dest}")" >/dev/null 2>&1 || true
-		docker compose -f "${COMPOSE_FILE}" logs --no-color "${service}" > "${dest}" 2>&1 || true
+		local service_log_tmp
+		service_log_tmp="$(mktemp "${TMPDIR:-/tmp}/service_capture.XXXXXX" 2>/dev/null || true)"
+		if [ -n "${service_log_tmp}" ]; then
+			docker compose -f "${COMPOSE_FILE}" logs --no-color "${service}" > "${service_log_tmp}" 2>&1 || true
+			if [ -s "${service_log_tmp}" ]; then
+				mv "${service_log_tmp}" "${dest}"
+			fi
+			rm -f "${service_log_tmp}" >/dev/null 2>&1 || true
+		fi
 	fi
 }
 
@@ -208,7 +216,7 @@ collect_container_diagnostics()
 				docker inspect -f 'Status={{.State.Status}} Running={{.State.Running}} ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}}' "${cid}" 2>/dev/null || true
 			echo ""
 			echo "=== healthcheck log (last 5 probes) ==="
-			docker inspect --format '{{if .State.Health}}{{range .State.Health.Log}}exit={{.ExitCode}} start={{.Start}} output={{.Output}}{{end}}{{else}}no healthcheck configured{{end}}' "${cid}" 2>/dev/null | tail -n 5 || true
+			docker inspect --format '{{if .State.Health}}{{range .State.Health.Log}}exit={{.ExitCode}} start={{.Start}} output={{.Output}}{{"\n"}}{{end}}{{else}}no healthcheck configured{{end}}' "${cid}" 2>/dev/null | tail -n 5 || true
 		else
 			echo "=== no container found for service ${service} ==="
 		fi
@@ -489,26 +497,23 @@ wait_for_health()
 			collect_container_diagnostics "${APP_SERVICE}" "${diag_log}"
 			capture_compose_logs
 
-			local merged_timeout_log
-			merged_timeout_log="$(mktemp "${TMPDIR:-/tmp}/health_timeout.XXXXXX" 2>/dev/null || true)"
-			if [ -n "${merged_timeout_log}" ]; then
-				{
-					if [ -s "${diag_log}" ]; then
-						echo "=== container diagnostics (${APP_SERVICE}) ==="
-						cat "${diag_log}"
-						echo ""
-					fi
-					if [ -s "${app_log}" ]; then
-						echo "=== ${APP_SERVICE} logs (last 80 lines) ==="
-						tail -n 80 "${app_log}"
-						echo ""
-					fi
-				} > "${merged_timeout_log}"
-				if [ -s "${merged_timeout_log}" ]; then
-					fail_fast "startup_health_timeout" "service did not become healthy within HEALTH_TIMEOUT seconds" "${merged_timeout_log}" "health" 1
+			local merged_timeout_log="${LOG_DIR}/${APP_SERVICE}.health_timeout.log"
+			{
+				if [ -s "${diag_log}" ]; then
+					echo "=== container diagnostics (${APP_SERVICE}) ==="
+					cat "${diag_log}"
+					echo ""
 				fi
-				rm -f "${merged_timeout_log}" >/dev/null 2>&1 || true
+				if [ -s "${app_log}" ]; then
+					echo "=== ${APP_SERVICE} logs (last 80 lines) ==="
+					tail -n 80 "${app_log}"
+					echo ""
+				fi
+			} > "${merged_timeout_log}"
+			if [ -s "${merged_timeout_log}" ]; then
+				fail_fast "startup_health_timeout" "service did not become healthy within HEALTH_TIMEOUT seconds" "${merged_timeout_log}" "health" 1
 			fi
+			rm -f "${merged_timeout_log}" >/dev/null 2>&1 || true
 			fail_fast "startup_health_timeout" "service did not become healthy within HEALTH_TIMEOUT seconds" "${COMPOSE_LOG}" "health"
 		fi
 
