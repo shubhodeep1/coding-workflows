@@ -1855,9 +1855,42 @@ jobs:
                 if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
                   echo "Attempting rebase onto origin/${TARGET_BRANCH} to reconcile non-fast-forward..."
                   if ! git rebase "origin/${TARGET_BRANCH}"; then
-                    echo "::error::Rebase failed due to conflicts. Manual resolution required."
+                    if ! git rebase --abort; then
+                      echo "::error::Rebase abort failed; refusing force-with-lease fallback."
+                      exit 1
+                    fi
+                    if [[ -d .git/rebase-merge || -d .git/rebase-apply ]] || ! git diff --quiet || ! git diff --cached --quiet; then
+                      echo "::error::Rebase state not clean after abort; refusing force-with-lease fallback."
+                      exit 1
+                    fi
+                    # ai/issue-* branches are unprotected bot branches.  When the
+                    # integration branch has moved forward (e.g. a sibling sub-issue
+                    # merged) the stale remote ai/issue-* cannot be cleanly rebased
+                    # onto.  Fall back to --force-with-lease so the fresh local
+                    # commit (based on the latest integration branch) supersedes the
+                    # stale remote rather than failing the entire implementation run.
+                    if [[ "${TARGET_BRANCH}" =~ ^ai/issue-[0-9]+$ ]]; then
+                      echo "::warning::Rebase failed due to conflicts on bot branch ${TARGET_BRANCH}; falling back to --force-with-lease push."
+                      # Ensure the remote-tracking ref is fresh for an accurate
+                      # force-with-lease pin; best-effort - if fetch fails we
+                      # fall back to the previously cached remote SHA.
+                      if ! git fetch --no-tags --prune origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
+                        echo "Fetch before force-with-lease failed; using last-known remote SHA. Push may still fail due to stale lease."
+                      fi
+                      if ! REMOTE_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"; then
+                        echo "::error::Failed to resolve remote SHA for ${TARGET_BRANCH}; refusing force-with-lease fallback."
+                        exit 1
+                      fi
+                      if git push -u origin "HEAD:${TARGET_BRANCH}" \
+                           --force-with-lease="refs/heads/${TARGET_BRANCH}:${REMOTE_SHA}"; then
+                        echo "Force-with-lease push succeeded after rebase conflict on ${TARGET_BRANCH}."
+                        exit 0
+                      fi
+                      echo "::error::Force-with-lease push also failed on ${TARGET_BRANCH}."
+                    else
+                      echo "::error::Rebase failed due to conflicts. Manual resolution required."
+                    fi
                     echo "::warning::Aborting rebase — git state may need manual inspection if abort fails."
-                    git rebase --abort || true
                     exit 1
                   fi
                   echo "Rebase onto origin/${TARGET_BRANCH} succeeded; retrying push."
