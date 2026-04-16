@@ -173,18 +173,33 @@ def _normalize_runs_snapshot(values: Any) -> list[dict[str, Any]]:
     return [dict(item) for item in values if isinstance(item, dict)]
 
 
-def _index_cached_rows(values: Any) -> dict[int, dict[str, Any]]:
-    indexed: dict[int, dict[str, Any]] = {}
+def _cache_run_key(run_id: int, run_attempt: int) -> tuple[int, int]:
+    return run_id, max(1, run_attempt)
+
+
+def _run_key_from_payload(payload: dict[str, Any]) -> tuple[int, int] | None:
+    run_id = _to_int(payload.get("run_id"), 0)
+    if run_id <= 0:
+        run_id = _to_int(payload.get("id"), 0)
+    if run_id <= 0:
+        return None
+
+    run_attempt = _to_int(payload.get("run_attempt"), 1)
+    return _cache_run_key(run_id, run_attempt)
+
+
+def _index_cached_rows(values: Any) -> dict[tuple[int, int], dict[str, Any]]:
+    indexed: dict[tuple[int, int], dict[str, Any]] = {}
     if not isinstance(values, list):
         return indexed
 
     for row in values:
         if not isinstance(row, dict):
             continue
-        run_id = _to_int(row.get("run_id"), 0)
-        if run_id <= 0:
+        cache_key = _run_key_from_payload(row)
+        if cache_key is None:
             continue
-        indexed[run_id] = dict(row)
+        indexed[cache_key] = dict(row)
     return indexed
 
 
@@ -1015,10 +1030,12 @@ def main(argv: list[str] | None = None) -> int:
 
         for run in runs:
             run_id = _to_int(run.get("id"), 0)
+            run_attempt = max(1, _to_int(run.get("run_attempt"), 1))
+            cache_key = _cache_run_key(run_id, run_attempt) if run_id > 0 else None
             if run_id > 0:
                 runs_snapshot_for_repo.append(_run_snapshot_for_cache(run))
 
-            reused_row = cached_rows_by_run_id.get(run_id)
+            reused_row = cached_rows_by_run_id.get(cache_key) if cache_key is not None else None
             if run_id > 0 and run_id in jobs_seen_lookup and isinstance(reused_row, dict):
                 row_copy = dict(reused_row)
                 row_copy.pop("_success_sampled", None)
@@ -1045,8 +1062,11 @@ def main(argv: list[str] | None = None) -> int:
                             "message": str(exc),
                         }
                     )
+                else:
+                    jobs_seen_set = _touch_seen_set(jobs_seen_set, run_id)
+                    jobs_seen_lookup = set(jobs_seen_set)
 
-            if run_id > 0:
+            elif run_id > 0:
                 jobs_seen_set = _touch_seen_set(jobs_seen_set, run_id)
                 jobs_seen_lookup = set(jobs_seen_set)
 
@@ -1084,8 +1104,9 @@ def main(argv: list[str] | None = None) -> int:
             logs_seen_set = _normalize_seen_set(repo_cache.get("logs_seen_set"))
             logs_seen_lookup = set(logs_seen_set)
             cached_rows_by_run_id = _index_cached_rows(repo_cache.get("rows_snapshot"))
+            cache_key = _cache_run_key(run_id, _to_int(run.get("run_attempt"), 1))
             if run_id in logs_seen_lookup:
-                cached_excerpts = _cached_log_excerpts(cached_rows_by_run_id.get(run_id))
+                cached_excerpts = _cached_log_excerpts(cached_rows_by_run_id.get(cache_key))
                 if cached_excerpts is not None:
                     run["log_excerpts"] = cached_excerpts
                     identity = (repository, run_id)
