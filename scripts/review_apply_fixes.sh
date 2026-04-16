@@ -628,7 +628,7 @@ while [ "${attempt}" -le 3 ]; do
           _ed_untracked_files="$(git ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d '[:space:]' || echo 0)"
           if [ -n "${_ed_diff_stat}" ]; then
             _ed_diff_stat_total_lines="$(printf '%s\n' "${_ed_diff_stat}" | wc -l | tr -d '[:space:]' || echo 0)"
-            printf '%s\n' "${_ed_diff_stat}" | head -n "${_ed_diff_stat_max_lines}"
+            printf '%s\n' "${_ed_diff_stat}" | head -n "${_ed_diff_stat_max_lines}" || true
             if [ "${_ed_diff_stat_total_lines:-0}" -gt "${_ed_diff_stat_max_lines}" ]; then
               echo "[truncated diff --stat output: showing first ${_ed_diff_stat_max_lines} of ${_ed_diff_stat_total_lines} lines]"
             fi
