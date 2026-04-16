@@ -168,6 +168,12 @@ PROMPT_RUNTIME_CONTEXT_HINT="$(printf '%s\n' \
   "Example command: cat ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
 
 # Detect whether this is the first review iteration (no prior AI autofix run).
+# Two conditions cover all first-run states:
+# 1. Missing or empty file — workflow never wrote a diff (very first run).
+# 2. Sentinel text — workflow wrote a placeholder string (e.g. "Initial run —
+#    no previous commit" or "No previous AI autofix") instead of a real diff.
+# Without both checks, runs where the workflow writes "Initial run — no
+# previous commit" would fall through and be classified as subsequent.
 IS_FIRST_ITERATION=false
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   IS_FIRST_ITERATION=true
