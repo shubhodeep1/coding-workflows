@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "<!-- ai:clarification-questions -->\nClarification questions (human response required)\n\nInterpreted clarification context: no Q<ID> items were asked; `/answer [auto-answered-by-orchestrator]` means planning can proceed with current issue scope.\n\nConflict detected with issue evidence:\n- The repository already contains first-class `BLOCKED:` support in both prompts and both workflows (`prompts/mode-clarify.txt`, `prompts/mode-plan.txt`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`).\n- There is already a blocked-path contract test file: `tests/test_plan_clarify_blocked_output.py`.\n- Plan should therefore target residual gaps/hardening, not greenfield blocked-path implementation.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/clarify.yml`\n- `.github/workflows/plan.yml`\n- `prompts/mode-clarify.txt` (only if reason-format tightening is needed)\n- `prompts/mode-plan.txt` (only if reason-format tightening is needed)\n- `tests/test_plan_clarify_blocked_output.py`\n- `README.md`\n- `agents.md`\n- No `/db/contracts/*` changes expected (no Mongo data/index behavior change).\n\n2. Functions/modules to implement or adjust\n- Clarify workflow:\n- `Parse Codex output` blocked branch: keep blocked-first precedence, ensure deterministic non-empty blocked reason handling.\n- `Set clarification phase label` and clear-path transition: ensure stale `ai:blocked` is removed when unblocking/re-entering normal flow.\n- Blocked handoff step: keep human-handoff comment with exact missing inputs and keep auto-answer suppression.\n- Plan workflow:\n- `Parse planning output` blocked branch: keep blocked-first precedence ahead of clarification detection.\n- `Validate planning phase label`: preserve blocked->planning entry only on explicit human `/answer`, and ensure stale `ai:blocked` is cleared once normal planning resumes.\n- `Handle blocked planning output`: preserve terminal blocked label transition and suppress orchestrator auto-answer path.\n- Memory/idempotency integration:\n- Preserve `memory_processed_command_complete --status blocked` for blocked `/answer` in plan.\n- Ensure blocked outcomes remain recorded in run events (fail-open behavior unchanged).\n\n3. Data structures affected\n- LLM output contract surface:\n- `BLOCKED: <reason>` (single-line deterministic signal).\n- GitHub issue label state machine:\n- `ai:blocked`, `ai:clarification`, `ai:planning`, `ai:awaiting-approval` transitions.\n- Memory metadata/status values:\n- processed-command status `blocked`\n- phase outcome `blocked` in run events.\n\n4. API/interface changes\n- Human-facing issue comments for blocked paths should consistently include:\n- explicit missing external input(s)\n- explicit next action (`/answer` or `/reclarify` as appropriate)\n- Operational behavior contract:\n- blocked detection must not post auto `/answer`\n- blocked detection must not trigger orchestrator auto-answer\n- normal CLEAR / NEEDS_CLARIFICATION behavior must remain backward compatible.\n\n5. Potential risks and edge cases\n- Stale-label risk:\n- issues can carry `ai:blocked` alongside active phase labels if unblock transitions do not clear it consistently.\n- Parser false positives/negatives:\n- `BLOCKED:` inside fenced code blocks must remain ignored.\n- Backward compatibility risk:\n- tightening blocked parsing must not break existing `STATUS: NEEDS_CLARIFICATION` or `STATUS: CLEAR` paths.\n- Loop regression risk:\n- repeated unsatisfiable branch/SHA requests must not re-enter clarify/plan auto-looping without new human input.\n\n6. Testing considerations\n- Extend `tests/test_plan_clarify_blocked_output.py` to cover:\n- blocked parser precedence over clarification detection in both workflows\n- blocked-path label transitions (add blocked, remove active phase labels)\n- blocked-path comment behavior includes actionable missing-input handoff\n- blocked-path suppression of auto-answer/orchestrator auto-answer steps\n- stale `ai:blocked` cleanup when issue re-enters normal planning flow\n- no-yo-yo contract assertions for repeated external-input unsatisfiable cases\n- Keep existing orchestrator clarify loop-guard coverage (`tests/test_orchestrate_clarify_loop_guard.py`) and ensure docs align with that guard plus clarify/plan blocked paths.\n- Run relevant targeted tests in CI for workflow contract regression and loop-guard invariants.\n\nDocumentation updates to include in same change\n- `README.md`: explicitly document that both clarify and plan can hard-stop into `ai:blocked` for non-synthesizable external inputs, and that this is complementary to `ORCHESTRATOR_MAX_CLARIFY_CYCLES` (loop guard for auto-answer cycles).\n- `agents.md`: add/expand explicit blocked-path semantics for clarify/plan (not only orchestrator loop-guard mention).\n\nAuto-answer parse failure: No Q-ID blocks detected\nRun: https://github.com/shubhodeep1/coding-workflows/actions/runs/24488757887\nHuman /answer is required for this clarification cycle.\n\nReply with:\n/answer",
+  "fingerprint": "ee7c628fac7ab007df12b530a5ca3480ac27cd0f350883e9890295a53ea50c77",
+  "lineage": {
+    "issue_number": 1139,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24488757887",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24488757887",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1139"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416023757_d90fde766a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1139,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24488757887"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Plan requested re-clarification for issue #1139",
+  "timestamps": {
+    "created_at": "2026-04-16T02:37:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
