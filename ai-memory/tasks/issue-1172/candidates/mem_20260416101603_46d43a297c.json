@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `20eafd7794b5c71aa63b90759de1781d2a86c312`\n- Checked-out branch: `orchestrator/project-1170`\n- Integration metadata branch: `orchestrator/project-1170`\n- Integration mismatch: `false`\n\nClarification mapping:\n- No clarification questions were issued (`/answer [auto-answered-by-orchestrator]`), so planning proceeds directly on the provided scope.\n\nRepresentative implementation pattern to follow:\n- `scripts/analyze_workflow_logs.py::main` already has a clear mode switch pattern (`sync` vs `batch submit/poll`) and centralized output writing (`resolve_dated_output_path`, `_write_json_atomic`, `write_report_atomic`).\n- `tests/test_analyze_workflow_logs.py::test_main_generates_dated_report_using_stubs` and `test_main_batch_submit_writes_state_and_returns_pending` are the representative tests for non-batch/batch behavior preservation.\n\nTask checklist (mapped to issue scope):\n- [ ] Add `--codex-mode` CLI flag (default `false`).\n- [ ] Change `--max-prompt-tokens/--prompt-token-budget` default to `0` and accept `0` as valid.\n- [ ] Implement codex-mode execution path that skips OpenRouter inference (direct + batch), writes `analysis_context.json` (untruncated), prints that path, exits `0`.\n- [ ] Preserve existing non-codex direct and batch behavior when `--codex-mode` is not set.\n- [ ] Update tests for parser defaults, codex-mode output/exit behavior, and legacy-path regression coverage.\n\nFiles likely to change:\n- `scripts/analyze_workflow_logs.py`\n- `tests/test_analyze_workflow_logs.py`\n\nFunctions/modules to implement:\n- `build_parser`\n- `main`\n- Reuse existing helpers: `prepare_analysis_context`, `truncate_to_budget`, `_write_json_atomic`, `resolve_dated_output_path` (or equivalent path resolution logic for codex context output)\n\nPlanned implementation details:\n1. CLI/interface updates in `build_parser`.\n- Add `--codex-mode` via `store_true`.\n- Change `prompt_token_budget` default from `24000` to `0`.\n- Update help text to reflect `0 = unbounded/no truncation`.\n\n2. Validation and control-flow updates in `main`.\n- Change prompt budget guard from `<= 0` to `< 0`.\n- Move OpenRouter API key requirement behind non-codex execution so codex mode does not require `OPENROUTER_API_KEY`.\n- Create codex-mode early return branch after input/context preparation:\n- Build full context from `prepare_analysis_context`.\n- Do not truncate for codex mode (ignore budget there).\n- Write `analysis_context.json` to output data location (using atomic JSON writer).\n- Print JSON path and return `0`.\n\n3. Non-codex path compatibility.\n- Keep existing direct (`run_sync`) and batch (`submit/poll/auto`) paths unchanged.\n- Keep existing fail-open batch fallback behavior unchanged.\n\nData structures affected:\n- `argparse.Namespace`: new boolean field `codex_mode`; updated default for `prompt_token_budget`.\n- `analysis_context.json` payload: serialized `prepare_analysis_context` output in codex mode (full, untruncated context).\n\nAPI/interface changes:\n- New CLI flag: `--codex-mode` (optional, default `false`).\n- `--max-prompt-tokens/--prompt-token-budget` default becomes `0`.\n- `0` budget is accepted (no truncation) instead of rejected.\n\nPotential risks and edge cases:\n- Output location ambiguity when `--output` (file path) is supplied; implementation should deterministically place `analysis_context.json` in the resolved output location directory.\n- Ensure codex mode never enters batch pending exit-code `3` path.\n- Preserve behavior for existing automation that expects markdown output in non-codex mode.\n- Avoid accidental requirement of prompt template or API key in codex mode if inference is skipped.\n\nConflict detection (issue vs current code):\n- Current code rejects `--prompt-token-budget <= 0`; this conflicts with required default/acceptance of `0`.\n- Current code requires `OPENROUTER_API_KEY` unconditionally; this conflicts with codex mode requirement to run without live inference.\n- No branch/ref conflict detected for this planning run.\n\nTesting considerations:\n1. Parser defaults.\n- Add/adjust tests to assert:\n- `prompt_token_budget == 0` by default.\n- `codex_mode is False` by default.\n- `--prompt-token-budget 0` parses and is accepted.\n\n2. Codex mode path behavior.\n- New test: run `main([...,\"--codex-mode\",...])` without `OPENROUTER_API_KEY`.\n- Assert exit code `0`.\n- Capture stdout and assert it prints `analysis_context.json` path.\n- Assert file exists and contains expected context keys.\n- Stub `call_openrouter`, `submit_openrouter_batch`, `poll_openrouter_batch` to fail if called, confirming they are skipped.\n\n3. Legacy non-codex regression.\n- Keep existing direct-path stubbed success test passing with new default budget.\n- Keep existing batch submit/poll tests unchanged to verify compatibility.\n- Keep `test_main_missing_openrouter_api_key_returns_2` as explicit non-codex requirement check.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ee2c80f59e44871f1bc3137172311ff94012fa6242676e5e78f67aec66da3ba1",
+  "lineage": {
+    "issue_number": 1172,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24504542725",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24504542725",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1172"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416101603_46d43a297c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1172,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24504542725"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1172",
+  "timestamps": {
+    "created_at": "2026-04-16T10:16:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
