@@ -2051,7 +2051,10 @@ jobs:
                 # would fire a false-positive EDITOR_CHANGES_LOST error.
                 # Same-line contradictions ("no files modified but updated
                 # X") and multi-line explicit edit bullets are still caught.
-                if [ -n "${substantive}" ]; then
+                first_line_suffix="$(printf '%s\n' "${first_line}" | sed -E 's/^[[:space:]]*-[[:space:]]*(no (repository )?files (were )?modified|no changes (were )?made|no modifications)[[:space:][:punct:]]*//I')"
+                if printf '%s\n' "${first_line_suffix}" | grep -qiE "${edit_claim_regex}"; then
+                  has_real_changes="true"
+                elif [ -n "${substantive}" ]; then
                   if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files (were )?modified|no changes (were )?made|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
                     has_real_changes="true"
                   else
