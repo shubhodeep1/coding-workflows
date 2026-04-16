@@ -1855,7 +1855,14 @@ jobs:
                 if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
                   echo "Attempting rebase onto origin/${TARGET_BRANCH} to reconcile non-fast-forward..."
                   if ! git rebase "origin/${TARGET_BRANCH}"; then
-                    git rebase --abort || true
+                    if ! git rebase --abort; then
+                      echo "::error::Rebase abort failed; refusing force-with-lease fallback."
+                      exit 1
+                    fi
+                    if [[ -d .git/rebase-merge || -d .git/rebase-apply ]] || ! git diff --quiet || ! git diff --cached --quiet; then
+                      echo "::error::Rebase state not clean after abort; refusing force-with-lease fallback."
+                      exit 1
+                    fi
                     # ai/issue-* branches are unprotected bot branches.  When the
                     # integration branch has moved forward (e.g. a sibling sub-issue
                     # merged) the stale remote ai/issue-* cannot be cleanly rebased
