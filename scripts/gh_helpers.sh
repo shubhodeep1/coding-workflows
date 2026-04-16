@@ -8,7 +8,6 @@
 #   gh_retry             — run a gh CLI command with rate-limit detection + retry
 #   gh_retry_to_file     — like gh_retry but captures stdout to a specified file
 #   gh_api_json_to_file  — like gh_retry_to_file but also validates JSON output
-#   gh_pr_with_all_comments — PR meta + issue comments + review comments (GraphQL-first)
 #   curl_gh_api          — run a curl command against GitHub API with retry
 #
 # Rate limit detection: on 403/429 "rate limit" responses the helper
@@ -536,6 +535,70 @@ gh_api_json_to_file()
 	fi
 	rm -f "${stderr_file}"
 	: > "${outfile}"
+	return 1
+}
+
+# ---------------------------------------------------------------
+# curl_gh_api — curl wrapper with rate-limit retry for GitHub API.
+#
+# Captures HTTP status code.  On 429 or 403-with-rate-limit body,
+# sleeps 30 s and retries.  Other errors use exponential backoff.
+# Outputs the response body on success (HTTP 2xx).
+#
+# Usage:
+#   curl_gh_api -s \
+#       -H "Authorization: token ${GH_TOKEN}" \
+#       -H "Accept: application/vnd.github.v3+json" \
+#       "https://api.github.com/repos/owner/repo/issues/1/comments"
+# ---------------------------------------------------------------
+curl_gh_api()
+{
+	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
+	local attempt=1
+	local body_file header_file
+	if ! body_file=$(mktemp "${TMPDIR:-/tmp}/curl_gh_body.XXXXXX" 2>/dev/null); then
+		echo "::error::curl_gh_api: failed to create body temp file (mktemp failed); aborting without calling curl" >&2
+		return 1
+	fi
+	if ! header_file=$(mktemp "${TMPDIR:-/tmp}/curl_gh_hdr.XXXXXX" 2>/dev/null); then
+		echo "::error::curl_gh_api: failed to create header temp file (mktemp failed); aborting without calling curl" >&2
+		rm -f "${body_file}"
+		return 1
+	fi
+
+	while [ "${attempt}" -le "${max_attempts}" ]; do
+		: > "${body_file}"
+		: > "${header_file}"
+		local http_code
+		http_code=$(curl -o "${body_file}" -D "${header_file}" -w '%{http_code}' "$@" 2>/dev/null) || http_code="000"
+
+		if [ "${http_code}" -ge 200 ] 2>/dev/null && [ "${http_code}" -lt 300 ] 2>/dev/null; then
+			cat "${body_file}"
+			rm -f "${body_file}" "${header_file}"
+			return 0
+		fi
+
+		local body_content
+		body_content=$(cat "${body_file}" 2>/dev/null || true)
+
+		if [ "${http_code}" = "429" ] || { [ "${http_code}" = "403" ] && _is_gh_rate_limit "${body_content}"; }; then
+			echo "::warning::GitHub API rate limit (HTTP ${http_code}, attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
+			_gh_ratelimit_tg_alert
+			_gh_rate_limit_trip_breaker
+			local _reset_ts
+			_reset_ts=$(_parse_reset_header "${header_file}")
+			_sleep_until_reset "${_reset_ts}"
+		else
+			local wait_secs=$(( 2 ** (attempt - 1) ))
+			echo "::warning::GitHub API curl failed HTTP ${http_code} (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
+			sleep "${wait_secs}"
+		fi
+
+		attempt=$(( attempt + 1 ))
+	done
+
+	rm -f "${body_file}" "${header_file}"
+	echo "::error::GitHub API curl failed after ${max_attempts} attempts" >&2
 	return 1
 }
 
