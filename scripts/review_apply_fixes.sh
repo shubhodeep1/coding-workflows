@@ -390,6 +390,8 @@ EDITOR_MAX_WALL="${EDITOR_MAX_WALL:-3300}"            # 55 min
 EDITOR_MIN_ATTEMPT_SECS="${EDITOR_MIN_ATTEMPT_SECS:-300}"  # 5 min minimum
 JOB_TIMEOUT_SECS=$((180 * 60))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
+_hb_fifo=""
+trap '[ -n "${_hb_fifo:-}" ] && rm -f "${_hb_fifo}" 2>/dev/null || true' EXIT
 
 attempt=1
 while [ "${attempt}" -le 3 ]; do
@@ -510,6 +512,7 @@ while [ "${attempt}" -le 3 ]; do
   # Wait for the heartbeat reader to finish draining the FIFO.
   wait "${_hb_reader_pid}" 2>/dev/null || true
   rm -f "${_hb_fifo}"
+  _hb_fifo=""
 
   kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
