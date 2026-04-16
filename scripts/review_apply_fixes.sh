@@ -72,6 +72,17 @@ Use ${PR_META_FILE} to understand:
 - PR description
 - overall intent of the change
 
+LINKED ISSUE (ORIGINAL TASK DESCRIPTION)
+$(if [ -s "${LINKED_ISSUE_CONTEXT_FILE:-}" ]; then
+  echo "The following file contains the original issue that triggered this PR."
+  echo "Use it to verify the PR fully implements the requested task and to judge"
+  echo "whether reviewer suggestions align with or contradict the original intent."
+  echo ""
+  echo "File: ${LINKED_ISSUE_CONTEXT_FILE}"
+else
+  echo "No linked issue context available for this PR."
+fi)
+
 REVIEWER INPUTS
 Multiple independent reviewer models have produced review reports.
 Reviewer artifacts are bundled into:
@@ -121,6 +132,26 @@ Before applying any fix:
 Ignore reviewer suggestions that lack clear evidence.
 
 Do not apply fixes based on speculative or hypothetical problems.
+
+PRE-FIX PLANNING STEP (MANDATORY)
+
+Before making ANY code changes, you MUST complete this planning step:
+
+1. Read ALL reviewer outputs from the bundle file
+2. Read the reviewer consensus file
+3. Read all PR comments
+4. Create a complete issue list — write down EVERY issue from ALL sources:
+   - For each issue: file, line, problem summary, source (which reviewer(s) or comment), confidence
+5. Classify each issue as one of:
+   - WILL_FIX: real issue with concrete evidence, within scope
+   - ALREADY_FIXED: the code already handles this correctly
+   - REJECT: speculative, out-of-scope, or incorrect suggestion (note reason)
+6. Sort WILL_FIX issues by priority: confidence score × severity
+7. Execute fixes in priority order, ensuring ALL WILL_FIX items are addressed
+
+This planning step ensures comprehensive coverage. Do not start editing files
+until you have classified every issue. The goal is to fix everything in one pass
+so that subsequent review iterations find minimal remaining issues.
 
 REVIEWER CONSENSUS SIGNAL
 The reviewer consensus file indicates which issues were detected by multiple reviewer models.
@@ -595,7 +626,7 @@ while [ "${attempt}" -le 3 ]; do
           in_s { print }
         ' "${tmp_output}")"
         no_change_phrase_regex='no ((repository|repo|code|file)[[:space:]]+)?(file[[:space:]]+)?(changes|modifications|edits)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)|no (repository )?files were modified|no changes (were )?made|no modifications'
-        no_change_declaration_regex="^[[:space:]]*(-[[:space:]]*)?([^;]*;[[:space:]]*)?(${no_change_phrase_regex})([[:space:]]*[[:punct:]]*)?$"
+        no_change_declaration_regex="^[[:space:]]*(-[[:space:]]*)?([^;:-]*[;:-][[:space:]]*)?(${no_change_phrase_regex})([[:space:]]*[[:punct:]]*)?$"
         strong_edit_claim_regex='update(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)|`[^`]+\.[[:alpha:]]+`'
 
         _claimed_changes="$(printf '%s\n' "${changes_section}" \
@@ -605,7 +636,7 @@ while [ "${attempt}" -le 3 ]; do
           | grep -viE "${no_change_declaration_regex}" \
           || true)"
 
-        mixed_claim_lines="$(printf '%s\n' "${changes_section}" | grep -iE "(${strong_edit_claim_regex}).*(${no_change_phrase_regex})" || true)"
+        mixed_claim_lines="$(printf '%s\n' "${changes_section}" | grep -iE "((${strong_edit_claim_regex}).*(${no_change_phrase_regex})|(${no_change_phrase_regex}).*(${strong_edit_claim_regex}))" || true)"
         if [ -n "${mixed_claim_lines}" ]; then
           _claimed_changes="$(printf '%s\n%s\n' "${_claimed_changes}" "${mixed_claim_lines}" | grep -vE '^[[:space:]]*$' | awk '!seen[$0]++' || true)"
         fi
