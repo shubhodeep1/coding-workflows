@@ -94,8 +94,12 @@ jobs:
             SHOULD_RUN="false"
             echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
           else
-            pr_state="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
-            pr_merged="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.merged // false' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "false")"
+            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false)] | @tsv')"; then
+              pr_state="${_pr_gate%%$'\t'*}"
+              pr_merged="${_pr_gate#*$'\t'}"
+              [ "${pr_merged}" = "${_pr_gate}" ] && pr_merged="false"
+              pr_merged="$(printf '%s' "${pr_merged}" | tr '[:upper:]' '[:lower:]')"
+            fi
           fi
 
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
@@ -438,7 +442,7 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
-          pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
+          pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' || echo "")"
           if [ -n "${pr_state}" ] && [ "${pr_state}" != "open" ]; then
             echo "::warning::PR #${PR_NUMBER} is ${pr_state} — setting PR_CLOSED to skip downstream work."
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"
@@ -699,19 +703,34 @@ jobs:
           # field; PRs with more than 50 linked issues will be silently
           # truncated (an extremely rare edge case in practice).
           _linked_tmp="$(mktemp)"
+          _linked_fetch_ok="false"
           if gh_retry "${_linked_tmp}" api graphql \
             -f owner="${{ github.repository_owner }}" \
             -f name="$(echo '${{ github.repository }}' | cut -d/ -f2)" \
             -F number="${PR_NUMBER}" \
             -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null; then
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
+            _linked_fetch_ok="true"
             _linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
           else
+            echo "::warning::Failed to fetch linked issues via GraphQL; proceeding without linked-issue context."
             _linked_raw='[]'
           fi
           rm -f "${_linked_tmp}"
           _linked_raw="$(printf '%s' "${_linked_raw}" | jq -c '.' 2>/dev/null || echo '[]')"
-          printf 'LINKED_ISSUES_JSON=%s\n' "${_linked_raw}" >> "$GITHUB_ENV"
+
+          # Store a lightweight numbers-only array in the env var to avoid
+          # size/sensitivity issues. Later steps only need numbers for linking.
+          # Only export cache state when fetch succeeded; on transient failure,
+          # leave LINKED_ISSUES_JSON unset so the late cache step retries.
+          if [ "${_linked_fetch_ok}" = "true" ]; then
+            if [ -n "${_linked_raw}" ] && [ "${_linked_raw}" != "[]" ]; then
+              _linked_numbers="$(printf '%s' "${_linked_raw}" | jq -c '[.[] | {number}]' 2>/dev/null || echo '[]')"
+              printf 'LINKED_ISSUES_JSON=%s\n' "${_linked_numbers}" >> "$GITHUB_ENV"
+            else
+              printf 'LINKED_ISSUES_JSON=[]\n' >> "$GITHUB_ENV"
+            fi
+          fi
 
           # Build linked issue context file for reviewer/editor prompts.
           # Use a temp file to avoid ARG_MAX failures on large issue bodies.
@@ -3063,18 +3082,33 @@ jobs:
           # title+body). Treat any set value (including "[]") as cached to
           # avoid duplicate API calls in the common no-linked-issues case.
           if [ -n "${LINKED_ISSUES_JSON+x}" ]; then
-            echo "Linked issues already cached from early fetch."
+            if [ -n "${LINKED_ISSUES_JSON:-}" ] && [ "${LINKED_ISSUES_JSON}" != "[]" ]; then
+              _linked_count="$(printf '%s' "${LINKED_ISSUES_JSON}" | jq -r 'length' 2>/dev/null || echo '0')"
+              _linked_numbers="$(printf '%s' "${LINKED_ISSUES_JSON}" | jq -r '[.[].number] | join(", ")' 2>/dev/null || true)"
+              if [ -n "${_linked_numbers}" ]; then
+                echo "Linked issues already cached from early fetch: count=${_linked_count}; numbers=${_linked_numbers}"
+              else
+                echo "Linked issues already cached from early fetch: count=${_linked_count}"
+              fi
+            else
+              echo "Linked issues already cached from early fetch."
+            fi
           else
             if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
               source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
             fi
             type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-            LINKED_ISSUES_JSON="$(gh_retry gh api graphql \
+            if LINKED_ISSUES_JSON="$(gh_retry gh api graphql \
               -f owner="${REPOSITORY%/*}" \
               -f name="${REPOSITORY#*/}" \
               -F number="${PR_NUMBER}" \
               -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null || echo '[]')"
+              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []')"; then
+              :
+            else
+              echo "::warning::Failed to refresh linked issues references; proceeding with empty linked issue list."
+              LINKED_ISSUES_JSON='[]'
+            fi
             LINKED_ISSUES_JSON="$(printf '%s' "${LINKED_ISSUES_JSON}" | jq -c '.' 2>/dev/null || echo '[]')"
             printf 'LINKED_ISSUES_JSON=%s\n' "${LINKED_ISSUES_JSON}" >> "$GITHUB_ENV"
           fi
