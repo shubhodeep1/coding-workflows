@@ -648,14 +648,14 @@ Triggers:
 | `since` | `""` | Optional ISO-8601 timestamp. When set, collector runs with `scripts/collect_workflow_logs.py --since <timestamp>`. |
 | `lookback_days` | `"7"` | Days of workflow runs to collect when `since` is empty. Passed to `scripts/collect_workflow_logs.py --lookback-days`. |
 | `codex_mode` | `true` | Codex-first analysis mode. When `true`, workflow runs analyzer preprocessing (`--codex-mode`) and then `codex exec` in the same run. When `false`, workflow uses the legacy analyzer inference/batch path (including deferred polling via batch-state artifact). |
-| `batch_api_disabled` | `""` | Optional `true`/`false` override for analyzer batch API behavior in non-codex mode only. Empty keeps `BATCH_API_DISABLED` env default. |
+| `batch_api_disabled` | `""` | Optional `true`/`false` override for analyzer batch API behavior in non-codex mode only. Non-empty values are validated in all runs; invalid values fail the workflow before mode branching. Empty keeps `BATCH_API_DISABLED` env default. |
 | `repos_override` | `""` | Optional comma-separated `owner/repo` list. Each item is validated with `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`; invalid values fail the run. |
 
 Mode behavior:
 
 - `codex_mode=true` (default): analyzer writes `analysis_context.json` (`--codex-mode`) and Codex generates the markdown report directly.
 - `codex_mode=false`: workflow restores latest non-expired `workflow-log-analysis-batch-state` artifact when available, runs analyzer in legacy mode, and may return pending (`exit 3`) until a later manual rerun completes polling.
-- `batch_api_disabled` input is honored only in `codex_mode=false` runs.
+- `batch_api_disabled` input is validated whenever a non-empty value is provided, but only affects analyzer behavior in `codex_mode=false` runs.
 
 Repository selection behavior:
 

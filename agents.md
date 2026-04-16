@@ -300,7 +300,7 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 - The collector randomly samples ~7% of successful runs for log analysis (`--success-sample-rate`, default `0.07`) using a deterministic seed. Sampled runs are tagged with `_success_sampled: true`.
 - AI memory operations emit `AI_MEMORY_TELEMETRY: {JSON}` lines (stderr from `ai_memory.py`; `memory_helpers.sh` uses stdout unless stdout must remain machine-readable, then telemetry is sent to stderr). The analysis prompt instructs the LLM to produce an **AI Memory Health** section from these lines.
 - `workflow-log-analysis.yml` remains `workflow_dispatch`-only and has dual execution paths: `codex_mode=true` (default) runs analyzer preprocessing (`--codex-mode`) plus `codex exec`, while `codex_mode=false` uses the legacy analyzer/batch path.
-- `batch_api_disabled` input overrides analyzer batch behavior only for `codex_mode=false`; codex-mode runs ignore batch-path overrides.
+- `batch_api_disabled` input is validated whenever a non-empty value is provided, but only overrides analyzer batch behavior for `codex_mode=false`; codex-mode runs do not use the batch path.
 
 ## 13a. Comprehensive Release Callback (Poller-Owned)
 
