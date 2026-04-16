@@ -1361,6 +1361,14 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 	state["integration_branch"] = "orchestrator/project-192"
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	# The pr_api_sequence entries are consumed sequentially by every
+	# gh api /pulls/N call.  The reconciliation loop calls
+	# _issue_cross_ref_pr_number_last (which triggers the REST timeline
+	# enrichment path — one extra /pulls/N call) PLUS _fetch_pr_json,
+	# consuming 2 entries before the review-blocked handler even starts.
+	# Provide enough "open" entries so the reconciliation sees the PR as
+	# open (keeping the issue review-blocked) and the review-blocked
+	# handler's own flow sees the open→merged transition.
 	_open_pr = {
 		"number": 901,
 		"state": "open",
@@ -1386,7 +1394,6 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 		"title": "Test PR",
 		"body": "Body",
 	}
-
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -1440,6 +1447,8 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 	state["integration_branch"] = "orchestrator/project-192"
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	# Extra open entries for reconciliation timeline enrichment (see
+	# test_review_blocked_merged_followup_retargets_to_integration_branch).
 	_open_pr = {
 		"number": 901,
 		"state": "open",
@@ -1464,7 +1473,6 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 		"title": "Test PR",
 		"body": "Body",
 	}
-
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -1513,6 +1521,8 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	# Extra open entries for reconciliation timeline enrichment (see
+	# test_review_blocked_merged_followup_retargets_to_integration_branch).
 	_open_pr = {
 		"number": 901,
 		"state": "open",
@@ -1538,7 +1548,6 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 		"title": "Test PR",
 		"body": "Body",
 	}
-
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -1588,6 +1597,8 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 	state["integration_branch"] = "orchestrator/project-192"
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	# Extra open entries for reconciliation timeline enrichment (see
+	# test_review_blocked_merged_followup_retargets_to_integration_branch).
 	_open_pr = {
 		"number": 901,
 		"state": "open",
@@ -1614,7 +1625,6 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 		"title": "Test PR",
 		"body": "Body",
 	}
-
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
