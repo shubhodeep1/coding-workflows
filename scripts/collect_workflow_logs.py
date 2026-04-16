@@ -567,10 +567,14 @@ def select_notable_runs_for_logs(runs: list[dict[str, Any]], max_log_runs: int) 
     )
     retried_runs = _sort_runs_by_created_desc([run for run in eligible if _to_int(run.get("retries"), 0) > 0])
 
+    runs_by_repository: dict[str, list[dict[str, Any]]] = {}
+    for run in eligible:
+        repository = str(run.get("repository"))
+        runs_by_repository.setdefault(repository, []).append(run)
+
     slow_runs: list[dict[str, Any]] = []
-    repositories = sorted({str(run.get("repository")) for run in eligible})
-    for repository in repositories:
-        repo_runs = [run for run in eligible if str(run.get("repository")) == repository]
+    for repository in sorted(runs_by_repository):
+        repo_runs = runs_by_repository[repository]
         repo_runs.sort(
             key=lambda item: (
                 _to_int(item.get("duration_seconds"), 0),
