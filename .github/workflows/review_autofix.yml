@@ -2004,11 +2004,11 @@ jobs:
               # file-change claims; without this guard those bullets trigger
               # a false-positive EDITOR_CHANGES_LOST error.
               first_line="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | head -1 || true)"
-              if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none'; then
+              if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)'; then
                 has_real_changes="false"
               else
                 # Strip lines that are blank or match "- none*"
-                substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' || true)"
+                substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)' || true)"
                 if [ -n "${substantive}" ]; then
                   has_real_changes="true"
                 fi
