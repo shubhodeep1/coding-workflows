@@ -687,6 +687,7 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
                 "error": error_text,
             }
         )
+        _emit_telemetry("clarify-loop-guard", ok=False, enabled=True, error="git_error", warning=error_text)
         return 2
     finally:
         if branch_dir:
