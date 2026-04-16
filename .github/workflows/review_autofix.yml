@@ -1945,8 +1945,9 @@ jobs:
               else
                 # Strip lines that are blank, match "- none*", or are
                 # informational metadata (e.g. "- Validation executed: ...")
-                # that the editor may emit when no files changed.
-                substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)' || true)"
+                # that the editor may emit when no files changed. Keep
+                # explicit "no changes" lines for contradiction detection.
+                substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed' || true)"
                 if [ -n "${substantive}" ]; then
                   if printf '%s\n' "${substantive}" | grep -qiE 'no (repository )?files were modified|no changes (were )?made|no modifications'; then
                     # Preserve contradictory mixed lines ("no changes, but
@@ -1962,7 +1963,9 @@ jobs:
                       fi
                     fi
                   else
-                    has_real_changes="true"
+                    if printf '%s\n' "${substantive}" | grep -qiE "${edit_claim_regex}"; then
+                      has_real_changes="true"
+                    fi
                   fi
                 fi
               fi
