@@ -361,14 +361,18 @@ gh_retry()
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
 			_gh_rate_limit_trip_breaker
-			_gh_rate_limit_wait
+			if [ "${attempt}" -lt "${max_attempts}" ]; then
+				_gh_rate_limit_wait
+			fi
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
 			if [ -n "${stderr_content}" ]; then
 				echo "::warning::  stderr: ${stderr_content}" >&2
 			fi
-			sleep "${wait_secs}"
+			if [ "${attempt}" -lt "${max_attempts}" ]; then
+				sleep "${wait_secs}"
+			fi
 		fi
 
 		attempt=$(( attempt + 1 ))
@@ -415,14 +419,18 @@ gh_retry_to_file()
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
 			_gh_rate_limit_trip_breaker
-			_gh_rate_limit_wait
+			if [ "${attempt}" -lt "${max_attempts}" ]; then
+				_gh_rate_limit_wait
+			fi
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
 			if [ -n "${stderr_content}" ]; then
 				echo "::warning::  stderr: ${stderr_content}" >&2
 			fi
-			sleep "${wait_secs}"
+			if [ "${attempt}" -lt "${max_attempts}" ]; then
+				sleep "${wait_secs}"
+			fi
 		fi
 
 		attempt=$(( attempt + 1 ))
