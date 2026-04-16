@@ -658,28 +658,23 @@ jobs:
           gh issue edit "${TRACKING_ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "${PENDING_LABEL}" >/dev/null
 
           METADATA_MARKER="COMPREHENSIVE_RELEASE_METADATA_V1"
-          METADATA_COMMENT_COUNT="$(gh_api_safe "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUMBER}/comments?per_page=100" --paginate | \
-            jq -s --arg marker "<!-- ${METADATA_MARKER} -->" 'map(. // []) | add // [] | [.[] | select((.body // "") | contains($marker))] | length' 2>/dev/null || echo '0')"
+          DISPATCHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          METADATA_BODY="$(printf '%s\n' \
+            "<!-- ${METADATA_MARKER} -->" \
+            "version_tag: ${VERSION_TAG}" \
+            "test_repo: ${TEST_REPO}" \
+            "source_repo: ${GITHUB_REPOSITORY}" \
+            "source_run_id: ${GITHUB_RUN_ID}" \
+            "source_run_url: ${SOURCE_RUN_URL}" \
+            "analysis_report: ${REPORT_FILE}" \
+            "analysis_report_url: ${REPORT_URL}" \
+            "analysis_workflow_run_id: ${ANALYSIS_RUN_ID}" \
+            "orchestrate_workflow: ${WORKFLOW_FILE}" \
+            "orchestrate_run_id: ${ORCH_RUN_ID}" \
+            "dispatched_at: ${DISPATCHED_AT}" \
+            "<!-- /${METADATA_MARKER} -->")"
 
-          if [ "${METADATA_COMMENT_COUNT}" = "0" ]; then
-            DISPATCHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            METADATA_BODY="$(printf '%s\n' \
-              "<!-- ${METADATA_MARKER} -->" \
-              "version_tag: ${VERSION_TAG}" \
-              "test_repo: ${TEST_REPO}" \
-              "source_repo: ${GITHUB_REPOSITORY}" \
-              "source_run_id: ${GITHUB_RUN_ID}" \
-              "source_run_url: ${SOURCE_RUN_URL}" \
-              "analysis_report: ${REPORT_FILE}" \
-              "analysis_report_url: ${REPORT_URL}" \
-              "analysis_workflow_run_id: ${ANALYSIS_RUN_ID}" \
-              "orchestrate_workflow: ${WORKFLOW_FILE}" \
-              "orchestrate_run_id: ${ORCH_RUN_ID}" \
-              "dispatched_at: ${DISPATCHED_AT}" \
-              "<!-- /${METADATA_MARKER} -->")"
-
-            jq -n --arg body "${METADATA_BODY}" '{"body": $body}' | \
-              gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUMBER}/comments" --method POST --input - >/dev/null
-          fi
+          jq -n --arg body "${METADATA_BODY}" '{"body": $body}' | \
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUMBER}/comments" --method POST --input - >/dev/null
 
           echo "tracking_issue=${TRACKING_ISSUE_NUMBER}" >> "${GITHUB_OUTPUT}"
