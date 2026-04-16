@@ -522,7 +522,6 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def truncate_to_budget(context: dict[str, Any], prompt_token_budget: int) -> dict[str, Any]:
-	trimmed = copy.deepcopy(context)
 	removed = {
 		"deep_dive_logs": 0,
 		"recent_runs": 0,
@@ -534,12 +533,15 @@ def truncate_to_budget(context: dict[str, Any], prompt_token_budget: int) -> dic
 	}
 
 	if prompt_token_budget <= 0:
+		trimmed = dict(context)
 		trimmed["truncation"] = {
 			"estimated_tokens": _estimate_tokens(trimmed),
 			"prompt_token_budget": prompt_token_budget,
 			"removed": removed,
 		}
 		return trimmed
+
+	trimmed = copy.deepcopy(context)
 
 	def estimate() -> int:
 		return _estimate_tokens(trimmed)
