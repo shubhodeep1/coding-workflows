@@ -72,12 +72,14 @@ jobs:
             echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
             sleep "${_wait_secs}"
           }
+          _GH_RATE_LIMIT_BREAKER_FILE="${GH_RATE_LIMIT_BREAKER_FILE:-/tmp/.gh_rate_limit_circuit_breaker}"
           _gh_retry() {
             local attempt=1
             while [ "${attempt}" -le 5 ]; do
               if "$@" 2>/tmp/_gh_retry_err; then return 0; fi
               if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_retry_err 2>/dev/null; then
                 echo "::warning::Rate limit hit (attempt ${attempt}/5), waiting for reset…" >&2
+                touch "${_GH_RATE_LIMIT_BREAKER_FILE}" 2>/dev/null || true
                 _rl_wait
               else
                 local wait_secs=$(( 2 ** (attempt - 1) ))
@@ -454,11 +456,25 @@ jobs:
             --actor "${GITHUB_ACTOR}" \
             --metadata-json "{\"run_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"repository\":\"${GITHUB_REPOSITORY}\",\"job_status\":\"${{ job.status }}\",\"has_work\":\"${{ steps.find_tracking.outputs.has_work || 'false' }}\"}" || true
 
+      - name: Check rate-limit circuit breaker
+        id: circuit_breaker
+        if: always()
+        run: |
+          set -euo pipefail
+          _BREAKER_FILE="${GH_RATE_LIMIT_BREAKER_FILE:-/tmp/.gh_rate_limit_circuit_breaker}"
+          if [ -f "${_BREAKER_FILE}" ]; then
+            echo "::warning::Rate-limit circuit breaker tripped — skipping self-retrigger; cron will start next cycle"
+            echo "tripped=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tripped=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Rate-limit cooldown before retrigger
         if: >-
           !cancelled()
           && steps.find_tracking.outputs.has_tracking == 'true'
           && inputs.caller_workflow != ''
+          && steps.circuit_breaker.outputs.tripped != 'true'
         run: |
           set -euo pipefail
           NOW="$(date +%s)"
@@ -477,6 +493,7 @@ jobs:
           !cancelled()
           && steps.find_tracking.outputs.has_tracking == 'true'
           && inputs.caller_workflow != ''
+          && steps.circuit_breaker.outputs.tripped != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
