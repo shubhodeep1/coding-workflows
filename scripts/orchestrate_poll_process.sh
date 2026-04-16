@@ -902,36 +902,30 @@ ensure_label_exists() {
     [ -n "${contract_description}" ] && description="${contract_description}"
   fi
 
-  # Check if label already exists to avoid futile retries (gh label create
-  # returns a non-zero exit code for existing labels, which is not transient).
-  #
-  # The two `gh api` probes below are intentionally NOT wrapped with
-  # `gh_retry`: a 404 (label missing) is the expected normal case on the
-  # first probe, and re-running it under exponential backoff would add
-  # ~31 s of latency to every label miss. Rate-limit detection + the
-  # Telegram admin alert still fire on the `gh_retry gh label create`
-  # immediately below, which is the write path that actually matters.
-  local encoded_name
-  encoded_name="$(printf '%s' "${label_name}" | jq -sRr @uri)"
-  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
-    _ENSURED_LABELS_CACHE[${label_name}]=1
-    return 0
-  fi
+  local _label_err_file
+  _label_err_file="$(mktemp)"
 
   if gh_retry gh label create "${label_name}" \
     --repo "${GITHUB_REPOSITORY}" \
     --color "${color}" \
-    --description "${description}" >/dev/null 2>&1; then
+    --description "${description}" >/dev/null 2>"${_label_err_file}"; then
+    rm -f "${_label_err_file}"
     _ENSURED_LABELS_CACHE[${label_name}]=1
     return 0
   fi
 
-  # Creation can fail if another concurrent actor created the label first.
-  # Cache only when a follow-up read confirms the label now exists.
-  # (Same rationale as above — not wrapped with gh_retry.)
-  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+  local _label_err=""
+  _label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
+  rm -f "${_label_err_file}"
+
+  if printf '%s' "${_label_err}" | grep -Eiq 'already[ _-]*exists|already_exists'; then
+    echo "::debug::ensure_label_exists: label already exists, skipping '${label_name}'." >&2
     _ENSURED_LABELS_CACHE[${label_name}]=1
+    return 0
   fi
+
+  echo "::warning::ensure_label_exists: failed to create label '${label_name}' in repo '${GITHUB_REPOSITORY}': ${_label_err}" >&2
+  return 0
 }
 
 set_issue_phase_label() {

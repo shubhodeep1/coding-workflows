@@ -363,6 +363,7 @@ def _run_poller(
 	update_branch_fail_for_prs: list[int] | None = None,
 	review_dispatch_fail_for_prs: list[int] | None = None,
 	active_autofix_runs: list[dict] | None = None,
+	label_create_responses: dict[str, dict] | None = None,
 	mock_stall_judge_json: dict | None = None,
 	fail_issue_comment_get_after: dict[int, int] | None = None,
 	fail_issue_get_for: list[int] | None = None,
@@ -402,6 +403,7 @@ def _run_poller(
 	update_branch_fail_for_prs = update_branch_fail_for_prs or []
 	review_dispatch_fail_for_prs = review_dispatch_fail_for_prs or []
 	active_autofix_runs = active_autofix_runs or []
+	label_create_responses = label_create_responses or {}
 	mock_stall_judge_json = mock_stall_judge_json or {}
 	fail_issue_comment_get_after = fail_issue_comment_get_after or {}
 	fail_issue_get_for = fail_issue_get_for or []
@@ -460,6 +462,9 @@ def _run_poller(
 		store = {
 			"issues": issues,
 			"next_comment_id": next_comment_id,
+			"api_calls": [],
+			"label_create_calls": [],
+			"label_create_responses": {str(k): dict(v) for k, v in label_create_responses.items()},
 			"validation_dispatches": [],
 			"review_dispatches": [],
 			"closed_issues": [],
@@ -574,6 +579,17 @@ if not args:
 	sys.exit(0)
 
 if args[0] == 'label' and len(args) >= 3 and args[1] == 'create':
+	label_name = args[2]
+	store.setdefault('label_create_calls', []).append(label_name)
+	responses = store.get('label_create_responses', {})
+	response = responses.get(label_name)
+	save()
+	if isinstance(response, dict):
+		message = str(response.get('stderr', ''))
+		exit_code = int(response.get('exit_code', 0))
+		if message:
+			print(message, file=sys.stderr)
+		sys.exit(exit_code)
 	sys.exit(0)
 
 if args[0] == 'python3' and len(args) >= 4 and args[1] == 'scripts/ai_memory.py' and args[2] == 'actions-runs-cache':
@@ -867,6 +883,7 @@ if args[0] == 'api':
 	if path is None:
 		print('{}')
 		sys.exit(0)
+	store.setdefault('api_calls', []).append(path)
 
 	if path == 'graphql':
 		mode = store.get('graphql_mode', 'full')
@@ -1511,6 +1528,8 @@ sys.exit(proc.returncode)
 		result["merge_calls"] = result.get("merge_calls", [])
 		result["review_dispatches"] = result.get("review_dispatches", [])
 		result["update_branch_calls"] = result.get("update_branch_calls", [])
+		result["label_create_calls"] = result.get("label_create_calls", [])
+		result["api_calls"] = result.get("api_calls", [])
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
 		result["actions_runs_fetch_count"] = int(result.get("actions_runs_fetch_count", 0))
@@ -1560,6 +1579,25 @@ def test_label_batch_graphql_full_skips_rest_fallback():
 	)
 	assert result["label_batch_graphql_calls"] == 1
 	assert result["issue_label_calls"].get("10", 0) == 0
+
+
+def test_ensure_label_exists_avoids_repo_label_get_probe_and_accepts_already_exists():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		label_create_responses={
+			"ai:merged": {
+				"exit_code": 1,
+				"stderr": "HTTP 422 Unprocessable Entity: already_exists",
+			},
+		},
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert "ai:merged" in result["label_create_calls"]
+	assert not any("/labels/" in path for path in result["api_calls"])
+	assert "label already exists, skipping 'ai:merged'" in result["stderr"]
 
 
 def test_complete_verdict_enters_validation_mode_when_enabled():
