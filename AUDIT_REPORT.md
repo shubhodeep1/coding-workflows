@@ -1,190 +1,220 @@
-# Repository Audit Report
+# AUDIT_REPORT.md
 
-**Date**: 2026-03-22
-**Scope**: Full dependency, structure, documentation, and runtime audit
+Date: 2026-04-16
 
----
+Audit scope executed:
+- Workflow files: `.github/workflows/*.yml` (28 files)
+- Scripts: `scripts/*.sh`, `scripts/*.py` (34 top-level files)
+- Mandatory context loaded: `README.md`, `agents.md`, `CLAUDE.md`, `.github/ai/*.json`
 
-## Executive Summary
+## 1) Bug & Correctness Sweep
 
-The repo is **structurally sound** — all Python scripts import cleanly using only
-stdlib modules, all JSON schemas/configs parse correctly, and the core workflow
-YAML files reference existing paths. However, there are **3 bugs** (1 critical,
-2 low), **2 inconsistencies**, and **several observations** worth addressing.
+### Finding BUG-001
+- **ID**: `BUG-001`
+- **File path**: `scripts/orchestrate_poll_process.sh`
+- **Line range**: `8027-8030`
+- **Severity**: Low
+- **Category tag**: `bug`
+- **Description**: `_sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"` expands `${ISSUE_NUMS}` unquoted. This allows word-splitting/glob expansion and can mis-order or drop items if unexpected characters are introduced.
+- **Recommended fix**: Quote the expansion and normalize with an array-safe path, e.g. `printf '%s\n' "${ISSUE_NUMS}"` after validating/splitting numeric IDs.
 
----
+### Finding BUG-002
+- **ID**: `BUG-002`
+- **File path**: `.github/workflows/test-and-mark-stable.yml`
+- **Line range**: `255-282`
+- **Severity**: Low
+- **Category tag**: `bug`
+- **Description**: In Phase 1 polling, comments are fetched twice in the same loop tick (`/comments` for count, then `/comments?per_page=5` for last bot message). This creates a TOCTOU window where stall/failure checks evaluate different snapshots.
+- **Recommended fix**: Fetch comments once per tick (descending, bounded page) and derive both count + latest bot-comment analysis from that single JSON payload.
 
-## Critical Issues
+### Finding SEC-001 [NEEDS VERIFICATION]
+- **ID**: `SEC-001`
+- **File path**: `scripts/orchestrate_poll_process.sh`
+- **Line range**: `592-599`
+- **Severity**: Low
+- **Category tag**: `security`
+- **Description**: `_validate_phase_threshold` clears vars via `eval "${var_name}="`. Current callers pass hardcoded names, but this is still an eval-based footgun if future callsites pass untrusted names.
+- **Recommended fix**: Replace `eval` with a whitelist + `printf -v "${var_name}" '%s' ''` (or explicit case branches) to remove command-evaluation risk.
 
-### 1. `memory_maintenance.yml` — Missing branch checkout + bypasses CLI (CRITICAL)
+## 2) GitHub API Call Redundancy Audit
 
-**File**: `.github/workflows/memory_maintenance.yml` (lines 31, 38-51, 66)
+### Finding API-001
+- **ID**: `API-001`
+- **File path**: `.github/workflows/review_autofix.yml`
+- **Line range**: `96-97`
+- **Severity**: Medium
+- **Category tag**: `api-redundancy`
+- **Description**: Gate step fetches the same PR endpoint twice (`.state`, then `.merged`).
+- **Current API call count**: 2 calls/run for `repos/{repo}/pulls/{PR_NUMBER}` in this path.
+- **Proposed call count after fix**: 1 call/run.
+- **Batching/caching pattern to extend**: Reuse the single-fetch parse model used by `_fetch_pr_json` + `_jq_field` in `scripts/orchestrate_poll_process.sh`.
+- **Recommended fix**: Fetch PR JSON once, parse both `state` and `merged` from local JSON.
 
-The workflow checks out the **default branch** (`actions/checkout@v5`), then
-calls `compact_memory(Path('.github/ai-memory'), ...)` directly. However, the
-`.github/ai-memory/` directory only exists on the dedicated `ai-memory` git
-branch — it does not exist on the default branch. This means:
+### Finding API-002
+- **ID**: `API-002`
+- **File path**: `scripts/orchestrate_poll_process.sh`
+- **Line range**: `1063-1077`, `6119-6125`, `6213-6219`, `6306-6313`, `8030-8038`
+- **Severity**: High
+- **Category tag**: `api-batching`
+- **Description**: `_issue_cross_ref_pr_number_last()` re-fetches issue timeline per call. It is invoked repeatedly across multiple loops in one poll cycle (status reconciliation, auto-merge, conflict healing, judge prompt assembly).
+- **Current API call count**: At least `2N + R + D` timeline lookups per wave cycle (N = issues in wave, R = ready-to-merge subset, D = in_progress/done subset), plus additional calls in stall/judge paths.
+- **Proposed call count after fix**: 1 batched GraphQL fetch per wave cycle (or one prefetch per phase) + in-memory lookups.
+- **Batching/caching pattern to extend**: Extend `_fetch_linked_pr_status_graphql` / `_fetch_candidate_issue_details_graphql` style caches already present in this script.
+- **Recommended fix**: Prefetch `issue -> linked_pr` map once per cycle and pass cached values into downstream loops.
 
-- `compact_memory()` will fail or no-op (the path doesn't exist)
-- `git add .github/ai-memory/` on line 66 will add nothing
-- The `ai-memory/README.md` explicitly states: *"Workflows must use CLI
-  subcommands and avoid duplicated inline memory logic."*
+### Finding API-003
+- **ID**: `API-003`
+- **File path**: `scripts/orchestrate_poll_process.sh`
+- **Line range**: `4389-4393`
+- **Severity**: Medium
+- **Category tag**: `api-batching`
+- **Description**: Standalone stall recovery builds candidate issues by looping six labels and calling `gh issue list` once per label.
+- **Current API call count**: 6 calls/cycle for label-based candidate bootstrap.
+- **Proposed call count after fix**: 1 call/cycle (single GraphQL/search query with aliased label filters).
+- **Batching/caching pattern to extend**: Aliased GraphQL batching pattern used in `_fetch_candidate_issue_details_graphql`.
+- **Recommended fix**: Replace per-label looped listing with one batched GraphQL/search query and local union/dedupe.
 
-**Fix**: Replace the inline Python with the CLI command, which handles branch
-switching via `persist_memory_operation`:
+### Finding API-004
+- **ID**: `API-004`
+- **File path**: `.github/workflows/test-and-mark-stable.yml`
+- **Line range**: `247-281`
+- **Severity**: Low
+- **Category tag**: `api-redundancy`
+- **Description**: Clarify poll loop fetches issue labels and comments count, then performs another comments fetch for bot-error detection.
+- **Current API call count**: 3 calls/poll tick (`issue`, `comments`, `comments?per_page=5`).
+- **Proposed call count after fix**: 2 calls/poll tick (`issue`, one bounded comments fetch).
+- **Batching/caching pattern to extend**: Reuse the same single-comments-payload pattern already used in the plan phase loop in this workflow (`COMMENTS_JSON` reuse).
+- **Recommended fix**: Derive count + last bot comment from one comments payload.
 
-```yaml
-python3 scripts/ai_memory.py compact \
-  --month "${ARCHIVE_MONTH}" \
-  --prune true
-```
+### Finding API-005
+- **ID**: `API-005`
+- **File path**: `.github/workflows/review_autofix.yml`
+- **Line range**: `158-167`
+- **Severity**: Medium
+- **Category tag**: `api-batching`
+- **Description**: In post-merge fallback path (`labels_known != true`), the workflow calls `gh issue view` once per linked issue to read labels.
+- **Current API call count**: `M` per run in fallback mode (`M` = fallback-linked issue count).
+- **Proposed call count after fix**: 1 batched GraphQL call for all fallback issue numbers.
+- **Batching/caching pattern to extend**: Extend the existing GraphQL linked-issue fetch in the same step (lines `136-141`) with an alias query for issue labels by number.
+- **Recommended fix**: Build one alias GraphQL query for all fallback issue IDs and evaluate labels from that response.
 
-And remove the manual `git add / git commit / git push` step (the CLI handles
-persistence and push retries).
+## 3) Code Duplication & Modularization Opportunities
 
----
+### Finding DUP-001
+- **ID**: `DUP-001`
+- **File path**: `scripts/label_helpers.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/validate_process.sh`, `scripts/review_rb_judge.sh`, `.github/workflows/review_autofix.yml`
+- **Line range**: `label_helpers.sh:80-101`, `orchestrate_poll_process.sh:868-931`, `validate_process.sh:440-466`, `review_rb_judge.sh:57-74`, `review_autofix.yml:2969-2984,3056-3067`
+- **Severity**: Medium
+- **Category tag**: `duplication`
+- **Description**: `ensure_label_exists` logic is reimplemented in multiple variants (different retry semantics, color defaults, and existence-check behavior), creating drift risk.
+- **Recommended fix**: Consolidate ownership in `scripts/label_helpers.sh` with one stable API:
+  - Function signature: `ensure_label_exists <label_name> [repo]`
+  - Optional strict mode: `ensure_label_exists_strict <label_name> [repo]`
+  - Update callers in `orchestrate_poll_process.sh`, `validate_process.sh`, `review_rb_judge.sh`, and fallback blocks in `review_autofix.yml`.
 
-## Low-Severity Issues
+### Finding DUP-002
+- **ID**: `DUP-002`
+- **File path**: `.github/workflows/test-and-mark-stable.yml`
+- **Line range**: `207-241`, `316-350`, `475-515`, `630-649`, `1059-1070`
+- **Severity**: Low
+- **Category tag**: `duplication`
+- **Description**: `gh_api_safe` and run-ID capture logic are duplicated across multiple phase blocks with slight variations.
+- **Recommended fix**: Move polling helpers into a shared script (e.g., `scripts/e2e_poll_helpers.sh`) and source it in each phase step.
+  - Function signature examples: `gh_api_safe <args...>`, `capture_run_id <repo> <created_after> <name_regex>`.
+  - Callers updated: clarify wait, plan wait, implement wait, review wait, poller wait blocks.
 
-### 2. `review_autofix.yml` — Ghost reference to old workflow name (LOW)
+### Finding DUP-003
+- **ID**: `DUP-003`
+- **File path**: `.github/workflows/review_autofix.yml`, `.github/workflows/issue_pr_status.yml`
+- **Line range**: `review_autofix.yml:2990-2993,3075-3078`, `issue_pr_status.yml:195`
+- **Severity**: Low
+- **Category tag**: `duplication`
+- **Description**: Regex-based fallback extraction of issue numbers from PR title/body is repeated in multiple paths.
+- **Recommended fix**: Extract to one helper (e.g., `scripts/gh_helpers.sh`):
+  - Function signature: `extract_linked_issue_numbers_from_pr_text <repo_slug> <text>`
+  - Update callers in review_autofix and issue_pr_status paths.
 
-**File**: `.github/workflows/review_autofix.yml` (line 473)
+## 4) Expression Size Limit Risk Assessment
 
-```bash
-cp .github/workflows/ai-auto-review-and-edit.yml "${RUNTIME_CONTEXT_DIR}/workflow_snapshot.yml" || true
-```
+Measurement method used:
+- Scanned all `.github/workflows/*.yml` `run: |` blocks containing `${{ ... }}` and measured static expression length per block.
+- Checked largest workflow file sizes against 800 KB alert threshold and 1 MB hard limit.
 
-`ai-auto-review-and-edit.yml` was likely the pre-refactoring name of
-`review_autofix.yml`. The file doesn't exist. The `|| true` prevents failure,
-but the intended workflow snapshot will never be created.
+Result summary:
+- No `${{ }}` expression block exceeded 15,000 characters.
+- Largest measured `run:` interpolation total was 534 chars (`.github/workflows/implement.yml:2344`), leaving 20,466 chars headroom to 21,000.
+- Largest workflow file size is 194,289 bytes (`.github/workflows/review_autofix.yml`), leaving 610,511 bytes headroom to 800 KB warning and 854,287 bytes headroom to 1 MB hard limit.
 
-**Fix**: Change to `review_autofix.yml` or remove the line if the snapshot is
-no longer needed.
+### Finding EXPR-001
+- **ID**: `EXPR-001`
+- **File path**: `.github/workflows/ci.yml`
+- **Line range**: `69-80`
+- **Severity**: Low
+- **Category tag**: `expression-limit`
+- **Description**: CI currently lints YAML/action schema but does not enforce expression-size budgets despite prior historical over-limit incidents.
+- **Estimated expression chars / headroom**: Current max observed expression block = 534 chars (headroom 20,466); no immediate overflow risk.
+- **Mitigation option**: Add a lightweight guard script in CI to fail at >15,000 chars and warn at >12,000 for any single `${{ ... }}` expression.
+- **Recommended fix**: Add a static checker step in `ci.yml` for expression-length budgets.
 
-### 3. `ai_pipeline.md` — Stale references to old workflow names (LOW)
+## 5) Cross-Cutting Concerns
 
-**File**: `ai_pipeline.md` (lines ~594, ~600)
+### Finding DEAD-001
+- **ID**: `DEAD-001`
+- **File path**: `scripts/memory_helpers.sh`
+- **Line range**: `57`
+- **Severity**: Low
+- **Category tag**: `dead-code`
+- **Description**: `local token="${GH_TOKEN:-}"` is declared but unused.
+- **Recommended fix**: Remove the unused variable or wire it into authenticated remote URL handling if intended.
 
-References `ai-auto-review-and-edit.yml` which no longer exists. These are
-documentation references, not runtime paths, but they're misleading.
+### Finding DEAD-002 [NEEDS VERIFICATION]
+- **ID**: `DEAD-002`
+- **File path**: `scripts/orchestrate_poll_process.sh`
+- **Line range**: `7250`, `7523`
+- **Severity**: Low
+- **Category tag**: `dead-code`
+- **Description**: `RB_FOLLOWUP_REFUSED` and `IF_BLOCKERS_SOURCE` are assigned but not read in static analysis.
+- **Recommended fix**: Confirm no dynamic reads; if none exist, remove assignments to reduce cognitive noise.
 
-**Fix**: Update references to the current workflow names.
+### Finding CONS-001
+- **ID**: `CONS-001`
+- **File path**: `.github/workflows/review_autofix.yml`
+- **Line range**: `96-97`, `2921-2928`
+- **Severity**: Medium
+- **Category tag**: `consistency`
+- **Description**: Same workflow mixes raw `gh api` and `gh_retry`/safe-helper patterns for similar PR-read operations, producing inconsistent retry and rate-limit behavior.
+- **Recommended fix**: Standardize on helper-backed reads (`gh_retry` + single-response parsing) for all PR metadata fetches in this workflow.
 
----
+### Finding SH-001 [NEEDS VERIFICATION]
+- **ID**: `SH-001`
+- **File path**: `scripts/validate_driver.sh`
+- **Line range**: `434`, `453`
+- **Severity**: Low
+- **Category tag**: `shellcheck`
+- **Description**: ShellCheck SC2053 flags unquoted RHS in `[[ ... == ${HELPER_PATTERN} ]]` and `[[ ... == ${CANARY_PATTERN} ]]`. If patterns become user-controlled, glob semantics may become broader than expected.
+- **Recommended fix**: If literal comparison is intended, quote RHS. If glob matching is intended, switch to explicit `case` blocks and annotate intent.
 
-## Inconsistencies
+Additional cross-cutting scan notes:
+- TODO/FIXME/HACK markers in audited workflows/scripts: none found.
 
-### 4. `setup-runtime` composite action is defined but never used
+## 6) Summary & Severity Matrix
 
-**File**: `.github/actions/setup-runtime/action.yml`
+### 6A) Findings Summary Table
 
-This composite action installs Node.js, Python, Codex CLI, validates env vars,
-and sets up the runtime workspace. However, **no workflow references it** — each
-workflow independently implements its own setup steps.
+| Severity | Count | IDs |
+|----------|-------|-----|
+| Critical | 0 | — |
+| High | 1 | API-002 |
+| Medium | 5 | API-001, API-003, API-005, DUP-001, CONS-001 |
+| Low | 10 | BUG-001, BUG-002, SEC-001, API-004, DUP-002, DUP-003, EXPR-001, DEAD-001, DEAD-002, SH-001 |
 
-**Impact**: Code duplication across workflows; the action exists for
-consolidation but was never wired in. `docs/compatibility-matrix.md` (line 32)
-mentions it as the installer, which is misleading.
+### 6B) Estimated Remediation Scope
 
-### 5. `research/` directory contains pre-refactoring analysis
+| Category | Files Touched | Estimated Effort |
+|----------|--------------|-----------------|
+| Critical/High bug fixes | 1-3 | Medium |
+| API call optimization | 3-6 | Medium-Large |
+| Code modularization | 4-8 | Medium-Large |
+| Expression size reduction | 1-2 | Small |
+| Medium/Low fixes | 6-10 | Small-Medium |
 
-**File**: `research/squad-workflow-improvements-20260322T042436Z.md`
-
-References old workflow filenames (`ai-clarify.yml`, `ai-plan.yml`,
-`ai-implement.yml`, `ai-auto-review-and-edit.yml`, `ai-issue-pr-status.yml`)
-that were the consumer-side wrappers before the refactoring into reusable
-`workflow_call` workflows. This is a research artifact and not actionable, but
-could confuse future contributors.
-
----
-
-## What Works Well
-
-| Area | Status | Notes |
-|------|--------|-------|
-| **Python scripts** | All import cleanly | stdlib-only; no external packages needed |
-| **`ai_memory.py` CLI** | Fully functional | All 6 subcommands parse and dispatch correctly |
-| **`ai_memory_lib.py`** | Imports OK | Schema validation, governance, branch-safe persistence |
-| **`ai_context_utils.py`** | Imports OK | Envelope builders, attachment handling, SSRF protection |
-| **`issue_attachment_bundle.py`** | Imports OK | Present in `scripts/` |
-| **`git_ref_health_check.sh`** | Valid bash | Correct `set -euo pipefail`, handles check/repair modes |
-| **JSON schemas** | All parse OK | `memory_record.v1`, `run_ledger_entry.v1`, `task_lineage.v1` |
-| **Retrieval profiles** | Valid JSON | 5 roles with deterministic scoring weights |
-| **Example files** | Valid JSON | All 3 sample files parse correctly |
-| **`netwask/tier1-agent-suite.json`** | Valid JSON | Agent suite config |
-| **Script path refs in workflows** | Correct | `scripts/` and `prompts/` paths match actual locations |
-| **Prompt template files** | All present | `header.txt`, `mode-clarify.txt`, `mode-plan.txt`, `mode-implement.txt` |
-| **Root instruction files** | All present | `codex_system_instructions.md`, `ai_pipeline.md`, `unattended_llm_system_instructions.md` |
-
----
-
-## README Accuracy
-
-The `README.md` is **mostly accurate**:
-
-- Workflow table matches actual files
-- Required secrets/variables are correct
-- Repository structure section matches actual layout
-- Versioning section aligns with `docs/release-policy.md`
-
-**One minor inaccuracy**: The README says `See workflow-templates/ in consumer
-repos for all wrapper examples` — this is contextually correct (consumer repos
-would have these) but could be clearer that no such directory exists in _this_
-repo.
-
----
-
-## Dependency Summary
-
-### Runtime Dependencies (Workflows)
-
-| Dependency | Type | Pinned | Notes |
-|------------|------|--------|-------|
-| `@openai/codex@v0.114.0` | npm | Yes | Installed by workflows |
-| Python 3.12 | runtime | Yes | stdlib only, no pip packages |
-| Node.js 22 | runtime | Yes | For Codex CLI |
-| `jq`, `curl`, `gh` | system | No | Installed via apt if missing |
-| `actions/checkout@v5` | GH Action | Yes | |
-| `actions/setup-python@v5` | GH Action | Yes | |
-| `actions/setup-node@v4` | GH Action | Yes (in composite only) | |
-
-### External Services
-
-| Service | Required | Secret |
-|---------|----------|--------|
-| OpenRouter API | Yes | `OPENROUTER_API_KEY` |
-| GitHub API | Yes | `GH_PAT` |
-| Telegram Bot API | No | `TG_BOT_SECRET` |
-
-### Unmet Dependencies
-
-**None** — all Python imports are stdlib, all referenced files exist, all JSON
-configs parse correctly. The only runtime dependency is `@openai/codex` which
-is installed at workflow start.
-
----
-
-## Missing from Repo
-
-| Item | Impact |
-|------|--------|
-| **Unit tests** | No test suite for Python scripts or schema validation |
-| **CI pipeline** | No GitHub Actions workflow to lint/validate this repo itself |
-| **`requirements.txt` / `pyproject.toml`** | Not needed (stdlib only) but absent for documentation |
-| **`.yamllint.yml`** | No YAML linting configuration |
-| **CHANGELOG** | No changelog tracking releases |
-
----
-
-## Recommendations (Priority Order)
-
-1. **Fix `memory_maintenance.yml`** — Use the CLI instead of inline Python to
-   get branch-safe persistence (critical bug)
-2. **Fix ghost reference in `review_autofix.yml`** — Update the workflow
-   snapshot path
-3. **Wire in `setup-runtime` action or remove it** — Eliminate the
-   defined-but-unused action
-4. **Update stale references in `ai_pipeline.md`** — Replace old workflow names
-5. **Add a basic CI workflow** — YAML lint + Python syntax check on PRs to this
-   repo
-6. **Add a CHANGELOG.md** — Track releases per `docs/release-policy.md`
