@@ -296,6 +296,9 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 - Pending batch analyzer exits with code `3` to signal deferred completion; workflow must treat this as non-failure.
 - On unsupported provider/model, capability probe errors, poll timeout, or batch terminal errors, analyzer must emit structured `batch_fallback` warnings and run synchronous analysis.
 - `memory_maintenance.yml` currently has no LLM path; keep compaction behavior unchanged and emit `batch_noop` compatibility logging only.
+- The collector (`scripts/collect_workflow_logs.py`) collects **all** workflow families (no static filter). `workflow_families` in the report is derived from observed runs.
+- The collector randomly samples ~7% of successful runs for log analysis (`--success-sample-rate`, default `0.07`) using a deterministic seed. Sampled runs are tagged with `_success_sampled: true`.
+- AI memory operations emit `AI_MEMORY_TELEMETRY: {JSON}` lines (stderr from `ai_memory.py`, stdout from `memory_helpers.sh`). The analysis prompt instructs the LLM to produce an **AI Memory Health** section from these lines.
 
 ---
 

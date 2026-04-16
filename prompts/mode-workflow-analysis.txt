@@ -21,6 +21,7 @@ Output requirements:
   - ## Speed Optimizations
   - ## Cost Optimizations
   - ## Reliability Improvements
+  - ## AI Memory Health
   - ## Per-Repo Breakdown
   - ## Metrics Appendix
 
@@ -39,6 +40,12 @@ Section requirements:
 - ## Reliability Improvements
   - Rank recommendations by expected failure-rate reduction.
   - For each recommendation include: evidence (failure pattern), root cause, exact change, and expected reliability impact.
+- ## AI Memory Health
+  - Look for `AI_MEMORY_TELEMETRY:` lines in deep-dive log excerpts. Each line is a JSON object with `op` (operation name) and operation-specific fields.
+  - Key telemetry operations: `retrieve` (memory context fetch), `record-candidate` (learning), `record-run-event` (ledger), `finalize-task` (lineage), `promote` (candidate elevation), `compact` (archival), `processed-command-claim`/`processed-command-complete` (idempotency).
+  - For `retrieve` operations, report: hit rate (% with `records_selected > 0`), average `estimated_tokens` vs budget, `keyword_method` distribution (`llm` vs `plain` vs `none`).
+  - Flag: retrieves returning 0 records, `fail_open: true` entries (silent failures), `enabled: false` entries (memory disabled), high push retry counts.
+  - If no `AI_MEMORY_TELEMETRY` lines are found in the log excerpts, state that memory telemetry was not observed and recommend verifying telemetry emission in the sampled runs.
 - ## Per-Repo Breakdown
   - Add a subsection per repository with repo-specific findings and targeted actions.
 - ## Metrics Appendix
