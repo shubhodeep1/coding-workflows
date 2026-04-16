@@ -3530,7 +3530,12 @@ jobs:
           if [ "${JUDGE_HANDLED}" = "true" ]; then
             case "${JUDGE_ACTION}" in
               merge)
-                MSG="Review-blocked judge merged PR as-is" ;;
+                case "${JUDGE_SKIP_REASON}" in
+                  *deterministic_merge)
+                    MSG="Review-blocked judge: LLM failed, deterministic fallback merged PR (no critical issues)" ;;
+                  *)
+                    MSG="Review-blocked judge merged PR as-is" ;;
+                esac ;;
               fix)
                 MSG="Review-blocked judge pushed fix commit" ;;
               close_and_reissue)
@@ -3544,6 +3549,10 @@ jobs:
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge disabled\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               not_writable)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), branch not writable\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
+              llm_failed_critical_issues|json_parse_failed_critical_issues)
+                MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge LLM failed, deterministic fallback found critical issues\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
+              llm_failed*|json_parse_failed*)
+                MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge LLM failed\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               *)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations)\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
             esac

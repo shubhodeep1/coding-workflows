@@ -58,7 +58,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
 | `REVIEW_REASONING_SCHEDULE` | No | `xhigh,high,medium` | review_autofix | Reviewer-only cycle schedule for autofix rounds (cycle 1 uses first entry, cycle 2 second, cycle 3+ last). Accepted values: `xhigh`, `high`, `medium`, `low` (comma-separated). |
 | `REVIEW_AUTODOWNGRADE_DISABLED` | No | `false` | review_autofix | Kill switch for reviewer cycle schedule. When `true`, reviewer reasoning stays fixed at `THINKING_LEVEL_REVIEWER`. |
-| `ENABLE_REVIEW_BLOCKED_JUDGE` | No | `true` | review_autofix | When true, non-orchestrator PRs that exhaust autofix iterations invoke a judge (LLM) to decide: merge as-is, push a fix commit, or close and reissue. Orchestrator-managed PRs are skipped (handled by the poller). PRs without linked issues use the PR title/body as requirement context. |
+| `ENABLE_REVIEW_BLOCKED_JUDGE` | No | `true` | review_autofix | When true, non-orchestrator PRs that exhaust autofix iterations invoke a judge (LLM) to decide: merge as-is, push a fix commit, or close and reissue. If the LLM judge fails (execution error or unparseable output), a deterministic fallback analyses editor summaries for critical-severity keywords and auto-merges when none are found. Orchestrator-managed PRs are skipped (handled by the poller). PRs without linked issues use the PR title/body as requirement context. |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | No | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge in non-orchestrator PRs (`xhigh`, `high`, `medium`, `low`). |
 | `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | review_autofix, orchestrate_poll | Maximum judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). Used by both the review_autofix judge (counts `[judge-fix]` commits) and the orchestrator poller. |
 | `ENABLE_VALIDATION` | No | `true` | orchestrate_poll | When true, a `complete` judge verdict transitions the tracking issue into runtime validation (`ai:validating`) and completion occurs only after validation passes. |
@@ -280,8 +280,11 @@ jobs:
 > respects `MAX_REVIEW_BLOCKED_RETRIES` (default `2`) by counting
 > `[judge-fix]` commits in the branch history. Orchestrator-managed PRs
 > are skipped (handled by the orchestrate_poll workflow instead). If the
-> judge is disabled or fails, the PR is labeled `ai:review-blocked` and
-> requires human intervention. When review passes with no fixes needed,
+> judge is disabled or fails, a deterministic fallback analyses the editor
+> summaries for critical-severity keywords (security vulnerabilities, data
+> loss, build failures, etc.). If none are found, the fallback auto-merges;
+> otherwise the PR is labeled `ai:review-blocked` and requires human
+> intervention. When review passes with no fixes needed,
 > it labels linked issues `ai:ready-to-merge` and enables auto-merge if
 > configured.
 
