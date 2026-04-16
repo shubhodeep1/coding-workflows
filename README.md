@@ -56,8 +56,6 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. |
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
-| `REVIEW_REASONING_SCHEDULE` | No | `xhigh,high,medium` | review_autofix | Reviewer-only cycle schedule for autofix rounds (cycle 1 uses first entry, cycle 2 second, cycle 3+ last). Accepted values: `xhigh`, `high`, `medium`, `low` (comma-separated). |
-| `REVIEW_AUTODOWNGRADE_DISABLED` | No | `false` | review_autofix | Kill switch for reviewer cycle schedule. When `true`, reviewer reasoning stays fixed at `THINKING_LEVEL_REVIEWER`. |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | No | `true` | review_autofix | When true, non-orchestrator PRs that exhaust autofix iterations invoke a judge (LLM) to decide: merge as-is, push a fix commit, or close and reissue. Orchestrator-managed PRs are skipped (handled by the poller). PRs without linked issues use the PR title/body as requirement context. |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | No | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge in non-orchestrator PRs (`xhigh`, `high`, `medium`, `low`). |
 | `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | review_autofix, orchestrate_poll | Maximum judge retries for review-blocked PRs before forcing a final decision (merge or close+reissue). Used by both the review_autofix judge (counts `[judge-fix]` commits) and the orchestrator poller. |
@@ -117,7 +115,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `BATCH_API_PROVIDER` | No | `auto` | workflow-log-analysis, memory_maintenance | Batch provider routing hint for OpenRouter Responses API capability checks/submission (`auto`, `openai`, `anthropic`). Unsupported hints fall back to sync with structured warnings. |
 | `BATCH_API_POLL_TIMEOUT_HOURS` | No | `24` | workflow-log-analysis, memory_maintenance | Maximum pending batch age before workflow-log-analysis falls back to synchronous generation. |
 
-**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. All phases default to `xhigh` (maximum reasoning depth). Judge runs use adaptive effort: cycles 1-3 keep `xhigh`, and cycles 4+ automatically downgrade to `high` to reduce cost on incremental rechecks. In `review_autofix`, reviewer effort also auto-schedules by autofix cycle via `REVIEW_REASONING_SCHEDULE` (default: `xhigh,xhigh,xhigh`) unless `REVIEW_AUTODOWNGRADE_DISABLED=true`. **E2E smoke test override has highest precedence:** when an issue title contains `[E2E Smoke Test]`, review/edit still force `low` reasoning regardless of schedule/kill-switch so release smoke runs stay cheap and fast.
+**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. All phases default to `xhigh` (maximum reasoning depth). No cycle-based downgrades are applied — every phase uses the configured reasoning effort for all cycles. **E2E smoke test exception:** when an issue or PR title contains `[E2E Smoke Test]`, all phases force `low` reasoning to keep smoke runs cheap and fast.
 
 | Variable | Default | Used By | Description |
 |---|---|---|---|
@@ -130,7 +128,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_EDITOR` | `xhigh` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
 | `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | orchestrate | Reasoning effort for project decomposition |
-| `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation (`xhigh` for cycles 1-3, automatically `high` from cycle 4 onward) |
+| `THINKING_LEVEL_JUDGE` | `xhigh` | orchestrate_poll | Reasoning effort for judge evaluation |
 | `THINKING_LEVEL_CLARIFY_RESPOND` | `xhigh` | orchestrate_clarify_respond | Reasoning effort for auto-answering clarification questions |
 | `THINKING_LEVEL_VALIDATE` | `xhigh` | validate | Reasoning effort for runtime validation harness generation and diagnosis |
 | `THINKING_LEVEL_CONFLICT_RESOLVER` | `xhigh` | orchestrate_poll | Reasoning effort for the orchestrator's Codex-based merge conflict resolver |
@@ -717,8 +715,6 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ALLOW_WORKFLOW_EDITS` | `true` | Allow AI edits to workflow files and automatic wrapper updates |
 | `ENABLE_AUTO_MERGE` | `true` | Auto-merge PRs (squash) when review passes and checks are green |
 | `MAX_AUTOFIX_ITERATIONS` | `3` | Maximum consecutive autofix rounds before marking `ai:review-blocked` |
-| `REVIEW_REASONING_SCHEDULE` | `xhigh,xhigh,xhigh` | Reviewer autofix-cycle reasoning schedule (`cycle1,cycle2,cycle3+`) |
-| `REVIEW_AUTODOWNGRADE_DISABLED` | `false` | Disable reviewer cycle schedule and keep fixed `THINKING_LEVEL_REVIEWER` |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | `true` | Enable review-blocked judge for non-orchestrator PRs |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | Reasoning effort for review-blocked judge |
 | `MAX_REVIEW_BLOCKED_RETRIES` | `2` | Maximum judge retries for review-blocked PRs (both review_autofix and orchestrate_poll) |
@@ -767,8 +763,6 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `THINKING_LEVEL_ANALYSIS` | `xhigh` | Reasoning effort for workflow log analysis report generation |
 | `THINKING_LEVEL_REVIEWER` | `xhigh` | Reasoning effort for reviewer models (bug detection) |
 | `THINKING_LEVEL_EDITOR` | `xhigh` | Reasoning effort for editor model (applying fixes) |
-| `REVIEW_REASONING_SCHEDULE` | `xhigh,xhigh,xhigh` | Reviewer autofix-cycle schedule override (`xhigh|high|medium|low`, comma-separated) |
-| `REVIEW_AUTODOWNGRADE_DISABLED` | `false` | Reviewer schedule kill switch (`true` keeps fixed reviewer effort) |
 | `TOOL_CALL_BUDGET_CLARIFY` | `15` | Tool call budget for clarification |
 | `TOOL_CALL_BUDGET_PLAN` | `40` | Tool call budget for planning |
 | `TOOL_CALL_BUDGET_IMPLEMENT` | `50` | Tool call budget for implementation |
@@ -777,7 +771,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `TOKEN_WARN_THRESHOLD_IMPLEMENT` | `200000` | Token warning threshold for implementation |
 | `WORKFLOW_ORCHESTRATE_MODEL` | (falls back to `WORKFLOW_EDITOR_MODEL`) | Model override for orchestrator/judge |
 | `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | Reasoning effort for project decomposition |
-| `THINKING_LEVEL_JUDGE` | `xhigh` | Reasoning effort for judge evaluation (`xhigh` for cycles 1-3, automatically `high` from cycle 4 onward) |
+| `THINKING_LEVEL_JUDGE` | `xhigh` | Reasoning effort for judge evaluation |
 | `ORCHESTRATE_POLL_INTERVAL` | `30` | Reserved poll interval setting (current poll cadence is controlled by the poller wrapper cron schedule) |
 | `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` | `1200` | _(deprecated — no longer consumed; short-circuit paths removed in #1163)_ |
 | `ORCHESTRATE_POLL_CALLER_WORKFLOW` | `ai-orchestrate-poll.yml` | Caller workflow filename for self-retrigger; empty string disables |
@@ -912,7 +906,7 @@ workflow_dispatch (project description)
     → Creates tracking issue + child issues
     → Wave 1 issues enter pipeline (clarify → auto-answer → plan → implement → review → merge)
     → Poller (scheduled): monitors progress, dispatches next waves
-    → Judge (LLM, adaptive thinking: `xhigh` cycles 1-3 then `high`, full repo checkout): evaluates after each wave
+    → Judge (LLM, full repo checkout): evaluates after each wave
         → complete: close tracking issue
         → in_progress: create fix-up issues (added to current wave for tracking), advance to next wave
         → failed: auto-recovery (revert + re-plan, retry once), then stop
@@ -947,7 +941,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 3. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. If a PR has merge conflicts (e.g. `main` advanced since the PR was created), the poller automatically updates the PR branch via the GitHub API before retrying the merge. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
 4. **In-progress conflict resolution:** When the base branch advances and creates merge conflicts on open PRs whose tracking issue is in the `in_progress` or `done` wave status (still going through the review/autofix cycle, or sitting in `ai:done` awaiting promotion to `ai:ready-to-merge`), the poller detects the conflict (`mergeable == false`). It first tries a GitHub API branch update; if that fails (real conflicts), it dispatches the review workflow via `workflow_dispatch`. The review workflow's built-in Codex conflict resolver then handles the resolution on a dedicated runner with a clean environment.
 5. **Polling:** Every 30 minutes (cron fallback), the poller checks if the current wave's issues have reached `ai:merged`. When all are merged, it runs the judge. Between cron ticks the poller self-retriggers for near-immediate cycles, unless a GitHub API rate limit was hit during the run (circuit breaker).
-6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads) with adaptive thinking (`xhigh` for cycles 1-3, then `high`). Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
+6. **Judge:** Full repo checkout + tool access (Serena, shell, file reads). Compares merged code against the project spec. Decides: complete, in_progress (next wave or fix-ups), or failed.
 7a. **Clean-wave skip (flagged):** When `ENABLE_CLEAN_WAVE_JUDGE_SKIP=true`, and the completed wave has no failed issues, project is not complete, and it is not a stuck-wave invocation, the poller advances `current_wave` and increments `judge_cycle` without calling Codex judge. `judge_stall_cycles` is unchanged.
 7b. **Clean project-completion skip (flagged):** When `ENABLE_CLEAN_WAVE_JUDGE_SKIP=true`, the final wave is complete with all issues merged, no failures, no review-blocked issues, and no stuck-wave invocation, the poller emits a synthetic `complete` verdict without calling the Codex judge. The outcome is deterministic in this case — the LLM judge cannot add value and risks empty-output failures.
 8. **Next wave:** When the judge approves, the poller creates the next wave's issues (deferred creation — they don't exist until their dependencies are met). This triggers `clarify.yml` via `issues.opened`.
