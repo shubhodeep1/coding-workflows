@@ -2,8 +2,8 @@
 
 Date: 2026-04-16
 
-Audit scope executed:
-- Workflow files: `.github/workflows/*.yml` (28 files)
+Audit scope:
+- Workflows: `.github/workflows/*.yml` (28 files)
 - Scripts: `scripts/*.sh`, `scripts/*.py` (34 top-level files)
 - Mandatory context loaded: `README.md`, `agents.md`, `CLAUDE.md`, `.github/ai/*.json`
 
@@ -15,17 +15,17 @@ Audit scope executed:
 - **Line range**: `8027-8030`
 - **Severity**: Low
 - **Category tag**: `bug`
-- **Description**: `_sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"` expands `${ISSUE_NUMS}` unquoted. This allows word-splitting/glob expansion and can mis-order or drop items if unexpected characters are introduced.
-- **Recommended fix**: Quote the expansion and normalize with an array-safe path, e.g. `printf '%s\n' "${ISSUE_NUMS}"` after validating/splitting numeric IDs.
+- **Description**: `_sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"` expands `${ISSUE_NUMS}` unquoted, so word-splitting/globbing can corrupt iteration when values are malformed.
+- **Recommended fix**: Quote the expansion (`"${ISSUE_NUMS}"`) and/or normalize to an array before sorting.
 
 ### Finding BUG-002
 - **ID**: `BUG-002`
 - **File path**: `.github/workflows/test-and-mark-stable.yml`
-- **Line range**: `255-282`
+- **Line range**: `255-256`, `280-281`
 - **Severity**: Low
 - **Category tag**: `bug`
-- **Description**: In Phase 1 polling, comments are fetched twice in the same loop tick (`/comments` for count, then `/comments?per_page=5` for last bot message). This creates a TOCTOU window where stall/failure checks evaluate different snapshots.
-- **Recommended fix**: Fetch comments once per tick (descending, bounded page) and derive both count + latest bot-comment analysis from that single JSON payload.
+- **Description**: The clarify poll loop fetches comments twice in one tick (first for count, then for last bot comment), creating a TOCTOU window where the two checks can evaluate different snapshots.
+- **Recommended fix**: Fetch comments once (`?per_page=5&direction=desc`), derive both count and latest bot comment from the same JSON payload.
 
 ### Finding SEC-001 [NEEDS VERIFICATION]
 - **ID**: `SEC-001`
@@ -33,8 +33,8 @@ Audit scope executed:
 - **Line range**: `592-599`
 - **Severity**: Low
 - **Category tag**: `security`
-- **Description**: `_validate_phase_threshold` clears vars via `eval "${var_name}="`. Current callers pass hardcoded names, but this is still an eval-based footgun if future callsites pass untrusted names.
-- **Recommended fix**: Replace `eval` with a whitelist + `printf -v "${var_name}" '%s' ''` (or explicit case branches) to remove command-evaluation risk.
+- **Description**: `_validate_phase_threshold` clears variables with `eval "${var_name}="`. Current call sites pass constants, but this is still eval-based and unsafe if future call sites pass dynamic names.
+- **Recommended fix**: Replace `eval` with explicit whitelist/case handling and `printf -v` assignments.
 
 ## 2) GitHub API Call Redundancy Audit
 
@@ -44,23 +44,23 @@ Audit scope executed:
 - **Line range**: `96-97`
 - **Severity**: Medium
 - **Category tag**: `api-redundancy`
-- **Description**: Gate step fetches the same PR endpoint twice (`.state`, then `.merged`).
+- **Description**: The same PR endpoint is fetched twice in sequence (`.state` and `.merged`) in one step.
 - **Current API call count**: 2 calls/run for `repos/{repo}/pulls/{PR_NUMBER}` in this path.
 - **Proposed call count after fix**: 1 call/run.
-- **Batching/caching pattern to extend**: Reuse the single-fetch parse model used by `_fetch_pr_json` + `_jq_field` in `scripts/orchestrate_poll_process.sh`.
-- **Recommended fix**: Fetch PR JSON once, parse both `state` and `merged` from local JSON.
+- **Batching/caching pattern to extend**: Reuse single-response parsing pattern from `_fetch_pr_json` + `_jq_field` in `scripts/orchestrate_poll_process.sh`.
+- **Recommended fix**: Fetch PR JSON once and parse all needed fields locally.
 
 ### Finding API-002
 - **ID**: `API-002`
 - **File path**: `scripts/orchestrate_poll_process.sh`
-- **Line range**: `1063-1077`, `6119-6125`, `6213-6219`, `6306-6313`, `8030-8038`
+- **Line range**: `1063-1077`, `6119`, `6213`, `6306`, `8030`
 - **Severity**: High
 - **Category tag**: `api-batching`
-- **Description**: `_issue_cross_ref_pr_number_last()` re-fetches issue timeline per call. It is invoked repeatedly across multiple loops in one poll cycle (status reconciliation, auto-merge, conflict healing, judge prompt assembly).
-- **Current API call count**: At least `2N + R + D` timeline lookups per wave cycle (N = issues in wave, R = ready-to-merge subset, D = in_progress/done subset), plus additional calls in stall/judge paths.
-- **Proposed call count after fix**: 1 batched GraphQL fetch per wave cycle (or one prefetch per phase) + in-memory lookups.
-- **Batching/caching pattern to extend**: Extend `_fetch_linked_pr_status_graphql` / `_fetch_candidate_issue_details_graphql` style caches already present in this script.
-- **Recommended fix**: Prefetch `issue -> linked_pr` map once per cycle and pass cached values into downstream loops.
+- **Description**: `_issue_cross_ref_pr_number_last()` refetches timeline data repeatedly in multiple loops in the same poll cycle.
+- **Current API call count**: At least `N + R + D + N` timeline lookups per cycle in common paths (`N` wave issues, `R` ready-to-merge, `D` in-progress/done), plus additional judge/stall paths.
+- **Proposed call count after fix**: 1 batched GraphQL prefetch per cycle (or per phase) + in-memory lookups.
+- **Batching/caching pattern to extend**: Extend `_fetch_linked_pr_status_graphql` / `_fetch_candidate_issue_details_graphql` cache-first model already present in this script.
+- **Recommended fix**: Build `issue_number -> latest_linked_pr` map once and pass it into downstream loops.
 
 ### Finding API-003
 - **ID**: `API-003`
@@ -68,49 +68,49 @@ Audit scope executed:
 - **Line range**: `4389-4393`
 - **Severity**: Medium
 - **Category tag**: `api-batching`
-- **Description**: Standalone stall recovery builds candidate issues by looping six labels and calling `gh issue list` once per label.
-- **Current API call count**: 6 calls/cycle for label-based candidate bootstrap.
-- **Proposed call count after fix**: 1 call/cycle (single GraphQL/search query with aliased label filters).
-- **Batching/caching pattern to extend**: Aliased GraphQL batching pattern used in `_fetch_candidate_issue_details_graphql`.
-- **Recommended fix**: Replace per-label looped listing with one batched GraphQL/search query and local union/dedupe.
+- **Description**: Standalone stall-recovery candidate bootstrap loops six labels and runs `gh issue list` once per label.
+- **Current API call count**: 6 calls/cycle for label-based bootstrap.
+- **Proposed call count after fix**: 1 batched GraphQL/search call.
+- **Batching/caching pattern to extend**: Aliased GraphQL helper style used by `_fetch_candidate_issue_details_graphql`.
+- **Recommended fix**: Replace per-label listing loop with one aliased GraphQL query and local union/dedupe.
 
 ### Finding API-004
 - **ID**: `API-004`
 - **File path**: `.github/workflows/test-and-mark-stable.yml`
-- **Line range**: `247-281`
+- **Line range**: `247-248`, `255-256`, `280-281`
 - **Severity**: Low
 - **Category tag**: `api-redundancy`
-- **Description**: Clarify poll loop fetches issue labels and comments count, then performs another comments fetch for bot-error detection.
-- **Current API call count**: 3 calls/poll tick (`issue`, `comments`, `comments?per_page=5`).
-- **Proposed call count after fix**: 2 calls/poll tick (`issue`, one bounded comments fetch).
-- **Batching/caching pattern to extend**: Reuse the same single-comments-payload pattern already used in the plan phase loop in this workflow (`COMMENTS_JSON` reuse).
-- **Recommended fix**: Derive count + last bot comment from one comments payload.
+- **Description**: Clarify polling uses three API reads per tick (issue labels + comments length + comments last bot body), with two calls hitting the comments endpoint.
+- **Current API call count**: 3 calls/tick.
+- **Proposed call count after fix**: 2 calls/tick.
+- **Batching/caching pattern to extend**: Reuse single comments payload in tick-local variables (same pattern already used in other polling phases).
+- **Recommended fix**: Fetch comments once per tick and derive both metrics from that payload.
 
 ### Finding API-005
 - **ID**: `API-005`
 - **File path**: `.github/workflows/review_autofix.yml`
-- **Line range**: `158-167`
+- **Line range**: `136-141`, `158-167`
 - **Severity**: Medium
 - **Category tag**: `api-batching`
-- **Description**: In post-merge fallback path (`labels_known != true`), the workflow calls `gh issue view` once per linked issue to read labels.
+- **Description**: Post-merge fallback path calls `gh issue view` per linked issue to fetch labels when labels were not included in the first query.
 - **Current API call count**: `M` per run in fallback mode (`M` = fallback-linked issue count).
 - **Proposed call count after fix**: 1 batched GraphQL call for all fallback issue numbers.
-- **Batching/caching pattern to extend**: Extend the existing GraphQL linked-issue fetch in the same step (lines `136-141`) with an alias query for issue labels by number.
-- **Recommended fix**: Build one alias GraphQL query for all fallback issue IDs and evaluate labels from that response.
+- **Batching/caching pattern to extend**: Extend the existing linked-issue GraphQL fetch in this same step with aliased issue label lookups.
+- **Recommended fix**: Build a single aliased GraphQL query keyed by issue number and parse label membership from one response.
 
 ## 3) Code Duplication & Modularization Opportunities
 
 ### Finding DUP-001
 - **ID**: `DUP-001`
 - **File path**: `scripts/label_helpers.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/validate_process.sh`, `scripts/review_rb_judge.sh`, `.github/workflows/review_autofix.yml`
-- **Line range**: `label_helpers.sh:80-101`, `orchestrate_poll_process.sh:868-931`, `validate_process.sh:440-466`, `review_rb_judge.sh:57-74`, `review_autofix.yml:2969-2984,3056-3067`
+- **Line range**: `label_helpers.sh:80-95`, `orchestrate_poll_process.sh:868-929`, `validate_process.sh:440-464`, `review_rb_judge.sh:57-71`, `review_autofix.yml:3020-3034,3133-3144`
 - **Severity**: Medium
 - **Category tag**: `duplication`
-- **Description**: `ensure_label_exists` logic is reimplemented in multiple variants (different retry semantics, color defaults, and existence-check behavior), creating drift risk.
-- **Recommended fix**: Consolidate ownership in `scripts/label_helpers.sh` with one stable API:
-  - Function signature: `ensure_label_exists <label_name> [repo]`
-  - Optional strict mode: `ensure_label_exists_strict <label_name> [repo]`
-  - Update callers in `orchestrate_poll_process.sh`, `validate_process.sh`, `review_rb_judge.sh`, and fallback blocks in `review_autofix.yml`.
+- **Description**: `ensure_label_exists` is reimplemented in at least five places with drift in retry behavior, color/description mapping, and existence checks.
+- **Recommended fix**: Centralize in `scripts/label_helpers.sh` and source it everywhere.
+  - Proposed shared signature: `ensure_label_exists <label_name> [repo]`
+  - Optional strict variant: `ensure_label_exists_strict <label_name> [repo]`
+  - Callers to migrate: `orchestrate_poll_process.sh`, `validate_process.sh`, `review_rb_judge.sh`, review_autofix fallback blocks.
 
 ### Finding DUP-002
 - **ID**: `DUP-002`
@@ -118,43 +118,48 @@ Audit scope executed:
 - **Line range**: `207-241`, `316-350`, `475-515`, `630-649`, `1059-1070`
 - **Severity**: Low
 - **Category tag**: `duplication`
-- **Description**: `gh_api_safe` and run-ID capture logic are duplicated across multiple phase blocks with slight variations.
-- **Recommended fix**: Move polling helpers into a shared script (e.g., `scripts/e2e_poll_helpers.sh`) and source it in each phase step.
-  - Function signature examples: `gh_api_safe <args...>`, `capture_run_id <repo> <created_after> <name_regex>`.
-  - Callers updated: clarify wait, plan wait, implement wait, review wait, poller wait blocks.
+- **Description**: `gh_api_safe` and run-ID polling helpers are repeated across multiple phase blocks with near-identical logic.
+- **Recommended fix**: Extract to a shared helper script sourced by these steps.
+  - Proposed shared signatures: `gh_api_safe <args...>`, `capture_run_id <repo> <created_after> <name_regex>`
+  - Callers to migrate: clarify wait, plan wait, implement wait, review wait, poller wait blocks.
 
 ### Finding DUP-003
 - **ID**: `DUP-003`
 - **File path**: `.github/workflows/review_autofix.yml`, `.github/workflows/issue_pr_status.yml`
-- **Line range**: `review_autofix.yml:2990-2993,3075-3078`, `issue_pr_status.yml:195`
+- **Line range**: `review_autofix.yml:3043,3154,3637`, `issue_pr_status.yml:197`
 - **Severity**: Low
 - **Category tag**: `duplication`
-- **Description**: Regex-based fallback extraction of issue numbers from PR title/body is repeated in multiple paths.
-- **Recommended fix**: Extract to one helper (e.g., `scripts/gh_helpers.sh`):
-  - Function signature: `extract_linked_issue_numbers_from_pr_text <repo_slug> <text>`
-  - Update callers in review_autofix and issue_pr_status paths.
+- **Description**: The same long regex fallback for issue-number extraction from PR title/body is duplicated in multiple workflow steps.
+- **Recommended fix**: Move extraction into one helper in `scripts/gh_helpers.sh`.
+  - Proposed shared signature: `extract_linked_issue_numbers_from_pr_text <repo_slug> <text>`
+  - Callers to migrate: `review_autofix.yml` fallback paths and `issue_pr_status.yml` fallback path.
 
 ## 4) Expression Size Limit Risk Assessment
 
-Measurement method used:
-- Scanned all `.github/workflows/*.yml` `run: |` blocks containing `${{ ... }}` and measured static expression length per block.
-- Checked largest workflow file sizes against 800 KB alert threshold and 1 MB hard limit.
+Assessment method:
+- Scanned all workflow `run: |` blocks containing `${{ ... }}` and measured expression token lengths per block.
+- Checked workflow file sizes against 800 KB warning and 1 MB hard parser limit.
 
-Result summary:
-- No `${{ }}` expression block exceeded 15,000 characters.
-- Largest measured `run:` interpolation total was 534 chars (`.github/workflows/implement.yml:2344`), leaving 20,466 chars headroom to 21,000.
-- Largest workflow file size is 194,289 bytes (`.github/workflows/review_autofix.yml`), leaving 610,511 bytes headroom to 800 KB warning and 854,287 bytes headroom to 1 MB hard limit.
+Measured results:
+- Max `${{ ... }}` total in a single interpolated `run` block: **534 chars** (`.github/workflows/implement.yml:2364-2851`).
+- Headroom to 21,000 expression cap at current max: **20,466 chars**.
+- Blocks over 15,000 chars: **0**.
+- Blocks over 18,000 chars: **0**.
+- Largest workflow file: **203,300 bytes** (`.github/workflows/review_autofix.yml`).
+- Headroom to 800 KB warning: **615,900 bytes**.
+- Headroom to 1 MB hard limit: **845,276 bytes**.
 
 ### Finding EXPR-001
 - **ID**: `EXPR-001`
 - **File path**: `.github/workflows/ci.yml`
-- **Line range**: `69-80`
+- **Line range**: `65-87`
 - **Severity**: Low
 - **Category tag**: `expression-limit`
-- **Description**: CI currently lints YAML/action schema but does not enforce expression-size budgets despite prior historical over-limit incidents.
-- **Estimated expression chars / headroom**: Current max observed expression block = 534 chars (headroom 20,466); no immediate overflow risk.
-- **Mitigation option**: Add a lightweight guard script in CI to fail at >15,000 chars and warn at >12,000 for any single `${{ ... }}` expression.
-- **Recommended fix**: Add a static checker step in `ci.yml` for expression-length budgets.
+- **Description**: The repo has prior expression-limit incidents, but CI currently has no dedicated expression-budget check.
+- **Estimated expression chars**: Current max observed block = 534 chars.
+- **Headroom remaining**: 20,466 chars to 21,000 cap.
+- **Mitigation option**: Add a static guard script in CI (warn at 12,000, fail at 15,000 per `${{ ... }}` expression).
+- **Recommended fix**: Add an expression-size budget check to `ci.yml` alongside existing lint steps.
 
 ## 5) Cross-Cutting Concerns
 
@@ -164,8 +169,8 @@ Result summary:
 - **Line range**: `57`
 - **Severity**: Low
 - **Category tag**: `dead-code`
-- **Description**: `local token="${GH_TOKEN:-}"` is declared but unused.
-- **Recommended fix**: Remove the unused variable or wire it into authenticated remote URL handling if intended.
+- **Description**: `local token="${GH_TOKEN:-}"` is declared but never used.
+- **Recommended fix**: Remove the variable or wire it into authenticated URL construction if intended.
 
 ### Finding DEAD-002 [NEEDS VERIFICATION]
 - **ID**: `DEAD-002`
@@ -173,29 +178,29 @@ Result summary:
 - **Line range**: `7250`, `7523`
 - **Severity**: Low
 - **Category tag**: `dead-code`
-- **Description**: `RB_FOLLOWUP_REFUSED` and `IF_BLOCKERS_SOURCE` are assigned but not read in static analysis.
-- **Recommended fix**: Confirm no dynamic reads; if none exist, remove assignments to reduce cognitive noise.
+- **Description**: `RB_FOLLOWUP_REFUSED` and `IF_BLOCKERS_SOURCE` are assigned but have no reads in static search.
+- **Recommended fix**: Confirm no dynamic/indirect reads; if none, remove assignments.
 
 ### Finding CONS-001
 - **ID**: `CONS-001`
 - **File path**: `.github/workflows/review_autofix.yml`
-- **Line range**: `96-97`, `2921-2928`
+- **Line range**: `96-97`, `440`, `3610`
 - **Severity**: Medium
 - **Category tag**: `consistency`
-- **Description**: Same workflow mixes raw `gh api` and `gh_retry`/safe-helper patterns for similar PR-read operations, producing inconsistent retry and rate-limit behavior.
-- **Recommended fix**: Standardize on helper-backed reads (`gh_retry` + single-response parsing) for all PR metadata fetches in this workflow.
+- **Description**: Same workflow mixes raw `gh api` and helper-backed `gh_retry` access for equivalent PR state reads, producing inconsistent retry/rate-limit behavior.
+- **Recommended fix**: Standardize on one helper-backed PR-read path (single fetch + local parse) across all PR-state checks in this workflow.
 
 ### Finding SH-001 [NEEDS VERIFICATION]
 - **ID**: `SH-001`
 - **File path**: `scripts/validate_driver.sh`
-- **Line range**: `434`, `453`
+- **Line range**: `558`, `577`
 - **Severity**: Low
 - **Category tag**: `shellcheck`
-- **Description**: ShellCheck SC2053 flags unquoted RHS in `[[ ... == ${HELPER_PATTERN} ]]` and `[[ ... == ${CANARY_PATTERN} ]]`. If patterns become user-controlled, glob semantics may become broader than expected.
-- **Recommended fix**: If literal comparison is intended, quote RHS. If glob matching is intended, switch to explicit `case` blocks and annotate intent.
+- **Description**: ShellCheck SC2053 flags unquoted RHS glob patterns in `[[ ... == ${HELPER_PATTERN} ]]` and `[[ ... == ${CANARY_PATTERN} ]]`.
+- **Recommended fix**: If glob semantics are intended, switch to `case` with explicit comments or add targeted ShellCheck suppression; if literal match is intended, quote RHS.
 
 Additional cross-cutting scan notes:
-- TODO/FIXME/HACK markers in audited workflows/scripts: none found.
+- `TODO`/`FIXME`/`HACK` markers in audited workflow/script files: none found.
 
 ## 6) Summary & Severity Matrix
 
@@ -211,10 +216,9 @@ Additional cross-cutting scan notes:
 ### 6B) Estimated Remediation Scope
 
 | Category | Files Touched | Estimated Effort |
-|----------|--------------|-----------------|
+|----------|---------------|------------------|
 | Critical/High bug fixes | 1-3 | Medium |
 | API call optimization | 3-6 | Medium-Large |
 | Code modularization | 4-8 | Medium-Large |
 | Expression size reduction | 1-2 | Small |
 | Medium/Low fixes | 6-10 | Small-Medium |
-
