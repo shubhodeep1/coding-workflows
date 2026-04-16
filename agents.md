@@ -300,6 +300,17 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 - The collector (`scripts/collect_workflow_logs.py`) collects **all** workflow families (no static filter). `workflow_families` in the report is derived from observed runs.
 - The collector randomly samples ~7% of successful runs for log analysis (`--success-sample-rate`, default `0.07`) using a deterministic seed. Sampled runs are tagged with `_success_sampled: true`.
 - AI memory operations emit `AI_MEMORY_TELEMETRY: {JSON}` lines (stderr from `ai_memory.py`; `memory_helpers.sh` uses stdout unless stdout must remain machine-readable, then telemetry is sent to stderr). The analysis prompt instructs the LLM to produce an **AI Memory Health** section from these lines.
+- `workflow-log-analysis.yml` remains `workflow_dispatch`-only and has dual execution paths: `codex_mode=true` (default) runs analyzer preprocessing (`--codex-mode`) plus `codex exec`, while `codex_mode=false` uses the legacy analyzer/batch path.
+- `batch_api_disabled` input is validated whenever a non-empty value is provided, but only overrides analyzer batch behavior for `codex_mode=false`; codex-mode runs do not use the batch path.
+
+## 13a. Comprehensive Release Callback (Poller-Owned)
+
+- `.github/workflows/comprehensive-test-and-release.yml` has three phases only (`phase1-first-pass-test`, `phase2-collect-and-analyze-logs`, `phase3-dispatch-orchestrator`); callback handling is poller-owned, not a standalone workflow phase.
+- Phase 2 dispatches `workflow-log-analysis.yml` with `codex_mode=true` and resolves the collector window from `analysis/last_collection_timestamp.txt`; invalid/missing timestamp falls back to `lookback_days_fallback`.
+- Poller callback handling is label-gated: `handle_comprehensive_release_callback_if_needed` runs only while the tracking issue has `ai:comprehensive-test-pending`.
+- On project status `complete`, the poller dispatches `test-and-mark-stable.yml` with `dry_run=false`, reusing validated `version_tag`/`test_repo` extracted from tracking comments when present.
+- On project status `failed` or `validation-failed`, the poller sends an abort notification and does not dispatch release.
+- In both completion and abort paths, the poller writes `comprehensive_release_callback` (`handled`, `status`, `handled_at`) and removes `ai:comprehensive-test-pending` best-effort; `handled=true` is still recorded when dispatch fails to prevent redispatch loops.
 
 ---
 
