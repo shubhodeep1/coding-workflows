@@ -57,30 +57,29 @@ jobs:
             exit 0
           fi
 
-          if ! issue_body="$(gh api "repos/${{ github.repository }}/issues/${issue_number}" --jq '.body // ""' 2>/dev/null)"; then
-            echo "::warning::Failed to read issue body for integration ref resolution; falling back to default branch."
+          resolver_script="${RUNNER_TEMP}/resolve_integration_ref.sh"
+          resolver_repo="shubhodeep1/coding-workflows"
+          resolver_ref="stable"
+          if [ "${{ github.repository }}" = "${resolver_repo}" ]; then
+            resolver_ref="${{ github.sha }}"
+          fi
+
+          if ! gh api "repos/${resolver_repo}/contents/scripts/resolve_integration_ref.sh?ref=${resolver_ref}" --jq '.content' | base64 --decode > "${resolver_script}"; then
+            echo "::warning::Failed to load canonical integration resolver; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          integration_branch="$(printf '%s\n' "${issue_body}" | sed -nE 's/^- Integration branch:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p; s/^\*\*Integration branch:\*\*[[:space:]]*`([^`]+)`[[:space:]]*$/\1/p' | head -n1 | tr -d '\r')"
-          if [ -z "${integration_branch}" ]; then
-            echo "::notice::No integration branch metadata found; falling back to default branch."
-            echo "ref=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if ! printf '%s' "${integration_branch}" | grep -Eq '^orchestrator/project-[0-9]+$'; then
-            echo "::warning::Ignoring integration branch with invalid format: ${integration_branch}"
-            echo "ref=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          integration_branch_ref="$(printf '%s' "${integration_branch}" | jq -sRr @uri)"
-          if gh api "repos/${{ github.repository }}/git/ref/heads/${integration_branch_ref}" >/dev/null 2>&1; then
+          chmod +x "${resolver_script}"
+          if integration_branch="$({
+            REPO="${{ github.repository }}" \
+            ISSUE="${issue_number}" \
+            GH_TOKEN="${GH_TOKEN}" \
+            bash "${resolver_script}"
+          })"; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::Integration branch from metadata does not exist: ${integration_branch}"
+            echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
 
@@ -734,7 +733,7 @@ jobs:
           1. Determine if the issue is clear enough to implement.
           2. If clarification is required, ask concise clarification questions.
           3. Ask only essential questions needed for implementation.
-          4. Use web search when needed to resolve unknowns before asking questions.
+          4. Use repo documentation only; no external web searches.
           5. If external APIs/services are likely required, review their official API docs and identify the expected endpoints and parameters so planning can include concrete call details for an offline editor.
           6. Use Serena MCP tools (get_symbols_overview, find_symbol) when available to explore
              the codebase efficiently. This helps you understand code structure with fewer tokens.
@@ -743,6 +742,9 @@ jobs:
              (e.g., a name in the issue doesn't match the name in the code).
           8. Do NOT write code.
           9. Do NOT propose implementation solutions.
+          10. If a required input is external and non-synthesizable by the auto-answerer
+              (for example branch name, commit SHA, credential, or external URL), do not
+              emit Q/Choices; emit exactly `BLOCKED: <short reason>`.
 
           ANSWER COMPATIBILITY (MANDATORY — prevents wasted planning runs):
           - When designing multiple-choice questions, check whether any combinations of
@@ -778,6 +780,9 @@ jobs:
           RATIONALE: <1-3 short lines>
           QUESTIONS:
           - None
+
+          Or, for blocked handoff:
+          BLOCKED: <short reason>
           PROMPT
 
           # Build prompt: static context + instructions + dynamic issue context,
@@ -883,7 +888,7 @@ jobs:
               fi
             fi
             if [ -f "${CODEX_OUTPUT_FILE}" ]; then
-              STATUS="$(grep -oiE 'STATUS:\s*(CLEAR|NEEDS_CLARIFICATION)' "${CODEX_OUTPUT_FILE}" | head -1 || echo "unknown")"
+              STATUS="$(grep -oiE 'STATUS:\s*(CLEAR|NEEDS_CLARIFICATION)|^\s*BLOCKED:\s*.+$' "${CODEX_OUTPUT_FILE}" | head -1 || echo "unknown")"
               echo "| Result | ${STATUS} |"
               # Count questions if clarification was needed
               if echo "${STATUS}" | grep -qi 'NEEDS_CLARIFICATION'; then
@@ -898,6 +903,35 @@ jobs:
         if: steps.clarify_route.outputs.skip_codex != 'true'
         run: |
           set -euo pipefail
+          BLOCKED_REASON="$(perl -ne '
+            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
+            next if $in_code;
+            if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { print $1; exit; }
+          ' "${CODEX_OUTPUT_FILE}")"
+
+          if [ -n "${BLOCKED_REASON}" ]; then
+            BLOCKED_REASON_OUTPUT_DELIM="BLOCKED_REASON_OUTPUT_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}_$$"
+            BLOCKED_REASON_ENV_DELIM="BLOCKED_REASON_ENV_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}_$$"
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            {
+              printf 'blocked_reason<<%s\n' "${BLOCKED_REASON_OUTPUT_DELIM}"
+              printf '%s\n' "${BLOCKED_REASON}"
+              printf '%s\n' "${BLOCKED_REASON_OUTPUT_DELIM}"
+            } >> "$GITHUB_OUTPUT"
+            echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
+            echo "BLOCKED=true" >> "$GITHUB_ENV"
+            {
+              printf 'BLOCKED_REASON<<%s\n' "${BLOCKED_REASON_ENV_DELIM}"
+              printf '%s\n' "${BLOCKED_REASON}"
+              printf '%s\n' "${BLOCKED_REASON_ENV_DELIM}"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "blocked=false" >> "$GITHUB_OUTPUT"
+          echo "blocked_reason=" >> "$GITHUB_OUTPUT"
+          echo "BLOCKED=false" >> "$GITHUB_ENV"
+
           # Case-insensitive, flexible parsing to handle LLM output variability
           if grep -qiE 'STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION' "${CODEX_OUTPUT_FILE}"; then
             # Extract questions section, handling various markdown formats
@@ -927,8 +961,51 @@ jobs:
             echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Handle blocked clarification output
+        if: steps.parse_codex.outputs.blocked == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          BLOCKED_REASON: ${{ steps.parse_codex.outputs.blocked_reason }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          source scripts/label_helpers.sh
+          source scripts/tg_helpers.sh
+
+          ensure_label_exists "ai:blocked" "${{ github.repository }}"
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+            --add-label 'ai:blocked' \
+            --remove-label 'ai:clarification' \
+            --remove-label 'ai:planning' \
+            --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
+
+          BLOCKED_COMMENT_FILE="${RUNTIME_DIR}/blocked_comment.md"
+          {
+            printf '%s\n' "Clarification blocked: human input required."
+            printf '\n'
+            printf '%s\n' "Reason: ${BLOCKED_REASON}"
+            printf '\n'
+            printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
+            printf '%s\n' "Provide the required input, then run /reclarify or continue with /answer as appropriate."
+          } > "${BLOCKED_COMMENT_FILE}"
+
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${BLOCKED_COMMENT_FILE}")" >/dev/null
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="Clarification blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "CRITICAL"
+
       - name: Post clarification questions
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -949,7 +1026,7 @@ jobs:
             -f body="$(cat "${RUNTIME_DIR}/clarification_comment.md")"
 
       - name: Record clarification candidate (needs clarification)
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -971,7 +1048,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Post clear-to-proceed comment
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -990,7 +1067,7 @@ jobs:
             -f body=$'/answer [auto-answered-by-clarify]\n\nAuto answer was posted because no human clarification was required.'
 
       - name: Record clarification candidate (clear)
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1010,7 +1087,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Telegram clarification notification
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1048,6 +1125,8 @@ jobs:
           OUTCOME="clear"
           if [ "${{ steps.clarify_route.outputs.skip_codex }}" = "true" ]; then
             OUTCOME="auto_answered_by_orchestrator"
+          elif [ "${{ steps.parse_codex.outputs.blocked }}" = "true" ]; then
+            OUTCOME="blocked"
           elif [ "${{ steps.parse_codex.outputs.needs_clarification }}" = "true" ]; then
             OUTCOME="needs_clarification"
           fi
