@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/orchestrate_poll.yml\nprompts/mode-validate-generate.txt\nscripts/gh_helpers.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/internal-orchestrate-poll.yml,\nscripts/orchestrate_lib.py\ntests/e2e_smoke_canary.txt",
+  "fingerprint": "645f63929bc11018fe56fe271511d5cdd9e6b1bddfe88108340367503ba99a3c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1152,
+    "run_id": "24491409209",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24491409209",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416041654_e24ea673b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1152,
+    "run_id": "24491409209"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T04:16:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
