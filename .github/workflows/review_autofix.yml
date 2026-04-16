@@ -1428,10 +1428,8 @@ jobs:
           # "canonical helpers" like review_apply_fixes.sh — be legitimately
           # modified, while still blocking files the editor never touched from
           # riding along in the commit.
-          # Consumer repos no longer blanket-exclude ':!scripts' — the
-          # bootstrap-generated scripts/.gitignore handles fetched helpers.
-          # This lets consumer-repo-owned scripts (e.g. scripts/security/)
-          # be committed normally.
+          # Consumer repos use per-file exclusions from scripts/.gitignore
+          # so consumer-owned scripts (e.g. scripts/security/*.js) are staged.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
             PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
             : > "${PRE_EDITOR_STATE_FILE}"
@@ -1648,8 +1646,18 @@ jobs:
             done < "${CODEX_TOUCHED_FILE}"
             rm -f "${CODEX_TOUCHED_FILE}"
           else
-            git add -u -- ':!node_modules' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-            git ls-files --others --exclude-standard -z -- ':!node_modules' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+            # Build per-file exclusions from scripts/.gitignore when present.
+            # If it is absent, keep exclusions empty so consumer-owned scripts/
+            # changes are still staged.
+            _ra_script_excludes=()
+            if [ -f scripts/.gitignore ]; then
+              while IFS= read -r _ign_entry; do
+                [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
+                _ra_script_excludes+=(":!scripts/${_ign_entry}")
+              done < scripts/.gitignore
+            fi
+            git add -u -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
+            git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
           fi
 
           echo "Staged files before commit:"
@@ -1916,8 +1924,7 @@ jobs:
             ' "${EDITOR_SUMMARY_FILE}")"
 
             # Check if the section contains substantive entries (not just
-            # "- none" variants or investigation-report lines that explicitly
-            # state no changes were made.
+            # "- none" variants or explicit "no modifications" statements).
             has_real_changes="false"
             if [ -n "${changes_section}" ]; then
               # If the first non-blank line is a "- none" variant (with any
@@ -1927,23 +1934,48 @@ jobs:
               # file-change claims; without this guard those bullets trigger
               # a false-positive EDITOR_CHANGES_LOST error.
               first_line="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | head -1 || true)"
-              if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)'; then
-                has_real_changes="false"
-              else
-                # Strip lines that are blank, match "- none*", explicitly
-                # declare no file/code/repository changes were required, or
-                # are informational metadata (e.g. "- Validation executed:
-                # ...") that the editor may emit when no files changed.
-                substantive="$(printf '%s\n' "${changes_section}" \
-                  | grep -vE '^[[:space:]]*$' \
-                  | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)' \
-                  | grep -viE '^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)' \
-                  | grep -viE 'no (repository |repo |code |file )?changes([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)([[:space:][:punct:]]*)$' \
-                  | grep -viE 'no (repository |repo |code |file )?(modifications|edits)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)([[:space:][:punct:]]*)$' \
-                  | grep -viE 'no .*file changes([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)([[:space:][:punct:]]*)$' \
-                  || true)"
+              # Strip lines that are blank, match "- none*", or are
+              # informational metadata bullets (e.g. "- Validation executed").
+              substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed' || true)"
+              edit_claim_regex='modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)|`[^`]+\.[[:alpha:]]+`'
+              if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)'; then
+                # Preserve contradictory summaries such as "- none" followed
+                # by "- created ...".
                 if [ -n "${substantive}" ]; then
-                  has_real_changes="true"
+                  if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files were modified|no changes (were )?made|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
+                    has_real_changes="true"
+                  else
+                    remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files were modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$' || true)"
+                    if printf '%s\n' "${remainder}" | grep -qiE "${edit_claim_regex}"; then
+                      has_real_changes="true"
+                    fi
+                  fi
+                fi
+              else
+                # Strip lines that are blank, match "- none*", or are
+                # informational metadata (e.g. "- Validation executed: ...")
+                # that the editor may emit when no files changed. Keep
+                # explicit "no changes" lines for contradiction detection.
+                substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed' || true)"
+                if [ -n "${substantive}" ]; then
+                  if printf '%s\n' "${substantive}" | grep -qiE 'no (repository )?files were modified|no changes (were )?made|no modifications'; then
+                    # Preserve contradictory mixed lines ("no changes, but
+                    # updated ...") so they still count as real change claims.
+                    if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files were modified|no changes (were )?made|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
+                      has_real_changes="true"
+                    else
+                      # Remove standalone no-modification declarations, but
+                      # still detect mixed sections that claim concrete edits.
+                      remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files were modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$' || true)"
+                      if printf '%s\n' "${remainder}" | grep -qiE "${edit_claim_regex}"; then
+                        has_real_changes="true"
+                      fi
+                    fi
+                  else
+                    if printf '%s\n' "${substantive}" | grep -qiE "${edit_claim_regex}"; then
+                      has_real_changes="true"
+                    fi
+                  fi
                 fi
               fi
             fi
@@ -2866,8 +2898,18 @@ jobs:
               done < "${RESOLVER_TOUCHED_FILE}"
               rm -f "${RESOLVER_TOUCHED_FILE}"
             else
-              git add -u -- ':!node_modules' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-              git ls-files --others --exclude-standard -z -- ':!node_modules' ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+              # Build per-file exclusions from scripts/.gitignore when present.
+              # If it is absent, keep exclusions empty so consumer-owned scripts/
+              # changes are still staged.
+              _rs_script_excludes=()
+              if [ -f scripts/.gitignore ]; then
+                while IFS= read -r _ign_entry; do
+                  [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
+                  _rs_script_excludes+=(":!scripts/${_ign_entry}")
+                done < scripts/.gitignore
+              fi
+              git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
+              git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!.serena' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
             fi
             echo "Staged files before commit:"
             STAGED_FILES="$(git diff --cached --name-only || true)"
@@ -3094,10 +3136,36 @@ jobs:
           fi
 
           ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
+          # Phase labels that are mutually exclusive — at most one should
+          # be present.  Defined as a jq-parseable array for the PUT swap.
+          _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:ready-to-merge on issue #${issue_number}"
-            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:ready-to-merge' || true
+            # Fetch current labels (1 call) then atomically replace via PUT
+            # (1 call).  This avoids the `gh issue edit --remove-label`
+            # failure mode where a label that does not exist as a repo
+            # label definition aborts the entire edit command, leaving the
+            # issue with stale phase labels and no target label applied.
+            if ! _cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+              --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
+              echo "::warning::GET labels failed for #${issue_number} — falling back to POST add."
+              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                -f 'labels[]=ai:ready-to-merge' >/dev/null 2>&1 \
+                || echo "::warning::POST fallback also failed for #${issue_number}."
+              continue
+            fi
+            _cur="${_cur:-[]}"
+            _new="$(echo "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" \
+              '(. - $p) + ["ai:ready-to-merge"] | unique')"
+            if ! printf '{"labels":%s}' "${_new}" | \
+              gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                --input - >/dev/null 2>&1; then
+              echo "::warning::PUT labels failed for #${issue_number} — falling back to POST add."
+              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                -f 'labels[]=ai:ready-to-merge' >/dev/null 2>&1 \
+                || echo "::warning::POST fallback also failed for #${issue_number}."
+            fi
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Review-blocked judge decision
@@ -3179,14 +3247,44 @@ jobs:
           fi
 
           ensure_label_exists "ai:review-blocked" "${REPOSITORY}"
+          # Phase labels that are mutually exclusive — at most one should
+          # be present.  Defined as a jq-parseable array for the PUT swap.
+          _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number}"
-            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:review-blocked'; then
-              echo "::warning::Failed to update labels on issue #${issue_number} — retrying in 2s..."
-              sleep 2
-              gh issue edit "${issue_number}" --repo "${REPOSITORY}" --add-label 'ai:review-blocked' \
-                || echo "::warning::Retry also failed for issue #${issue_number}. Label may need manual application."
+            # Fetch current labels (1 call) then atomically replace via PUT
+            # (1 call).  This avoids the `gh issue edit --remove-label`
+            # failure mode where a label that does not exist as a repo
+            # label definition aborts the entire edit command, leaving the
+            # issue with stale phase labels and no target label applied.
+            if ! _cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+              --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
+              echo "::warning::GET labels failed for #${issue_number} — falling back to POST add."
+              if gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                -f 'labels[]=ai:review-blocked' >/dev/null 2>&1; then
+                echo "  ai:review-blocked added via POST fallback on #${issue_number}."
+              else
+                echo "::warning::POST fallback also failed for #${issue_number}. Label may need manual application."
+              fi
+              continue
+            fi
+            _cur="${_cur:-[]}"
+            _new="$(echo "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" \
+              '(. - $p) + ["ai:review-blocked"] | unique')"
+            if ! printf '{"labels":%s}' "${_new}" | \
+              gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                --input - >/dev/null 2>&1; then
+              # Fallback: just ensure ai:review-blocked is present (1 call).
+              # This alone is sufficient for the orchestrator poller to detect
+              # the review-blocked state; stale phase labels are cosmetic.
+              echo "::warning::PUT labels failed for #${issue_number} — falling back to POST add."
+              if gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                -f 'labels[]=ai:review-blocked' >/dev/null 2>&1; then
+                echo "  ai:review-blocked added via POST fallback on #${issue_number}."
+              else
+                echo "::warning::POST fallback also failed for #${issue_number}. Label may need manual application."
+              fi
             fi
           done <<< "${ISSUE_NUMBERS}"
 
@@ -3662,10 +3760,36 @@ jobs:
             echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
           fi
 
+          # Phase labels that are mutually exclusive — at most one should
+          # be present.  Defined as a jq-parseable array for the PUT swap.
+          _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
             echo "Setting ai:review-blocked on issue #${issue_number} (workflow failure)"
-            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:ready-to-merge' --remove-label 'ai:review-blocked' --remove-label 'ai:merged' --remove-label 'ai:closed' --add-label 'ai:review-blocked' || true
+            # Fetch current labels (1 call) then atomically replace via PUT
+            # (1 call).  This avoids the `gh issue edit --remove-label`
+            # failure mode where a label that does not exist as a repo
+            # label definition aborts the entire edit command, leaving the
+            # issue with stale phase labels and no target label applied.
+            if ! _cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+              --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
+              echo "::warning::GET labels failed for #${issue_number} — falling back to POST add."
+              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                -f 'labels[]=ai:review-blocked' >/dev/null 2>&1 \
+                || echo "::warning::POST fallback also failed for #${issue_number}."
+              continue
+            fi
+            _cur="${_cur:-[]}"
+            _new="$(echo "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" \
+              '(. - $p) + ["ai:review-blocked"] | unique')"
+            if ! printf '{"labels":%s}' "${_new}" | \
+              gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                --input - >/dev/null 2>&1; then
+              echo "::warning::PUT labels failed for #${issue_number} — falling back to POST add."
+              gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+                -f 'labels[]=ai:review-blocked' >/dev/null 2>&1 \
+                || echo "::warning::POST fallback also failed for #${issue_number}."
+            fi
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (workflow failure)

@@ -390,6 +390,9 @@ EDITOR_MAX_WALL="${EDITOR_MAX_WALL:-3300}"            # 55 min
 EDITOR_MIN_ATTEMPT_SECS="${EDITOR_MIN_ATTEMPT_SECS:-300}"  # 5 min minimum
 JOB_TIMEOUT_SECS=$((180 * 60))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
+_hb_tmpdir=""
+_hb_fifo=""
+trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EXIT
 
 attempt=1
 while [ "${attempt}" -le 3 ]; do
@@ -483,19 +486,37 @@ while [ "${attempt}" -le 3 ]; do
   ) &
   wd_pid=$!
 
-  # Run codex with stderr-based heartbeat tracking
+  # Run codex with stderr-based heartbeat tracking.
+  # Use a named pipe (FIFO) instead of process substitution (2> >(...))
+  # to avoid a bash 5.2 bug where process substitution combined with
+  # backgrounding (&) corrupts the shell's script-file read position,
+  # causing spurious syntax errors after the retry loop exits.
+  _hb_tmpdir="$(mktemp -d /tmp/hb_fifo_editor.XXXXXX)"
+  _hb_fifo="${_hb_tmpdir}/stderr.pipe"
+  mkfifo -m 600 "${_hb_fifo}"
+  # Start heartbeat reader in background — reads stderr lines through
+  # the FIFO, updates the heartbeat file, and writes to tmp_err.
   (
-    exec codex exec --model "${MODEL_EDITOR}" --full-auto < "${EDITOR_PROMPT_FILE}"
-  ) > "${tmp_output}" 2> >(
     while IFS= read -r line || [ -n "$line" ]; do
       printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
       printf '%s\n' "$line"
-    done > "${tmp_err}"
+    done < "${_hb_fifo}" > "${tmp_err}"
   ) &
+  _hb_reader_pid=$!
+  # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
+  (
+    trap '' PIPE
+    exec codex exec --model "${MODEL_EDITOR}" --full-auto < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
+  ) > "${tmp_output}" &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"
   cmd_rc=0
   wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
+  # Wait for the heartbeat reader to finish draining the FIFO.
+  wait "${_hb_reader_pid}" 2>/dev/null || true
+  rm -rf "${_hb_tmpdir}"
+  _hb_tmpdir=""
+  _hb_fifo=""
 
   kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
