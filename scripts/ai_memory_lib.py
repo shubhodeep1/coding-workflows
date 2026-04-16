@@ -38,6 +38,7 @@ RUN_LEDGER_SCHEMA_VERSION = "run_ledger_entry.v1"
 TASK_LINEAGE_SCHEMA_VERSION = "task_lineage.v1"
 PROCESSED_COMMAND_SCHEMA_VERSION = "processed_command_entry.v1"
 RETRIEVAL_PROFILE_SCHEMA_VERSION = "retrieval_profiles.v1"
+ACTIONS_RUNS_CACHE_SCHEMA_VERSION = "v1"
 MAX_MEMORY_DETAILS_LENGTH = 12000
 LEGACY_MEMORY_ROOT_RELATIVE = ".github/ai-memory"
 CANONICAL_MEMORY_ROOT_RELATIVE = "ai-memory"
@@ -475,6 +476,60 @@ def _lineage_path(memory_root: Path, issue_number: int) -> Path:
 def _run_ledger_path(memory_root: Path, run_id: str) -> Path:
     safe_run_id = sanitize_segment(run_id, "run-unknown")
     return memory_root / "runs" / safe_run_id / "ledger" / "events.jsonl"
+
+
+def _validate_repository_name(repository: str) -> str:
+    normalized = (repository or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", normalized) is None:
+        raise MemoryValidationError(
+            "repository must match owner/repo using only alnum, '.', '_', and '-'"
+        )
+    return normalized
+
+
+def _actions_runs_cache_path(memory_root: Path, repository: str) -> Path:
+    normalized_repo = _validate_repository_name(repository)
+    owner, repo = normalized_repo.split("/", 1)
+    owner_key = sanitize_segment(owner.lower(), "owner")
+    repo_key = sanitize_segment(repo.lower(), "repo")
+    return memory_root / "orchestrator" / "actions_runs_cache" / f"{owner_key}__{repo_key}.json"
+
+
+def validate_actions_runs_cache_payload(payload: dict[str, Any], memory_root: Path) -> None:
+    _validate_with_schema_file(payload, _schema_file(memory_root, "actions_runs_cache.v1.json"))
+
+
+def get_actions_runs_cache(memory_root: Path, repository: str) -> dict[str, Any] | None:
+    ensure_memory_layout(memory_root)
+    cache_path = _actions_runs_cache_path(memory_root, repository)
+    if not cache_path.exists():
+        return None
+    payload = _load_json(cache_path)
+    validate_actions_runs_cache_payload(payload, memory_root)
+    return payload
+
+
+def put_actions_runs_cache(
+    memory_root: Path,
+    *,
+    repository: str,
+    runs: list[dict[str, Any]],
+    etag: str | None,
+    ttl_seconds: int,
+    fetched_at: str | None = None,
+) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    payload = {
+        "schema_version": ACTIONS_RUNS_CACHE_SCHEMA_VERSION,
+        "repository": _validate_repository_name(repository),
+        "fetched_at": fetched_at or utc_now_iso(),
+        "ttl_seconds": int(ttl_seconds),
+        "etag": (etag or None),
+        "runs": runs,
+    }
+    validate_actions_runs_cache_payload(payload, memory_root)
+    _atomic_write_json(_actions_runs_cache_path(memory_root, repository), payload)
+    return payload
 
 
 def make_processed_command_entry_id(issue_number: int, comment_id: int, command: str) -> str:

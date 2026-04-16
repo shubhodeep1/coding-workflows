@@ -584,6 +584,12 @@ if ! [[ "${STALL_THRESHOLD_MINUTES}" =~ ^[0-9]+$ ]] || [ "${STALL_THRESHOLD_MINU
   STALL_THRESHOLD_MINUTES="120"
 fi
 
+ACTIONS_RUNS_CACHE_TTL_SECONDS="${ACTIONS_RUNS_CACHE_TTL_SECONDS:-60}"
+if ! [[ "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" =~ ^[0-9]+$ ]] || [ "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" -lt 1 ]; then
+  echo "::warning::ACTIONS_RUNS_CACHE_TTL_SECONDS must be a positive integer; defaulting to 60"
+  ACTIONS_RUNS_CACHE_TTL_SECONDS="60"
+fi
+
 # Per-phase stall thresholds (override the global fallback above).
 # Each var maps to a pipeline phase label.  Unset vars use the built-in
 # defaults in orchestrate_lib.py (60 min for lightweight phases, 120 min
@@ -3062,6 +3068,144 @@ sync_validation_fix_issues_from_comments() {
 # Stall recovery: workflow run status checks
 # ---------------------------------------------------------------
 
+declare -g _ACTIONS_RUNS_BLOB_CACHE=''
+declare -g _ACTIONS_RUNS_BLOB_READY='false'
+
+_load_actions_runs_cached() {
+  local empty_blob='{"workflow_runs":[]}'
+  if [ "${_ACTIONS_RUNS_BLOB_READY}" = "true" ]; then
+    printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE:-${empty_blob}}"
+    return 0
+  fi
+
+  local repo="${GITHUB_REPOSITORY:-}"
+  if [ -z "${repo}" ]; then
+    _ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
+    _ACTIONS_RUNS_BLOB_READY="true"
+    printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+    return 0
+  fi
+
+  local cache_json='{}'
+  local cache_payload='{}'
+  local cache_hit='false'
+  local cached_runs='[]'
+  local cached_etag=''
+  local cached_fetched_at=''
+  local cache_age_seconds='999999'
+  local now_epoch
+  now_epoch="$(date +%s)"
+
+  if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
+    cache_json="$(python3 scripts/ai_memory.py actions-runs-cache get --repo "${repo}" || echo '{}')"
+    cache_hit="$(printf '%s' "${cache_json}" | jq -r 'if (.ok == true and .hit == true and (.cache | type == "object")) then "true" else "false" end' 2>/dev/null || echo 'false')"
+    if [ "${cache_hit}" = "true" ]; then
+      cache_payload="$(printf '%s' "${cache_json}" | jq -c '.cache // {}' 2>/dev/null || echo '{}')"
+      cached_runs="$(printf '%s' "${cache_payload}" | jq -c '.runs // []' 2>/dev/null || echo '[]')"
+      cached_etag="$(printf '%s' "${cache_payload}" | jq -r '.etag // ""' 2>/dev/null || echo '')"
+      cached_fetched_at="$(printf '%s' "${cache_payload}" | jq -r '.fetched_at // ""' 2>/dev/null || echo '')"
+      if [ -n "${cached_fetched_at}" ]; then
+        local cached_epoch
+        cached_epoch="$(jq -nr --arg ts "${cached_fetched_at}" '$ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601' 2>/dev/null || echo '0')"
+        if [[ "${cached_epoch}" =~ ^[0-9]+$ ]] && [ "${cached_epoch}" -le "${now_epoch}" ]; then
+          cache_age_seconds="$(( now_epoch - cached_epoch ))"
+        fi
+      fi
+    fi
+  fi
+
+  if [ "${cache_hit}" = "true" ] && [ "${cache_age_seconds}" -lt "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" ]; then
+    _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
+    _ACTIONS_RUNS_BLOB_READY="true"
+    printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+    return 0
+  fi
+
+  local response_file
+  local response_body_file
+  local response_err
+  local status_line=''
+  local body_json=''
+  local response_etag=''
+  response_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response.XXXXXX")"
+  response_body_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response-body.XXXXXX")"
+  response_err="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response-err.XXXXXX")"
+
+  local -a api_cmd
+  # Existing gh wrappers in this script are body-only and do not expose HTTP
+  # response headers or 304 status lines. This direct `gh api -i` call is used
+  # so one conditional fetch can carry If-None-Match and parse ETag metadata.
+  api_cmd=(gh_retry gh api -i "repos/${repo}/actions/runs?per_page=100")
+  if [ -n "${cached_etag}" ]; then
+    api_cmd+=(-H "If-None-Match: ${cached_etag}")
+  fi
+
+  local api_rc=0
+  if ! "${api_cmd[@]}" >"${response_file}" 2>"${response_err}"; then
+    api_rc=$?
+  fi
+
+  if [ -s "${response_file}" ] && head -n 1 "${response_file}" | grep -q '^HTTP/'; then
+    status_line="$(head -n 1 "${response_file}")"
+    response_etag="$(awk '{ line = $0; sub(/\r$/, "", line); if (tolower(line) ~ /^etag:[[:space:]]*/) { sub(/^[^:]*:[[:space:]]*/, "", line); print line; exit } }' "${response_file}" 2>/dev/null || echo '')"
+    body_json="$(awk 'f{print} /^\r?$/{f=1}' "${response_file}" 2>/dev/null)"
+  else
+    body_json="$(cat "${response_file}" 2>/dev/null || echo '')"
+  fi
+
+  if [ -n "${body_json}" ]; then
+    printf '%s\n' "${body_json}" > "${response_body_file}"
+  fi
+
+  if printf '%s' "${status_line}" | grep -Eq ' 304( |$)'; then
+    if [ "${cache_hit}" = "true" ]; then
+      local ttl_put_file
+      ttl_put_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-refresh.XXXXXX")"
+      jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' > "${ttl_put_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${ttl_put_file}"
+      if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
+        python3 scripts/ai_memory.py actions-runs-cache put \
+          --repo "${repo}" \
+          --runs-file "${ttl_put_file}" \
+          --etag "${response_etag:-${cached_etag}}" \
+          --ttl-seconds "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" >/dev/null || true
+      fi
+      rm -f "${ttl_put_file}"
+      _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
+      _ACTIONS_RUNS_BLOB_READY="true"
+      rm -f "${response_file}" "${response_body_file}" "${response_err}"
+      printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+      return 0
+    fi
+  fi
+
+  if [ "${api_rc}" -eq 0 ] && [ -n "${body_json}" ] && printf '%s' "${body_json}" | jq -e 'type == "object" and (.workflow_runs | type == "array")' >/dev/null 2>&1; then
+    local runs_only
+    runs_only="$(printf '%s' "${body_json}" | jq -c '.workflow_runs // []' 2>/dev/null || echo '[]')"
+    if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
+      python3 scripts/ai_memory.py actions-runs-cache put \
+        --repo "${repo}" \
+        --runs-file "${response_body_file}" \
+        --etag "${response_etag}" \
+        --ttl-seconds "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" >/dev/null || true
+    fi
+    _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
+    _ACTIONS_RUNS_BLOB_READY="true"
+    rm -f "${response_file}" "${response_body_file}" "${response_err}"
+    printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+    return 0
+  fi
+
+  if [ "${cache_hit}" = "true" ]; then
+    _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
+  else
+    _ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
+  fi
+  _ACTIONS_RUNS_BLOB_READY="true"
+  rm -f "${response_file}" "${response_body_file}" "${response_err}"
+  printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+  return 0
+}
+
 # Build a set of issue numbers that have *genuinely active* (in_progress or
 # queued) workflow runs — i.e., runs that started recently enough that they
 # could still be making progress.
@@ -3076,16 +3220,20 @@ build_active_issue_set() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Fetch in_progress + queued runs (recent, max 50).
-  # _safe_gh_jq guarantees empty stdout on failure → fallback is valid JSON.
+  # Fetch active runs from the shared per-tick actions-runs loader.
+  # This preserves one conditional API retrieval per tick.
+  local actions_runs_blob
+  actions_runs_blob="$(_load_actions_runs_cached)"
+
+  # Preserve historical status selection semantics (in_progress/queued, max 50
+  # each) while sourcing from one shared payload.
   local runs_json
-  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
-    --jq '.workflow_runs' || echo '[]')"
+  runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
   local queued_json
-  queued_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
-    --jq '.workflow_runs' || echo '[]')"
+  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "queued")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${queued_json}" ] || queued_json='[]'
+
 
   # Merge both lists
   local all_runs
@@ -3154,11 +3302,12 @@ cancel_zombie_runs_for_issue() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Re-fetch in_progress runs and find zombies matching this issue.
-  # _safe_gh_jq guarantees empty stdout on failure → fallback stays valid.
+  # Reuse the shared actions-runs blob and preserve prior in_progress+50 scope.
+  local actions_runs_blob
+  actions_runs_blob="$(_load_actions_runs_cached)"
+
   local runs_json
-  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
-    --jq '.workflow_runs' || echo '[]')"
+  runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
 
   local zombie_run_ids
@@ -3774,9 +3923,7 @@ invoke_stall_judge() {
 
   local workflows_json
   local workflow_outcomes
-  # _safe_gh_jq → clean empty stdout on failure so the `|| echo '{...}'`
-  # fallback stays valid JSON for downstream jq reads.
-  workflows_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=50" 2>/dev/null || echo '{"workflow_runs":[]}')"
+  workflows_json="$(_load_actions_runs_cached)"
   workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" '
     [.workflow_runs[]?
       | select((.name // "") == "AI Review"

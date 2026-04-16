@@ -21,10 +21,12 @@ from ai_memory_lib import (
     complete_processed_command,
     evaluate_clarify_loop_guard,
     finalize_task_lineage,
+    get_actions_runs_cache,
     get_processed_command_entry,
     list_processed_command_entries,
     parse_bool,
     persist_memory_operation,
+    put_actions_runs_cache,
     promote_candidates,
     read_memory_root_from_branch,
     record_candidate,
@@ -75,7 +77,7 @@ def _read_env_defaults(args: argparse.Namespace) -> argparse.Namespace:
         args.memory_branch = os.getenv("AI_MEMORY_BRANCH", "ai-memory")
     if not getattr(args, "memory_root", None):
         args.memory_root = os.getenv("AI_MEMORY_ROOT", "ai-memory")
-    if not getattr(args, "push_retries", None):
+    if getattr(args, "push_retries", None) is None:
         args.push_retries = int(os.getenv("AI_MEMORY_PUSH_RETRIES", "5"))
     if not getattr(args, "enabled", None):
         args.enabled = parse_bool(os.getenv("AI_MEMORY_ENABLED", "true"), default=True)
@@ -243,6 +245,28 @@ def _json_or_empty(payload: str | None) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise MemoryValidationError("metadata JSON must be an object")
     return parsed
+
+
+def _emit_actions_runs_cache_fallback(*, mode: str, reason: str, repo: str) -> None:
+    print(
+        "::warning::rate_limit_audit_fallback "
+        f"helper=actions_runs_cache mode={mode} reason={reason} repo={repo}",
+        file=sys.stderr,
+    )
+
+
+def _read_runs_file(path_text: str) -> list[dict[str, Any]]:
+    path = Path(_require_nonempty(path_text, "runs_file"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        runs = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("workflow_runs"), list):
+        runs = payload["workflow_runs"]
+    else:
+        raise MemoryValidationError("runs_file must contain a JSON array or {\"workflow_runs\": [...]} object")
+    if not all(isinstance(item, dict) for item in runs):
+        raise MemoryValidationError("runs_file entries must be JSON objects")
+    return runs
 
 
 def cmd_record_candidate(args: argparse.Namespace) -> int:
@@ -484,6 +508,119 @@ def cmd_compact(args: argparse.Namespace) -> int:
         did_push=result.get("did_push", False),
     )
     return 0
+
+
+def cmd_actions_runs_cache_get(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "hit": False, "cache": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+        try:
+            cache = get_actions_runs_cache(memory_root, repository)
+        except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+            _emit_actions_runs_cache_fallback(mode="get", reason="cache_corrupt", repo=repository)
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": True,
+                    "hit": False,
+                    "cache": None,
+                    "warning": str(exc),
+                }
+            )
+            return 0
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": bool(cache),
+                "cache": cache,
+            }
+        )
+        return 0
+    except MemoryGitError as exc:
+        error_text = str(exc)
+        lowered = error_text.lower()
+        is_missing_branch = (
+            ("remote branch" in lowered and ("not found" in lowered or "does not exist" in lowered))
+            or "could not find remote ref" in lowered
+            or "couldn't find remote ref" in lowered
+            or "remote ref does not exist" in lowered
+        )
+        if is_missing_branch:
+            _print_json({"ok": True, "enabled": False, "hit": False, "cache": None, "warning": error_text})
+            return 0
+        print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
+        _print_json({"ok": False, "enabled": True, "hit": False, "cache": None, "error": error_text})
+        return 2
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+def cmd_actions_runs_cache_put(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "stored": False, "cache": None})
+        return 0
+
+    try:
+        ttl_seconds = _require_positive_int(str(args.ttl_seconds), "ttl_seconds")
+    except MemoryValidationError:
+        _emit_actions_runs_cache_fallback(mode="put", reason="invalid_ttl", repo=repository)
+        _print_json({"ok": True, "enabled": True, "stored": False, "cache": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+
+    def _op(clone_dir: Path) -> dict[str, Any]:
+        memory_root = _resolve_memory_root(clone_dir, args.memory_root)
+        runs = _read_runs_file(args.runs_file)
+        cache = put_actions_runs_cache(
+            memory_root,
+            repository=repository,
+            runs=runs,
+            etag=(args.etag if args.etag else None),
+            ttl_seconds=ttl_seconds,
+            fetched_at=(args.fetched_at if args.fetched_at else None),
+        )
+        return {"cache": cache, "stored": True}
+
+    try:
+        result = persist_memory_operation(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+            push_retries=int(args.push_retries),
+            commit_message=f"ai-memory: actions runs cache [{repository}]",
+            operation=_op,
+        )
+        _print_json({"ok": True, **result})
+        return 0
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
+        _emit_actions_runs_cache_fallback(mode="put", reason="cache_write_failed", repo=repository)
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": False,
+                "cache": None,
+                "warning": str(exc),
+            }
+        )
+        return 0
 
 
 def cmd_processed_command_check(args: argparse.Namespace) -> int:
@@ -909,6 +1046,23 @@ def build_parser() -> argparse.ArgumentParser:
     compact.add_argument("--month", default=None)
     compact.add_argument("--prune", default="false")
     compact.set_defaults(func=cmd_compact)
+
+    actions_runs_cache = subparsers.add_parser("actions-runs-cache", help="Read/write actions runs cache")
+    actions_runs_cache_subparsers = actions_runs_cache.add_subparsers(dest="actions_runs_cache_command", required=True)
+
+    actions_runs_cache_get = actions_runs_cache_subparsers.add_parser("get", help="Read actions runs cache")
+    _add_shared_args(actions_runs_cache_get)
+    actions_runs_cache_get.add_argument("--repo", required=True)
+    actions_runs_cache_get.set_defaults(func=cmd_actions_runs_cache_get)
+
+    actions_runs_cache_put = actions_runs_cache_subparsers.add_parser("put", help="Write actions runs cache")
+    _add_shared_args(actions_runs_cache_put)
+    actions_runs_cache_put.add_argument("--repo", required=True)
+    actions_runs_cache_put.add_argument("--runs-file", required=True)
+    actions_runs_cache_put.add_argument("--etag", default="")
+    actions_runs_cache_put.add_argument("--ttl-seconds", default="60")
+    actions_runs_cache_put.add_argument("--fetched-at", default="")
+    actions_runs_cache_put.set_defaults(func=cmd_actions_runs_cache_put)
 
     processed_check = subparsers.add_parser("processed-command-check", help="Check processed command entry")
     _add_shared_args(processed_check)
