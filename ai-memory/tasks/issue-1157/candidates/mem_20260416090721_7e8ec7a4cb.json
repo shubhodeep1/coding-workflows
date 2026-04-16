@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue (ref: `main` @ `806e9b69b83bd635f932a24d0fb413c3bf7e22e7`)\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt` (only file)\n\n2. Functions or modules to implement\n- No code modules/functions required.\n- Single file-content replacement operation: overwrite entire file payload.\n\n3. Data structures affected\n- Plain-text canary record in `tests/e2e_smoke_canary.txt`.\n- Final content must be exactly:\n  - `status: ok`\n  - `run_id: 24501658777`\n  - `updated-by: ai-pipeline`\n\n4. API or interface changes\n- None.\n- No workflow, script, schema, or runtime interface changes.\n\n5. Potential risks or edge cases\n- Accidental trailing/leading extra lines or whitespace.\n- Missing terminal newline handling differences across editors.\n- Accidental modification of additional files (must be avoided per constraint).\n\n6. Testing considerations\n- Verify file content exactness byte-for-byte against the 3-line target.\n- Verify only one file changed in git status/diff.\n- Confirm no directory creation and no additional edits.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "bc35196480980cf9788fa4435236fa15104dd7eab1c4040972cb56c313ac383c",
+  "lineage": {
+    "issue_number": 1157,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24501766789",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24501766789",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1157"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260416090721_7e8ec7a4cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1157,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24501766789"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1157",
+  "timestamps": {
+    "created_at": "2026-04-16T09:07:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
