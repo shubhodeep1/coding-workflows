@@ -117,7 +117,7 @@ jobs:
             BEFORE_IDS_JSON='[]'
           fi
 
-          RUN_ARGS=("${WORKFLOW_FILE}" "--repo" "${GITHUB_REPOSITORY}" "-f" "dry_run=true" "-f" "phase_timeout=${PHASE_TIMEOUT_STR}")
+          RUN_ARGS=("${WORKFLOW_FILE}" "--repo" "${GITHUB_REPOSITORY}" "--ref" "${GITHUB_REF_NAME}" "-f" "dry_run=true" "-f" "phase_timeout=${PHASE_TIMEOUT_STR}")
           if [ -n "${VERSION_TAG}" ]; then
             RUN_ARGS+=("-f" "version_tag=${VERSION_TAG}")
           fi
@@ -135,13 +135,13 @@ jobs:
               continue
             fi
 
-            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg actor "${GITHUB_ACTOR}" --arg branch "${GITHUB_REF_NAME}" '
+            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg actor "${GITHUB_ACTOR}" --arg bot_actor "github-actions[bot]" --arg branch "${GITHUB_REF_NAME}" '
               [
                 .workflow_runs[]
                 | select((.id as $id | ($before | index($id) | not)))
                 | select((.event // "") == "workflow_dispatch")
                 | select((.head_branch // "") == $branch)
-                | select((.actor.login // "") == $actor)
+                | select(((.actor.login // "") == $actor) or ((.actor.login // "") == $bot_actor))
               ]
               | sort_by(.created_at)
             ' 2>/dev/null || echo '[]')"
@@ -312,7 +312,7 @@ jobs:
             BEFORE_IDS_JSON='[]'
           fi
 
-          RUN_ARGS=("${WORKFLOW_FILE}" "--repo" "${GITHUB_REPOSITORY}" "-f" "codex_mode=true")
+          RUN_ARGS=("${WORKFLOW_FILE}" "--repo" "${GITHUB_REPOSITORY}" "--ref" "${GITHUB_REF_NAME}" "-f" "codex_mode=true")
           if [ -n "${SINCE_ARG}" ]; then
             RUN_ARGS+=("-f" "since=${SINCE_ARG}")
           else
@@ -329,13 +329,13 @@ jobs:
               continue
             fi
 
-            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg actor "${GITHUB_ACTOR}" --arg branch "${GITHUB_REF_NAME}" '
+            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg actor "${GITHUB_ACTOR}" --arg bot_actor "github-actions[bot]" --arg branch "${GITHUB_REF_NAME}" '
               [
                 .workflow_runs[]
                 | select((.id as $id | ($before | index($id) | not)))
                 | select((.event // "") == "workflow_dispatch")
                 | select((.head_branch // "") == $branch)
-                | select((.actor.login // "") == $actor)
+                | select(((.actor.login // "") == $actor) or ((.actor.login // "") == $bot_actor))
               ]
               | sort_by(.created_at)
             ' 2>/dev/null || echo '[]')"
@@ -553,7 +553,7 @@ jobs:
             BEFORE_IDS_JSON='[]'
           fi
 
-          gh workflow run "${WORKFLOW_FILE}" --repo "${GITHUB_REPOSITORY}" -f "project_description=${PROJECT_DESCRIPTION}"
+          gh workflow run "${WORKFLOW_FILE}" --repo "${GITHUB_REPOSITORY}" --ref "${GITHUB_REF_NAME}" -f "project_description=${PROJECT_DESCRIPTION}"
 
           ORCH_RUN_ID=""
           for _attempt in $(seq 1 30); do
@@ -563,13 +563,13 @@ jobs:
               continue
             fi
 
-            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg actor "${GITHUB_ACTOR}" --arg branch "${GITHUB_REF_NAME}" '
+            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg actor "${GITHUB_ACTOR}" --arg bot_actor "github-actions[bot]" --arg branch "${GITHUB_REF_NAME}" '
               [
                 .workflow_runs[]
                 | select((.id as $id | ($before | index($id) | not)))
                 | select((.event // "") == "workflow_dispatch")
                 | select((.head_branch // "") == $branch)
-                | select((.actor.login // "") == $actor)
+                | select(((.actor.login // "") == $actor) or ((.actor.login // "") == $bot_actor))
               ]
               | sort_by(.created_at)
             ' 2>/dev/null || echo '[]')"
