@@ -589,18 +589,26 @@ while [ "${attempt}" -le 3 ]; do
         # treat this attempt as failed so the retry loop can try again.
         # See: PR #1136, #1137 where this mismatch caused premature
         # auto-merge of un-fixed PRs.
-        _claimed_changes="$(awk '
+        changes_section="$(awk '
           /^[[:space:]]*Changes made:/ { in_s=1; next }
           in_s && /^[[:space:]]*[A-Za-z].*:/ { exit }
           in_s { print }
-        ' "${tmp_output}" \
+        ' "${tmp_output}")"
+        no_change_phrase_regex='no ((repository|repo|code|file)[[:space:]]+)?(file[[:space:]]+)?(changes|modifications|edits)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)|no (repository )?files were modified|no changes (were )?made|no modifications'
+        no_change_declaration_regex="^[[:space:]]*(-[[:space:]]*)?([^;]*;[[:space:]]*)?(${no_change_phrase_regex})([[:space:]]*[[:punct:]]*)?$"
+        strong_edit_claim_regex='update(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)|`[^`]+\.[[:alpha:]]+`'
+
+        _claimed_changes="$(printf '%s\n' "${changes_section}" \
           | grep -vE '^[[:space:]]*$' \
           | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)' \
-          | grep -viE '^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)' \
-          | grep -viE 'no (repository |repo |code |file )?changes([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)' \
-          | grep -viE 'no (repository |repo |code |file )?(modifications|edits)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)' \
-          | grep -viE 'no .* file changes([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)' \
+          | grep -viE '^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified)' \
+          | grep -viE "${no_change_declaration_regex}" \
           || true)"
+
+        mixed_claim_lines="$(printf '%s\n' "${changes_section}" | grep -iE "(${strong_edit_claim_regex}).*(${no_change_phrase_regex})" || true)"
+        if [ -n "${mixed_claim_lines}" ]; then
+          _claimed_changes="$(printf '%s\n%s\n' "${_claimed_changes}" "${mixed_claim_lines}" | grep -vE '^[[:space:]]*$' | awk '!seen[$0]++' || true)"
+        fi
 
         if [ -n "${_claimed_changes}" ]; then
           # Editor claims it made changes — verify git agrees.
