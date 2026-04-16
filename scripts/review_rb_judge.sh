@@ -70,6 +70,17 @@ if [ "${CAN_PUSH:-false}" != "true" ]; then
   exit 0
 fi
 
+# Early guard: skip judge if the PR is no longer open (e.g. already merged
+# by a prior run). This prevents wasting AI compute and posting duplicate
+# decisions on closed/merged PRs even if upstream gate/env guards fail.
+_pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || echo "")"
+if [ -n "${_pr_state}" ] && [ "${_pr_state}" != "open" ]; then
+  echo "PR #${PR_NUMBER} is ${_pr_state} — skipping review-blocked judge (PR not open)."
+  echo "judge_skip_reason=pr_not_open" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+unset _pr_state
+
 ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
 ensure_label_exists "ai:closed" "${REPOSITORY}"
 
