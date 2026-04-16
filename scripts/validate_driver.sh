@@ -94,8 +94,13 @@ else
 	APP_URL_EXPLICIT=0
 fi
 APP_URL="${APP_URL-http://localhost:8080/health}"
-HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
-HEALTH_POLL_INTERVAL="${HEALTH_POLL_INTERVAL:-2}"
+# Accept both env var naming conventions. The generate prompt instructs Codex
+# to emit HEALTH_TIMEOUT_SECONDS / HEALTH_POLL_INTERVAL_SECONDS in validate.env,
+# while the driver historically reads HEALTH_TIMEOUT / HEALTH_POLL_INTERVAL.
+# Explicit _SECONDS takes precedence when set; otherwise fall back to the
+# legacy name, then the default.
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT_SECONDS:-${HEALTH_TIMEOUT:-120}}"
+HEALTH_POLL_INTERVAL="${HEALTH_POLL_INTERVAL_SECONDS:-${HEALTH_POLL_INTERVAL:-2}}"
 PHASE="${PHASE:-runtime_validation}"
 TEST_DIR="${TEST_DIR:-validation/tests}"
 LOG_DIR="${LOG_DIR:-validation/logs}"
@@ -173,54 +178,18 @@ capture_compose_logs()
 	fi
 }
 
-capture_service_log()
+# Service-aware log capture: writes the specified service's logs to a
+# dedicated file so app-specific output is not buried under unrelated
+# service chatter (e.g. mongo health probes).
+capture_service_logs()
 {
-	local service="$1"
-	local dest="$2"
+	local service="${1:-${APP_SERVICE}}"
+	local safe_service="${service//[^A-Za-z0-9_.-]/_}"
+	local dest="${LOG_DIR}/${safe_service}.log"
 	if [ -f "${COMPOSE_FILE}" ]; then
 		mkdir -p "$(dirname -- "${dest}")" >/dev/null 2>&1 || true
-		local service_log_tmp
-		service_log_tmp="$(mktemp "${TMPDIR:-/tmp}/service_capture.XXXXXX" 2>/dev/null || true)"
-		if [ -n "${service_log_tmp}" ]; then
-			docker compose -f "${COMPOSE_FILE}" logs --no-color "${service}" > "${service_log_tmp}" 2>&1 || true
-			if [ -s "${service_log_tmp}" ]; then
-				mv "${service_log_tmp}" "${dest}"
-			fi
-			rm -f "${service_log_tmp}" >/dev/null 2>&1 || true
-		fi
+		docker compose -f "${COMPOSE_FILE}" logs --no-color -- "${service}" > "${dest}" 2>&1 || true
 	fi
-}
-
-collect_container_diagnostics()
-{
-	local service="$1"
-	local dest="$2"
-	if [ ! -f "${COMPOSE_FILE}" ]; then
-		return 0
-	fi
-	mkdir -p "$(dirname -- "${dest}")" >/dev/null 2>&1 || true
-	{
-		echo "=== docker compose ps ==="
-		docker compose -f "${COMPOSE_FILE}" ps 2>&1 || true
-		echo ""
-
-		local cid
-		cid="$(docker compose -f "${COMPOSE_FILE}" ps -q "${service}" 2>/dev/null | head -n1 || true)"
-		if [ -z "${cid}" ]; then
-			cid="$(docker compose -f "${COMPOSE_FILE}" ps -q --status exited "${service}" 2>/dev/null | head -n1 || true)"
-		fi
-
-		if [ -n "${cid}" ]; then
-			echo "=== docker inspect ${service} (state) ==="
-			docker inspect -f '{{json .State}}' "${cid}" 2>/dev/null | python3 -m json.tool 2>/dev/null || \
-				docker inspect -f 'Status={{.State.Status}} Running={{.State.Running}} ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}}' "${cid}" 2>/dev/null || true
-			echo ""
-			echo "=== healthcheck log (last 5 probes) ==="
-			docker inspect --format '{{if .State.Health}}{{range .State.Health.Log}}exit={{.ExitCode}} start={{.Start}} output={{.Output}}{{"\n"}}{{end}}{{else}}no healthcheck configured{{end}}' "${cid}" 2>/dev/null | tail -n 5 || true
-		else
-			echo "=== no container found for service ${service} ==="
-		fi
-	} > "${dest}" 2>&1 || true
 }
 
 append_failure()
@@ -323,7 +292,13 @@ teardown()
 	fi
 
 	if [ "${preserve_failure_log}" != "1" ]; then
+		# Capture live container logs BEFORE docker compose down. These are the
+		# diagnostically valuable logs. Save an immutable pre-down copy so the
+		# post-down capture (which may be near-empty) cannot overwrite them.
 		capture_compose_logs
+		if [ -f "${COMPOSE_LOG}" ]; then
+			cp "${COMPOSE_LOG}" "${COMPOSE_LOG%.log}.pre_down.log" 2>/dev/null || true
+		fi
 	fi
 
 	if [ -f "${COMPOSE_FILE}" ]; then
@@ -331,6 +306,8 @@ teardown()
 	fi
 
 	if [ "${preserve_failure_log}" != "1" ]; then
+		# Post-down capture for any final shutdown messages; the primary artifact
+		# is the pre_down copy above.
 		capture_compose_logs
 	fi
 }
@@ -461,19 +438,49 @@ wait_for_health()
 	local container_id
 	local running
 	local health
+	local status
+	local exit_code
+	local restart_count
+	local app_log_tail
+	local app_service_log
 	local service_ready
 	local url_ready
 
+	app_service_log="${LOG_DIR}/${APP_SERVICE//[^A-Za-z0-9_.-]/_}.log"
 	deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))
 
 	while :; do
 		service_ready=0
 		url_ready=1
 
-		container_id="$(docker compose -f "${COMPOSE_FILE}" ps -q "${APP_SERVICE}" | head -n1 || true)"
+		container_id="$(docker compose -f "${COMPOSE_FILE}" ps -q -- "${APP_SERVICE}" | head -n1 || true)"
 		if [ -n "${container_id}" ]; then
 			running="$(docker inspect -f '{{.State.Running}}' "${container_id}" 2>/dev/null || echo false)"
 			health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${container_id}" 2>/dev/null || echo unknown)"
+			status="$(docker inspect -f '{{.State.Status}}' "${container_id}" 2>/dev/null || echo unknown)"
+
+			# Fail fast: detect exited or restarting container immediately
+			# instead of waiting the full timeout.
+			if [ "${status}" = "exited" ] || [ "${status}" = "dead" ]; then
+				exit_code="$(docker inspect -f '{{.State.ExitCode}}' "${container_id}" 2>/dev/null || echo unknown)"
+				capture_compose_logs
+				capture_service_logs "${APP_SERVICE}"
+				fail_fast "startup_container_exited" \
+					"${APP_SERVICE} container exited (status=${status} exit_code=${exit_code}); check app logs" \
+					"${app_service_log}" "health"
+			fi
+			if [ "${status}" = "restarting" ]; then
+				restart_count="$(docker inspect -f '{{.RestartCount}}' "${container_id}" 2>/dev/null || echo unknown)"
+				if [[ "${restart_count}" =~ ^[0-9]+$ ]] && [ "${restart_count}" -ge 3 ]; then
+					exit_code="$(docker inspect -f '{{.State.ExitCode}}' "${container_id}" 2>/dev/null || echo unknown)"
+					capture_compose_logs
+					capture_service_logs "${APP_SERVICE}"
+					fail_fast "startup_container_restart_loop" \
+						"${APP_SERVICE} container in restart loop (restarts=${restart_count} exit_code=${exit_code}); check app logs" \
+						"${app_service_log}" "health"
+				fi
+			fi
+
 			if [ "${running}" = "true" ] && { [ "${health}" = "healthy" ] || [ "${health}" = "none" ]; }; then
 				service_ready=1
 			fi
@@ -491,30 +498,31 @@ wait_for_health()
 		fi
 
 		if [ "$(date +%s)" -ge "${deadline}" ]; then
-			local app_log="${LOG_DIR}/${APP_SERVICE}.log"
-			local diag_log="${LOG_DIR}/${APP_SERVICE}.diagnostics"
-			capture_service_log "${APP_SERVICE}" "${app_log}"
-			collect_container_diagnostics "${APP_SERVICE}" "${diag_log}"
-			capture_compose_logs
-
-			local merged_timeout_log="${LOG_DIR}/${APP_SERVICE}.health_timeout.log"
+			# App-focused timeout diagnostics: capture service-specific logs
+			# and container state before the combined compose log capture so
+			# downstream log tails are actionable.
+			capture_service_logs "${APP_SERVICE}"
+			app_log_tail="$(tail -n "${TAIL_LINES}" "${app_service_log}" 2>/dev/null || echo "(no service log)")"
 			{
-				if [ -s "${diag_log}" ]; then
-					echo "=== container diagnostics (${APP_SERVICE}) ==="
-					cat "${diag_log}"
-					echo ""
+				echo "=== ${APP_SERVICE} timeout diagnostics ==="
+				echo "--- docker compose ps ---"
+				docker compose -f "${COMPOSE_FILE}" ps 2>&1 || true
+				if [ -n "${container_id}" ]; then
+					echo "--- docker inspect state (${APP_SERVICE}) ---"
+					docker inspect -f 'Status={{.State.Status}} Running={{.State.Running}} ExitCode={{.State.ExitCode}} RestartCount={{.RestartCount}} Health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+						"${container_id}" 2>&1 || true
+					echo "--- docker inspect health log (${APP_SERVICE}) ---"
+						docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}{{.Output}}{{end}}{{else}}no healthcheck configured{{end}}' \
+							"${container_id}" 2>&1 || true
 				fi
-				if [ -s "${app_log}" ]; then
-					echo "=== ${APP_SERVICE} logs (last 80 lines) ==="
-					tail -n 80 "${app_log}"
-					echo ""
-				fi
-			} > "${merged_timeout_log}"
-			if [ -s "${merged_timeout_log}" ]; then
-				fail_fast "startup_health_timeout" "service did not become healthy within HEALTH_TIMEOUT seconds" "${merged_timeout_log}" "health" 1
-			fi
-			rm -f "${merged_timeout_log}" >/dev/null 2>&1 || true
-			fail_fast "startup_health_timeout" "service did not become healthy within HEALTH_TIMEOUT seconds" "${COMPOSE_LOG}" "health"
+				echo "--- ${APP_SERVICE} log tail ---"
+				echo "${app_log_tail}"
+				echo "=== end diagnostics ==="
+			} >> "${app_service_log}" 2>&1 || true
+			capture_compose_logs
+			fail_fast "startup_health_timeout" \
+				"${APP_SERVICE} did not become healthy within ${HEALTH_TIMEOUT}s (last status=${status:-unknown} running=${running:-unknown} health=${health:-unknown})" \
+				"${app_service_log}" "health"
 		fi
 
 		sleep "${HEALTH_POLL_INTERVAL}"
