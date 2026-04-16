@@ -317,7 +317,20 @@ jobs:
           } >> "$GITHUB_ENV"
 
           REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh"
-          OPTIONAL_BOOTSTRAP_SCRIPTS=""
+          # Optional bootstrap scripts: allowed to be missing from both
+          # refs.  The bootstrap emits a warning and continues — callers
+          # that depend on these must themselves tolerate absence.  Keep
+          # this list empty unless a genuinely optional helper is added;
+          # the default should always be "required".
+          # Optional bootstrap entry for the integration-sync intent
+          # fingerprint verifier added by the #1057 auto-heal
+          # hardening work. Treated as optional so older script_refs
+          # (consumer repos still pinned to a stable channel that
+          # predates this script) bootstrap cleanly without erroring;
+          # the fingerprint verification step in the resolver is
+          # gated on the script's existence and falls open with a
+          # warning when missing.
+          OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"
           for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -2148,6 +2161,7 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
           echo "Running Codex resolver"
 
@@ -2345,15 +2359,122 @@ jobs:
           # (silent — no check_runs, no error in Actions UI). Keeping the
           # prompt in a separate file under prompts/ lets it grow without
           # ever re-approaching the limit.
-          PROMPT_TPL="${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+          #
+          # Two templates exist:
+          #   * conflict-resolver.txt — the generic one used everywhere
+          #     except orchestrator integration branches.
+          #   * integration-sync-conflict-resolver.txt — used when the PR
+          #     head ref matches `orchestrator/project-*`. Adds merged
+          #     sub-issue intent + intent fingerprints so the resolver
+          #     does not silently revert a merged sub-issue's work
+          #     during a sync conflict resolution.
+          DEFAULT_PROMPT_TPL="${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+          INTEGRATION_PROMPT_TPL="${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt"
+          PROMPT_TPL="${DEFAULT_PROMPT_TPL}"
+          IS_INTEGRATION_SYNC="false"
+          INTEGRATION_TRACKING_NUM=""
+          INTEGRATION_TRACKING_TITLE=""
+          INTEGRATION_TRACKING_BODY=""
+          INTEGRATION_MERGED_SUB_ISSUES_LIST=""
+          INTEGRATION_MERGED_SUB_ISSUE_COUNT="0"
+          INTEGRATION_FINGERPRINTS_JSON="{}"
+          case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+            orchestrator/project-*)
+              IS_INTEGRATION_SYNC="true"
+              INTEGRATION_TRACKING_NUM="${TARGET_BRANCH#orchestrator/project-}"
+              if [ ! -f "${INTEGRATION_PROMPT_TPL}" ]; then
+                echo "::warning::integration-sync-conflict-resolver template missing at ${INTEGRATION_PROMPT_TPL}; falling back to generic conflict-resolver template (intent-injection disabled for this run)."
+                IS_INTEGRATION_SYNC="false"
+              else
+                PROMPT_TPL="${INTEGRATION_PROMPT_TPL}"
+              fi
+              ;;
+          esac
           if [ ! -f "${PROMPT_TPL}" ]; then
             echo "::error::Conflict resolver prompt template missing: ${PROMPT_TPL}"
             exit 1
           fi
-          CONFLICTED_FILES_COUNT="${CONFLICTED_FILES_COUNT}" \
+
+          # Pull the orchestrator state comment for this tracking issue so we
+          # can render merged sub-issue intent + fingerprints into the prompt.
+          # Fail-open: any failure here just leaves the integration variables
+          # blank and still renders the integration template (the resolver
+          # will see a placeholder note and behave like the generic resolver
+          # for those slots).
+          if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ ^[0-9]+$ ]]; then
+            _ti_json="$(gh_retry gh api -H 'Accept: application/vnd.github+json' \
+              "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}" 2>/dev/null || echo '{}')"
+            INTEGRATION_TRACKING_TITLE="$(printf '%s' "${_ti_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
+            INTEGRATION_TRACKING_BODY="$(printf '%s' "${_ti_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+            unset _ti_json
+
+            _ti_comments_raw="$(mktemp)"
+            if gh_retry gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}/comments?per_page=100" \
+              > "${_ti_comments_raw}" 2>/dev/null; then
+              _state_payload="$(jq -s '
+                ([.[][] | select(.body | contains("ORCHESTRATOR_STATE_V1"))] // [])
+                | last // {}
+                | .body // ""
+                | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
+                | .json // ""
+              ' "${_ti_comments_raw}" 2>/dev/null || echo '""')"
+              _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
+              if [ -n "${_state_json}" ]; then
+                # Build the merged sub-issues list (id : github_issue : status)
+                INTEGRATION_MERGED_SUB_ISSUES_LIST="$(printf '%s' "${_state_json}" | jq -r '
+                  [
+                    .waves[]?.issues[]?
+                    | select(.status == "merged")
+                    | "          - " + (.id // "?") + " (issue #" + ((.github_issue // 0) | tostring) + ")"
+                  ] | join("\n")
+                ' 2>/dev/null || echo "")"
+                INTEGRATION_MERGED_SUB_ISSUE_COUNT="$(printf '%s' "${_state_json}" | jq -r '
+                  [.waves[]?.issues[]? | select(.status == "merged")] | length
+                ' 2>/dev/null || echo "0")"
+                INTEGRATION_FINGERPRINTS_JSON="$(printf '%s' "${_state_json}" | jq -c '
+                  .merged_issue_fingerprints // {}
+                ' 2>/dev/null || echo "{}")"
+              fi
+              unset _state_payload _state_json
+            fi
+            rm -f "${_ti_comments_raw}"
+            unset _ti_comments_raw
+
+            if [ -z "${INTEGRATION_MERGED_SUB_ISSUES_LIST}" ]; then
+              INTEGRATION_MERGED_SUB_ISSUES_LIST="          (no merged sub-issues recorded in tracking-issue state — this typically means the integration branch is empty or state is not yet seeded)"
+            fi
+            # Stash the (potentially large) fingerprints JSON in a temp file
+            # and render it from that path below to avoid passing large
+            # payloads via process environment variables.
+            INTEGRATION_FINGERPRINTS_FILE="${RUNTIME_DIR}/integration_fingerprints.json"
+            printf '%s' "${INTEGRATION_FINGERPRINTS_JSON}" > "${INTEGRATION_FINGERPRINTS_FILE}"
+            # Persist the conflicted-paths-to-fingerprint mapping for the
+            # post-resolve verification step below. The verification step is
+            # gated on IS_INTEGRATION_SYNC == 'true' so this file only matters
+            # in the integration-sync path.
+            INTEGRATION_BRANCH_NAME="${TARGET_BRANCH}"
+            echo "INTEGRATION_FINGERPRINTS_FILE=${INTEGRATION_FINGERPRINTS_FILE}" >> "$GITHUB_ENV"
+            echo "INTEGRATION_BRANCH_NAME=${INTEGRATION_BRANCH_NAME}" >> "$GITHUB_ENV"
+            echo "INTEGRATION_TRACKING_NUM=${INTEGRATION_TRACKING_NUM}" >> "$GITHUB_ENV"
+            echo "IS_INTEGRATION_SYNC=true" >> "$GITHUB_ENV"
+          fi
+
+          # Render the prompt template with substitutions. We pass placeholder
+          # names + their values via env so the python one-liner stays under
+          # GHA's 21,000-char per-step expression limit and avoids wrestling
+          # with shell quoting around the multi-line template body.
+          PROMPT_TPL="${PROMPT_TPL}" \
+            CONFLICTED_FILES_COUNT="${CONFLICTED_FILES_COUNT}" \
             CONFLICTED_FILES_LIST="${CONFLICTED_FILES_LIST}" \
-            PROMPT_TPL="${PROMPT_TPL}" \
-            python3 -c 'import os,sys; tpl=open(os.environ["PROMPT_TPL"], encoding="utf-8").read(); sys.stdout.write(tpl.replace("{{CONFLICTED_FILES_COUNT}}",os.environ["CONFLICTED_FILES_COUNT"]).replace("{{CONFLICTED_FILES_LIST}}",os.environ["CONFLICTED_FILES_LIST"]))' \
+            INTEGRATION_BRANCH="${TARGET_BRANCH:-${HEAD_REF:-}}" \
+            TRACKING_ISSUE_NUMBER="${INTEGRATION_TRACKING_NUM}" \
+            TRACKING_ISSUE_TITLE="${INTEGRATION_TRACKING_TITLE}" \
+            TRACKING_ISSUE_BODY="${INTEGRATION_TRACKING_BODY}" \
+            MERGED_SUB_ISSUES_LIST="${INTEGRATION_MERGED_SUB_ISSUES_LIST}" \
+            MERGED_SUB_ISSUE_COUNT="${INTEGRATION_MERGED_SUB_ISSUE_COUNT}" \
+            INTEGRATION_FINGERPRINTS_FILE="${INTEGRATION_FINGERPRINTS_FILE:-}" \
+            python3 -c "import os,sys; tpl=open(os.environ['PROMPT_TPL'],encoding='utf-8').read(); keys=['CONFLICTED_FILES_COUNT','CONFLICTED_FILES_LIST','INTEGRATION_BRANCH','TRACKING_ISSUE_NUMBER','TRACKING_ISSUE_TITLE','TRACKING_ISSUE_BODY','MERGED_SUB_ISSUES_LIST','MERGED_SUB_ISSUE_COUNT']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; p=os.environ.get('INTEGRATION_FINGERPRINTS_FILE',''); fp=(open(p,encoding='utf-8',errors='replace').read() if (p and os.path.isfile(p) and os.access(p, os.R_OK)) else '{}'); tpl=tpl.replace('{{INTENT_FINGERPRINTS_JSON}}', fp); sys.stdout.write(tpl)" \
             > "${CONFLICT_RESOLVER_PROMPT_FILE}"
 
           # On the workflow source repo, snapshot the post-merge working-tree
@@ -2689,6 +2810,97 @@ jobs:
               echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
               exit 0
             fi
+
+            # ============================================================
+            # Integration-sync intent fingerprint verification (#1057
+            # auto-heal hardening).
+            #
+            # When this resolver run is acting on an orchestrator
+            # integration branch (IS_INTEGRATION_SYNC=true was exported
+            # by the prepare step), the orchestrator state has captured
+            # intent fingerprints for every sub-issue PR that has merged
+            # into this branch.  Verify the resolver's output preserves
+            # those fingerprints BEFORE creating the [ai-merge-resolve]
+            # commit:
+            #
+            #   - must_contain[]: every regex MUST still match its file
+            #     in the post-resolve tree.  A failed match means the
+            #     resolver removed a line the merged sub-issue added —
+            #     a silent intent regression.
+            #
+            #   - must_not_contain[]: no regex may match its file in
+            #     the post-resolve tree.  A successful match means the
+            #     resolver re-introduced a line the merged sub-issue
+            #     deleted — a silent intent regression.
+            #
+            # Going-forward only (Q4:A): sub-issues merged before
+            # fingerprinting was enabled have no entries in the
+            # fingerprints JSON and are silently skipped.  Fail-open on
+            # any plumbing error: a missing fingerprints file or
+            # unparseable JSON logs a warning and lets the resolver
+            # commit through (the existing check_resolver_diff.sh
+            # guards still apply).  Verification failures, however, are
+            # HARD errors — the whole point is to surface silent
+            # regressions before they ship.
+            #
+            # #5 silent-regression detector: as a belt-and-braces signal
+            # for the "resolver took the other side verbatim" failure
+            # mode, also emit a warning if the post-resolve tree
+            # contains strictly fewer total must_contain markers than
+            # were captured.  The hard match check above already
+            # rejects any specific drop, but the count delta is a
+            # cheap way to catch coordinated regressions in the logs.
+            if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ]; then
+              if [ -z "${INTEGRATION_FINGERPRINTS_FILE:-}" ] || [ ! -f "${INTEGRATION_FINGERPRINTS_FILE}" ]; then
+                echo "::warning::Integration fingerprint verification skipped — INTEGRATION_FINGERPRINTS_FILE missing. Resolver commit allowed but downstream sub-issue intent regressions will not be caught by this guard."
+              else
+                _fp_size="$(wc -c < "${INTEGRATION_FINGERPRINTS_FILE}" 2>/dev/null || echo 0)"
+                if [ "${_fp_size}" -le 2 ]; then
+                  echo "Integration fingerprint verification: no fingerprints recorded for any merged sub-issue (${INTEGRATION_FINGERPRINTS_FILE} is empty/{}). Skipping verification."
+                else
+                  echo "Integration fingerprint verification: checking resolver output against captured intent fingerprints..."
+                  # Delegate to scripts/verify_integration_fingerprints.py
+                  # (optional bootstrap entry — see OPTIONAL_BOOTSTRAP_SCRIPTS).
+                  # Exit codes:
+                  #   0 — all fingerprints satisfied
+                  #   1 — at least one fingerprint violation (HARD error)
+                  #   2 — plumbing failure (file missing / unparseable):
+                  #       FAIL OPEN — warn and continue.
+                  # Older consumer script_refs may not have the verifier yet;
+                  # in that case the bootstrap step warns and continues, and
+                  # we fall open here too.
+                  _fp_verifier_exit=0
+                  if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
+                    echo "::warning::verify_integration_fingerprints.py not bootstrapped on this script_ref; integration fingerprint verification skipped (fail-open). Resolver commit allowed."
+                    _fp_verifier_exit=2
+                  else
+                    INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+                      python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+                        "${INTEGRATION_FINGERPRINTS_FILE}" || _fp_verifier_exit=$?
+                  fi
+                  case "${_fp_verifier_exit}" in
+                    0)
+                      ;;
+                    1)
+                      # Hard violation — surface as a structured error
+                      # and bail out of the resolver step.  The merge
+                      # state is left intact so the orchestrator's
+                      # next poll tick re-enters heal_integration_-
+                      # branch_conflict, which (per Q3:A default
+                      # INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1) will
+                      # immediately escalate to the integration judge.
+                      echo "::error::Aborting [ai-merge-resolve] commit: integration fingerprint verification rejected the resolver output."
+                      echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+                      exit 1
+                      ;;
+                    2|*)
+                      echo "::warning::Integration fingerprint verification could not run (exit ${_fp_verifier_exit}); continuing without intent guard for this commit."
+                      ;;
+                  esac
+                fi
+              fi
+            fi
+
             git commit -m "[ai-merge-resolve] resolve merge conflicts"
             git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}
             # NOTE: push deferred to final "Push all pending commits" step.
