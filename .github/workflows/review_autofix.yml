@@ -921,9 +921,11 @@ jobs:
 
       - name: "Preflight: Warn if protected paths are tracked in consumer repo"
         # Defensive check: in consumer repos, the workflow's runtime helpers
-        # (scripts/, prompts/, .serena/, .github/scripts/, .github/prompts/,
-        # ai-memory/) should never be tracked — they are fetched at runtime
-        # from coding-workflows.  If a prior buggy run leaked them into the
+        # (known scripts/<helper> files, prompts/, .serena/, .github/scripts/,
+        # .github/prompts/, ai-memory/) should never be tracked — they are
+        # fetched at runtime from coding-workflows. Consumer-owned scripts/**
+        # are allowed and intentionally excluded from this warning.
+        # If a prior buggy run leaked runtime helpers into the
         # consumer's history, every merge with the base branch will re-stage
         # them in the conflict-resolver step and trip the downstream guard.
         # We can't fix the leak from here, but we surface it immediately so
@@ -934,10 +936,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          leaked_paths="$(git ls-files -- 'scripts/' 'prompts/' '.serena/' '.github/scripts/' '.github/prompts/' 'ai-memory/' 2>/dev/null || true)"
+          leaked_paths="$(git ls-files -- \
+            'scripts/gh_helpers.sh' 'scripts/setup_serena.sh' 'scripts/git_ref_health_check.sh' \
+            'scripts/render_prompt.sh' 'scripts/validate_changed_files_syntax.sh' 'scripts/serena_efficiency_report.py' \
+            'scripts/tg_helpers.sh' 'scripts/label_helpers.sh' 'scripts/memory_helpers.sh' \
+            'scripts/ai_memory.py' 'scripts/ai_memory_lib.py' 'scripts/openrouter_prompt_cache.py' \
+            'scripts/codex_model_catalog.json' \
+            'prompts/' '.serena/' '.github/scripts/' '.github/prompts/' 'ai-memory/' 2>/dev/null || true)"
           if [ -n "${leaked_paths}" ]; then
             leaked_count="$(printf '%s\n' "${leaked_paths}" | sed '/^$/d' | wc -l | tr -d ' ')"
-            echo "::warning::Consumer repo tracks ${leaked_count} workflow runtime/helper artifact(s) under scripts/, prompts/, .serena/, .github/scripts/, .github/prompts/, or ai-memory/. These will be auto-unstaged before commit, but please remove them from the repo (git rm -r --cached + commit) to prevent repeated friction on every merge with the base branch."
+            echo "::warning::Consumer repo tracks ${leaked_count} workflow runtime/helper artifact(s) (scripts/<known helper>, prompts/, .serena/, .github/scripts/, .github/prompts/, or ai-memory/). Consumer-owned scripts under scripts/ are allowed; remove only leaked workflow artifacts (git rm -r --cached + commit) to prevent repeated merge friction on every merge with the base branch."
             echo "Tracked protected paths found on ${TARGET_BRANCH:-HEAD}:"
             printf '%s\n' "${leaked_paths}" | sed '/^$/d; s/^/ - /'
           else
@@ -2260,7 +2268,7 @@ jobs:
           # Skipped on the workflow source repo, where these paths are
           # tracked source files — removing them here would leave them
           # missing for the rest of this step because the consumer-repo
-          # restore block below (git reset/checkout on 'scripts' etc.) is
+          # restore block below (git reset/checkout on protected paths) is
           # intentionally skipped when IS_WORKFLOW_SOURCE_REPO=true, and
           # `git merge --no-commit` does not rewrite paths whose content
           # is identical between HEAD and BASE.  Downstream

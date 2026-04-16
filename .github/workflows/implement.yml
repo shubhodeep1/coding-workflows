@@ -1539,6 +1539,12 @@ jobs:
           fi
           git add -u -- "${add_u_excludes[@]}"
           git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
+          if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
+            while IFS= read -r fetched_script; do
+              case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac
+              git reset -q HEAD -- "scripts/${fetched_script}" 2>/dev/null || true
+            done < scripts/.gitignore
+          fi
           echo "Staged files before commit:"
           git diff --cached --name-only | sed 's/^/ - /' || true
           if [ "${is_self_repo}" = "false" ] && git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
