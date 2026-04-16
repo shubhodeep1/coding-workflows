@@ -2124,7 +2124,7 @@ jobs:
             fi
           fi
 
-          echo "editor_noop_suspicious=${EDITOR_NOOP_SUSPICIOUS}"
+          echo "editor_noop_suspicious=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_OUTPUT"
           echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
@@ -3636,7 +3636,7 @@ jobs:
           MSG+="PR: ${PR_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
 
           BODY="⚠️ **Editor no-op suspicious** — the editor claimed no changes were needed but the disposition could not be verified."
           BODY+=$'\n\n'
