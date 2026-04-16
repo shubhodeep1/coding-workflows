@@ -173,6 +173,48 @@ capture_compose_logs()
 	fi
 }
 
+capture_service_log()
+{
+	local service="$1"
+	local dest="$2"
+	if [ -f "${COMPOSE_FILE}" ]; then
+		mkdir -p "$(dirname -- "${dest}")" >/dev/null 2>&1 || true
+		docker compose -f "${COMPOSE_FILE}" logs --no-color "${service}" > "${dest}" 2>&1 || true
+	fi
+}
+
+collect_container_diagnostics()
+{
+	local service="$1"
+	local dest="$2"
+	if [ ! -f "${COMPOSE_FILE}" ]; then
+		return 0
+	fi
+	mkdir -p "$(dirname -- "${dest}")" >/dev/null 2>&1 || true
+	{
+		echo "=== docker compose ps ==="
+		docker compose -f "${COMPOSE_FILE}" ps 2>&1 || true
+		echo ""
+
+		local cid
+		cid="$(docker compose -f "${COMPOSE_FILE}" ps -q "${service}" 2>/dev/null | head -n1 || true)"
+		if [ -z "${cid}" ]; then
+			cid="$(docker compose -f "${COMPOSE_FILE}" ps -q --status exited "${service}" 2>/dev/null | head -n1 || true)"
+		fi
+
+		if [ -n "${cid}" ]; then
+			echo "=== docker inspect ${service} (state) ==="
+			docker inspect -f '{{json .State}}' "${cid}" 2>/dev/null | python3 -m json.tool 2>/dev/null || \
+				docker inspect -f 'Status={{.State.Status}} Running={{.State.Running}} ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}}' "${cid}" 2>/dev/null || true
+			echo ""
+			echo "=== healthcheck log (last 5 probes) ==="
+			docker inspect --format '{{if .State.Health}}{{range .State.Health.Log}}exit={{.ExitCode}} start={{.Start}} output={{.Output}}{{end}}{{else}}no healthcheck configured{{end}}' "${cid}" 2>/dev/null | tail -n 5 || true
+		else
+			echo "=== no container found for service ${service} ==="
+		fi
+	} > "${dest}" 2>&1 || true
+}
+
 append_failure()
 {
 	local test_name="$1"
@@ -261,18 +303,18 @@ print(
 
 teardown()
 {
-	local preserve_startup_failure_log=0
+	local preserve_failure_log=0
 
 	if [ "${TEARDOWN_DONE}" = "1" ]; then
 		return 0
 	fi
 
 	TEARDOWN_DONE=1
-	if [ "${RESULT}" = "fail" ] && [ "${PHASE}" = "startup" ]; then
-		preserve_startup_failure_log=1
+	if [ "${RESULT}" = "fail" ] && { [ "${PHASE}" = "startup" ] || [ "${PHASE}" = "health" ]; }; then
+		preserve_failure_log=1
 	fi
 
-	if [ "${preserve_startup_failure_log}" != "1" ]; then
+	if [ "${preserve_failure_log}" != "1" ]; then
 		capture_compose_logs
 	fi
 
@@ -280,7 +322,7 @@ teardown()
 		docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
 	fi
 
-	if [ "${preserve_startup_failure_log}" != "1" ]; then
+	if [ "${preserve_failure_log}" != "1" ]; then
 		capture_compose_logs
 	fi
 }
@@ -441,7 +483,32 @@ wait_for_health()
 		fi
 
 		if [ "$(date +%s)" -ge "${deadline}" ]; then
+			local app_log="${LOG_DIR}/${APP_SERVICE}.log"
+			local diag_log="${LOG_DIR}/${APP_SERVICE}.diagnostics"
+			capture_service_log "${APP_SERVICE}" "${app_log}"
+			collect_container_diagnostics "${APP_SERVICE}" "${diag_log}"
 			capture_compose_logs
+
+			local merged_timeout_log
+			merged_timeout_log="$(mktemp "${TMPDIR:-/tmp}/health_timeout.XXXXXX" 2>/dev/null || true)"
+			if [ -n "${merged_timeout_log}" ]; then
+				{
+					if [ -s "${diag_log}" ]; then
+						echo "=== container diagnostics (${APP_SERVICE}) ==="
+						cat "${diag_log}"
+						echo ""
+					fi
+					if [ -s "${app_log}" ]; then
+						echo "=== ${APP_SERVICE} logs (last 80 lines) ==="
+						tail -n 80 "${app_log}"
+						echo ""
+					fi
+				} > "${merged_timeout_log}"
+				if [ -s "${merged_timeout_log}" ]; then
+					fail_fast "startup_health_timeout" "service did not become healthy within HEALTH_TIMEOUT seconds" "${merged_timeout_log}" "health" 1
+				fi
+				rm -f "${merged_timeout_log}" >/dev/null 2>&1 || true
+			fi
 			fail_fast "startup_health_timeout" "service did not become healthy within HEALTH_TIMEOUT seconds" "${COMPOSE_LOG}" "health"
 		fi
 
