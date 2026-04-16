@@ -449,6 +449,7 @@ jobs:
             -f body="/approved
 
           E2E smoke test auto-approval (run ${GITHUB_RUN_ID})."
+          echo "approved_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           echo "✓ Posted /approved comment"
 
       - name: "Phase 3b: Wait for PR creation (implement phase)"
@@ -461,6 +462,13 @@ jobs:
           echo "Inactivity timeout: ${PHASE_TIMEOUT} minutes"
           INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))
           LAST_ACTIVITY=$(date +%s)
+          PHASE_START=$(date +%s)
+          # Grace period before declaring "all runs completed" failure.
+          # The /approved comment needs time to trigger the implement
+          # workflow via webhook — without this, the poller can see a
+          # stale completed implement run (e.g. from AUTO_IMPLEMENT_ON_CLEAR_PLAN
+          # auto-approval) and exit before the real run even starts.
+          MIN_GRACE_SECONDS=60
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
 
@@ -483,12 +491,18 @@ jobs:
           # API, and widens pagination to per_page=100 in case of high concurrent
           # workflow run volume on the target repo. Returns the run id on stdout
           # (empty string if all attempts fail).
+          # Use approval timestamp to filter implement runs so we exclude
+          # stale runs triggered by AUTO_IMPLEMENT_ON_CLEAR_PLAN auto-approval
+          # during the plan phase. Fall back to issue creation time if Phase 3a
+          # was skipped (plan auto-approved directly to ai:implementing).
+          IMPL_CREATED_AFTER="${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"
+
           capture_run_id() {
             local name_re="$1"
             local result=""
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
+              result=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${IMPL_CREATED_AFTER}" \
                 --jq "[.workflow_runs[] | select(.name | test(\"${name_re}\"; \"i\")) | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .id // empty" || echo "")
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
@@ -529,7 +543,7 @@ jobs:
               --jq '[.labels[].name] | join(",")' || echo "")
 
             # Fetch all implement runs once and extract metrics from the response
-            IMPL_RUNS_JSON=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" || echo "")
+            IMPL_RUNS_JSON=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${IMPL_CREATED_AFTER}" || echo "")
             if [ -n "$IMPL_RUNS_JSON" ]; then
               IMPL_RUN_TOTAL=$(echo "$IMPL_RUNS_JSON" | jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | length' 2>/dev/null || echo "0")
               IMPL_RUN_IN_PROGRESS=$(echo "$IMPL_RUNS_JSON" | jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped") | select(.status != "completed")] | length' 2>/dev/null || echo "0")
@@ -563,7 +577,12 @@ jobs:
             fi
 
             # Detect implement workflow failure — only if ALL runs have completed
-            if [ "$IMPL_RUN_TOTAL" -gt 0 ] && [ "$IMPL_RUN_IN_PROGRESS" -eq 0 ]; then
+            # AND enough time has elapsed for the real implement workflow to start.
+            # Without the grace period, stale completed runs (e.g. from
+            # AUTO_IMPLEMENT_ON_CLEAR_PLAN auto-approval during the plan phase)
+            # cause a false failure before the /approved-triggered run starts.
+            ELAPSED_SECS=$((NOW - PHASE_START))
+            if [ "$IMPL_RUN_TOTAL" -gt 0 ] && [ "$IMPL_RUN_IN_PROGRESS" -eq 0 ] && [ "$ELAPSED_SECS" -ge "$MIN_GRACE_SECONDS" ]; then
               # All implement runs finished but no PR appeared — give one more cycle
               sleep "$POLL_INTERVAL"
               PR_RECHECK=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
@@ -574,6 +593,8 @@ jobs:
               echo "::error::All ${IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created"
               echo "status=implement_failed" >> "$GITHUB_OUTPUT"
               exit 1
+            elif [ "$IMPL_RUN_TOTAL" -gt 0 ] && [ "$IMPL_RUN_IN_PROGRESS" -eq 0 ] && [ "$ELAPSED_SECS" -lt "$MIN_GRACE_SECONDS" ]; then
+              echo "  ⏳ All ${IMPL_RUN_TOTAL} implement run(s) completed but grace period active (${ELAPSED_SECS}s/${MIN_GRACE_SECONDS}s) — waiting for /approved-triggered run to start"
             fi
 
             # Inactivity timeout
