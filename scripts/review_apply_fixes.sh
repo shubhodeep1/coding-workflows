@@ -575,6 +575,7 @@ while [ "${attempt}" -le 3 ]; do
         ' "${tmp_output}" \
           | grep -vE '^[[:space:]]*$' \
           | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)' \
+          | grep -viE '^[[:space:]]*-[[:space:]]*(Validation executed|No .* modified|No changes)' \
           | grep -viE 'no (repository |repo |code |file )?changes([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)' \
           | grep -viE 'no (repository |repo |code |file )?(modifications|edits)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)' \
           | grep -viE 'no .* file changes([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)' \
