@@ -3871,7 +3871,7 @@ invoke_stall_judge() {
     echo 'web_search = "live"'
     echo 'model_provider = "openrouter"'
     echo "model = \"${MODEL_EDITOR}\""
-    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE}\""
+    echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-xhigh}\""
     if [ -f "${CATALOG_PATH}" ]; then
       echo "model_catalog_json = \"${CATALOG_PATH}\""
     fi
@@ -6425,7 +6425,7 @@ json.dump(result, sys.stdout)
       echo 'web_search = "live"'
       echo 'model_provider = "openrouter"'
       echo "model = \"${MODEL_EDITOR}\""
-      echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE}\""
+      echo "model_reasoning_effort = \"${MODEL_REASONING_EFFORT_JUDGE:-xhigh}\""
       if [ -f "${CATALOG_PATH}" ]; then
         echo "model_catalog_json = \"${CATALOG_PATH}\""
       fi
