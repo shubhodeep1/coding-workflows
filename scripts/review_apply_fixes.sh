@@ -505,6 +505,7 @@ while [ "${attempt}" -le 3 ]; do
   _hb_reader_pid=$!
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   (
+    trap '' PIPE
     exec codex exec --model "${MODEL_EDITOR}" --full-auto < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
   ) > "${tmp_output}" &
   codex_bg_pid=$!
