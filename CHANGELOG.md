@@ -8,6 +8,7 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 ## [Unreleased]
 
 ### Changed
+- H8: made reviewer watchdog PR-state polling interval configurable via `REVIEW_PR_STATE_POLL_INTERVAL_SECS` in `scripts/review_run_reviewers.sh` (default `10`, valid `10..3600`), with `rate_limit_audit_fallback` warning and fail-open fallback to default for invalid/out-of-range inputs.
 - Added H4 PR comment hydration shim in `scripts/gh_helpers.sh`: `gh_pr_with_all_comments` now uses a single GraphQL call for PR metadata + issue/review comments with deterministic ordering, mandatory fail-open REST fallback, and shared legacy JSON output contract for judge consumers.
 - review/autofix now caches PR `closingIssuesReferences(first: 50)` once per job in `LINKED_ISSUES_JSON` and reuses it for linked-issue status/label updates and Telegram single-issue links, preserving existing PR title/body REST fallback and downstream behavior.
 - Completed H1 migration for remaining workflow surfaces by replacing
