@@ -3,20 +3,31 @@ name: Workflow Log Analysis
 on:
   workflow_dispatch:
     inputs:
+      since:
+        description: Optional ISO-8601 timestamp to collect runs since (e.g. 2026-04-01T00:00:00Z)
+        required: false
+        default: ""
+        type: string
       lookback_days:
         description: Days of workflow runs to analyze
         required: false
         default: "7"
+        type: string
+      codex_mode:
+        description: Run Codex-first analysis path (set false to use legacy analyzer mode)
+        required: false
+        default: true
+        type: boolean
+      batch_api_disabled:
+        description: Optional true/false override for analyzer batch API behavior in non-codex mode
+        required: false
+        default: ""
         type: string
       repos_override:
         description: Optional comma-separated repositories (owner/repo)
         required: false
         default: ""
         type: string
-  schedule:
-    # Approximates an every-48h cadence: runs every other day (1, 3, 5, ...) at 06:00 UTC.
-    # Note: day-of-month `*/2` drifts at month boundaries (occasional 1-day or 2-day gap).
-    - cron: "0 6 */2 * *"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -113,13 +124,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          LOOKBACK_DAYS="${{ github.event.inputs.lookback_days || (github.event_name == 'schedule' && '2' || '7') }}"
+          SINCE_INPUT="${{ github.event.inputs.since || '' }}"
+          LOOKBACK_DAYS="${{ github.event.inputs.lookback_days || '7' }}"
           mapfile -t REPOS < /tmp/workflow-analysis-repos.txt
 
           COLLECT_ARGS=(
-            --lookback-days "${LOOKBACK_DAYS}"
             --output workflow_log_report.json
           )
+
+          if [ -n "${SINCE_INPUT//[[:space:]]/}" ]; then
+            COLLECT_ARGS+=(--since "${SINCE_INPUT}")
+          else
+            COLLECT_ARGS+=(--lookback-days "${LOOKBACK_DAYS}")
+          fi
 
           for repo in "${REPOS[@]}"; do
             COLLECT_ARGS+=(--repo "${repo}")
@@ -139,6 +156,8 @@ jobs:
     needs: collect-logs
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -150,6 +169,61 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Cache Codex CLI
+        if: ${{ inputs.codex_mode }}
+        id: cache-codex
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.tool_cache }}/codex
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Install Codex CLI
+        if: ${{ inputs.codex_mode && steps.cache-codex.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+          CODEX_BIN="$(which codex)"
+          mkdir -p "${{ runner.tool_cache }}/codex"
+          cp -r "$(npm root -g)/@openai/codex" "${{ runner.tool_cache }}/codex/package"
+          cp "${CODEX_BIN}" "${{ runner.tool_cache }}/codex/codex"
+
+      - name: Restore Codex CLI from cache
+        if: ${{ inputs.codex_mode && steps.cache-codex.outputs.cache-hit == 'true' }}
+        run: |
+          set -euo pipefail
+          npm install -g "${{ runner.tool_cache }}/codex/package" --no-audit --no-fund
+
+      - name: Create Codex config
+        if: ${{ inputs.codex_mode }}
+        env:
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.codex
+          CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
+          {
+            echo 'web_search = "live"'
+            echo 'model_provider = "openrouter"'
+            echo "model = \"${WORKFLOW_EDITOR_MODEL}\""
+            echo 'model_reasoning_effort = "medium"'
+            if [ -f "${CATALOG_PATH}" ]; then
+              echo "model_catalog_json = \"${CATALOG_PATH}\""
+            fi
+            echo
+            echo '[model_providers.openrouter]'
+            echo 'name = "OpenRouter"'
+            echo 'base_url = "https://openrouter.ai/api/v1"'
+            echo 'env_key = "OPENROUTER_API_KEY"'
+            echo 'wire_api = "responses"'
+            echo 'stream_idle_timeout_ms = 600000'
+            echo 'stream_max_retries = 5'
+            echo 'request_max_retries = 3'
+            echo
+            echo '[sandbox_workspace_write]'
+            echo 'network_access = true'
+          } > ~/.codex/config.toml
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Download workflow log report artifact
         uses: actions/download-artifact@v4
@@ -163,10 +237,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
           THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || 'xhigh' }}
-          # Pilot: route the analyzer through Gemini 3.1 Pro Preview by default for this workflow only.
-          # Override with repo variable WORKFLOW_LOG_ANALYSIS_MODEL (e.g. openai/gpt-5.3-codex) to revert.
-          # Scoped to this step's env so other workflows still resolve WORKFLOW_EDITOR_MODEL from repo vars.
-          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'google/gemini-3.1-pro-preview' }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
           BATCH_API_DISABLED: ${{ vars.BATCH_API_DISABLED || 'false' }}
           BATCH_API_PROVIDER: ${{ vars.BATCH_API_PROVIDER || 'auto' }}
           BATCH_API_POLL_TIMEOUT_HOURS: ${{ vars.BATCH_API_POLL_TIMEOUT_HOURS || '24' }}
@@ -175,42 +246,117 @@ jobs:
         run: |
           set -euo pipefail
 
+          CODEX_MODE_INPUT="${{ inputs.codex_mode && 'true' || 'false' }}"
+          BATCH_API_DISABLED_INPUT="${{ github.event.inputs.batch_api_disabled || '' }}"
           BATCH_ARTIFACT_NAME="workflow-log-analysis-batch-state"
           BATCH_STATE_FILE="workflow_log_analysis_batch_state.json"
 
-          if ARTIFACTS_JSON="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" 2>/dev/null)"; then
-            :
-          else
-            ARTIFACTS_JSON=''
-          fi
-          if [ -n "${ARTIFACTS_JSON}" ]; then
-            ARTIFACT_ID="$(printf '%s\n' "${ARTIFACTS_JSON}" | jq -rs --arg name "${BATCH_ARTIFACT_NAME}" --arg branch "${GITHUB_REF_NAME}" '[.[].artifacts[]?] | map(select(.name == $name and .expired == false and (((.workflow_run // {}) | .head_branch // "") == $branch))) | sort_by(.created_at) | last | .id // empty' 2>/dev/null || true)"
-            if [ -n "${ARTIFACT_ID}" ]; then
-              TMP_DIR="$(mktemp -d)"
-              if gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "${TMP_DIR}/batch-state.zip" 2>/dev/null; then
-                if unzip -oq "${TMP_DIR}/batch-state.zip" -d "${TMP_DIR}" >/dev/null 2>&1 && [ -f "${TMP_DIR}/${BATCH_STATE_FILE}" ]; then
-                  cp "${TMP_DIR}/${BATCH_STATE_FILE}" "${BATCH_STATE_FILE}"
-                  echo "INFO: {\"event\":\"batch_poll\",\"status\":\"state_loaded\",\"artifact_id\":${ARTIFACT_ID}}"
-                fi
-              fi
-              rm -rf "${TMP_DIR}"
+          if [ "${CODEX_MODE_INPUT}" != "true" ]; then
+            if ARTIFACTS_JSON="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" 2>/dev/null)"; then
+              :
+            else
+              ARTIFACTS_JSON=''
             fi
+            if [ -n "${ARTIFACTS_JSON}" ]; then
+              ARTIFACT_ID="$(printf '%s\n' "${ARTIFACTS_JSON}" | jq -rs --arg name "${BATCH_ARTIFACT_NAME}" --arg branch "${GITHUB_REF_NAME}" '[.[].artifacts[]?] | map(select(.name == $name and .expired == false and (((.workflow_run // {}) | .head_branch // "") == $branch))) | sort_by(.created_at) | last | .id // empty' 2>/dev/null || true)"
+              if [ -n "${ARTIFACT_ID}" ]; then
+                TMP_DIR="$(mktemp -d)"
+                if gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "${TMP_DIR}/batch-state.zip" 2>/dev/null; then
+                  if unzip -oq "${TMP_DIR}/batch-state.zip" -d "${TMP_DIR}" >/dev/null 2>&1 && [ -f "${TMP_DIR}/${BATCH_STATE_FILE}" ]; then
+                    cp "${TMP_DIR}/${BATCH_STATE_FILE}" "${BATCH_STATE_FILE}"
+                    echo "INFO: {\"event\":\"batch_poll\",\"status\":\"state_loaded\",\"artifact_id\":${ARTIFACT_ID}}"
+                  fi
+                fi
+                rm -rf "${TMP_DIR}"
+              fi
+            fi
+          fi
+
+          if [ -n "${BATCH_API_DISABLED_INPUT//[[:space:]]/}" ]; then
+            case "${BATCH_API_DISABLED_INPUT,,}" in
+              true|false)
+                BATCH_API_DISABLED="${BATCH_API_DISABLED_INPUT,,}"
+                ;;
+              *)
+                echo "::error::Invalid batch_api_disabled input '${BATCH_API_DISABLED_INPUT}'. Use true or false."
+                exit 1
+                ;;
+            esac
+          fi
+
+          ANALYZE_EXIT=0
+          REPORT_FILE=""
+          if [ "${CODEX_MODE_INPUT}" = "true" ]; then
+            REPORT_DATE="$(date -u +%F)"
+            REPORT_DIR="analysis"
+            REPORT_BASE="${REPORT_DIR}/workflow-optimization-${REPORT_DATE}"
+            REPORT_FILE="${REPORT_BASE}.md"
+            if [ -f "${REPORT_FILE}" ]; then
+              REPORT_SUFFIX=2
+              while [ -f "${REPORT_BASE}-${REPORT_SUFFIX}.md" ]; do
+                REPORT_SUFFIX=$((REPORT_SUFFIX + 1))
+              done
+              REPORT_FILE="${REPORT_BASE}-${REPORT_SUFFIX}.md"
+            fi
+
+            ANALYSIS_CONTEXT_FILE=""
+            set +e
+            ANALYSIS_CONTEXT_FILE="$(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output "${REPORT_FILE}" --codex-mode)"
+            ANALYZE_EXIT=$?
+            set -e
+
+            if [ "${ANALYZE_EXIT}" -ne 0 ]; then
+              echo "::error::Analyzer failed to prepare Codex context with exit code ${ANALYZE_EXIT}."
+              exit "${ANALYZE_EXIT}"
+            fi
+            if [ -z "${ANALYSIS_CONTEXT_FILE}" ] || [ ! -f "${ANALYSIS_CONTEXT_FILE}" ]; then
+              echo "::error::Analyzer did not produce a valid Codex context file path."
+              exit 1
+            fi
+
+            CODEX_PROMPT_FILE="$(mktemp)"
+            {
+              bash scripts/render_prompt.sh prompts/mode-workflow-analysis.txt
+              echo
+              echo "=== ANALYSIS CONTEXT ==="
+              cat "${ANALYSIS_CONTEXT_FILE}"
+            } > "${CODEX_PROMPT_FILE}"
+
+            max_attempts=3
+            for attempt in $(seq 1 "${max_attempts}"); do
+              set +e
+              codex exec --model "${WORKFLOW_EDITOR_MODEL}" --full-auto < "${CODEX_PROMPT_FILE}" > "${REPORT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
+              ANALYZE_EXIT=$?
+              set -e
+              if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
+                break
+              fi
+              if [ "${attempt}" -lt "${max_attempts}" ]; then
+                sleep_secs=$((10 * (2 ** (attempt - 1))))
+                sleep "${sleep_secs}"
+              else
+                if [ "${ANALYZE_EXIT}" -eq 0 ]; then
+                  echo "::error::Codex returned empty output after ${max_attempts} attempts."
+                  exit 1
+                fi
+                echo "::error::Codex failed after ${max_attempts} attempts with exit code ${ANALYZE_EXIT}."
+                exit "${ANALYZE_EXIT}"
+              fi
+            done
+
+            echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
+            echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           cmd=(python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --batch-state-file "${BATCH_STATE_FILE}")
           if [ -n "${THINKING_LEVEL_ANALYSIS}" ]; then
             cmd+=(--thinking-level "${THINKING_LEVEL_ANALYSIS}")
           fi
-          # Gemini 3.1 Pro Preview caps max output at 65536 tokens. The analyzer's default
-          # --max-output-tokens is 100000, which would be rejected by Gemini routes. Cap it
-          # only when the resolved model id contains "gemini" so non-Gemini models keep the
-          # script default.
           case "${WORKFLOW_EDITOR_MODEL:-}" in
             *gemini*) cmd+=(--max-output-tokens 60000) ;;
           esac
 
-          ANALYZE_EXIT=0
-          REPORT_FILE=""
           set +e
           REPORT_FILE="$("${cmd[@]}")"
           ANALYZE_EXIT=$?
@@ -309,7 +455,7 @@ jobs:
           if [ "${ANALYSIS_STATUS}" = "pending" ]; then
             MSG="Workflow log analysis submitted async batch for ${{ github.repository }}"
             MSG+=$'\n'
-            MSG+="Report: pending (deferred to future scheduled run)"
+            MSG+="Report: pending (rerun this workflow manually to continue polling)"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
           else

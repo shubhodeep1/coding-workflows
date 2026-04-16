@@ -22,6 +22,13 @@ _memory_warn()
 	echo "::warning::memory $*" >&2
 }
 
+_memory_telemetry()
+{
+	# Emit a structured telemetry line to stdout for log-analysis visibility.
+	# Usage: _memory_telemetry '{"op":"retrieve","ok":true,...}'
+	echo "AI_MEMORY_TELEMETRY: $1"
+}
+
 _memory_retrieve_fallback()
 {
 	local output_file="${1:-}"
@@ -93,11 +100,13 @@ memory_ensure_branch()
 memory_record_run_event()
 {
 	if ! _memory_enabled; then
+		_memory_telemetry '{"op":"record-run-event","ok":true,"enabled":false,"source":"shell"}'
 		return 0
 	fi
 
 	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-run-event "$@" 2>&1 || {
 		_memory_warn "record-run-event failed (fail-open)"
+		_memory_telemetry '{"op":"record-run-event","ok":false,"fail_open":true,"source":"shell"}'
 		return 0
 	}
 }
@@ -105,11 +114,13 @@ memory_record_run_event()
 memory_record_candidate()
 {
 	if ! _memory_enabled; then
+		_memory_telemetry '{"op":"record-candidate","ok":true,"enabled":false,"source":"shell"}'
 		return 0
 	fi
 
 	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-candidate "$@" 2>&1 || {
 		_memory_warn "record-candidate failed (fail-open)"
+		_memory_telemetry '{"op":"record-candidate","ok":false,"fail_open":true,"source":"shell"}'
 		return 0
 	}
 }
@@ -120,6 +131,7 @@ memory_retrieve()
 
 	if ! _memory_enabled; then
 		_memory_retrieve_fallback "${output_file}" "disabled"
+		_memory_telemetry '{"op":"retrieve","ok":true,"enabled":false,"source":"shell"}'
 		return 0
 	fi
 
@@ -130,6 +142,7 @@ memory_retrieve()
 	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" retrieve --output-file "${output_file}" "$@" 2>&1 || {
 		_memory_warn "retrieve failed (fail-open)"
 		_memory_retrieve_fallback "${output_file}" "unavailable"
+		_memory_telemetry '{"op":"retrieve","ok":false,"fail_open":true,"source":"shell"}'
 		return 0
 	}
 }
@@ -138,6 +151,7 @@ memory_processed_command_check()
 {
 	if ! _memory_enabled; then
 		echo '{"exists": false}'
+		_memory_telemetry '{"op":"processed-command-check","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
@@ -149,6 +163,7 @@ memory_processed_command_check()
 
 	{
 		_memory_warn "processed-command-check failed (fail-open)"
+		_memory_telemetry '{"op":"processed-command-check","ok":false,"fail_open":true,"source":"shell"}' >&2
 		echo '{"exists": false}'
 		return 0
 	}
@@ -158,6 +173,7 @@ memory_processed_command_list()
 {
 	if ! _memory_enabled; then
 		echo '{"entries": [], "count": 0}'
+		_memory_telemetry '{"op":"processed-command-list","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
@@ -169,6 +185,7 @@ memory_processed_command_list()
 
 	{
 		_memory_warn "processed-command-list failed (fail-open)"
+		_memory_telemetry '{"op":"processed-command-list","ok":false,"fail_open":true,"source":"shell"}' >&2
 		echo '{"entries": [], "count": 0}'
 		return 0
 	}
@@ -178,6 +195,7 @@ memory_clarify_loop_guard()
 {
 	if ! _memory_enabled; then
 		echo '{"result": {"blocked": false, "reason": "none", "cycle": 1, "max_cycles": null}}'
+		_memory_telemetry '{"op":"clarify-loop-guard","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
@@ -189,6 +207,7 @@ memory_clarify_loop_guard()
 
 	{
 		_memory_warn "clarify-loop-guard failed (fail-open)"
+		_memory_telemetry '{"op":"clarify-loop-guard","ok":false,"fail_open":true,"source":"shell"}' >&2
 		echo '{"result": {"blocked": false, "reason": "none", "cycle": 1, "max_cycles": null}}'
 		return 0
 	}
@@ -197,6 +216,7 @@ memory_clarify_loop_guard()
 memory_finalize_task()
 {
 	if ! _memory_enabled; then
+		_memory_telemetry '{"op":"finalize-task","ok":true,"enabled":false,"source":"shell"}'
 		return 0
 	fi
 
@@ -206,6 +226,7 @@ memory_finalize_task()
 memory_promote()
 {
 	if ! _memory_enabled; then
+		_memory_telemetry '{"op":"promote","ok":true,"enabled":false,"source":"shell"}'
 		return 0
 	fi
 
@@ -215,6 +236,8 @@ memory_promote()
 memory_processed_command_claim()
 {
 	if ! _memory_enabled; then
+		echo '{"ok": true, "enabled": false, "operation_result": {"claimed": true, "entry": null}}'
+		_memory_telemetry '{"op":"processed-command-claim","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
@@ -224,11 +247,14 @@ memory_processed_command_claim()
 memory_processed_command_complete()
 {
 	if ! _memory_enabled; then
+		echo '{"ok": true, "enabled": false, "entry": null}'
+		_memory_telemetry '{"op":"processed-command-complete","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
 	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" processed-command-complete "$@" || {
 		_memory_warn "processed-command-complete failed (fail-open)"
+		_memory_telemetry '{"op":"processed-command-complete","ok":false,"fail_open":true,"source":"shell"}'
 		return 0
 	}
 }

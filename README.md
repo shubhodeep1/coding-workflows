@@ -597,21 +597,23 @@ This repository includes [`.github/workflows/workflow-log-analysis.yml`](.github
 
 ### How to run
 
-Run **Actions -> Workflow Log Analysis -> Run workflow**, or let the built-in schedule fire automatically.
+Run **Actions -> Workflow Log Analysis -> Run workflow**.
 
 Triggers:
 
 - `workflow_dispatch` (manual).
-- `schedule`: `cron: "0 6 */2 * *"` — runs every other day (1, 3, 5, ...) at 06:00 UTC, approximating an every-48h cadence. Day-of-month `*/2` drifts at month boundaries (occasional 1-day or 2-day gap).
 
 `workflow_dispatch` inputs:
 
 | Input | Default | Description |
 |---|---|---|
-| `lookback_days` | `"7"` | Days of workflow runs to collect. Passed to `scripts/collect_workflow_logs.py --lookback-days`. On scheduled runs this falls back to `"2"` to match the 48h cadence; manual dispatch keeps the `"7"` default unless overridden. |
+| `since` | `""` | Optional ISO-8601 timestamp. When set, collector runs with `scripts/collect_workflow_logs.py --since <timestamp>`. |
+| `lookback_days` | `"7"` | Days of workflow runs to collect when `since` is empty. Passed to `scripts/collect_workflow_logs.py --lookback-days`. |
+| `codex_mode` | `true` | Codex-first analysis mode. When `true`, workflow runs analyzer preprocessing (`--codex-mode`) and then `codex exec`. When `false`, workflow uses legacy analyzer inference/batch behavior. |
+| `batch_api_disabled` | `""` | Optional `true`/`false` override for analyzer batch API behavior in non-codex mode. Empty keeps `BATCH_API_DISABLED` env default. |
 | `repos_override` | `""` | Optional comma-separated `owner/repo` list. Each item is validated with `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`; invalid values fail the run. |
 
-Repository selection behavior (applies to both manual and scheduled runs):
+Repository selection behavior:
 
 1. If `repos_override` is set, only those repositories are used.
 2. Otherwise, the workflow reads `.github/ai/consumer_repos.json` (if present) and also includes `${GITHUB_REPOSITORY}`.
@@ -663,9 +665,12 @@ Generated JSON report (`workflow_log_report.json`) includes:
 
 Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_logs.py)
 
-- Workflow invocation: `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json`
+- Codex-first workflow path (`codex_mode=true`):
+  1. `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output <report.md> --codex-mode` (writes `analysis_context.json` and prints its path)
+  2. `codex exec --model <WORKFLOW_EDITOR_MODEL> --full-auto` with `prompts/mode-workflow-analysis.txt` + generated analysis context, writing the final markdown report file.
+- Legacy workflow path (`codex_mode=false`): `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --batch-state-file workflow_log_analysis_batch_state.json`
 - `--max-output-tokens` default is `100000`. The workflow auto-caps this to `60000` when the resolved `WORKFLOW_EDITOR_MODEL` contains `gemini` (Gemini 3.1 Pro Preview's max output is 65536).
-- Model resolution for this workflow only: the `Run workflow log analysis` step pins `WORKFLOW_EDITOR_MODEL` to `google/gemini-3.1-pro-preview` by default (pilot). Override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL` (e.g. `openai/gpt-5.3-codex`) to revert. This override is scoped to the analysis step env and does not affect the global `WORKFLOW_EDITOR_MODEL` used by `clarify`/`plan`/`implement`/`review_autofix`/`validate`/`orchestrate`.
+- Model resolution for this workflow only: the `Run workflow log analysis` step defaults `WORKFLOW_EDITOR_MODEL` to `openai/gpt-5.3-codex` and allows override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL`. This override is scoped to this workflow and does not affect the global `WORKFLOW_EDITOR_MODEL` used by `clarify`/`plan`/`implement`/`review_autofix`/`validate`/`orchestrate`.
 - `load_input_data` accepts either:
   - `--input` with a collector report (`runs` list; `runs[].log_excerpts` are flattened into `deep_dive_logs` as `{name: <repo>/<run_id>/<step_name>, excerpt}`), a combined bundle object (`run_metrics`, `summary_stats`, optional `deep_dive_logs`), or a JSON array of run metrics
   - `--data-dir` containing `workflow_log_report.json` or `run_metrics.json` + `summary_stats.json` (optionally `run_logs/`)
@@ -687,7 +692,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 - Repository commit: generated markdown report is committed/pushed to `${{ github.ref_name }}`.
 - No-op behavior: if the report file has no diff, commit/push is skipped (`No report changes to commit.`).
 - Telegram summary: when configured, sends either a pending-batch message or a completion message with report URL and workflow run URL.
-- Deferred artifact contract: pending batch metadata is uploaded as artifact `workflow-log-analysis-batch-state` containing `workflow_log_analysis_batch_state.json`; later runs fetch latest non-expired artifact and continue polling.
+- Deferred artifact contract (non-codex mode): pending batch metadata is uploaded as artifact `workflow-log-analysis-batch-state` containing `workflow_log_analysis_batch_state.json`; later manual dispatch runs fetch latest non-expired artifact and continue polling.
 - Structured logs are emitted for batch decisions and lifecycle (`batch_submit`, `batch_poll`, `batch_complete`, `batch_fallback`).
 - `memory_maintenance.yml` remains functionally unchanged (no LLM path in current repo) and now emits structured `batch_noop` compatibility logging with batch env values.
 - Low-data windows are valid: the analyzer still writes a report when input data is sparse.
