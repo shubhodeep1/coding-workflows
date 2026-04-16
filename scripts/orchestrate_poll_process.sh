@@ -1077,6 +1077,29 @@ _issue_cross_ref_pr_number_last() {
   ' 2>/dev/null | tail -n1
 }
 
+# _timeline_jq — Paginated timeline query with jq filter.
+# Fetches ALL pages of the timeline API (via _issue_timeline_with_cross_refs_json,
+# which is GraphQL-first with REST fallback) and applies a jq filter.
+# Usage: _timeline_jq <issue_number> '<jq_filter>'
+# Input:  issue_number (integer), jq_filter (string — applied to the merged array)
+# Output: jq-filtered result on stdout; empty string on failure
+# API calls: 1 GraphQL (fail-open to 1+ paginated REST) via the existing
+#            _issue_timeline_with_cross_refs_json helper.
+# Fail-open: returns empty on timeline fetch failure or jq error.
+_timeline_jq()
+{
+	local issue_num="$1"
+	local jq_filter="$2"
+	local timeline_json
+
+	if ! timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}")"; then
+		echo ""
+		return 1
+	fi
+
+	printf '%s' "${timeline_json}" | jq -r "${jq_filter}" 2>/dev/null
+}
+
 has_label() {
   local labels_json="$1"
   local label="$2"
@@ -5669,9 +5692,9 @@ The poller will resume processing on the next cycle."
           # sub-issue (going-forward only — see capture helper docs).
           _bws_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
           if [ -n "${_bws_integ}" ]; then
-            _bws_pr="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/timeline" \
-              --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-              2>/dev/null || echo "")"
+            _bws_pr="$(_timeline_jq "${pw_inum}" \
+              '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+              || echo "")"
             if [[ "${_bws_pr}" =~ ^[0-9]+$ ]]; then
               capture_intent_fingerprints_for_merged_subissue "${pw_inum}" "${_bws_pr}" || true
             fi
@@ -6045,9 +6068,9 @@ json.dump(result, sys.stdout)
       if [ "${_ws_status}" = "merged" ] && [[ "${_ws_gh}" =~ ^[0-9]+$ ]]; then
         _intent_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
         if [ -n "${_intent_integ}" ]; then
-          _intent_pr="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${_ws_gh}/timeline" \
-            --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-            2>/dev/null || echo "")"
+          _intent_pr="$(_timeline_jq "${_ws_gh}" \
+            '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
+            || echo "")"
           if [[ "${_intent_pr}" =~ ^[0-9]+$ ]]; then
             capture_intent_fingerprints_for_merged_subissue "${_ws_gh}" "${_intent_pr}" || true
           fi
@@ -6164,12 +6187,14 @@ json.dump(result, sys.stdout)
     [[ "${ip_issue}" =~ ^[0-9]+$ ]] || continue
     IP_PR="$(_issue_cross_ref_pr_number_last "${ip_issue}" 2>/dev/null || echo "")"
     if ! [[ "${IP_PR}" =~ ^[0-9]+$ ]]; then
+      echo "  Issue #${ip_issue}: no linked PR found in timeline."
       continue
     fi
     _ip_pr_json="$(_fetch_pr_json "${IP_PR}")"
     IP_PR_STATE="$(_jq_field "${_ip_pr_json}" '.state' 'open|closed|merged')"
     IP_MERGEABLE="$(_jq_field "${_ip_pr_json}" '.mergeable' 'true|false')"
     if [ "${IP_PR_STATE}" != "open" ] || [ "${IP_MERGEABLE}" != "false" ]; then
+      echo "  Issue #${ip_issue}: PR #${IP_PR} state=${IP_PR_STATE} mergeable=${IP_MERGEABLE}, skipping."
       continue
     fi
     echo "  Issue #${ip_issue} has PR #${IP_PR} with merge conflicts. Running Codex conflict resolution..."
