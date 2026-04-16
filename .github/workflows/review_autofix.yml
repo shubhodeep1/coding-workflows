@@ -2017,9 +2017,9 @@ jobs:
                 substantive="$(printf '%s\n' "${changes_section}" \
                   | grep -vE '^[[:space:]]*$' \
                   | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)' \
-                  | grep -viE 'no (repository |repo |code |file )?changes (were |was )?(required|needed|made|necessary)' \
-                  | grep -viE 'no (repository |repo |code |file )?(modifications|edits) (were |was )?(required|needed|made|necessary)' \
-                  | grep -viE 'no .* file changes were required' \
+                  | grep -viE 'no (repository |repo |code |file )?changes (were |was |are |is )?(required|needed|made|necessary)' \
+                  | grep -viE 'no (repository |repo |code |file )?(modifications|edits) (were |was |are |is )?(required|needed|made|necessary)' \
+                  | grep -viE 'no .* file changes (were |was |are |is )?required' \
                   || true)"
                 if [ -n "${substantive}" ]; then
                   has_real_changes="true"
