@@ -85,6 +85,7 @@ class RetrievalResult:
     selected_record_ids: list[str]
     estimated_tokens: int
     role: str
+    keyword_method: str  # "llm", "plain", or "none"
 
 
 def parse_bool(value: Any, default: bool = False) -> bool:
@@ -1065,21 +1066,24 @@ def _extract_keywords(
     body: str | None,
     *,
     api_key: str | None = None,
-) -> set[str]:
-    """Extract keywords using LLM when available, falling back to plain tokenisation."""
+) -> tuple[set[str], str]:
+    """Extract keywords using LLM when available, falling back to plain tokenisation.
+
+    Returns (keywords, method) where method is "llm", "plain", or "none".
+    """
     safe_title = title or ""
     safe_body = body or ""
     if not safe_title and not safe_body:
-        return set()
+        return set(), "none"
 
     if api_key:
         llm_keywords = _extract_keywords_llm(safe_title, safe_body, api_key=api_key)
         if llm_keywords is not None:
             # Combine LLM concepts with plain tokens for broader coverage
             plain = _extract_keywords_plain(safe_title, safe_body)
-            return plain | {kw.lower() for kw in llm_keywords}
+            return plain | {kw.lower() for kw in llm_keywords}, "llm"
 
-    return _extract_keywords_plain(safe_title, safe_body)
+    return _extract_keywords_plain(safe_title, safe_body), "plain"
 
 
 def _keyword_overlap_ratio(keywords: set[str], text: str) -> float:
@@ -1182,7 +1186,7 @@ def retrieve_memory_context(
     token_budget = _resolve_token_budget(profile, resolved_role)
 
     # Extract keywords for content-aware scoring
-    keywords = _extract_keywords(issue_title, issue_body, api_key=api_key)
+    keywords, keyword_method = _extract_keywords(issue_title, issue_body, api_key=api_key)
 
     records: list[dict[str, Any]] = []
     for record in _load_canonical_records(memory_root):
@@ -1254,6 +1258,7 @@ def retrieve_memory_context(
         selected_record_ids=[str(item.get("record_id")) for item in selected],
         estimated_tokens=used_tokens,
         role=resolved_role,
+        keyword_method=keyword_method,
     )
 
 
