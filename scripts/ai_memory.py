@@ -515,6 +515,7 @@ def cmd_processed_command_check(args: argparse.Namespace) -> int:
                 "entry": entry,
             }
         )
+        _emit_telemetry("processed-command-check", ok=True, enabled=True, exists=bool(entry))
         return 0
     except MemoryGitError as exc:
         error_text = str(exc)
@@ -566,6 +567,7 @@ def cmd_processed_command_list(args: argparse.Namespace) -> int:
                 "count": len(entries),
             }
         )
+        _emit_telemetry("processed-command-list", ok=True, enabled=True, count=len(entries))
         return 0
     except MemoryGitError as exc:
         error_text = str(exc)
@@ -638,6 +640,14 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
                 "result": result,
                 "entries_considered": len(entries),
             }
+        )
+        _emit_telemetry(
+            "clarify-loop-guard",
+            ok=True,
+            enabled=True,
+            blocked=bool(result.get("blocked")),
+            cycle=_safe_int(result.get("cycle")),
+            entries_considered=len(entries),
         )
         return 0
     except MemoryGitError as exc:

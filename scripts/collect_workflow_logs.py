@@ -222,7 +222,7 @@ def gh_api_bytes(
     raise RuntimeError(f"gh api failed for {endpoint} after retries")
 
 
-def normalize_workflow_family(workflow_name: str | None, workflow_path: str | None) -> str | None:
+def normalize_workflow_family(workflow_name: str | None, workflow_path: str | None) -> str:
     name = (workflow_name or "").lower()
     path = (workflow_path or "").lower()
     combined = f"{name} {path}"
