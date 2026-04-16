@@ -58,6 +58,7 @@ Section requirements:
   - Identify high-volume and high-redundancy API call patterns by workflow/job/step.
   - Flag unbatched per-item calls, repeated lookups in loops, and missed cache/prefetch opportunities.
   - Recommend concrete batching/reuse changes with estimated call-count reduction and rate-limit risk reduction.
+  - Cross-reference findings against repository-specific API hygiene rules (mandatory batching, cycle-local caches, and fail-open behavior).
 - ## MCP & Serena Efficiency
   - Audit tool-use efficiency: broad reads vs targeted symbol lookups, repeated reads of same regions, and avoidable tool churn.
   - Recommend concrete changes that improve token efficiency and turnaround time while preserving correctness.
