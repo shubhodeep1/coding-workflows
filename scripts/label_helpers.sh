@@ -104,7 +104,7 @@ ensure_label_exists() {
 	_label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
 	rm -f "${_label_err_file}"
 
-	if printf '%s' "${_label_err}" | grep -Eiq 'already[ _-]*exists|422|unprocessable'; then
+	if printf '%s' "${_label_err}" | grep -Eiq 'already[ _-]*exists|already_exists'; then
 		echo "::debug::ensure_label_exists: label already exists, skipping '${label_name}'." >&2
 		return 0
 	fi

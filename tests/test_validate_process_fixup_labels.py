@@ -224,7 +224,7 @@ printf '%s' "${{CREATED_FIX_ISSUES_JSON}}" > "${{CREATED_JSON_FILE}}"
 		assert created_json == [1201]
 
 
-def test_validate_needs_fixes_label_create_422_already_exists_is_idempotent() -> None:
+def test_validate_needs_fixes_label_create_already_exists_is_idempotent() -> None:
 	ensure_label_exists_fn = _extract_ensure_label_exists_function()
 
 	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_labels_exists_") as td:
