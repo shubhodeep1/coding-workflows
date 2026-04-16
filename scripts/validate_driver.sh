@@ -170,9 +170,12 @@ append_failure()
 	local test_name="$1"
 	local error_message="$2"
 	local log_source="${3:-}"
+	local skip_capture="${4:-0}"
 	local log_tail=""
 
-	capture_compose_logs
+	if [ "${skip_capture}" != "1" ]; then
+		capture_compose_logs
+	fi
 
 	if [ -n "${log_source}" ] && [ -f "${log_source}" ]; then
 		log_tail="$(tail -n "${TAIL_LINES}" "${log_source}" 2>/dev/null || true)"
@@ -303,9 +306,10 @@ fail_fast()
 	local error_message="$2"
 	local log_source="${3:-${COMPOSE_LOG}}"
 	local fail_phase="${4:-runtime_validation}"
+	local skip_capture="${5:-0}"
 
 	echo "${error_message}" >&2
-	append_failure "${test_name}" "${error_message}" "${log_source}"
+	append_failure "${test_name}" "${error_message}" "${log_source}" "${skip_capture}"
 	TOTAL_TESTS=$((TOTAL_TESTS + 1))
 	FAILED_TESTS=$((FAILED_TESTS + 1))
 	RESULT="fail"
@@ -354,7 +358,7 @@ run_preflight_checks()
 start_compose()
 {
 	local build_log
-	build_log="$(mktemp "${TMPDIR:-/tmp}/compose_build.XXXXXX")"
+	build_log="$(mktemp "${TMPDIR:-/tmp}/compose_build.XXXXXX")" || fail_fast "preflight_compose_up" "failed to create temp file for compose build output" "${COMPOSE_LOG}" "startup"
 	if ! docker compose -f "${COMPOSE_FILE}" up -d --build >"${build_log}" 2>&1; then
 		capture_compose_logs
 		# Prepend the build/start output so the log_tail includes the
@@ -362,7 +366,7 @@ start_compose()
 		# before any container runtime logs.
 		if [ -s "${build_log}" ]; then
 			local merged_log
-			merged_log="$(mktemp "${TMPDIR:-/tmp}/compose_merged.XXXXXX")"
+			merged_log="$(mktemp "${TMPDIR:-/tmp}/compose_merged.XXXXXX")" || fail_fast "preflight_compose_up" "failed to create temp file for compose merged output" "${build_log}" "startup" 1
 			{
 				echo "=== docker compose up --build output ==="
 				cat "${build_log}"
@@ -376,7 +380,7 @@ start_compose()
 			mv "${merged_log}" "${COMPOSE_LOG}"
 		fi
 		rm -f "${build_log}"
-		fail_fast "preflight_compose_up" "failed to build/start compose services" "${COMPOSE_LOG}" "startup"
+		fail_fast "preflight_compose_up" "failed to build/start compose services" "${COMPOSE_LOG}" "startup" 1
 	fi
 	rm -f "${build_log}"
 
