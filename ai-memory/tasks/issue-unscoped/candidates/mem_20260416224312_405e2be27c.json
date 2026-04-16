@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 4\nIssues with multi-reviewer agreement: 2\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: .github/workflows/review_autofix.yml (line ~2018)\n      Problem: Regex asymmetry (`([[:space:][:punct:]]*)$` vs `([[:space:][:punct:]].*)?$`) causes inconsistent filtering of \"no modifications\" statements. Fallback heuristic may miss same-line contradictions (e.g., \"- no modifications but updated X\") because contradictory line is filtered out before contradiction check.; When Change status missing/malformed and editor outputs contradictory \"no modifications but updated\" in same line, fallback filters the line and misses the contradiction, potentially failing to detect EDITOR_CHANGES_LOST when it should.; ISSUE_CONFIDENCE: post-finale-humorous; Wait, I need to output the confidence as a number. Let me think: Confidence 3 seems appropriate - plausible issue with some evidence but not certain.; Actually, looking at the cross-pollination summary again, the deepseek reviewer analyzed this thoroughly and concluded confidence 2 (speculative). I should align with that assessment since they did detailed analysis.; Revised: CONFIDENCE: 2; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5\n\n  [2] File: .github/workflows/review_autofix.yml\n      Problem: Location: Lines 2044, 2060, 2073, 2096; Issue: Regex inconsistency between authoritative and fallback paths; Suggested minimal fix: Change fallback regex from `([[:space:][:punct:]].*)?$` to `([[:space:][:punct:]]*)$` to match authoritative path behavior. This would make fallback filter fewer lines (more sensitive to contradictions), reducing the chance of missed contradictions when Change status is malformed.; Estimated lines changed: 4 (one per occurrence); HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [3] File: .github/workflows/review_autofix.yml (line ~2047)\n      Problem: When Change status is missing/malformed and the first bullet is an explicit \"no modifications\" declaration containing an edit claim (e.g., \"- no modifications but updated X\"), that line is filtered out before contradiction detection. The fallback incorrectly treats the output as \"no changes\".; The fallback heuristic misses same-line contradictions in the first bullet, potentially failing to detect that the editor actually made changes. This could lead to false-negative EDITOR_CHANGES_LOST detection or incorrect blocking behavior when relying on the fallback for old/malformed editor output.; HARDENING_SUGGESTIONS:\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [4] File: .github/workflows/review_autofix.yml\n      Problem: Location: Line 2055 (construction of `substantive`); Issue: Filter that creates `substantive` removes the first_line even when it contains a contradiction.; Suggested minimal fix: In the explicit \"no modifications\" branch, also check the first_line itself for an edit claim: after computing `substantive`, run `printf '%s\\n' \"${first_line}\" | grep -qiE \"${edit_claim_regex}\"` and set `has_real_changes=\"true\"` if it matches. Alternatively, adjust the filter to retain first_line for contradiction checks.; Estimated lines changed: 2-3; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n.github/workflows/review_autofix.yml\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "c7f24afb9405bda75eee1e70b08c34ef5677ab6aabd5c131534e5acde4501384",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1240,
+    "run_id": "24536936772",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24536936772",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416224312_405e2be27c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1240,
+    "run_id": "24536936772"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T22:43:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
