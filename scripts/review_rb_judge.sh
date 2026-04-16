@@ -151,6 +151,7 @@ if type gh_pr_with_all_comments >/dev/null 2>&1; then
 elif type _gh_pr_with_all_comments_rest >/dev/null 2>&1; then
   PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
 else
+  printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${REPOSITORY%%/*} repo=${REPOSITORY##*/} pr=${PR_NUMBER}" >&2
   PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null || echo '[]')"
   PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo '[]')"
   PR_CONTEXT_JSON="$(jq -cn --argjson meta "${PRELOADED_PR_META}" --argjson comments "${PR_ISSUE_COMMENTS}" --argjson review_comments "${PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"

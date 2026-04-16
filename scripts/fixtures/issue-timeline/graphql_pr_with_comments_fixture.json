@@ -8,28 +8,28 @@
 	},
 	"comments": [
 		{
-			"author": null,
-			"body": "System note",
-			"created_at": "2026-04-10T12:05:00Z"
-		},
-		{
 			"author": "reviewer-a",
 			"body": "Please add fallback coverage.",
 			"created_at": "2026-04-10T12:00:00Z"
+		},
+		{
+			"author": null,
+			"body": "System note",
+			"created_at": "2026-04-10T12:05:00Z"
 		}
 	],
 	"review_comments": [
-		{
-			"author": null,
-			"path": "scripts/orchestrate_poll_process.sh",
-			"line": null,
-			"body": "Nit: compact this block"
-		},
 		{
 			"author": "reviewer-b",
 			"path": "scripts/gh_helpers.sh",
 			"line": 612,
 			"body": "Keep this fallback fail-open."
+		},
+		{
+			"author": null,
+			"path": "scripts/orchestrate_poll_process.sh",
+			"line": null,
+			"body": "Nit: compact this block"
 		}
 	]
 }

@@ -6504,6 +6504,7 @@ json.dump(result, sys.stdout)
       elif type _gh_pr_with_all_comments_rest >/dev/null 2>&1; then
         RB_PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
       else
+        printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${GITHUB_REPOSITORY%%/*} repo=${GITHUB_REPOSITORY##*/} pr=${RB_PR}" >&2
         RB_PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null || echo '[]')"
         RB_PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo '[]')"
         RB_PR_CONTEXT_JSON="$(jq -cn --argjson meta "${RB_PRELOADED_META}" --argjson comments "${RB_PR_ISSUE_COMMENTS}" --argjson review_comments "${RB_PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"
