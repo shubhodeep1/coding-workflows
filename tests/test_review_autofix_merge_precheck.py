@@ -24,6 +24,17 @@ def _workflow() -> str:
 # Fix 1: explicit removal of known CI-generated files before git reset/merge
 # ---------------------------------------------------------------------------
 
+def test_workflow_checks_out_pr_head_ref_for_judge_context():
+    """Review/autofix must evaluate PR context from the PR head ref."""
+    wf = _workflow()
+    assert "uses: actions/checkout@v5" in wf, (
+        "Expected review_autofix workflow to use actions/checkout@v5"
+    )
+    assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in wf, (
+        "Expected checkout ref to prefer pull_request.head.sha (PR head context)"
+    )
+
+
 def test_known_ci_artifacts_removed_before_git_reset_in_detect_step():
     """Before git reset --hard HEAD in the detect-conflicts step, the workflow
     must explicitly remove known CI-generated files so they cannot linger as
