@@ -7,7 +7,9 @@ backward-compatible plain-text consensus summary.  Exit 0 on all paths.
 """
 from __future__ import annotations
 
-import argparse, re, sys
+import argparse
+import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
