@@ -8739,10 +8739,11 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	# A real merge conflict returns HTTP 422 with a JSON body on stdout —
 	# retrying is pointless (the conflict won't resolve itself) and the
 	# body would leak into the log with no newline. Cap retries at 1 and
-	# silence both streams; stage 2 handles the permanent-failure path.
+	# silence stdout while preserving stderr diagnostics; stage 2 handles
+	# the permanent-failure path.
 	S_HEAD_SHA="$(echo "${S_PR_JSON}" | jq -r '.head.sha // ""')"
 	if [ -n "${S_HEAD_SHA}" ] && GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${S_PR}/update-branch" \
-		-X PUT -f expected_head_sha="${S_HEAD_SHA}" >/dev/null 2>&1; then
+		-X PUT -f expected_head_sha="${S_HEAD_SHA}" >/dev/null; then
 		echo "  PR #${S_PR} branch updated via API. Synchronize event will re-trigger review."
 		CONFLICT_SWEEP_FIXED=$(( CONFLICT_SWEEP_FIXED + 1 ))
 		continue
