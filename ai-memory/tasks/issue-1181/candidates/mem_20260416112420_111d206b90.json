@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; summary=Validation failed due to harness error; failure_summary=Validation harness error: Adjust the dependency-auditing harness step to perform imports in a repo-root-aware way and avoid assuming `scripts.*` is importable from arbitrary cwd. Likely touchpoints: the dependency auditing test script under `validation/` (e.g., `validation/tests/08_dependency_auditing.sh` or generated equivalent) and, if needed, the validation driver wiring that invokes it (e.g., `scripts/validate_driver.sh`). Keep checks aligned with how this repository\u2019s Python modules are actually executed in CI. V",
+  "fingerprint": "bf4fcb4e77c73e38ad0e45cb1b99c82245004b2a37424bb7ca3e519ea7fa8b91",
+  "lineage": {
+    "issue_number": 1181,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24506584581",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24506584581",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260416112420_111d206b90",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1181,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24506584581"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-16T11:24:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
