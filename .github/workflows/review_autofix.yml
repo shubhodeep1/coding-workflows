@@ -1994,13 +1994,20 @@ jobs:
             ' "${EDITOR_SUMMARY_FILE}")"
 
             # Check if the section contains substantive entries (not just
-            # "- none" variants).
+            # "- none" variants or explicit "no modifications" statements).
             has_real_changes="false"
             if [ -n "${changes_section}" ]; then
-              # Strip lines that are blank or match "- none*"
-              substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' || true)"
-              if [ -n "${substantive}" ]; then
-                has_real_changes="true"
+              # If the section explicitly states no files were modified,
+              # treat the entire section as non-substantive — remaining
+              # lines are justification/context, not change claims.
+              if printf '%s\n' "${changes_section}" | grep -qiE 'no (repository )?files were modified|no changes (were )?made|no modifications'; then
+                has_real_changes="false"
+              else
+                # Strip lines that are blank or match "- none*"
+                substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' || true)"
+                if [ -n "${substantive}" ]; then
+                  has_real_changes="true"
+                fi
               fi
             fi
 
