@@ -1997,24 +1997,35 @@ jobs:
             # "- none" variants or explicit "no modifications" statements).
             has_real_changes="false"
             if [ -n "${changes_section}" ]; then
-              # Strip lines that are blank or match "- none*"
-              substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -vE '^[[:space:]]*-[[:space:]]*none' || true)"
-              if [ -n "${substantive}" ]; then
-                if printf '%s\n' "${substantive}" | grep -qiE 'no (repository )?files were modified|no changes (were )?made|no modifications'; then
-                  # Preserve contradictory mixed lines ("no changes, but
-                  # updated ...") so they still count as real change claims.
-                  if printf '%s\n' "${substantive}" | grep -qiE '(no (repository )?files were modified|no changes (were )?made|no modifications).*(but|however|yet|although|still|nevertheless).*(updated|changed|added|removed|deleted|renamed|created|fixed|patched|implemented|refactor|tweak|adjust|improv|resolved|[[:alnum:]_.-]+/[[:alnum:]_.-]+|[[:alnum:]_.-]+\.[[:alpha:]]+)'; then
-                    has_real_changes="true"
-                  else
-                    # Remove standalone no-modification declarations, but still
-                    # detect mixed sections that claim concrete file edits.
-                    remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files were modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$' || true)"
-                    if printf '%s\n' "${remainder}" | grep -qiE 'modified|updated|changed|added|removed|deleted|renamed|created|fixed|patched|implemented|refactor|tweak|adjust|improv|resolved|[[:alnum:]_.-]+/[[:alnum:]_.-]+|[[:alnum:]_.-]+\.[[:alpha:]]+'; then
+              # If the first non-blank line is a "- none" variant (with any
+              # trailing description), treat the entire section as "no changes".
+              # Editors may append informational bullets (validation runs,
+              # missing-context notes) below "- none" that are not real
+              # file-change claims; without this guard those bullets trigger
+              # a false-positive EDITOR_CHANGES_LOST error.
+              first_line="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | head -1 || true)"
+              if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)'; then
+                has_real_changes="false"
+              else
+                # Strip lines that are blank or match "- none*"
+                substantive="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)' || true)"
+                if [ -n "${substantive}" ]; then
+                  if printf '%s\n' "${substantive}" | grep -qiE 'no (repository )?files were modified|no changes (were )?made|no modifications'; then
+                    # Preserve contradictory mixed lines ("no changes, but
+                    # updated ...") so they still count as real change claims.
+                    if printf '%s\n' "${substantive}" | grep -qiE '(no (repository )?files were modified|no changes (were )?made|no modifications).*(but|however|yet|although|still|nevertheless).*(updated|changed|added|removed|deleted|renamed|created|fixed|patched|implemented|refactor|tweak|adjust|improv|resolved|[[:alnum:]_.-]+/[[:alnum:]_.-]+|[[:alnum:]_.-]+\.[[:alpha:]]+)'; then
                       has_real_changes="true"
+                    else
+                      # Remove standalone no-modification declarations, but
+                      # still detect mixed sections that claim concrete edits.
+                      remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files were modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$' || true)"
+                      if printf '%s\n' "${remainder}" | grep -qiE 'modified|updated|changed|added|removed|deleted|renamed|created|fixed|patched|implemented|refactor|tweak|adjust|improv|resolved|[[:alnum:]_.-]+/[[:alnum:]_.-]+|[[:alnum:]_.-]+\.[[:alpha:]]+'; then
+                        has_real_changes="true"
+                      fi
                     fi
+                  else
+                    has_real_changes="true"
                   fi
-                else
-                  has_real_changes="true"
                 fi
               fi
             fi
