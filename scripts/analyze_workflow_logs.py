@@ -186,7 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument(
 		"--thinking-level",
 		choices=["xhigh", "high", "medium", "low"],
-		default="medium",
+		default="xhigh",
 		help="Reasoning effort for the OpenRouter request.",
 	)
 	parser.add_argument(

@@ -71,9 +71,9 @@ def test_truncate_to_budget_drops_deep_dive_before_recent_runs():
 	assert trimmed["truncation"]["removed"]["recent_runs"] == 0
 
 
-def test_build_parser_thinking_level_defaults_to_medium():
+def test_build_parser_thinking_level_defaults_to_xhigh():
 	args = analyzer.build_parser().parse_args([])
-	assert args.thinking_level == "medium"
+	assert args.thinking_level == "xhigh"
 
 
 def test_build_parser_accepts_explicit_thinking_level():

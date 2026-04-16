@@ -5082,6 +5082,73 @@ recover_stalled_issue() {
         fi
       fi
       if [[ "${_lpr_num}" =~ ^[0-9]+$ ]] && [ "${_lpr_state}" = "open" ]; then
+        # --- State-aware open-PR guard ---
+        # Instead of always skipping, check the PR's merge state and review
+        # status to dispatch the appropriate corrective action.
+        local _opr_json=""
+        local _opr_mergeable=""
+        local _opr_mergeable_state=""
+        local _opr_head_ref=""
+        local _opr_review_comments=""
+
+        # Reuse existing PR JSON if available (REST fallback already fetched it),
+        # otherwise fetch once (1 API call, not per-field).
+        if [ -n "${_lpr_json:-}" ] && [ "${_lpr_json}" != "{}" ]; then
+          _opr_json="${_lpr_json}"
+        else
+          _opr_json="$(_fetch_pr_json "${_lpr_num}")"
+        fi
+        _opr_mergeable="$(_jq_field "${_opr_json}" '.mergeable' 'true|false')"
+        _opr_mergeable_state="$(_jq_field "${_opr_json}" '.mergeable_state')"
+        _opr_head_ref="$(_jq_field "${_opr_json}" '.head.ref')"
+
+        # Sub-case 1: PR has merge conflicts → dispatch conflict resolver
+        if { [ "${_opr_mergeable}" = "false" ] || [ "${_opr_mergeable_state}" = "dirty" ]; } && [ -n "${_opr_head_ref}" ]; then
+          local _opr_dispatch_rc=0
+          _dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_dispatch_rc=$?
+          if [ "${_opr_dispatch_rc}" -eq 0 ]; then
+            echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict pr=${_lpr_num} phase=${phase} action=dispatch_conflict_resolver"
+            add_healing_note "Issue #${issue_num}: open PR #${_lpr_num} has merge conflicts (phase=${phase}); dispatching conflict resolver instead of '${action}'"
+            STALL_HEALING_CHANGED=true
+            tg_notify "Stall recovery: PR #${_lpr_num} for issue #${issue_num} has merge conflicts. Dispatched conflict resolver."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
+            return 0  # Signal: corrective action taken
+          elif [ "${_opr_dispatch_rc}" -eq 2 ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=open_pr_merge_conflict_dispatch_skipped pr=${_lpr_num} phase=${phase} action=${action}"
+          else
+            echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict_dispatch_failed pr=${_lpr_num} phase=${phase} action=${action} rc=${_opr_dispatch_rc}"
+          fi
+          return 1  # Signal: no action taken (skipped/failed dispatch)
+        fi
+
+        # Sub-case 2: PR has unresolved review comments → dispatch review/autofix
+        # Check review decision (CHANGES_REQUESTED or pending reviews).
+        # Audited existing calls: _fetch_pr_json returns the full PR payload
+        # but not review comments.  We need one additional REST call to check
+        # review state.  This is acceptable because it only fires when an open
+        # PR exists AND the stall threshold is exceeded (rare), not per-cycle.
+        _opr_review_comments="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_lpr_num}/reviews" \
+          --jq '[.[] | select(.user != null and .user.login != null)] | sort_by(.user.login, (.submitted_at // "")) | group_by(.user.login) | map(last) | map(select(.state == "CHANGES_REQUESTED")) | length' 2>/dev/null || echo "0")"
+        if ! [[ "${_opr_review_comments}" =~ ^[0-9]+$ ]]; then
+          _opr_review_comments="0"
+        fi
+        if [ "${_opr_review_comments}" -gt 0 ] && [ -n "${_opr_head_ref}" ]; then
+          local _opr_autofix_rc=0
+          _dispatch_review_for_conflicts "${_lpr_num}" "${_opr_head_ref}" || _opr_autofix_rc=$?
+          if [ "${_opr_autofix_rc}" -eq 0 ]; then
+            echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_changes_requested pr=${_lpr_num} phase=${phase} action=dispatch_autofix"
+            add_healing_note "Issue #${issue_num}: open PR #${_lpr_num} has ${_opr_review_comments} review(s) requesting changes (phase=${phase}); dispatching autofix instead of '${action}'"
+            STALL_HEALING_CHANGED=true
+            tg_notify "Stall recovery: PR #${_lpr_num} for issue #${issue_num} has changes-requested reviews. Dispatched autofix."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_lpr_num}")" "WARNING"
+            return 0  # Signal: corrective action taken
+          elif [ "${_opr_autofix_rc}" -eq 2 ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=open_pr_changes_requested_dispatch_skipped pr=${_lpr_num} phase=${phase} action=${action}"
+          else
+            echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_changes_requested_dispatch_failed pr=${_lpr_num} phase=${phase} action=${action} rc=${_opr_autofix_rc}"
+          fi
+          return 1  # Signal: no action taken (skipped/failed dispatch)
+        fi
+
+        # Sub-case 3: PR is open but clean/progressing → skip (legacy behavior)
         echo "STALL_SKIP issue=${issue_num} reason=open_linked_pr pr=${_lpr_num} phase=${phase} action=${action}"
         add_healing_note "Issue #${issue_num}: skipped early-phase stall recovery '${action}' (phase=${phase}) — open linked PR #${_lpr_num} already exists"
         STALL_HEALING_CHANGED=true
