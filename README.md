@@ -115,7 +115,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `BATCH_API_PROVIDER` | No | `auto` | workflow-log-analysis, memory_maintenance | Batch provider routing hint for OpenRouter Responses API capability checks/submission (`auto`, `openai`, `anthropic`). Unsupported hints fall back to sync with structured warnings. |
 | `BATCH_API_POLL_TIMEOUT_HOURS` | No | `24` | workflow-log-analysis, memory_maintenance | Maximum pending batch age before workflow-log-analysis falls back to synchronous generation. |
 
-**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. All phases default to `xhigh` (maximum reasoning depth). No runtime downgrades are applied — every phase and every cycle uses the configured reasoning effort as-is.
+**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. All phases default to `xhigh` (maximum reasoning depth). No cycle-based downgrades are applied — every phase uses the configured reasoning effort for all cycles. **E2E smoke test exception:** when an issue or PR title contains `[E2E Smoke Test]`, all phases force `low` reasoning to keep smoke runs cheap and fast.
 
 | Variable | Default | Used By | Description |
 |---|---|---|---|

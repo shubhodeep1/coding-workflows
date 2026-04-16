@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Tests for reviewer reasoning-effort behaviour in review_autofix.yml.
 
-The schedule machinery (REVIEW_REASONING_SCHEDULE, REVIEW_AUTODOWNGRADE_DISABLED,
-cycle-based selector step) has been removed. All reasoning stays at the
-configured THINKING_LEVEL_* value for every cycle — no runtime downgrades.
+The cycle-based schedule machinery (REVIEW_REASONING_SCHEDULE,
+REVIEW_AUTODOWNGRADE_DISABLED) has been removed. Non-smoke-test runs use
+the configured THINKING_LEVEL_* for every cycle. Smoke test runs override
+reasoning to ``low`` for both reviewer and editor phases.
 """
 
 from __future__ import annotations
@@ -28,17 +29,14 @@ def test_no_reasoning_schedule_env_vars() -> None:
 def test_no_cycle_selector_step() -> None:
 	wf = _workflow()
 	assert "Select reviewer reasoning effort for current cycle" not in wf
-	assert "smoke_override" not in wf
-	assert "kill_switch_enabled" not in wf
 	assert "schedule_source" not in wf
 
 
-def test_no_smoke_test_reasoning_override() -> None:
+def test_smoke_test_forces_low_reasoning() -> None:
 	wf = _workflow()
-	assert "REVIEW_SMOKE_OVERRIDE_ACTIVE" not in wf
-	assert 'REVIEWER_REASONING_EFFORT=low' not in wf
-	assert 'EDITOR_REASONING_EFFORT=low' not in wf
-	assert 'model_reasoning_effort = "low"' not in wf
+	assert 'REVIEWER_REASONING_EFFORT=low' in wf
+	assert 'EDITOR_REASONING_EFFORT=low' in wf
+	assert 'model_reasoning_effort = "low"' in wf
 
 
 def test_editor_switch_replaces_any_reasoning_value() -> None:

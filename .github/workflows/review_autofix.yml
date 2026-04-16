@@ -854,7 +854,9 @@ jobs:
           fi
 
           if [ "$IS_SMOKE" = "true" ]; then
-            echo "🔬 Smoke test PR detected — using reduced reviewer set"
+            echo "🔬 Smoke test PR detected — switching to low reasoning effort and reduced reviewer set"
+            echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+            echo "EDITOR_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             # Use only 2 fast models for smoke tests
             {
               echo 'REVIEWER_MODELS<<SMOKE_EOF'
@@ -862,6 +864,10 @@ jobs:
               echo 'stepfun/step-3.5-flash'
               echo 'SMOKE_EOF'
             } >> "$GITHUB_ENV"
+            # Patch the already-written codex config to use low reasoning (if present)
+            if [ -f "${HOME}/.codex/config.toml" ]; then
+              sed -i 's/^[[:space:]]*model_reasoning_effort = ".*"/model_reasoning_effort = "low"/' "${HOME}/.codex/config.toml"
+            fi
           else
             echo "Standard PR — using default LLM settings"
           fi

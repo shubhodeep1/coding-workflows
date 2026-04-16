@@ -16,11 +16,10 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 - Extended staged AI memory schema lists to include the new cache schema
   entries for actions runs and workflow log analysis (best-effort staging
   until files exist on support refs).
-- Removed all runtime reasoning effort downgrades — every phase and cycle now
-  uses the configured `THINKING_LEVEL_*` as-is (`xhigh` by default):
+- Removed all cycle-based runtime reasoning effort downgrades — every phase now
+  uses the configured `THINKING_LEVEL_*` as-is (`xhigh` by default) for all cycles:
   - Removed adaptive judge downgrade (`xhigh` → `high` after cycle 3) in `orchestrate_poll_process.sh`.
   - Removed adaptive validate downgrade (`xhigh` → `high` after cycle 3) in `validate_process.sh`.
-  - Removed E2E smoke test reasoning overrides (forced `low`) in `clarify.yml`, `plan.yml`, `implement.yml`, and `review_autofix.yml`.
   - Removed issue-summary generation reasoning override (forced `low`) in `implement.yml`.
   - Removed `REVIEW_REASONING_SCHEDULE` / `REVIEW_AUTODOWNGRADE_DISABLED` reviewer cycle schedule machinery in `review_autofix.yml`.
 - Trimmed static prompt assembly in planning, implementation, and review/autofix workflows to reduce token overhead.
