@@ -2126,53 +2126,7 @@ jobs:
             cat "${PLAN_FILE}"
           } > "${RUNTIME_DIR}/issue_context_for_summary.txt"
 
-          CONFIG_FILE="${HOME}/.codex/config.toml"
-          CONFIG_BACKUP_FILE="${RUNTIME_DIR}/codex_config_issue_summary_backup.toml"
-          HAD_CONFIG="false"
-          if [ -f "${CONFIG_FILE}" ]; then
-            HAD_CONFIG="true"
-            cp "${CONFIG_FILE}" "${CONFIG_BACKUP_FILE}"
-          fi
-
-          restore_codex_config() {
-            if [ "${HAD_CONFIG}" = "true" ] && [ -f "${CONFIG_BACKUP_FILE}" ]; then
-              cp "${CONFIG_BACKUP_FILE}" "${CONFIG_FILE}"
-              rm -f "${CONFIG_BACKUP_FILE}"
-              return
-            fi
-            rm -f "${CONFIG_FILE}" "${CONFIG_BACKUP_FILE}"
-          }
-          trap 'restore_codex_config; rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt"' EXIT
-
-          mkdir -p "${HOME}/.codex"
-          if [ "${HAD_CONFIG}" = "true" ] && [ -f "${CONFIG_BACKUP_FILE}" ]; then
-            awk '
-              BEGIN { replaced = 0 }
-              /^model_reasoning_effort[[:space:]]*=/ {
-                print "model_reasoning_effort = \"low\""
-                replaced = 1
-                next
-              }
-              { print }
-              END {
-                if (!replaced) {
-                  print "model_reasoning_effort = \"low\""
-                }
-              }
-            ' "${CONFIG_BACKUP_FILE}" > "${CONFIG_FILE}"
-          else
-            {
-              echo 'model_reasoning_effort = "low"'
-              echo 'model_provider = "openrouter"'
-              echo "model = \"${MODEL_EDITOR}\""
-              echo
-              echo '[model_providers.openrouter]'
-              echo 'name = "OpenRouter"'
-              echo 'base_url = "https://openrouter.ai/api/v1"'
-              echo 'env_key = "OPENROUTER_API_KEY"'
-              echo 'wire_api = "responses"'
-            } > "${CONFIG_FILE}"
-          fi
+          trap 'rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt"' EXIT
 
           for _summary_attempt in 1 2 3; do
             cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" \
