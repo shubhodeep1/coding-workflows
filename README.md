@@ -737,6 +737,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `INTEGRATION_SYNC_CONFLICT_MAX_RETRIES` | `1` | Tighter ticks-before-judge budget applied only when head ref matches `orchestrator/project-*` (integration-sync conflicts) |
 | `FINGERPRINT_PER_FILE_CAP` | `12` | Cap on `must_contain`/`must_not_contain` patterns captured per file per merged sub-issue |
 | `FINGERPRINT_MIN_PATTERN_CHARS` | `12` | Minimum trimmed-line length for a captured fingerprint pattern |
+| `ACTIONS_RUNS_CACHE_TTL_SECONDS` | `60` | Cross-tick cache TTL (seconds) for `GET /actions/runs` snapshots persisted on the `ai-memory` branch and reused by orchestrator poll run-state readers |
 | `CONTEXT7_DISABLED` | `false` | Disable the optional Context7 MCP server setup in workflows |
 | `GIT_MCP_DISABLED` | `false` | Disable the optional Git MCP server setup in workflows (preloaded diff artifacts remain fallback) |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
@@ -1079,6 +1080,16 @@ The `gh_rate_limit_breaker_tripped` shell function is exported by `gh_helpers.sh
 - Manual parity check (`scripts/compare_issue_timeline_parity.sh`) now also validates PR context parity using:
   - `scripts/fixtures/issue-timeline/rest_pr_with_comments_fixture.json`
   - `scripts/fixtures/issue-timeline/graphql_pr_with_comments_fixture.json`
+
+### H5 Actions Runs Cross-Tick Cache
+
+- `scripts/orchestrate_poll_process.sh` now centralizes poller run-state reads behind `_load_actions_runs_cached`, so `build_active_issue_set`, `cancel_zombie_runs_for_issue`, and `invoke_stall_judge` filter one shared actions-runs blob per tick instead of issuing separate `GET /actions/runs` requests.
+- Cache payloads are stored per repository on the `ai-memory` branch and validated against `ai-memory/schemas/actions_runs_cache.v1.json`.
+- New CLI in `scripts/ai_memory.py`:
+  - `actions-runs-cache get --repo <owner/repo>`
+  - `actions-runs-cache put --repo <owner/repo> --runs-file <path> --etag <string>`
+- New env var `ACTIONS_RUNS_CACHE_TTL_SECONDS` (default `60`) controls freshness; invalid values fail-open to default with a warning.
+- Cache corruption/schema mismatch is fail-open and treated as cache miss with structured warning key `rate_limit_audit_fallback`.
 
 ## Runtime Validation Phase
 

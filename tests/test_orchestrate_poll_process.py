@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Deterministic tests for orchestrate_poll_process.sh validation state handling."""
 
 from __future__ import annotations
@@ -368,6 +368,12 @@ def _run_poller(
 	fail_issue_get_for: list[int] | None = None,
 	fail_branch_ref_after: dict[str, int] | None = None,
 	fail_branch_ref_not_found_after: dict[str, int] | None = None,
+	mock_actions_runs_cache_get_json: dict | None = None,
+	mock_actions_runs_cache_put_json: dict | None = None,
+	actions_runs_workflow_runs: list[dict] | None = None,
+	actions_runs_status: int = 200,
+	actions_runs_status_sequence: list[int] | None = None,
+	actions_runs_etag: str = '"etag-initial"',
 	codex_touch_file: str | None = None,
 	mock_git_push_success: bool = False,
 	enable_stall_judge: str = "true",
@@ -401,6 +407,10 @@ def _run_poller(
 	fail_issue_get_for = fail_issue_get_for or []
 	fail_branch_ref_after = fail_branch_ref_after or {}
 	fail_branch_ref_not_found_after = fail_branch_ref_not_found_after or {}
+	mock_actions_runs_cache_get_json = mock_actions_runs_cache_get_json or {}
+	mock_actions_runs_cache_put_json = mock_actions_runs_cache_put_json or {}
+	actions_runs_workflow_runs = actions_runs_workflow_runs or []
+	actions_runs_status_sequence = actions_runs_status_sequence or []
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -478,6 +488,14 @@ def _run_poller(
 			"fail_issue_get_for": [int(x) for x in fail_issue_get_for],
 			"fail_branch_ref_after": {str(k): int(v) for k, v in fail_branch_ref_after.items()},
 			"fail_branch_ref_not_found_after": {str(k): int(v) for k, v in fail_branch_ref_not_found_after.items()},
+			"mock_actions_runs_cache_get_json": mock_actions_runs_cache_get_json,
+			"mock_actions_runs_cache_put_json": mock_actions_runs_cache_put_json,
+			"actions_runs_fetch_count": 0,
+			"actions_runs_if_none_match_count": 0,
+			"actions_runs_etag": actions_runs_etag,
+			"actions_runs_workflow_runs": list(actions_runs_workflow_runs),
+			"actions_runs_status": int(actions_runs_status),
+			"actions_runs_status_sequence": list(actions_runs_status_sequence),
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -486,7 +504,7 @@ def _run_poller(
 			encoding="utf-8",
 		)
 
-		gh_mock = r'''#!/usr/bin/env python3
+		gh_mock = r'''#!/usr/bin/python3
 import json
 import re
 import sys
@@ -540,6 +558,9 @@ def parse_api():
 			input_file = args[i + 1]
 			i += 2
 			continue
+		if arg == '-H':
+			i += 2
+			continue
 		if arg.startswith('-'):
 			i += 1
 			continue
@@ -554,6 +575,84 @@ if not args:
 
 if args[0] == 'label' and len(args) >= 3 and args[1] == 'create':
 	sys.exit(0)
+
+if args[0] == 'python3' and len(args) >= 4 and args[1] == 'scripts/ai_memory.py' and args[2] == 'actions-runs-cache':
+	cmd = args[3]
+	if cmd == 'get':
+		repo = ''
+		i = 4
+		while i < len(args):
+			if args[i] == '--repo' and i + 1 < len(args):
+				repo = args[i + 1]
+				i += 2
+				continue
+			i += 1
+		payload = {
+			'ok': True,
+			'enabled': True,
+			'hit': bool(store.get('mock_actions_runs_cache_hit', False)),
+			'cache': store.get('mock_actions_runs_cache_payload'),
+		}
+		override = store.get('mock_actions_runs_cache_get_json')
+		if isinstance(override, dict) and override:
+			payload.update(override)
+		if repo and isinstance(payload.get('cache'), dict):
+			payload['cache'].setdefault('repository', repo)
+		print(json.dumps(payload))
+		sys.exit(0)
+	if cmd == 'put':
+		runs_file = ''
+		repo = ''
+		etag = ''
+		ttl_seconds = ''
+		i = 4
+		while i < len(args):
+			if args[i] == '--runs-file' and i + 1 < len(args):
+				runs_file = args[i + 1]
+				i += 2
+				continue
+			if args[i] == '--repo' and i + 1 < len(args):
+				repo = args[i + 1]
+				i += 2
+				continue
+			if args[i] == '--etag' and i + 1 < len(args):
+				etag = args[i + 1]
+				i += 2
+				continue
+			if args[i] == '--ttl-seconds' and i + 1 < len(args):
+				ttl_seconds = args[i + 1]
+				i += 2
+				continue
+			i += 1
+		runs = []
+		if runs_file:
+			try:
+				raw = Path(runs_file).read_text(encoding='utf-8')
+				parsed = json.loads(raw)
+				if isinstance(parsed, dict):
+					runs = list(parsed.get('workflow_runs', []))
+				elif isinstance(parsed, list):
+					runs = parsed
+			except Exception:
+				runs = []
+		store['mock_actions_runs_cache_hit'] = True
+		store['mock_actions_runs_cache_payload'] = {
+			'schema_version': 'v1',
+			'repository': repo or 'owner/repo',
+			'fetched_at': '2026-01-01T00:00:00Z',
+			'ttl_seconds': int(ttl_seconds or 60),
+			'etag': etag or None,
+			'runs': runs,
+		}
+		store.setdefault('mock_actions_runs_cache_put_calls', 0)
+		store['mock_actions_runs_cache_put_calls'] = int(store['mock_actions_runs_cache_put_calls']) + 1
+		save()
+		payload = {'ok': True, 'stored': True, 'cache': store['mock_actions_runs_cache_payload']}
+		override = store.get('mock_actions_runs_cache_put_json')
+		if isinstance(override, dict) and override:
+			payload.update(override)
+		print(json.dumps(payload))
+		sys.exit(0)
 
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
 	print('[]')
@@ -1087,6 +1186,57 @@ if args[0] == 'api':
 			print(json.dumps({'default_branch': store.get('default_branch', 'main')}))
 		sys.exit(0)
 
+	m = re.search(r'/actions/runs(?:\?.*)?$', path)
+	if m:
+		query = path.split('?', 1)[1] if '?' in path else ''
+		from urllib.parse import parse_qs
+		params = parse_qs(query)
+		if_none_match = ''
+		i = 1
+		while i < len(args):
+			if args[i] == '-H' and i + 1 < len(args):
+				header = args[i + 1]
+				if header.lower().startswith('if-none-match:'):
+					if_none_match = header.split(':', 1)[1].strip()
+				i += 2
+				continue
+			i += 1
+
+		store['actions_runs_fetch_count'] = int(store.get('actions_runs_fetch_count', 0)) + 1
+		if if_none_match:
+			store['actions_runs_if_none_match_count'] = int(store.get('actions_runs_if_none_match_count', 0)) + 1
+
+		status_sequence = store.get('actions_runs_status_sequence', [])
+		if isinstance(status_sequence, list) and status_sequence:
+			status = int(status_sequence.pop(0))
+			store['actions_runs_status_sequence'] = status_sequence
+		else:
+			status = int(store.get('actions_runs_status', 200))
+
+		etag = store.get('actions_runs_etag', '"etag-initial"')
+		workflow_runs = list(store.get('actions_runs_workflow_runs', []))
+		status_text = 'OK' if status == 200 else 'Not Modified'
+		headers = [
+			f'HTTP/1.1 {status} {status_text}',
+			'Content-Type: application/json; charset=utf-8',
+			f'ETag: {etag}',
+			'',
+		]
+		if status == 304:
+			body = ''
+		else:
+			body_obj = {
+				'total_count': len(workflow_runs),
+				'workflow_runs': workflow_runs,
+			}
+			body = json.dumps(body_obj)
+		output = '\n'.join(headers) + '\n'
+		if body:
+			output += body + '\n'
+		save()
+		sys.stdout.write(output)
+		sys.exit(0)
+
 	m = re.search(r'/actions/workflows/[^/]+/runs', path)
 	if m:
 		runs = store.get('validation_workflow_runs', [])
@@ -1108,10 +1258,12 @@ sys.exit(1)
 		_write_exec(bin_dir / "gh", gh_mock)
 
 		real_git = shutil.which("git")
+		real_python = shutil.which("python3")
 		assert real_git is not None
+		assert real_python is not None
 		_write_exec(
 			bin_dir / "git",
-			r'''#!/usr/bin/env python3
+			r'''#!/usr/bin/python3
 import json
 import os
 import subprocess
@@ -1163,7 +1315,7 @@ sys.exit(proc.returncode)
 
 		_write_exec(
 			bin_dir / "codex",
-			"""#!/usr/bin/env python3
+			"""#!/usr/bin/python3
 import json
 import os
 import sys
@@ -1183,6 +1335,115 @@ if touch_file:
 		fh.write("mock change\\n")
 print(json.dumps(parsed))
 """,
+		)
+
+		_write_exec(
+			bin_dir / "python3",
+			r'''#!/usr/bin/python3
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+real_python = os.environ.get("REAL_PYTHON_BIN", "python3")
+store_path = Path(os.environ.get("GH_MOCK_STORE", ""))
+
+def _load_store() -> dict:
+	if not store_path:
+		return {}
+	if not store_path.exists():
+		return {}
+	return json.loads(store_path.read_text(encoding="utf-8"))
+
+def _save_store(store: dict) -> None:
+	if not store_path:
+		return
+	store_path.write_text(json.dumps(store), encoding="utf-8")
+
+if len(args) >= 3 and args[0] == "scripts/ai_memory.py" and args[1] == "actions-runs-cache":
+	store = _load_store()
+	cmd = args[2]
+	if cmd == "get":
+		repo = ""
+		i = 3
+		while i < len(args):
+			if args[i] == "--repo" and i + 1 < len(args):
+				repo = args[i + 1]
+				i += 2
+				continue
+			i += 1
+		payload = {
+			"ok": True,
+			"enabled": True,
+			"hit": bool(store.get("mock_actions_runs_cache_hit", False)),
+			"cache": store.get("mock_actions_runs_cache_payload"),
+		}
+		override = store.get("mock_actions_runs_cache_get_json")
+		if isinstance(override, dict) and override:
+			payload.update(override)
+		if repo and isinstance(payload.get("cache"), dict):
+			payload["cache"].setdefault("repository", repo)
+		print(json.dumps(payload))
+		sys.exit(0)
+	if cmd == "put":
+		runs_file = ""
+		repo = ""
+		etag = ""
+		ttl_seconds = ""
+		i = 3
+		while i < len(args):
+			if args[i] == "--runs-file" and i + 1 < len(args):
+				runs_file = args[i + 1]
+				i += 2
+				continue
+			if args[i] == "--repo" and i + 1 < len(args):
+				repo = args[i + 1]
+				i += 2
+				continue
+			if args[i] == "--etag" and i + 1 < len(args):
+				etag = args[i + 1]
+				i += 2
+				continue
+			if args[i] == "--ttl-seconds" and i + 1 < len(args):
+				ttl_seconds = args[i + 1]
+				i += 2
+				continue
+			i += 1
+		runs = []
+		if runs_file:
+			try:
+				raw = Path(runs_file).read_text(encoding="utf-8")
+				parsed = json.loads(raw)
+				if isinstance(parsed, dict):
+					runs = list(parsed.get("workflow_runs", []))
+				elif isinstance(parsed, list):
+					runs = parsed
+			except Exception:
+				runs = []
+		store["mock_actions_runs_cache_hit"] = True
+		store["mock_actions_runs_cache_payload"] = {
+			"schema_version": "v1",
+			"repository": repo or "owner/repo",
+			"fetched_at": "2026-01-01T00:00:00Z",
+			"ttl_seconds": int(ttl_seconds or 60),
+			"etag": etag or None,
+			"runs": runs,
+		}
+		store.setdefault("mock_actions_runs_cache_put_calls", 0)
+		store["mock_actions_runs_cache_put_calls"] = int(store["mock_actions_runs_cache_put_calls"]) + 1
+		_save_store(store)
+		payload = {"ok": True, "stored": True, "cache": store["mock_actions_runs_cache_payload"]}
+		override = store.get("mock_actions_runs_cache_put_json")
+		if isinstance(override, dict) and override:
+			payload.update(override)
+		print(json.dumps(payload))
+		sys.exit(0)
+
+proc = subprocess.run([real_python, *args])
+sys.exit(proc.returncode)
+''',
 		)
 
 		env = os.environ.copy()
@@ -1216,6 +1477,7 @@ print(json.dumps(parsed))
 				"GH_MOCK_STORE": str(store_file),
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
+				"REAL_PYTHON_BIN": real_python,
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
@@ -1251,6 +1513,8 @@ print(json.dumps(parsed))
 		result["update_branch_calls"] = result.get("update_branch_calls", [])
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
+		result["actions_runs_fetch_count"] = int(result.get("actions_runs_fetch_count", 0))
+		result["actions_runs_if_none_match_count"] = int(result.get("actions_runs_if_none_match_count", 0))
 		return result
 
 
@@ -4002,7 +4266,7 @@ def test_truncated_comments_json_is_handled_gracefully():
 		# Minimal gh mock: returns truncated JSON for comments endpoint,
 		# empty body for issue body (causes reconstruction to skip gracefully).
 		gh_mock = """\
-#!/usr/bin/env python3
+#!/usr/bin/python3
 import json, re, sys
 args = sys.argv[1:]
 if not args:
@@ -4057,7 +4321,7 @@ sys.exit(1)
 
 		# Minimal codex mock (should not be reached in this test)
 		(bin_dir / "codex").write_text(
-			"#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps({'status':'complete','justification':'','assessment':'','new_issues':[],'issues_to_revert':[]}))\n"
+			"#!/usr/bin/python3\nimport json,sys\nprint(json.dumps({'status':'complete','justification':'','assessment':'','new_issues':[],'issues_to_revert':[]}))\n"
 		)
 		(bin_dir / "codex").chmod(0o755)
 
@@ -4415,6 +4679,120 @@ def test_verify_integration_fingerprints_skips_empty_object():
 		empty = Path(td) / "empty.json"
 		empty.write_text("{}", encoding="utf-8")
 		assert mod.main([str(empty)]) == 0
+
+
+def test_actions_runs_shared_loader_reuses_single_fetch_per_tick() -> None:
+	state = _base_state()
+	state["project_status"] = "in_progress"
+	state["issues"] = [
+		{
+			"id": "issue-one",
+			"title": "Issue one",
+			"github_issue": 10,
+			"status": "in_progress",
+			"phase": "implementing",
+			"last_updated": "2026-01-01T00:00:00Z",
+		}
+	]
+	run = {
+		"id": 1001,
+		"status": "in_progress",
+		"conclusion": None,
+		"name": "Internal Review",
+		"workflow_id": 11,
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:01:00Z",
+		"run_started_at": "2026-01-01T00:00:30Z",
+		"head_branch": "ai/issue-10",
+		"event": "pull_request",
+		"run_attempt": 1,
+		"html_url": "https://example.invalid/runs/1001",
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:orchestrator-managed", "ai:in-progress"],
+		issue_labels={10: ["ai:managed", "ai:implementing"]},
+		issue_linked_prs={10: 351},
+		prs=[
+			{
+				"number": 351,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"baseRefName": "main",
+				"headSha": "sha-10",
+			}
+		],
+		validation_workflow_runs=[run],
+	)
+	assert result["actions_runs_fetch_count"] == 1
+
+
+def test_actions_runs_cached_loader_uses_if_none_match_when_stale() -> None:
+	state = _base_state()
+	state["project_status"] = "in_progress"
+	state["issues"] = [
+		{
+			"id": "issue-one",
+			"title": "Issue one",
+			"github_issue": 10,
+			"status": "in_progress",
+			"phase": "implementing",
+			"last_updated": "2026-01-01T00:00:00Z",
+		}
+	]
+	run = {
+		"id": 1001,
+		"status": "in_progress",
+		"conclusion": None,
+		"name": "Internal Review",
+		"workflow_id": 11,
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:01:00Z",
+		"run_started_at": "2026-01-01T00:00:30Z",
+		"head_branch": "ai/issue-10",
+		"event": "pull_request",
+		"run_attempt": 1,
+		"html_url": "https://example.invalid/runs/1001",
+	}
+	cached_payload = {
+		"schema_version": "v1",
+		"repository": "owner/repo",
+		"fetched_at": "2024-01-01T00:00:00Z",
+		"ttl_seconds": 60,
+		"etag": '"etag-old"',
+		"runs": [run],
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:orchestrator-managed", "ai:in-progress"],
+		issue_labels={10: ["ai:managed", "ai:implementing"]},
+		issue_linked_prs={10: 351},
+		prs=[
+			{
+				"number": 351,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"baseRefName": "main",
+				"headSha": "sha-10",
+			}
+		],
+		validation_workflow_runs=[run],
+		mock_actions_runs_cache_get_json={"ok": True, "enabled": True, "hit": True, "cache": cached_payload},
+		actions_runs_workflow_runs=[run],
+		actions_runs_status=304,
+	)
+	assert result["actions_runs_fetch_count"] == 1
+	assert result["actions_runs_if_none_match_count"] >= 1
 
 
 def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
