@@ -615,6 +615,17 @@ CRITICAL — importlib dynamic module loading for dependency_auditing import che
   `importlib.import_module` handles `sys.modules` registration automatically
   and is the correct API for "does this module load?" audits.
 
+CRITICAL — dependency_auditing sidecar scripts MUST set sys.path to repo root:
+- Any Python sidecar file generated under `validation/tests/_lib/` for
+  dependency_auditing MUST contain BOTH of the following lines before any
+  `importlib.import_module()` call:
+    os.chdir("/workspace")
+    sys.path.insert(0, "/workspace")
+  Without these lines, `scripts.*` modules are not importable because
+  `/workspace` is not on `sys.path` by default inside the container.
+  This is the single most common cause of false `No module named 'scripts'`
+  harness failures. Omitting these lines is a harness defect.
+
 Validation coverage (implement only when concretely applicable):
 1. Build verification
 2. Startup and health checks
