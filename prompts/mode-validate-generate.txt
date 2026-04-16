@@ -583,15 +583,18 @@ CRITICAL — importlib dynamic module loading for dependency_auditing import che
 - WRONG:
     mod_name = "scripts.semantic_cache"  # use the real module path dynamically
     spec = importlib.util.spec_from_file_location(mod_name, p)
+    assert spec is not None and spec.loader is not None
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)          # crashes on @dataclass in Python 3.12
 - RIGHT (register before exec):
     mod_name = "scripts.semantic_cache"  # use the real module path dynamically
     spec = importlib.util.spec_from_file_location(mod_name, p)
+    assert spec is not None and spec.loader is not None
     m = importlib.util.module_from_spec(spec)
     sys.modules[mod_name] = m            # must precede exec_module
     spec.loader.exec_module(m)
-- Preferred: avoid `importlib` entirely for import auditing. Use the sidecar
+- Preferred: avoid low-level `importlib.util.spec_from_file_location` +
+  `exec_module` import auditing. Use the sidecar
   pattern from "Preferred pattern A" above with a simple `PYTHONPATH`-based
   import check:
     # validation/tests/_lib/import_audit.py
