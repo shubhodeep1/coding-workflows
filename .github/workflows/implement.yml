@@ -1503,11 +1503,14 @@ jobs:
           fi
           rm -rf .serena
 
-          if [ -z "$(git status --porcelain)" ]; then
-            echo "No repository changes were produced by Codex implementation."
+          porcelain_status="$(git status --porcelain)"
+          if [ -z "${porcelain_status}" ]; then
+            echo "No repository changes were produced by Codex implementation (worktree clean after artifact cleanup)."
             echo "did_commit=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "Worktree changes before staging (post artifact-cleanup):"
+          echo "${porcelain_status}" | sed 's/^/  /'
 
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
@@ -1520,13 +1523,9 @@ jobs:
           # `*/coding-workflows` repository these paths ARE the source of truth
           # and must be editable, so the excludes are dropped.
           #
-          # NOTE: scripts/ is NOT blanket-excluded here.  The bootstrap step
-          # writes a scripts/.gitignore that ignores only the runtime-fetched
-          # helpers (gh_helpers.sh, tg_helpers.sh, etc.).  A blanket ':!scripts'
-          # would also block legitimate consumer-repo scripts such as
-          # scripts/security/*.js — which was the root cause of
-          # ai:implementation-failed false-positives on repos that keep their
-          # own scripts under scripts/.
+          # NOTE: scripts/ is NOT blanket-excluded here. Runtime-fetched
+          # infrastructure helpers are filtered separately so consumer repos can
+          # still commit their own scripts/ changes when required.
           is_self_repo="false"
           if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then
             is_self_repo="true"
@@ -1626,9 +1625,22 @@ jobs:
           # re-label the issue and post an explanatory comment.
           if [ -z "$(git diff --cached --name-only)" ]; then
             if [ "${is_self_repo}" = "false" ]; then
-              echo "All Codex changes were filtered out (.github/prompts/, .github/scripts/, prompts/, or fetched-manifest cleanup); nothing to commit."
+              echo "All Codex changes were filtered out by staging exclusions or fetched-manifest cleanup; nothing to commit."
             else
               echo "No staged changes after fetched-manifest cleanup; nothing to commit."
+            fi
+            # Log what Codex created that didn't make it past filters
+            remaining_changes="$(git status --porcelain 2>/dev/null || true)"
+            if [ -n "${remaining_changes}" ]; then
+              echo "::warning::Files present in worktree but excluded from staging:"
+              echo "${remaining_changes}" | sed 's/^/  /'
+              echo "If these are legitimate consumer-repo files, the pathspec exclusions in the commit step may be too broad."
+              # Pass to Handle no-op step for inclusion in the issue comment
+              {
+                echo "remaining_changes<<__RC_EOF__"
+                echo "${remaining_changes}"
+                echo "__RC_EOF__"
+              } >> "$GITHUB_OUTPUT"
             fi
             echo "did_commit=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -1749,6 +1761,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.commit_changes.outputs.destructive_commit_blocked == ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REMAINING_CHANGES: ${{ steps.commit_changes.outputs.remaining_changes }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -1761,8 +1774,27 @@ jobs:
           # treating this as success.
           echo "::warning::Implementation produced no repository changes. Labeling issue #${ISSUE_NUMBER} as ai:implementation-failed."
 
+          remaining_changes="${REMAINING_CHANGES:-}"
+          noop_body="⚠️ AI implementation produced no repository changes despite an approved plan."
+          if [ -n "${remaining_changes}" ]; then
+            noop_body="${noop_body}
+
+          **Files created by the model but excluded from commit by pathspec filters:**
+          \`\`\`
+          ${remaining_changes}
+          \`\`\`
+          This indicates a workflow-level file filter is stripping legitimate changes."
+          else
+            noop_body="${noop_body}
+
+          The model produced no file changes at all. This may be a model failure or prompt issue."
+          fi
+          noop_body="${noop_body}
+
+          Labeling \`ai:implementation-failed\` for orchestrator re-processing."
+
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="⚠️ AI implementation produced no repository changes despite an approved plan. This is likely a pipeline bug (e.g. workflow edits stripped without \`ALLOW_WORKFLOW_EDITS=true\`, or the model failed to write files). Labeling \`ai:implementation-failed\` for orchestrator re-processing."
+            -f body="${noop_body}"
 
           # Remove ai:done (if present) and add failure label.
           # The commit step may already have removed fetched helper artifacts
