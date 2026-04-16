@@ -397,6 +397,7 @@ wait_for_health()
 	local status
 	local exit_code
 	local restart_count
+	local app_log_tail
 	local service_ready
 	local url_ready
 
@@ -424,7 +425,7 @@ wait_for_health()
 			fi
 			if [ "${status}" = "restarting" ]; then
 				restart_count="$(docker inspect -f '{{.RestartCount}}' "${container_id}" 2>/dev/null || echo unknown)"
-				if [ "${restart_count}" != "unknown" ] && [ "${restart_count}" -ge 3 ] 2>/dev/null; then
+				if [[ "${restart_count}" =~ ^[0-9]+$ ]] && [ "${restart_count}" -ge 3 ]; then
 					exit_code="$(docker inspect -f '{{.State.ExitCode}}' "${container_id}" 2>/dev/null || echo unknown)"
 					capture_compose_logs
 					capture_service_logs "${APP_SERVICE}"
@@ -455,6 +456,7 @@ wait_for_health()
 			# and container state before the combined compose log capture so
 			# downstream log tails are actionable.
 			capture_service_logs "${APP_SERVICE}"
+			app_log_tail="$(tail -n "${TAIL_LINES}" "${LOG_DIR}/${APP_SERVICE}.log" 2>/dev/null || echo "(no service log)")"
 			{
 				echo "=== ${APP_SERVICE} timeout diagnostics ==="
 				echo "--- docker compose ps ---"
@@ -464,11 +466,11 @@ wait_for_health()
 					docker inspect -f 'Status={{.State.Status}} Running={{.State.Running}} ExitCode={{.State.ExitCode}} RestartCount={{.RestartCount}} Health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
 						"${container_id}" 2>&1 || true
 					echo "--- docker inspect health log (${APP_SERVICE}) ---"
-					docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}{{.Output}}{{end}}{{else}}no healthcheck configured{{end}}' \
-						"${container_id}" 2>&1 || true
+						docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}{{.Output}}{{end}}{{else}}no healthcheck configured{{end}}' \
+							"${container_id}" 2>&1 || true
 				fi
 				echo "--- ${APP_SERVICE} log tail ---"
-				tail -n "${TAIL_LINES}" "${LOG_DIR}/${APP_SERVICE}.log" 2>/dev/null || echo "(no service log)"
+				echo "${app_log_tail}"
 				echo "=== end diagnostics ==="
 			} >> "${LOG_DIR}/${APP_SERVICE}.log" 2>&1 || true
 			capture_compose_logs
