@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n/tmp/codex-pr-24507715814-1-13216/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\nscripts/ai_memory.py\nscripts/ai_memory.py\nscripts/collect_workflow_logs.py\nscripts/collect_workflow_logs.py\nscripts/memory_helpers.sh\n\nLow confidence files (mentioned by 1 reviewer):\n/tmp/codex-pr-24507715814-1-13216/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\n/tmp/codex-pr-24507715814-1-13216/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\n/tmp/codex-pr-24507715814-1-13216/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\n/tmp/codex-pr-24507715814-1-13216/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\n/tmp/codex-pr-24507715814-1-13216/previous_reviews/review_minimax_minimax-m2_5.txt:**File:**\n/tmp/codex-pr-24507715814-1-13216/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\n/tmp/codex-pr-24507715814-1-13216/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\n/tmp/codex-pr-24507715814-1-13216/previous_reviews/review_moonshotai_kimi-k2_5.txt:**File:**\nscripts/ai_memory_lib.py\nscripts/memory_helpers.sh",
+  "fingerprint": "e6f286f095f735a9251201836ce5d848fd7e31dda01b15d7a7da0e5c1eaa0963",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1185,
+    "run_id": "24507715814",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24507715814",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416113910_71d0c4b1a0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1185,
+    "run_id": "24507715814"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 6 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T11:39:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
