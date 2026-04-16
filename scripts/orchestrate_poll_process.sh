@@ -1410,9 +1410,11 @@ ensure_integration_conflict_state_fields() {
 #
 # Caps:
 #   - Up to FINGERPRINT_PER_FILE_CAP patterns per file per direction.
-#   - Files outside .github/, scripts/, prompts/, ai-memory/ are
-#     skipped (binary-prone, generated, or out-of-scope for resolver
-#     edits).
+#   - Files outside the resolver-safe allowlist
+#     (.github/, scripts/, prompts/, ai-memory/, tests/,
+#     workflow-templates/, docs/, db/contracts/, and root
+#     {agents,README,CLAUDE}.md) are skipped (binary-prone,
+#     generated, or out-of-scope for resolver edits).
 #   - Patterns shorter than FINGERPRINT_MIN_PATTERN_CHARS (after trim)
 #     are skipped — too generic to fingerprint reliably.
 #   - Patterns containing only whitespace, only braces/brackets, or

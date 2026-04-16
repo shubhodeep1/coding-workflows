@@ -23,9 +23,9 @@ Inputs:
   for operator log readability.
 
 This script is referenced by `.github/workflows/review_autofix.yml` in
-the conflict-resolver step (post-codex, pre-commit). It is also added
-to `REQUIRED_BOOTSTRAP_SCRIPTS` so consumer-repo runs receive a copy
-during workflow bootstrap.
+the conflict-resolver step (post-codex, pre-commit). It is currently
+listed in `OPTIONAL_BOOTSTRAP_SCRIPTS` so older consumer-repo script
+refs can fail open until the next stable cut.
 
 Going-forward only: see `capture_intent_fingerprints_for_merged_subissue`
 in `scripts/orchestrate_poll_process.sh` for the capture half.

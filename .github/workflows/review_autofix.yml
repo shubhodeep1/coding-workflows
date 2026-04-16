@@ -2272,6 +2272,7 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true'
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
           echo "Running Codex resolver"
 
@@ -2555,8 +2556,8 @@ jobs:
               INTEGRATION_MERGED_SUB_ISSUES_LIST="          (no merged sub-issues recorded in tracking-issue state — this typically means the integration branch is empty or state is not yet seeded)"
             fi
             # Stash the (potentially large) fingerprints JSON in a temp file
-            # so the env-var path in the python renderer below stays under
-            # the OS argv/env limit. We pass the path, not the content.
+            # and render it from that path below to avoid passing large
+            # payloads via process environment variables.
             INTEGRATION_FINGERPRINTS_FILE="${RUNTIME_DIR}/integration_fingerprints.json"
             printf '%s' "${INTEGRATION_FINGERPRINTS_JSON}" > "${INTEGRATION_FINGERPRINTS_FILE}"
             # Persist the conflicted-paths-to-fingerprint mapping for the
@@ -2583,8 +2584,8 @@ jobs:
             TRACKING_ISSUE_BODY="${INTEGRATION_TRACKING_BODY}" \
             MERGED_SUB_ISSUES_LIST="${INTEGRATION_MERGED_SUB_ISSUES_LIST}" \
             MERGED_SUB_ISSUE_COUNT="${INTEGRATION_MERGED_SUB_ISSUE_COUNT}" \
-            INTENT_FINGERPRINTS_JSON="${INTEGRATION_FINGERPRINTS_JSON}" \
-            python3 -c "import os,sys; tpl=open(os.environ['PROMPT_TPL'],encoding='utf-8').read(); keys=['CONFLICTED_FILES_COUNT','CONFLICTED_FILES_LIST','INTEGRATION_BRANCH','TRACKING_ISSUE_NUMBER','TRACKING_ISSUE_TITLE','TRACKING_ISSUE_BODY','MERGED_SUB_ISSUES_LIST','MERGED_SUB_ISSUE_COUNT','INTENT_FINGERPRINTS_JSON']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; sys.stdout.write(tpl)" \
+            INTEGRATION_FINGERPRINTS_FILE="${INTEGRATION_FINGERPRINTS_FILE:-}" \
+            python3 -c "import os,sys; tpl=open(os.environ['PROMPT_TPL'],encoding='utf-8').read(); keys=['CONFLICTED_FILES_COUNT','CONFLICTED_FILES_LIST','INTEGRATION_BRANCH','TRACKING_ISSUE_NUMBER','TRACKING_ISSUE_TITLE','TRACKING_ISSUE_BODY','MERGED_SUB_ISSUES_LIST','MERGED_SUB_ISSUE_COUNT']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; p=os.environ.get('INTEGRATION_FINGERPRINTS_FILE',''); fp=(open(p,encoding='utf-8').read() if (p and os.path.isfile(p)) else '{}'); tpl=tpl.replace('{{INTENT_FINGERPRINTS_JSON}}', fp); sys.stdout.write(tpl)" \
             > "${CONFLICT_RESOLVER_PROMPT_FILE}"
 
           # On the workflow source repo, snapshot the post-merge working-tree
