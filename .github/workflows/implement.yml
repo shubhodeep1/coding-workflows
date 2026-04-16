@@ -1533,8 +1533,28 @@ jobs:
           add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
           add_o_excludes=(':!node_modules' ':!.serena' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
           if [ "${is_self_repo}" = "false" ]; then
-            add_u_excludes+=(':!.github/prompts' ':!.github/scripts')
-            add_o_excludes+=(':!prompts' ':!.github/prompts' ':!.github/scripts')
+            # Build per-file exclusions from the runtime-generated scripts/.gitignore
+            # instead of a blanket ':!scripts'.  The blanket exclusion previously
+            # blocked ALL consumer-repo-owned files under scripts/ (e.g.
+            # scripts/security/check-npm-audit.js), causing silent no-op commits.
+            # The .gitignore lists exactly the fetched coding-workflows helper
+            # scripts that must NOT be committed to consumer repos.
+            if [ -f scripts/.gitignore ]; then
+              while IFS= read -r _ign_entry; do
+                [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
+                add_u_excludes+=(":!scripts/${_ign_entry}")
+                add_o_excludes+=(":!scripts/${_ign_entry}")
+              done < scripts/.gitignore
+            else
+              # Fallback: if .gitignore was not created (bootstrap failure), use
+              # blanket exclusion for safety — same as the legacy behaviour.
+              add_u_excludes+=(':!scripts')
+              add_o_excludes+=(':!scripts')
+            fi
+            # Keep runtime artifact paths out of consumer-repo commits for
+            # both tracked updates (-u) and untracked additions.
+            add_u_excludes+=(':!prompts' ':!.serena' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
+            add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
           fi
           git add -u -- "${add_u_excludes[@]}"
           git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
