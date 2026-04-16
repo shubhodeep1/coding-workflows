@@ -3009,8 +3009,8 @@ jobs:
             # failure mode where a label that does not exist as a repo
             # label definition aborts the entire edit command, leaving the
             # issue with stale phase labels and no target label applied.
-            if ! _cur="$(gh_retry gh api "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-              --jq '[.[].name]' 2>/dev/null)"; then
+            if ! _cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+              --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
               echo "::warning::GET labels failed for #${issue_number} — falling back to POST add."
               gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
                 -f 'labels[]=ai:ready-to-merge' >/dev/null 2>&1 \
@@ -3120,8 +3120,8 @@ jobs:
             # failure mode where a label that does not exist as a repo
             # label definition aborts the entire edit command, leaving the
             # issue with stale phase labels and no target label applied.
-            if ! _cur="$(gh_retry gh api "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-              --jq '[.[].name]' 2>/dev/null)"; then
+            if ! _cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+              --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
               echo "::warning::GET labels failed for #${issue_number} — falling back to POST add."
               if gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
                 -f 'labels[]=ai:review-blocked' >/dev/null 2>&1; then
@@ -3602,8 +3602,8 @@ jobs:
             # failure mode where a label that does not exist as a repo
             # label definition aborts the entire edit command, leaving the
             # issue with stale phase labels and no target label applied.
-            if ! _cur="$(gh_retry gh api "repos/${REPOSITORY}/issues/${issue_number}/labels" \
-              --jq '[.[].name]' 2>/dev/null)"; then
+            if ! _cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue_number}/labels" \
+              --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
               echo "::warning::GET labels failed for #${issue_number} — falling back to POST add."
               gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue_number}/labels" \
                 -f 'labels[]=ai:review-blocked' >/dev/null 2>&1 \
