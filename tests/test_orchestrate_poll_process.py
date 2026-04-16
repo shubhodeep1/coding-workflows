@@ -1361,52 +1361,44 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 	state["integration_branch"] = "orchestrator/project-192"
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	_open_pr = {
+		"number": 901,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+	_merged_pr = {
+		"number": 901,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-04-15T00:00:00Z",
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
+		# 4 open entries absorb: sync-superseded timeline enrichment,
+		# sync-superseded _fetch_pr_json, reconciliation timeline
+		# enrichment, reconciliation _fetch_pr_json.  The merged entry
+		# is first seen by the review-blocked handler.
 		pr_api_sequence={
-			901: [
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "closed",
-					"merged": True,
-					"merged_at": "2026-04-15T00:00:00Z",
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-			]
+			901: [dict(_open_pr) for _ in range(4)] + [dict(_merged_pr)],
 		},
 		prs=[
 			{
@@ -1448,51 +1440,42 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 	state["integration_branch"] = "orchestrator/project-192"
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	_open_pr = {
+		"number": 901,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+	_merged_pr = {
+		"number": 901,
+		"state": "closed",
+		"merged": True,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
+		# 4 open entries absorb pre-handler PR API calls (sync timeline
+		# enrichment, sync _fetch_pr_json, reconciliation timeline
+		# enrichment, reconciliation _fetch_pr_json).
 		pr_api_sequence={
-			901: [
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "closed",
-					"merged": True,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-			]
+			901: [dict(_open_pr) for _ in range(4)] + [dict(_merged_pr)],
 		},
 		prs=[
 			{
@@ -1530,53 +1513,43 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	_open_pr = {
+		"number": 901,
+		"state": "open",
+		"merged": False,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+	_merged_pr = {
+		"number": 901,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-04-15T00:00:00Z",
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
+		# 2 open entries absorb: reconciliation timeline enrichment and
+		# reconciliation _fetch_pr_json (no sync calls — no integration
+		# branch configured).
 		pr_api_sequence={
-			901: [
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "closed",
-					"merged": True,
-					"merged_at": "2026-04-15T00:00:00Z",
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "closed",
-					"merged": True,
-					"merged_at": "2026-04-15T00:00:00Z",
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-			]
+			901: [dict(_open_pr) for _ in range(2)] + [dict(_merged_pr), dict(_merged_pr)],
 		},
 		prs=[
 			{
@@ -1615,53 +1588,44 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 	state["integration_branch"] = "orchestrator/project-192"
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 
+	_open_pr = {
+		"number": 901,
+		"state": "open",
+		"merged": False,
+		"merged_at": None,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+	_merged_pr = {
+		"number": 901,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-04-15T00:00:00Z",
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
+		# 4 open entries absorb pre-handler PR API calls (sync timeline
+		# enrichment, sync _fetch_pr_json, reconciliation timeline
+		# enrichment, reconciliation _fetch_pr_json).
 		pr_api_sequence={
-			901: [
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "open",
-					"merged": False,
-					"merged_at": None,
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-				{
-					"number": 901,
-					"state": "closed",
-					"merged": True,
-					"merged_at": "2026-04-15T00:00:00Z",
-					"baseRefName": "main",
-					"headRefName": "ai/issue-10",
-					"headRefFromApi": "ai/issue-10",
-					"mergeable": True,
-					"mergeable_state": "clean",
-					"title": "Test PR",
-					"body": "Body",
-				},
-			]
+			901: [dict(_open_pr) for _ in range(4)] + [dict(_merged_pr)],
 		},
 		prs=[
 			{
