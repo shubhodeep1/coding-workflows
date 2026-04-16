@@ -8,6 +8,7 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 ## [Unreleased]
 
 ### Changed
+- Added H4 PR comment hydration shim in `scripts/gh_helpers.sh`: `gh_pr_with_all_comments` now uses a single GraphQL call for PR metadata + issue/review comments with deterministic ordering, mandatory fail-open REST fallback, and shared legacy JSON output contract for judge consumers.
 - review/autofix now caches PR `closingIssuesReferences(first: 50)` once per job in `LINKED_ISSUES_JSON` and reuses it for linked-issue status/label updates and Telegram single-issue links, preserving existing PR title/body REST fallback and downstream behavior.
 - Completed H1 migration for remaining workflow surfaces by replacing
   support-file GitHub Contents API fetch loops in `validate.yml` and
