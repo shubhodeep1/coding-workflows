@@ -164,7 +164,8 @@ capture_compose_logs()
 		local compose_log_tmp
 		compose_log_tmp="$(mktemp "${TMPDIR:-/tmp}/compose_capture.XXXXXX" 2>/dev/null || true)"
 		if [ -n "${compose_log_tmp}" ]; then
-			if docker compose -f "${COMPOSE_FILE}" logs --no-color > "${compose_log_tmp}" 2>&1 && [ -s "${compose_log_tmp}" ]; then
+			docker compose -f "${COMPOSE_FILE}" logs --no-color > "${compose_log_tmp}" 2>&1 || true
+			if [ -s "${compose_log_tmp}" ]; then
 				mv "${compose_log_tmp}" "${COMPOSE_LOG}"
 			fi
 			rm -f "${compose_log_tmp}" >/dev/null 2>&1 || true
@@ -396,10 +397,10 @@ start_compose()
 			mkdir -p "$(dirname -- "${COMPOSE_LOG}")" >/dev/null 2>&1 || true
 			mv "${merged_log}" "${COMPOSE_LOG}"
 		fi
-		rm -f "${build_log}"
+		rm -f "${build_log}" >/dev/null 2>&1 || true
 		fail_fast "preflight_compose_up" "failed to build/start compose services" "${COMPOSE_LOG}" "startup" 1
 	fi
-	rm -f "${build_log}"
+	rm -f "${build_log}" >/dev/null 2>&1 || true
 
 	capture_compose_logs
 }
