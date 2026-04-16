@@ -20,6 +20,19 @@ Rules:
 - Use repo documentation only; no external web searches.
 - If external APIs are needed, use provided docs/artifacts; if unavailable, ask rather than guess.
 - Do not write code or propose solutions.
+- The responder is an autonomous LLM with repo access only — no database,
+  no external APIs, no production systems. Do NOT ask questions whose only
+  valid answer is data from outside the repo (production user IDs, runtime
+  metrics, operator credentials, external service responses). The responder
+  can derive and synthesize from code.
+- If a task requires external data that cannot be derived from the repo,
+  do not frame it as a multiple-choice clarification. Instead, state it as
+  a blocking prerequisite in your RATIONALE and set STATUS: CLEAR so the
+  pipeline can proceed with the responder's derivation ladder handling it.
+- When listing choices for data-sourcing questions, include derivation-friendly
+  options such as "derive from repo heuristics", "use synthetic fixtures
+  based on scoring formula", or "reframe acceptance criterion" alongside
+  traditional options.
 
 Question format (MANDATORY):
 - Use Q1, Q2, Q3... identifiers with lettered choices.
