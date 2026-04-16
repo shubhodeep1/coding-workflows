@@ -698,22 +698,32 @@ jobs:
           # NOTE: first:50 matches the GitHub GraphQL API maximum for this
           # field; PRs with more than 50 linked issues will be silently
           # truncated (an extremely rare edge case in practice).
-          _linked_raw="$(gh api graphql \
+          _linked_tmp="$(mktemp)"
+          if gh_retry "${_linked_tmp}" api graphql \
             -f owner="${{ github.repository_owner }}" \
             -f name="$(echo '${{ github.repository }}' | cut -d/ -f2)" \
             -F number="${PR_NUMBER}" \
             -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null || echo '[]')"
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []' 2>/dev/null; then
+            _linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
+          else
+            _linked_raw='[]'
+          fi
+          rm -f "${_linked_tmp}"
           _linked_raw="$(printf '%s' "${_linked_raw}" | jq -c '.' 2>/dev/null || echo '[]')"
           printf 'LINKED_ISSUES_JSON=%s\n' "${_linked_raw}" >> "$GITHUB_ENV"
 
           # Build linked issue context file for reviewer/editor prompts.
-          PYTHONDONTWRITEBYTECODE=1 python3 - "${_linked_raw}" "${LINKED_ISSUE_CONTEXT_FILE}" <<'PYLINKED'
+          # Use a temp file to avoid ARG_MAX failures on large issue bodies.
+          _linked_json_file="$(mktemp)"
+          printf '%s' "${_linked_raw}" > "${_linked_json_file}"
+          PYTHONDONTWRITEBYTECODE=1 python3 - "${_linked_json_file}" "${LINKED_ISSUE_CONTEXT_FILE}" <<'PYLINKED'
           import json, sys
-          raw = sys.argv[1]
+          json_path = sys.argv[1]
           out_path = sys.argv[2]
           try:
-              issues = json.loads(raw)
+              with open(json_path, "r", encoding="utf-8") as fh:
+                  issues = json.load(fh)
           except (json.JSONDecodeError, TypeError):
               issues = []
           lines = []
@@ -730,6 +740,7 @@ jobs:
           with open(out_path, "w", encoding="utf-8") as fh:
               fh.write("\n".join(lines))
           PYLINKED
+          rm -f "${_linked_json_file}"
           echo "Linked issue context bytes: $(wc -c < "${LINKED_ISSUE_CONTEXT_FILE}" | tr -d '[:space:]')"
 
           PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
@@ -2956,9 +2967,10 @@ jobs:
           set +e
           # Reuse LINKED_ISSUES_JSON from the early "Collect PR metadata" step
           # which already fetched closingIssuesReferences via GraphQL (with
-          # title+body). Only re-fetch if the early step failed to set it.
-          if [ -n "${LINKED_ISSUES_JSON:-}" ] && [ "${LINKED_ISSUES_JSON}" != "[]" ]; then
-            echo "Linked issues already cached from early fetch: ${LINKED_ISSUES_JSON}"
+          # title+body). Treat any set value (including "[]") as cached to
+          # avoid duplicate API calls in the common no-linked-issues case.
+          if [ -n "${LINKED_ISSUES_JSON+x}" ]; then
+            echo "Linked issues already cached from early fetch."
           else
             if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
               source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true

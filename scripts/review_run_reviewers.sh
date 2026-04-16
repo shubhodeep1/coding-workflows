@@ -821,11 +821,11 @@ run_reviewer() {
     # codex config inside the isolated CODEX_HOME so the model uses the
     # desired thinking level without affecting other reviewers.
     if [ -n "${reasoning_level}" ] && [ -f "${reviewer_codex_home}/config.toml" ]; then
-      sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/config.toml" 2>/dev/null || true
+      sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/config.toml" 2>/dev/null || true
     elif [ -n "${reasoning_level}" ] && [ -f "${HOME}/.codex/config.toml" ] && [ -d "${reviewer_codex_home}" ]; then
       # Config might be at the standard location within the isolated home
       if [ -f "${reviewer_codex_home}/.codex/config.toml" ]; then
-        sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/.codex/config.toml" 2>/dev/null || true
+        sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/.codex/config.toml" 2>/dev/null || true
       fi
     fi
     (

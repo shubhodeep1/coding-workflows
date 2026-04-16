@@ -363,16 +363,20 @@ def find_callers(symbol_name, project_dir, exclude_file):
     """
     try:
         abs_project_dir = os.path.abspath(project_dir)
+        grep_cmd = [
+            "grep", "-rlF",
+            "--exclude-dir=.git",
+            "--exclude-dir=node_modules",
+            "--exclude-dir=__pycache__",
+            "--exclude-dir=.serena",
+        ]
+        # For identifier-like symbols, require word boundaries to avoid
+        # substring false positives (e.g. "run" matching "runner").
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", symbol_name):
+            grep_cmd.append("-w")
+        grep_cmd.extend([symbol_name, "."])
         proc = subprocess.run(
-            [
-                "grep", "-rlF",
-                "--exclude-dir=.git",
-                "--exclude-dir=node_modules",
-                "--exclude-dir=__pycache__",
-                "--exclude-dir=.serena",
-                symbol_name,
-                ".",
-            ],
+            grep_cmd,
             capture_output=True,
             text=True,
             timeout=10,
