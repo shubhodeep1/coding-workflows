@@ -1,0 +1,15 @@
+{
+	"$schema_version": "hot_files.v1",
+	"description": "Files that are contended by many orchestrator sub-issues. The planner-side partition guard in scripts/orchestrate_lib.py consults this list to auto-serialize (via synthetic depends_on edges) any wave whose siblings would all touch the same hot file. The poller-side pre-merge probe in scripts/orchestrate_poll_process.sh additionally performs a byte-level git merge-tree check before squashing sub-PRs into the integration branch. Consumer repos override by committing their own .github/ai/hot_files.json; if the file is absent the hot-file constraint is empty (no siblings are penalised) and only the merge-tree probe enforces partitioning.",
+	"hot_files": [
+		"README.md",
+		"agents.md",
+		"scripts/orchestrate_poll_process.sh",
+		"scripts/orchestrate_lib.py",
+		".github/workflows/implement.yml",
+		".github/workflows/orchestrate.yml",
+		".github/workflows/orchestrate_poll.yml",
+		"prompts/mode-orchestrate.txt",
+		"prompts/mode-implement.txt"
+	]
+}

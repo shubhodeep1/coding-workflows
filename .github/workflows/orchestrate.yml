@@ -551,8 +551,34 @@ jobs:
           python3 scripts/orchestrate_lib.py validate --input-file "${DECOMPOSITION_FILE}"
           echo "Decomposition validated successfully."
 
-          # Compute waves for logging
-          python3 scripts/orchestrate_lib.py compute-waves --input-file "${DECOMPOSITION_FILE}"
+          # Partition-guard dry-run: report any sibling file-touch overlaps
+          # in the raw (pre-serialization) decomposition so the tracking
+          # issue and job log surface the rewrite plan BEFORE the
+          # destructive compute-waves pass runs. This uses the
+          # .github/ai/hot_files.json in the consumer repo checkout when
+          # present; absence of the file is fine (hot-file set is empty).
+          PARTITION_REPORT_FILE="${RUNTIME_DIR}/partition_report.json"
+          python3 scripts/orchestrate_lib.py check-partition \
+            --input-file "${DECOMPOSITION_FILE}" > "${PARTITION_REPORT_FILE}" || {
+              echo "::error::Partition check failed (likely cycle/structural overlap). See report:"
+              cat "${PARTITION_REPORT_FILE}" || true
+              exit 1
+            }
+          PARTITION_OVERLAP_COUNT="$(jq -r '.total_overlaps // 0' "${PARTITION_REPORT_FILE}")"
+          if [ "${PARTITION_OVERLAP_COUNT}" -gt 0 ]; then
+            echo "::notice::Partition guard detected ${PARTITION_OVERLAP_COUNT} sibling file-touch overlap(s); auto-serialize will resolve them by injecting dependency_edges."
+            jq -r '.wave_reports[]? | select(.overlap_count > 0) | "  Wave " + (.wave | tostring) + ": " + (.overlap_count | tostring) + " overlap(s): " + ([.overlaps[] | "\(.issue_a)\u2194\(.issue_b) on \(.files | join(\", \"))"] | join("; "))' "${PARTITION_REPORT_FILE}" || true
+            jq -r '.planned_serializations[]? | "  Will serialize: \(.winner) -> \(.loser) (over " + (.overlap_type) + " on " + (.files | join(", ")) + ")"' "${PARTITION_REPORT_FILE}" || true
+          else
+            echo "Partition guard: no sibling file-touch overlaps detected."
+          fi
+
+          # Compute waves with auto-serialize and write the resulting
+          # dependency_edges back into DECOMPOSITION_FILE so tracking-body
+          # build + Wave 1 dispatch consume the post-serialization graph.
+          python3 scripts/orchestrate_lib.py compute-waves \
+            --input-file "${DECOMPOSITION_FILE}" \
+            --write-back
 
       - name: Ensure orchestrator labels exist
         env:

@@ -34,6 +34,50 @@ Rules:
 - Do not propose issues that duplicate existing functionality.
 - Do not write code. Only produce the decomposition JSON.
 
+File partitioning rules (MANDATORY — prevents merge conflicts between parallel
+sibling issues within the same wave):
+
+- For EVERY issue, populate the optional `files_touched` array with every
+  repository-relative file path you expect the implementer to create, modify,
+  or delete. Use exact literal paths (no globs, no wildcards). Be conservative
+  and include files you are confident will be touched; leave out files you are
+  uncertain about rather than guessing. An empty/omitted array means "unknown
+  scope"; the byte-level pre-merge probe in the poller will still guard such
+  issues, but partition quality degrades when many issues omit the list.
+
+- Two sibling issues that would run in the SAME wave (i.e. neither depends on
+  the other through the dependency DAG) MUST NOT share any entry in their
+  `files_touched` lists. If two tasks genuinely both need to edit the same
+  file, declare an explicit `dependency_edges` entry so they serialize into
+  different waves — never leave the conflict unresolved at planning time.
+
+- Hot files: the orchestrator infrastructure considers certain files "hot"
+  (contended by many tasks at once — for example, top-level README.md,
+  agents.md, god-files like scripts/orchestrate_poll_process.sh, and shared
+  workflow YAMLs). Consumer repositories may publish their own hot-file list
+  at `.github/ai/hot_files.json`. When planning a wave, assume at most ONE
+  sibling in any given wave may touch each hot file. If multiple proposed
+  tasks all need to touch the same hot file, prefer one of these patterns:
+    (a) Funnel all hot-file edits for the wave into a single trailing
+        "docs-and-glue" issue that depends_on every peer in the wave, so it
+        runs after the peers merge.
+    (b) Serialize the conflicting tasks into separate waves via
+        `dependency_edges`.
+
+- Docs editing discipline: when a task must edit `README.md`, `agents.md`, or
+  any Markdown documentation, prefer inserting new content under existing
+  stable HTML-comment anchors of the form `<!-- anchor:NAME -->` rather than
+  renumbering numbered lists, reflowing paragraphs, or rewriting surrounding
+  content. Multiple siblings that all "add a new section 9a" to the same
+  numbered pipeline description are a classic conflict generator; anchors
+  keep insertion points stable across parallel edits. State this expectation
+  explicitly inside each doc-touching issue body.
+
+- Implementer discipline: inside each issue body, explicitly instruct the
+  implementer to STAY INSIDE the `files_touched` list, to avoid reflowing
+  unrelated code, and to prefer append-only edits in files that other
+  siblings may also be touching across waves.
+
 Output contract:
 - Output MUST be a single valid JSON object matching the orchestrate_decomposition.v1
   schema (provided below).
@@ -44,11 +88,15 @@ Schema reference:
 - schema_version: "orchestrate_decomposition.v1" (constant)
 - project_title: short title for the tracking issue (max 200 chars)
 - project_summary: high-level scope summary (max 5000 chars)
-- issues[]: array of {id, title, body, priority}
+- issues[]: array of {id, title, body, priority, files_touched?}
   - id: stable local ID (lowercase alphanumeric + hyphens/underscores)
   - title: GitHub issue title
   - body: full issue body (enough context for the AI pipeline)
   - priority: 1 (highest) to 10 (lowest)
+  - files_touched (optional but STRONGLY RECOMMENDED): array of repository-
+    relative file paths the issue intends to edit/create/delete. Used by the
+    partition guard to prevent sibling merge conflicts. Omit or leave empty
+    only when the scope is genuinely undetermined.
 - dependency_edges[]: array of {from, to}
   - from: issue ID that must be merged first
   - to: issue ID that depends on from

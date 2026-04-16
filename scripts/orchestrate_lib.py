@@ -64,6 +64,48 @@ def validate_decomposition(data: dict[str, Any]) -> dict[str, Any]:
 		if not isinstance(priority, int) or priority < 1 or priority > 10:
 			raise OrchestrateError(f"issues[{idx}].priority must be 1-10, got {priority!r}")
 
+		# files_touched is optional. When present, it must be an array of
+		# non-empty repository-relative path strings with at most 50 entries.
+		# Duplicates within a single issue are dropped silently (the partition
+		# guard treats them as a set).
+		ft_raw = issue.get("files_touched", None)
+		if ft_raw is None:
+			# Normalize missing key to empty list so downstream code can treat
+			# it uniformly without re-checking for absence.
+			issue["files_touched"] = []
+		else:
+			if not isinstance(ft_raw, list):
+				raise OrchestrateError(f"issues[{idx}].files_touched must be an array if present")
+			if len(ft_raw) > 50:
+				raise OrchestrateError(
+					f"issues[{idx}].files_touched has {len(ft_raw)} entries (max 50)"
+				)
+			cleaned: list[str] = []
+			seen: set[str] = set()
+			for fidx, raw_path in enumerate(ft_raw):
+				if not isinstance(raw_path, str):
+					raise OrchestrateError(
+						f"issues[{idx}].files_touched[{fidx}] must be a string"
+					)
+				p = raw_path.strip()
+				if not p:
+					raise OrchestrateError(
+						f"issues[{idx}].files_touched[{fidx}] must not be empty"
+					)
+				if len(p) > 512:
+					raise OrchestrateError(
+						f"issues[{idx}].files_touched[{fidx}] exceeds 512 chars"
+					)
+				# Normalize to forward slashes and strip leading "./".
+				p = p.replace("\\", "/")
+				while p.startswith("./"):
+					p = p[2:]
+				if p in seen:
+					continue
+				seen.add(p)
+				cleaned.append(p)
+			issue["files_touched"] = cleaned
+
 	edges = data.get("dependency_edges", [])
 	if not isinstance(edges, list):
 		raise OrchestrateError("dependency_edges must be an array")
@@ -110,15 +152,294 @@ def _detect_cycles(issue_ids: set[str], edges: list[dict[str, str]]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Hot-file registry loader
+# ---------------------------------------------------------------------------
+
+DEFAULT_HOT_FILES_PATH = ".github/ai/hot_files.json"
+
+
+def load_hot_files(path: str | Path | None = None) -> set[str]:
+	"""Load the hot-file registry used by the partition guard.
+
+	Consumer repositories opt into hot-file partitioning by committing a JSON
+	file at ``.github/ai/hot_files.json`` with the shape:
+
+		{"hot_files": ["path/one", "path/two", ...]}
+
+	If the file is absent, malformed, or unreadable, the hot-file set is
+	empty and the partition guard falls back to straight pairwise overlap
+	detection without the multi-sibling-per-hot-file rule. This keeps new
+	consumer repos working out of the box with no config.
+	"""
+	target = Path(path) if path else Path(DEFAULT_HOT_FILES_PATH)
+	try:
+		with target.open("r", encoding="utf-8") as f:
+			data = json.load(f)
+	except (FileNotFoundError, PermissionError, OSError):
+		return set()
+	except json.JSONDecodeError:
+		return set()
+
+	raw_list = data.get("hot_files") if isinstance(data, dict) else None
+	if not isinstance(raw_list, list):
+		return set()
+
+	cleaned: set[str] = set()
+	for item in raw_list:
+		if not isinstance(item, str):
+			continue
+		p = item.strip().replace("\\", "/")
+		while p.startswith("./"):
+			p = p[2:]
+		if p:
+			cleaned.add(p)
+	return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Partition guard: detect and auto-serialize sibling file-touch overlaps
+# ---------------------------------------------------------------------------
+
+def _parallel_groups_from_edges(
+	issues_by_id: dict[str, dict[str, Any]],
+	edges: list[dict[str, str]],
+) -> list[list[str]]:
+	"""Return the topological wave grouping (list of lists of issue IDs).
+
+	This is the pure-ordering helper used by the partition guard. It mirrors
+	the logic of :func:`compute_waves` but returns IDs only and skips issue
+	object materialisation so we can run it repeatedly during auto-serialize
+	without mutating state.
+	"""
+	in_degree: dict[str, int] = {iid: 0 for iid in issues_by_id}
+	dependents: dict[str, list[str]] = {iid: [] for iid in issues_by_id}
+	for edge in edges:
+		if edge["to"] in in_degree:
+			in_degree[edge["to"]] += 1
+		if edge["from"] in dependents:
+			dependents[edge["from"]].append(edge["to"])
+
+	remaining = set(issues_by_id.keys())
+	groups: list[list[str]] = []
+	while remaining:
+		ready = sorted(
+			[iid for iid in remaining if in_degree[iid] == 0],
+			key=lambda iid: issues_by_id[iid].get("priority", 10),
+		)
+		if not ready:
+			raise OrchestrateError(
+				f"Cannot compute wave grouping; remaining issues have unmet deps: {remaining}"
+			)
+		groups.append(ready)
+		for iid in ready:
+			remaining.discard(iid)
+			for dep in dependents[iid]:
+				if dep in in_degree:
+					in_degree[dep] -= 1
+	return groups
+
+
+def validate_wave_file_partition(
+	wave_ids: list[str],
+	issues_by_id: dict[str, dict[str, Any]],
+	hot_files: set[str] | None = None,
+) -> list[dict[str, Any]]:
+	"""Detect sibling file-touch overlaps within a single wave.
+
+	Returns a list of overlap records, each:
+
+		{
+			"type": "pair" | "hot_file",
+			"issue_a": <id>,
+			"issue_b": <id>,
+			"files": [<overlapping paths>],
+		}
+
+	- ``pair`` overlaps: any two siblings that share at least one
+	  ``files_touched`` entry. The caller should serialize them.
+	- ``hot_file`` overlaps: any two siblings that both touch the same hot
+	  file (even if it's their ONLY overlap). Deliberately reported
+	  separately from pair overlaps so the caller can treat them with a
+	  different policy if desired; at present they are serialized the same
+	  way.
+
+	Issues whose ``files_touched`` list is empty are never flagged — there is
+	nothing to compare. The byte-level pre-merge probe in the poller handles
+	unknown-scope issues at merge time instead.
+	"""
+	hot = hot_files or set()
+	overlaps: list[dict[str, Any]] = []
+
+	# Build {issue_id: set(paths)} once.
+	files_for: dict[str, set[str]] = {}
+	for iid in wave_ids:
+		raw = issues_by_id.get(iid, {}).get("files_touched", []) or []
+		files_for[iid] = set(raw)
+
+	seen_pairs: set[tuple[str, str]] = set()
+	for i, iid_a in enumerate(wave_ids):
+		fa = files_for[iid_a]
+		if not fa:
+			continue
+		for iid_b in wave_ids[i + 1:]:
+			fb = files_for[iid_b]
+			if not fb:
+				continue
+			common = sorted(fa & fb)
+			if not common:
+				continue
+			pair_key = (iid_a, iid_b)
+			if pair_key in seen_pairs:
+				continue
+			seen_pairs.add(pair_key)
+
+			hot_common = [p for p in common if p in hot]
+			if hot_common:
+				overlaps.append({
+					"type": "hot_file",
+					"issue_a": iid_a,
+					"issue_b": iid_b,
+					"files": hot_common,
+				})
+			# Also report the full pair overlap (may be the same files, but
+			# a non-hot-file overlap is equally fatal). We emit only one
+			# record per pair, choosing pair if there are non-hot overlaps
+			# and hot_file otherwise.
+			non_hot = [p for p in common if p not in hot]
+			if non_hot:
+				overlaps.append({
+					"type": "pair",
+					"issue_a": iid_a,
+					"issue_b": iid_b,
+					"files": non_hot,
+				})
+	return overlaps
+
+
+def auto_serialize_file_overlaps(
+	data: dict[str, Any],
+	hot_files: set[str] | None = None,
+	max_rounds: int = 50,
+) -> list[dict[str, Any]]:
+	"""Inject synthetic dependency_edges that resolve sibling file overlaps.
+
+	Mutates ``data["dependency_edges"]`` in place, appending one edge per
+	resolved overlap, and records a machine-readable audit trail in
+	``data["partition_serializations"]`` so the orchestrate.yml step can log
+	the rewrites to the tracking issue.
+
+	The injected edge orders the lower-priority (higher numeric priority)
+	sibling AFTER the higher-priority one. On priority tie, the issue with
+	the lexicographically smaller ID wins first-wave placement.
+
+	If adding an edge would introduce a cycle, the function raises
+	OrchestrateError — the decomposition is fundamentally inconsistent and a
+	human must re-plan.
+
+	``max_rounds`` caps the auto-serialize loop to avoid pathological cases
+	where every round keeps producing new overlaps. In practice one or two
+	rounds suffice because each edge strictly reduces the set of parallel
+	siblings that can still collide.
+
+	Returns the audit trail (list of serialization records).
+	"""
+	hot = hot_files or set()
+	issues_by_id: dict[str, dict[str, Any]] = {i["id"]: i for i in data["issues"]}
+	edges: list[dict[str, str]] = list(data.get("dependency_edges", []) or [])
+	serializations: list[dict[str, Any]] = []
+
+	def _edge_exists(frm: str, to: str) -> bool:
+		for e in edges:
+			if e.get("from") == frm and e.get("to") == to:
+				return True
+		return False
+
+	def _pick_winner(iid_a: str, iid_b: str) -> tuple[str, str]:
+		"""Return (winner, loser) — winner runs first, loser depends on winner."""
+		pa = issues_by_id[iid_a].get("priority", 10)
+		pb = issues_by_id[iid_b].get("priority", 10)
+		if pa < pb:
+			return iid_a, iid_b
+		if pb < pa:
+			return iid_b, iid_a
+		# Priority tie: stable by lexicographic id
+		return (iid_a, iid_b) if iid_a < iid_b else (iid_b, iid_a)
+
+	for round_idx in range(max_rounds):
+		groups = _parallel_groups_from_edges(issues_by_id, edges)
+		any_new = False
+		for group_idx, wave_ids in enumerate(groups):
+			overlaps = validate_wave_file_partition(wave_ids, issues_by_id, hot)
+			if not overlaps:
+				continue
+			for record in overlaps:
+				winner, loser = _pick_winner(record["issue_a"], record["issue_b"])
+				if _edge_exists(winner, loser):
+					continue  # already serialized by a previous round
+				# Prevent cycles: test with the candidate edge applied.
+				test_edges = edges + [{"from": winner, "to": loser}]
+				try:
+					_detect_cycles(set(issues_by_id.keys()), test_edges)
+				except OrchestrateError as exc:
+					raise OrchestrateError(
+						"auto_serialize_file_overlaps: injecting dependency "
+						f"{winner!r} -> {loser!r} to resolve overlap "
+						f"{record['files']!r} would create a cycle: {exc}. "
+						"The decomposition is inconsistent — re-plan required."
+					)
+				edges.append({"from": winner, "to": loser})
+				serializations.append({
+					"round": round_idx + 1,
+					"wave_index": group_idx,
+					"overlap_type": record["type"],
+					"winner": winner,
+					"loser": loser,
+					"files": record["files"],
+				})
+				any_new = True
+		if not any_new:
+			break
+	else:
+		# max_rounds exhausted without stabilising
+		raise OrchestrateError(
+			f"auto_serialize_file_overlaps did not converge within {max_rounds} rounds; "
+			"decomposition has structurally tangled file ownership — re-plan required."
+		)
+
+	data["dependency_edges"] = edges
+	data["partition_serializations"] = serializations
+	return serializations
+
+
+# ---------------------------------------------------------------------------
 # Wave computation
 # ---------------------------------------------------------------------------
 
-def compute_waves(data: dict[str, Any]) -> list[list[dict[str, Any]]]:
+def compute_waves(
+	data: dict[str, Any],
+	hot_files: set[str] | None = None,
+	auto_serialize: bool = True,
+) -> list[list[dict[str, Any]]]:
 	"""Compute execution waves from the dependency DAG.
 
 	Returns a list of waves. Each wave is a list of issue objects that can
 	run in parallel. Within each wave, issues are sorted by priority (ascending).
+
+	When ``auto_serialize`` is true (default), any pair of siblings in the
+	same wave that share ``files_touched`` entries is resolved by injecting a
+	synthetic dependency edge, pushing the lower-priority sibling into a
+	later wave. The audit trail is recorded on ``data["partition_serializations"]``.
+
+	``hot_files`` is an optional set of repository-relative paths that are
+	considered "hot" — they are flagged separately from regular pair overlaps
+	so the orchestrate.yml log step can highlight them, but they are
+	serialized identically. When ``None``, the function calls
+	:func:`load_hot_files` with the default registry path.
 	"""
+	if auto_serialize:
+		effective_hot = hot_files if hot_files is not None else load_hot_files()
+		auto_serialize_file_overlaps(data, effective_hot)
+
 	issues_by_id: dict[str, dict[str, Any]] = {i["id"]: i for i in data["issues"]}
 	edges = data.get("dependency_edges", [])
 
@@ -186,6 +507,11 @@ def build_tracking_state(
 				"github_issue": gh_num,
 				"status": "pending" if gh_num is not None else "not_created",
 			}
+			# Persist the file-partition manifest onto each wave entry so the
+			# poller-side merge-tree probe can consult it without re-parsing
+			# issue bodies. Empty list is persisted explicitly to distinguish
+			# "known empty / unknown scope" from "missing".
+			entry["files_touched"] = list(issue.get("files_touched", []) or [])
 			# Seed stall-tracking fields for issues that already exist
 			if gh_num is not None:
 				entry["last_seen_phase"] = ""
@@ -206,6 +532,7 @@ def build_tracking_state(
 				"title": issue["title"],
 				"body": issue["body"],
 				"priority": issue["priority"],
+				"files_touched": list(issue.get("files_touched", []) or []),
 			}
 
 	# Snapshot the tracking issue body at project creation time. The
@@ -844,14 +1171,91 @@ def cmd_compute_waves(args: argparse.Namespace) -> int:
 	with path.open("r", encoding="utf-8") as f:
 		data = json.load(f)
 	data = validate_decomposition(data)
-	waves = compute_waves(data)
+	hot_files = load_hot_files(getattr(args, "hot_files_path", None) or None)
+	waves = compute_waves(data, hot_files=hot_files)
 	output = []
 	for wave_idx, wave in enumerate(waves):
 		output.append({
 			"wave": wave_idx + 1,
-			"issues": [{"id": i["id"], "title": i["title"], "priority": i["priority"]} for i in wave],
+			"issues": [
+				{
+					"id": i["id"],
+					"title": i["title"],
+					"priority": i["priority"],
+					"files_touched": list(i.get("files_touched", []) or []),
+				}
+				for i in wave
+			],
 		})
-	_print_json({"ok": True, "total_waves": len(waves), "waves": output})
+	_print_json({
+		"ok": True,
+		"total_waves": len(waves),
+		"waves": output,
+		"hot_files": sorted(hot_files),
+		"partition_serializations": data.get("partition_serializations", []),
+	})
+	# Also write the (possibly serialized) decomposition back to disk so
+	# downstream steps (tracking issue creation, Wave 1 dispatch) consume
+	# the post-serialization edge set, not the raw decomposer output.
+	if getattr(args, "write_back", False):
+		with path.open("w", encoding="utf-8") as f:
+			json.dump(data, f, ensure_ascii=True, indent=2)
+	return 0
+
+
+def cmd_check_partition(args: argparse.Namespace) -> int:
+	"""Probe a decomposition for file-partition overlaps without mutating it.
+
+	Emits a machine-readable report of overlaps detected in each wave and a
+	dry-run audit trail of edges that ``auto_serialize_file_overlaps`` would
+	inject. Used by the orchestrate.yml partition-guard step to log the
+	rewrite plan to the tracking issue before the destructive compute-waves
+	call runs with ``--write-back``.
+	"""
+	path = Path(args.input_file).resolve()
+	with path.open("r", encoding="utf-8") as f:
+		data = json.load(f)
+	data = validate_decomposition(data)
+	hot_files = load_hot_files(getattr(args, "hot_files_path", None) or None)
+
+	# Dry-run pass: compute waves WITHOUT auto-serialize to see what the raw
+	# decomposer produced, and then report overlaps per wave.
+	raw_waves = compute_waves(dict(data, dependency_edges=list(data.get("dependency_edges", []))), hot_files=hot_files, auto_serialize=False)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+
+	wave_reports: list[dict[str, Any]] = []
+	total_overlaps = 0
+	for wave_idx, wave in enumerate(raw_waves):
+		ids = [i["id"] for i in wave]
+		overlaps = validate_wave_file_partition(ids, issues_by_id, hot_files)
+		total_overlaps += len(overlaps)
+		wave_reports.append({
+			"wave": wave_idx + 1,
+			"issue_count": len(ids),
+			"overlap_count": len(overlaps),
+			"overlaps": overlaps,
+		})
+
+	# Dry-run serialize against a clone so we can report the planned rewrites.
+	clone = json.loads(json.dumps(data))
+	try:
+		planned = auto_serialize_file_overlaps(clone, hot_files)
+	except OrchestrateError as exc:
+		_print_json({
+			"ok": False,
+			"error": str(exc),
+			"total_overlaps": total_overlaps,
+			"wave_reports": wave_reports,
+		})
+		return 3
+
+	_print_json({
+		"ok": True,
+		"hot_files": sorted(hot_files),
+		"total_overlaps": total_overlaps,
+		"wave_reports": wave_reports,
+		"planned_serializations": planned,
+	})
 	return 0
 
 
@@ -1090,7 +1494,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p_waves = subparsers.add_parser("compute-waves", help="Compute execution waves from decomposition")
 	p_waves.add_argument("--input-file", required=True)
+	p_waves.add_argument("--hot-files-path", default=None, help="Path to hot_files.json (default: .github/ai/hot_files.json in CWD; absent file => empty set)")
+	p_waves.add_argument("--write-back", action="store_true", help="Write the serialized decomposition (with injected dependency_edges) back to --input-file")
 	p_waves.set_defaults(func=cmd_compute_waves)
+
+	p_partition = subparsers.add_parser("check-partition", help="Dry-run partition check for sibling file-touch overlaps")
+	p_partition.add_argument("--input-file", required=True)
+	p_partition.add_argument("--hot-files-path", default=None, help="Path to hot_files.json (default: .github/ai/hot_files.json in CWD)")
+	p_partition.set_defaults(func=cmd_check_partition)
 
 	p_body = subparsers.add_parser("build-tracking-body", help="Build tracking issue markdown body")
 	p_body.add_argument("--input-file", required=True)

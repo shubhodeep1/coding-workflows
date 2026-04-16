@@ -149,11 +149,17 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 
 ## 4. Environment Variables
 
+<!-- anchor:agents-env-vars -->
+<!-- Parallel orchestrator sub-issues: append new env-var bullets to the
+     bottom of this list under this anchor. Do NOT reorder existing
+     bullets or reflow paragraphs — parallel edits that rewrite
+     existing bullets here cause merge conflicts. -->
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
 - Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
 - GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
+- Orchestrator merge-conflict probe: `MAX_MERGE_DEFERRALS` (default `5`) caps how many consecutive poll cycles a single sub-PR may be deferred by `probe_sibling_merge_conflicts` in `scripts/orchestrate_poll_process.sh`. The probe uses local `git merge-tree --write-tree --name-only` against every other open sibling PR targeting the same integration branch, spending zero GH API calls per probe (one batched `gh pr list` + one batched `git fetch` per cycle). Exceeding the threshold emits a Telegram WARNING but does not fail the PR. Partition-guard configuration lives alongside this at `.github/ai/hot_files.json` (optional per-consumer-repo override — empty/missing file means no hot-file constraint is enforced at planning time, only the merge-tree probe).
 
 ---
 

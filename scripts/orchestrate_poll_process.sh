@@ -205,6 +205,205 @@ _pr_checks_completed()
 }
 
 # ---------------------------------------------------------------
+# Helper: Pre-merge sibling-conflict probe.
+#
+# Before squash-merging a sub-PR into the integration branch, check
+# whether merging it would textually conflict with any OTHER open
+# sub-PR targeting the same integration branch.  This catches the
+# common "both siblings edit README.md / orchestrate_poll_process.sh
+# in the same wave" collision early, before the merge goes through
+# and forces the loser into a conflict-resolution autofix loop.
+#
+# Implementation notes:
+# - Zero GH API calls per probe: we fetch the open-PR list ONCE per
+#   poll cycle (into _MERGE_PROBE_CACHE_JSON) and memoize. All cross-
+#   checks use local `git merge-tree --write-tree --name-only` which
+#   operates entirely on the fetched refs.
+# - `git merge-tree --write-tree` (git ≥ 2.38) returns 0 on clean
+#   merge and 1 when textual conflicts occur. With `--name-only` it
+#   prints the list of conflicting paths to stdout instead of a full
+#   tree SHA. We rely on both signals.
+# - Siblings are fetched in a single batched `git fetch` per probe
+#   cycle so the network cost is bounded by wave size.
+# - MAX_MERGE_DEFERRALS caps how many cycles a single PR may be
+#   deferred before the poller escalates via Telegram for human
+#   review; the defer counter is stored in state on the wave entry
+#   as `merge_deferral_count` (additive, backward compatible).
+# ---------------------------------------------------------------
+MAX_MERGE_DEFERRALS="${MAX_MERGE_DEFERRALS:-5}"
+if ! [[ "${MAX_MERGE_DEFERRALS}" =~ ^[0-9]+$ ]] || [ "${MAX_MERGE_DEFERRALS}" -lt 1 ]; then
+	echo "::warning::MAX_MERGE_DEFERRALS='${MAX_MERGE_DEFERRALS}' invalid; falling back to 5." >&2
+	MAX_MERGE_DEFERRALS=5
+fi
+
+# Cache: JSON array of open PRs per integration branch, keyed by branch name.
+# Populated lazily on first probe in each poll cycle.
+declare -gA _MERGE_PROBE_CACHE_JSON=()
+declare -gA _MERGE_PROBE_CACHE_FETCHED=()
+
+# _merge_probe_refresh — populate the sibling-PR cache for a given
+# integration branch. Performs exactly one `gh pr list` API call per
+# integration branch per cycle and a single batched `git fetch` for
+# all sibling head refs.
+#
+# Usage: _merge_probe_refresh <integration_branch>
+_merge_probe_refresh()
+{
+	local integration_branch="$1"
+	[ -n "${integration_branch}" ] || return 0
+
+	if [ -n "${_MERGE_PROBE_CACHE_FETCHED[${integration_branch}]:-}" ]; then
+		return 0
+	fi
+
+	local prs_json
+	prs_json="$(gh_retry gh pr list \
+		--repo "${GITHUB_REPOSITORY}" \
+		--state open \
+		--base "${integration_branch}" \
+		--json number,headRefName,headRefOid \
+		--limit 100 2>/dev/null || echo '[]')"
+	if ! printf '%s' "${prs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+		prs_json='[]'
+	fi
+	_MERGE_PROBE_CACHE_JSON["${integration_branch}"]="${prs_json}"
+
+	# Batched fetch of all sibling head refs + the integration branch.
+	# Ignore failures — a failed fetch means the probe will be best-effort.
+	local refs=()
+	while IFS= read -r ref; do
+		[ -n "${ref}" ] && refs+=("${ref}")
+	done < <(printf '%s' "${prs_json}" | jq -r '.[].headRefName // empty')
+	refs+=("${integration_branch}")
+	if [ "${#refs[@]}" -gt 0 ]; then
+		git fetch --no-tags --quiet origin "${refs[@]}" 2>/dev/null || true
+	fi
+
+	_MERGE_PROBE_CACHE_FETCHED["${integration_branch}"]="1"
+}
+
+# probe_sibling_merge_conflicts — returns 0 when the candidate PR can
+# be merged without conflicts against every other open sibling PR
+# targeting the same integration branch, 1 when a conflict is
+# detected. On conflict, prints the conflicting sibling PR number and
+# the colliding paths to stdout for caller logging.
+#
+# Usage: probe_sibling_merge_conflicts <candidate_pr> <candidate_head_ref> <integration_branch>
+probe_sibling_merge_conflicts()
+{
+	local candidate_pr="$1"
+	local candidate_head_ref="$2"
+	local integration_branch="$3"
+
+	if [ -z "${candidate_pr}" ] || [ -z "${candidate_head_ref}" ] || [ -z "${integration_branch}" ]; then
+		# Missing inputs => probe cannot run; fall through to existing merge.
+		return 0
+	fi
+	if ! command -v git >/dev/null 2>&1; then
+		return 0
+	fi
+	# Availability check: modern git (>= 2.38) prints a usage line
+	# containing "--write-tree" on stderr when invoked with no args.
+	# We deliberately avoid `git merge-tree --help` because the help
+	# pager requires man pages which are absent on minimized images
+	# (including the standard ubuntu-latest runner when trimmed).
+	if ! git merge-tree 2>&1 | grep -q -- '--write-tree'; then
+		echo "  [merge-probe] git merge-tree --write-tree unavailable; skipping probe for PR #${candidate_pr}."
+		return 0
+	fi
+
+	_merge_probe_refresh "${integration_branch}"
+	local prs_json="${_MERGE_PROBE_CACHE_JSON[${integration_branch}]:-[]}"
+
+	local candidate_ref="refs/remotes/origin/${candidate_head_ref}"
+	if ! git rev-parse --verify --quiet "${candidate_ref}" >/dev/null 2>&1; then
+		# Candidate ref not present locally — try a one-off fetch.
+		git fetch --no-tags --quiet origin "${candidate_head_ref}" 2>/dev/null || true
+		if ! git rev-parse --verify --quiet "${candidate_ref}" >/dev/null 2>&1; then
+			echo "  [merge-probe] Cannot locate candidate ref ${candidate_ref}; skipping probe."
+			return 0
+		fi
+	fi
+
+	local any_conflict=0
+	local sibling_entries
+	sibling_entries="$(printf '%s' "${prs_json}" | jq -c '.[]')"
+	while IFS= read -r entry; do
+		[ -n "${entry}" ] || continue
+		local sib_num sib_ref
+		sib_num="$(printf '%s' "${entry}" | jq -r '.number // empty')"
+		sib_ref="$(printf '%s' "${entry}" | jq -r '.headRefName // empty')"
+		[ -n "${sib_num}" ] || continue
+		[ -n "${sib_ref}" ] || continue
+		# Skip self
+		if [ "${sib_num}" = "${candidate_pr}" ]; then
+			continue
+		fi
+		local sib_local_ref="refs/remotes/origin/${sib_ref}"
+		if ! git rev-parse --verify --quiet "${sib_local_ref}" >/dev/null 2>&1; then
+			# The cache fetch didn't get this one; try once more, then skip.
+			git fetch --no-tags --quiet origin "${sib_ref}" 2>/dev/null || true
+			if ! git rev-parse --verify --quiet "${sib_local_ref}" >/dev/null 2>&1; then
+				continue
+			fi
+		fi
+		local conflicts_out
+		if conflicts_out="$(git merge-tree --write-tree --name-only --no-messages "${candidate_ref}" "${sib_local_ref}" 2>/dev/null)"; then
+			# Exit 0 => clean merge
+			continue
+		fi
+		# Non-zero => conflict. First line of output is the written tree
+		# SHA; subsequent lines are the conflicting paths when --name-only
+		# is in effect. Strip the tree SHA defensively.
+		local conflict_paths
+		conflict_paths="$(printf '%s\n' "${conflicts_out}" | awk 'NR==1{next} {print}' | sed '/^$/d')"
+		if [ -z "${conflict_paths}" ]; then
+			# Older git: conflict information may appear on the first line
+			# already. Treat the whole output as conflict context.
+			conflict_paths="${conflicts_out}"
+		fi
+		echo "  [merge-probe] PR #${candidate_pr} conflicts with sibling PR #${sib_num} on paths:"
+		printf '      %s\n' "${conflict_paths}" | sed 's/^      $//' | sed '/^$/d'
+		any_conflict=1
+		# Keep scanning so the log captures all colliding siblings for
+		# this cycle; early-return is fine if we only care about the
+		# boolean.
+	done <<< "${sibling_entries}"
+
+	if [ "${any_conflict}" -eq 1 ]; then
+		return 1
+	fi
+	return 0
+}
+
+# _bump_merge_deferral_count — increment the per-wave-issue
+# merge-deferral counter in state and return the new count.
+#
+# Usage: _bump_merge_deferral_count <wave_idx> <github_issue>
+_bump_merge_deferral_count()
+{
+	local wave_idx="$1"
+	local gh_issue="$2"
+	[[ "${wave_idx}" =~ ^[0-9]+$ ]] || return 0
+	[[ "${gh_issue}" =~ ^[0-9]+$ ]] || return 0
+	[ -f "${STATE_FILE}" ] || return 0
+	local tmp
+	tmp="${STATE_FILE}.merge_defer.tmp"
+	if jq --argjson wi "${wave_idx}" --argjson gi "${gh_issue}" '
+		(.waves[$wi].issues[] | select(.github_issue == $gi)) |= (
+			.merge_deferral_count = ((.merge_deferral_count // 0) + 1)
+		)
+	' "${STATE_FILE}" > "${tmp}" 2>/dev/null; then
+		mv "${tmp}" "${STATE_FILE}"
+	else
+		rm -f "${tmp}" 2>/dev/null || true
+	fi
+	jq --argjson wi "${wave_idx}" --argjson gi "${gh_issue}" -r \
+		'.waves[$wi].issues[] | select(.github_issue == $gi) | .merge_deferral_count // 0' \
+		"${STATE_FILE}" 2>/dev/null | head -n1
+}
+
+# ---------------------------------------------------------------
 # Helper: Fetch PR JSON once and extract multiple fields.
 #
 # Reduces GitHub API calls by fetching the PR endpoint once instead
@@ -4943,6 +5142,11 @@ json.dump(result, sys.stdout)
   # ---------------------------------------------------------------
   # Auto-merge: merge PRs that are ready-to-merge
   # ---------------------------------------------------------------
+  # Resolve the active integration branch once per poll cycle. Used by
+  # probe_sibling_merge_conflicts() to enumerate sibling PRs targeting
+  # the same integration branch with a single cached gh pr list call.
+  RTM_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  [ "${RTM_INTEGRATION_BRANCH}" = "null" ] && RTM_INTEGRATION_BRANCH=""
   echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "ready-to-merge") | .github_issue' | while read -r rtm_issue; do
     [[ "${rtm_issue}" =~ ^[0-9]+$ ]] || continue
     echo "  Issue #${rtm_issue} is ready-to-merge, finding linked PR..."
@@ -4954,8 +5158,27 @@ json.dump(result, sys.stdout)
       PR_STATE="$(_jq_field "${_rtm_pr_json}" '.state' 'open|closed|merged')"
       PR_MERGEABLE="$(_jq_field "${_rtm_pr_json}" '.mergeable' 'true|false')"
       _rtm_head_sha="$(_jq_field "${_rtm_pr_json}" '.head.sha')"
+      _rtm_head_ref="$(_jq_field "${_rtm_pr_json}" '.head.ref')"
       if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
 		if _pr_checks_completed "${RTM_PR}" "${_rtm_head_sha}"; then
+		  # Pre-merge sibling-conflict probe: refuse to squash into the
+		  # integration branch when another open sibling PR would
+		  # textually conflict. This short-circuits the wave-internal
+		  # collision pattern (two siblings editing README.md /
+		  # orchestrate_poll_process.sh / agents.md in parallel) BEFORE
+		  # the merge lands, so the loser never enters an autofix
+		  # rebase loop.
+		  if [ -n "${RTM_INTEGRATION_BRANCH}" ] && [ -n "${_rtm_head_ref}" ] && [ "${_rtm_head_ref}" != "null" ]; then
+		    if ! probe_sibling_merge_conflicts "${RTM_PR}" "${_rtm_head_ref}" "${RTM_INTEGRATION_BRANCH}"; then
+		      _rtm_defer_count="$(_bump_merge_deferral_count "${WAVE_IDX}" "${rtm_issue}")"
+		      [[ "${_rtm_defer_count}" =~ ^[0-9]+$ ]] || _rtm_defer_count=0
+		      echo "  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — sibling conflict detected."
+		      if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
+		        tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent sibling merge-tree conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
+		      fi
+		      continue
+		    fi
+		  fi
 		  echo "  Merging PR #${RTM_PR} (squash)..."
 		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		    echo "  PR #${RTM_PR} merge initiated."

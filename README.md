@@ -679,6 +679,11 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 
 ## Required Variables
 
+<!-- anchor:required-variables-table -->
+<!-- Parallel orchestrator sub-issues: append new env vars to the BOTTOM
+     of this table directly under this anchor. Do NOT reorder existing
+     rows or reflow the table — parallel sub-issues inserting rows in
+     the middle is a classic merge-conflict generator. -->
 | Variable | Default | Description |
 |---|---|---|
 | `WORKFLOW_EDITOR_MODEL` | `openai/gpt-5.3-codex` | Model for code editing tasks |
@@ -766,6 +771,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `SEMANTIC_CACHE_MAX_CANONICAL_CHARS` | `50000` | Maximum canonical input length for cache key generation (longer inputs skip cache lookup/store) |
 | `SERENA_WARN_THRESHOLD_IMPLEMENT` | `50` | Minimum Serena efficiency (%) before implement emits low-adoption warning |
 | `SERENA_WARN_THRESHOLD_REVIEW` | `50` | Minimum Serena efficiency (%) before review_autofix emits low-adoption warning |
+| `MAX_MERGE_DEFERRALS` | `5` | Max consecutive poll cycles a single sub-PR may be deferred by the pre-merge sibling-conflict probe (`probe_sibling_merge_conflicts` in `scripts/orchestrate_poll_process.sh`). The probe runs `git merge-tree --write-tree --name-only` locally against every other open sub-PR targeting the same integration branch before invoking `gh pr merge --squash`. When a textual conflict is detected, the candidate PR is skipped for the cycle and the deferral counter on its wave entry is incremented. Exceeding `MAX_MERGE_DEFERRALS` triggers a Telegram WARNING for human review but does not mark the PR failed — the probe is a merge-ordering nudge, not a gate. Set lower for more aggressive human escalation or higher to give auto-serialization more room. |
 
 ## Semantic Cache (Clarification Only)
 
@@ -890,6 +896,14 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 
 ### How it works
 
+<!-- anchor:orchestrator-pipeline-steps -->
+<!-- Parallel orchestrator sub-issues: when you need to document a new
+     pipeline step or behavior here, insert new prose directly under this
+     anchor with an append-only `Na.` / `Nb.` suffixed bullet. Do NOT
+     renumber existing steps and do NOT reflow the paragraphs below —
+     multiple siblings editing this list in parallel is a known conflict
+     generator, and the partition guard will serialize waves that touch
+     the same anchor. See prompts/mode-orchestrate.txt. -->
 1. **Decomposition:** The LLM reads your repo, breaks the project into scoped issues with a dependency graph, and creates a tracking issue (labeled `ai:orchestrator-tracking`).
 2. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically. If clarification questions are raised, the `orchestrate_clarify_respond` workflow answers them automatically using an LLM, so the pipeline runs fully unattended.
 3. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. If a PR has merge conflicts (e.g. `main` advanced since the PR was created), the poller automatically updates the PR branch via the GitHub API before retrying the merge. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.
