@@ -572,6 +572,49 @@ PY
   bug even when the Python parses in isolation, because the outer shell
   eats the single quotes inside the heredoc body at runtime.
 
+CRITICAL — importlib dynamic module loading for dependency_auditing import checks:
+- When verifying that a Python module is importable (e.g. for `dependency_auditing`),
+  do NOT use raw `importlib.util.spec_from_file_location` + `exec_module` without
+  registering the module in `sys.modules` first. Python 3.12's `dataclasses`
+  decorator calls `sys.modules.get(cls.__module__).__dict__` during class
+  processing; if the module is not registered the call returns `None` and raises
+  `AttributeError: 'NoneType' object has no attribute '__dict__'`. This is a
+  harness defect, not an application defect.
+- WRONG:
+    mod_name = "scripts.semantic_cache"  # use the real module path dynamically
+    spec = importlib.util.spec_from_file_location(mod_name, p)
+    assert spec is not None and spec.loader is not None
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)          # crashes on @dataclass in Python 3.12
+- RIGHT (register before exec):
+    mod_name = "scripts.semantic_cache"  # use the real module path dynamically
+    spec = importlib.util.spec_from_file_location(mod_name, p)
+    assert spec is not None and spec.loader is not None
+    m = importlib.util.module_from_spec(spec)
+    sys.modules[mod_name] = m            # must precede exec_module
+    try:
+        spec.loader.exec_module(m)
+    except Exception:
+        sys.modules.pop(mod_name, None)
+        raise
+- Preferred: avoid low-level `importlib.util.spec_from_file_location` +
+  `exec_module` import auditing. Use the sidecar
+  pattern from "Preferred pattern A" above with a simple `PYTHONPATH`-based
+  import check:
+    # validation/tests/_lib/import_audit.py
+    import importlib, sys, os
+    os.chdir("/workspace")
+    sys.path.insert(0, "/workspace")
+    mod_name = "scripts.semantic_cache"   # dotted module path
+    try:
+        importlib.import_module(mod_name)
+        print(f"ok - {mod_name} imports cleanly")
+    except Exception as exc:
+        print(f"not ok - {mod_name} import failed: {exc}")
+        sys.exit(1)
+  `importlib.import_module` handles `sys.modules` registration automatically
+  and is the correct API for "does this module load?" audits.
+
 Validation coverage (implement only when concretely applicable):
 1. Build verification
 2. Startup and health checks
