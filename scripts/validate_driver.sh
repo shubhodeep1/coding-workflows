@@ -514,6 +514,10 @@ wait_for_health()
 			app_log_tail="$(tail -n "${TAIL_LINES}" "${app_service_log}" 2>/dev/null || echo "(no service log)")"
 			{
 				echo "=== ${APP_SERVICE} timeout diagnostics ==="
+				# Write app log tail first so the final tailed failure payload
+				# still retains infra diagnostics at the end.
+				echo "--- ${APP_SERVICE} log tail ---"
+				echo "${app_log_tail}"
 				echo "--- docker compose ps ---"
 				docker compose -f "${COMPOSE_FILE}" ps 2>&1 || true
 				if [ -n "${container_id}" ]; then
@@ -521,11 +525,9 @@ wait_for_health()
 					docker inspect -f 'Status={{.State.Status}} Running={{.State.Running}} ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} RestartCount={{.RestartCount}} Health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
 						"${container_id}" 2>&1 || true
 					echo "--- docker inspect health log (${APP_SERVICE}) ---"
-						docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}exit={{.ExitCode}} start={{.Start}} output={{.Output}}{{"\n"}}{{end}}{{else}}no healthcheck configured{{end}}' \
-							"${container_id}" 2>&1 | tail -n 5 || true
+					docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}exit={{.ExitCode}} start={{.Start}} output={{.Output}}{{"\n"}}{{end}}{{else}}no healthcheck configured{{end}}' \
+						"${container_id}" 2>&1 | tail -n 5 || true
 				fi
-				echo "--- ${APP_SERVICE} log tail ---"
-				echo "${app_log_tail}"
 				echo "=== end diagnostics ==="
 			} >> "${app_service_log}" 2>&1 || true
 			capture_compose_logs
