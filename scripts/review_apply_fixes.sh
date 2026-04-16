@@ -504,6 +504,7 @@ while [ "${attempt}" -le 3 ]; do
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
     if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints" "${tmp_output}"; then
       reviewer_validation_ok=true
+      changes_lost_detected=false
       while IFS= read -r manifest_path; do
         manifest_sha="$(sha256sum "${manifest_path}" | awk '{print $1}')"
         if ! awk -v file_path="${manifest_path}" '
@@ -589,6 +590,7 @@ while [ "${attempt}" -le 3 ]; do
             cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}_changes_lost.txt" || true
             # Fall through to retry instead of exiting
             reviewer_validation_ok=false
+            changes_lost_detected=true
           fi
         fi
 
@@ -600,7 +602,9 @@ while [ "${attempt}" -le 3 ]; do
         fi
         echo "Editor output passed format/manifest validation but claimed changes did not persist on attempt ${attempt}; retrying."
       fi
-      echo "Editor output failed reviewer manifest validation on attempt ${attempt}."
+      if [ "${changes_lost_detected}" = false ]; then
+        echo "Editor output failed reviewer manifest validation on attempt ${attempt}."
+      fi
     fi
     if [ -s "${tmp_output}" ]; then
       echo "Editor output on attempt ${attempt} failed structured-format and/or reviewer-manifest validation; retrying."

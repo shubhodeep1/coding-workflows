@@ -1993,7 +1993,7 @@ jobs:
 
             if [ "${has_real_changes}" = "true" ]; then
               if [ "${CAN_PUSH:-}" = "true" ]; then
-                echo "::error::Editor claimed changes but no commit was produced. Serena MCP tool calls likely failed to persist changes on disk."
+                echo "::error::Editor claimed changes but no commit was produced. This indicates a mismatch between the editor summary and final git state (changes may have failed to persist, or may have been discarded during commit validation)."
               else
                 echo "::error::Editor claimed changes but no commit was produced. Push is disabled (CAN_PUSH=${CAN_PUSH:-false}), so this does not necessarily indicate a Serena persistence failure."
               fi
