@@ -16,7 +16,7 @@ def _workflow() -> str:
 
 def test_schedule_env_defaults_are_declared() -> None:
 	wf = _workflow()
-	assert "REVIEW_REASONING_SCHEDULE: ${{ vars.REVIEW_REASONING_SCHEDULE || 'xhigh,high,medium' }}" in wf
+	assert "REVIEW_REASONING_SCHEDULE: ${{ vars.REVIEW_REASONING_SCHEDULE || 'xhigh,xhigh,xhigh' }}" in wf
 	assert "REVIEW_AUTODOWNGRADE_DISABLED: ${{ vars.REVIEW_AUTODOWNGRADE_DISABLED || 'false' }}" in wf
 
 
