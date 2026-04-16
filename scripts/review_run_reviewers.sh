@@ -169,7 +169,9 @@ PROMPT_RUNTIME_CONTEXT_HINT="$(printf '%s\n' \
 
 # Detect whether this is the first review iteration (no prior AI autofix run).
 IS_FIRST_ITERATION=false
-if grep -q '^No previous AI autofix' "${LAST_RUN_DIFF_FILE}" 2>/dev/null; then
+if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
+  IS_FIRST_ITERATION=true
+elif grep -qE '^(No previous AI autofix|Initial run — no previous commit)' "${LAST_RUN_DIFF_FILE}" 2>/dev/null; then
   IS_FIRST_ITERATION=true
 fi
 
@@ -953,12 +955,12 @@ run_reviewer_pass() {
     pass_models+=("${model}")
     pass_status_files+=("${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_${safe_name}.txt")
     pass_log_files+=("${PREVIOUS_REVIEWS_DIR}/${pass_prefix}_${safe_name}.log")
-    run_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" &
+    run_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2 &
     pass_pids+=("$!")
   done <<< "${REVIEWER_MODELS}"
 
   if [ "${#pass_pids[@]}" -eq 0 ]; then
-    echo "No reviewer models configured."
+    echo "No reviewer models configured." >&2
     exit 1
   fi
 
@@ -966,7 +968,7 @@ run_reviewer_pass() {
     local pid="${pass_pids[$idx]}"
     local model="${pass_models[$idx]}"
     if ! wait "${pid}"; then
-      echo "Reviewer worker process crashed for model ${model} (${pass_prefix})."
+      echo "Reviewer worker process crashed for model ${model} (${pass_prefix})." >&2
     fi
   done
 
@@ -998,7 +1000,7 @@ build_cross_pollination_summary() {
     for pass1_file in "${PREVIOUS_REVIEWS_DIR}"/pass1_*.txt; do
       [ -f "${pass1_file}" ] || continue
       local model_name
-      model_name="$(basename "${pass1_file}" .txt | sed 's/^pass1_//' | tr '___' '/.:')"
+      model_name="$(basename "${pass1_file}" .txt | sed 's/^pass1_//')"
       # Skip files that contain only failure messages
       if grep -q '^.*failed after retries' "${pass1_file}" 2>/dev/null; then
         continue

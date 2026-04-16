@@ -54,8 +54,8 @@ def _extract_line(text: str) -> int | None:
 	return None
 
 def _reviewer_name(p: Path) -> str:
-	"""Reverse safe_name encoding: ``___`` -> ``:``, ``__`` -> ``/``."""
-	return p.stem.removeprefix("review_").replace("___", ":").replace("__", "/")
+	"""Return the reviewer filename stem as an opaque reviewer identifier."""
+	return p.stem.removeprefix("review_")
 
 def _normalize_path(fp: str) -> str:
 	return re.sub(r"\s*\(.*\)\s*$", "", fp).strip()
