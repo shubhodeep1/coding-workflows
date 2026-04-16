@@ -323,6 +323,7 @@ jobs:
             RUN_ARGS+=("-f" "lookback_days=${LOOKBACK_DAYS_STR}")
           fi
 
+          COLLECTION_WINDOW_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           gh workflow run "${RUN_ARGS[@]}"
 
           RUN_ID=""
@@ -419,7 +420,10 @@ jobs:
           fi
 
           mkdir -p analysis
-          NEW_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          NEW_TIMESTAMP="${COLLECTION_WINDOW_START}"
+          if ! is_iso_utc_timestamp "${NEW_TIMESTAMP}"; then
+            NEW_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          fi
           CURRENT_TIMESTAMP=""
           if [ -f "${TIMESTAMP_FILE}" ]; then
             CURRENT_TIMESTAMP="$(head -n1 "${TIMESTAMP_FILE}" | tr -d '\r\n')"
