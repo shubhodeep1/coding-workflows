@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 """Deterministic tests for orchestrate_poll_process.sh validation state handling."""
 
 from __future__ import annotations
@@ -504,7 +504,7 @@ def _run_poller(
 			encoding="utf-8",
 		)
 
-		gh_mock = r'''#!/usr/bin/python3
+		gh_mock = r'''#!/usr/bin/env python3
 import json
 import re
 import sys
@@ -1263,7 +1263,7 @@ sys.exit(1)
 		assert real_python is not None
 		_write_exec(
 			bin_dir / "git",
-			r'''#!/usr/bin/python3
+			r'''#!/usr/bin/env python3
 import json
 import os
 import subprocess
@@ -1315,7 +1315,7 @@ sys.exit(proc.returncode)
 
 		_write_exec(
 			bin_dir / "codex",
-			"""#!/usr/bin/python3
+			"""#!/usr/bin/env python3
 import json
 import os
 import sys
@@ -4266,7 +4266,7 @@ def test_truncated_comments_json_is_handled_gracefully():
 		# Minimal gh mock: returns truncated JSON for comments endpoint,
 		# empty body for issue body (causes reconstruction to skip gracefully).
 		gh_mock = """\
-#!/usr/bin/python3
+#!/usr/bin/env python3
 import json, re, sys
 args = sys.argv[1:]
 if not args:
@@ -4321,7 +4321,7 @@ sys.exit(1)
 
 		# Minimal codex mock (should not be reached in this test)
 		(bin_dir / "codex").write_text(
-			"#!/usr/bin/python3\nimport json,sys\nprint(json.dumps({'status':'complete','justification':'','assessment':'','new_issues':[],'issues_to_revert':[]}))\n"
+			"#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps({'status':'complete','justification':'','assessment':'','new_issues':[],'issues_to_revert':[]}))\n"
 		)
 		(bin_dir / "codex").chmod(0o755)
 

@@ -3147,7 +3147,7 @@ _load_actions_runs_cached() {
 
   if [ -s "${response_file}" ] && head -n 1 "${response_file}" | grep -q '^HTTP/'; then
     status_line="$(head -n 1 "${response_file}")"
-    response_etag="$(awk 'BEGIN{IGNORECASE=1} /^etag:[[:space:]]*/ {sub(/^[^:]*:[[:space:]]*/, "", $0); sub(/\r$/, "", $0); print; exit}' "${response_file}" 2>/dev/null || echo '')"
+    response_etag="$(awk '{ line = $0; sub(/\r$/, "", line); if (tolower(line) ~ /^etag:[[:space:]]*/) { sub(/^[^:]*:[[:space:]]*/, "", line); print line; exit } }' "${response_file}" 2>/dev/null || echo '')"
     body_json="$(awk 'f{print} /^\r?$/{f=1}' "${response_file}" 2>/dev/null)"
   else
     body_json="$(cat "${response_file}" 2>/dev/null || echo '')"
