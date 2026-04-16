@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+# Pre-flight syntax check: detect transient file corruption (e.g. CI
+# runner filesystem issues) before executing.  On failure, print the
+# exact parse error, dump an md5 fingerprint for post-mortem, and exit
+# with a clear diagnostic instead of a cryptic "unexpected token" deep
+# in the script.
+if ! bash -n "${BASH_SOURCE[0]}" 2>/tmp/_rb_judge_syntax_err; then
+	echo "::error::review_rb_judge.sh failed pre-flight syntax check — file may be corrupt on this runner."
+	echo "--- syntax error detail ---"
+	cat /tmp/_rb_judge_syntax_err
+	echo "--- file fingerprint ---"
+	md5sum "${BASH_SOURCE[0]}" 2>/dev/null || wc -c < "${BASH_SOURCE[0]}"
+	echo "---"
+	rm -f /tmp/_rb_judge_syntax_err
+	exit 2
+fi
+rm -f /tmp/_rb_judge_syntax_err
+
 set -euo pipefail
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-/tmp/codex-support}"
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -152,8 +169,8 @@ elif type _gh_pr_with_all_comments_rest >/dev/null 2>&1; then
   PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
 else
   printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${REPOSITORY%%/*} repo=${REPOSITORY##*/} pr=${PR_NUMBER}" >&2
-  PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null || echo '[]')"
-  PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo '[]')"
+  PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
+  PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
   PR_CONTEXT_JSON="$(jq -cn --argjson meta "${PRELOADED_PR_META}" --argjson comments "${PR_ISSUE_COMMENTS}" --argjson review_comments "${PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"
 fi
 PR_COMMENTS="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.comments // []' 2>/dev/null || echo "[]")"
