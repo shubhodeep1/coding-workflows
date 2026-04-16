@@ -307,7 +307,7 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 - `.github/workflows/comprehensive-test-and-release.yml` has three phases only (`phase1-first-pass-test`, `phase2-collect-and-analyze-logs`, `phase3-dispatch-orchestrator`); callback handling is poller-owned, not a standalone workflow phase.
 - Phase 2 dispatches `workflow-log-analysis.yml` with `codex_mode=true` and resolves the collector window from `analysis/last_collection_timestamp.txt`; invalid/missing timestamp falls back to `lookback_days_fallback`.
 - Poller callback handling is label-gated: `handle_comprehensive_release_callback_if_needed` runs only while the tracking issue has `ai:comprehensive-test-pending`.
-- On project status `complete`, the poller dispatches `test-and-mark-stable.yml` with `dry_run=false`, reusing validated metadata from `COMPREHENSIVE_RELEASE_METADATA_V1` when present.
+- On project status `complete`, the poller dispatches `test-and-mark-stable.yml` with `dry_run=false`, reusing validated `version_tag`/`test_repo` extracted from tracking comments when present.
 - On project status `failed` or `validation-failed`, the poller sends an abort notification and does not dispatch release.
 - In both completion and abort paths, the poller writes `comprehensive_release_callback` (`handled`, `status`, `handled_at`) and removes `ai:comprehensive-test-pending` best-effort; `handled=true` is still recorded when dispatch fails to prevent redispatch loops.
 

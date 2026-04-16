@@ -133,7 +133,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             else:
                 print(context, end="")
             _print_json({"ok": True, "enabled": False, "records_selected": 0, "estimated_tokens": 0, "warning": str(exc)})
-            _emit_telemetry("retrieve", ok=True, enabled=False, records_selected=0, warning=str(exc))
+            _emit_telemetry("retrieve", ok=True, enabled=False, records_selected=0, warning="branch_unavailable")
             return 0
         memory_root = _resolve_memory_root(branch_dir, args.memory_root)
         profiles_path = branch_dir / args.retrieval_profiles
@@ -529,11 +529,11 @@ def cmd_processed_command_check(args: argparse.Namespace) -> int:
         )
         if is_missing_branch:
             _print_json({"ok": True, "enabled": False, "exists": False, "entry": None, "warning": error_text})
-            _emit_telemetry("processed-command-check", ok=True, enabled=False, exists=False, warning=error_text)
+            _emit_telemetry("processed-command-check", ok=True, enabled=False, exists=False, warning="branch_unavailable")
             return 0
         print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
         _print_json({"ok": False, "enabled": True, "exists": False, "entry": None, "error": error_text})
-        _emit_telemetry("processed-command-check", ok=False, enabled=True, exists=False, error="git_error", warning=error_text)
+        _emit_telemetry("processed-command-check", ok=False, enabled=True, exists=False, error="git_error", warning="git_error")
         return 2
     finally:
         if branch_dir:
@@ -584,11 +584,11 @@ def cmd_processed_command_list(args: argparse.Namespace) -> int:
         )
         if is_missing_branch:
             _print_json({"ok": True, "enabled": False, "entries": [], "count": 0, "warning": error_text})
-            _emit_telemetry("processed-command-list", ok=True, enabled=False, count=0, warning=error_text)
+            _emit_telemetry("processed-command-list", ok=True, enabled=False, count=0, warning="branch_unavailable")
             return 0
         print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
         _print_json({"ok": False, "enabled": True, "entries": [], "count": 0, "error": error_text})
-        _emit_telemetry("processed-command-list", ok=False, enabled=True, count=0, error="git_error", warning=error_text)
+        _emit_telemetry("processed-command-list", ok=False, enabled=True, count=0, error="git_error", warning="git_error")
         return 2
     finally:
         if branch_dir:
@@ -677,7 +677,7 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
                     "warning": error_text,
                 }
             )
-            _emit_telemetry("clarify-loop-guard", ok=True, enabled=False, blocked=bool(result.get("blocked")), cycle=_safe_int(result.get("cycle")), entries_considered=0, warning=error_text)
+            _emit_telemetry("clarify-loop-guard", ok=True, enabled=False, blocked=bool(result.get("blocked")), cycle=_safe_int(result.get("cycle")), entries_considered=0, warning="branch_unavailable")
             return 0
         print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
         _print_json(
@@ -689,7 +689,7 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
                 "error": error_text,
             }
         )
-        _emit_telemetry("clarify-loop-guard", ok=False, enabled=True, error="git_error", warning=error_text)
+        _emit_telemetry("clarify-loop-guard", ok=False, enabled=True, error="git_error", warning="git_error")
         return 2
     finally:
         if branch_dir:
