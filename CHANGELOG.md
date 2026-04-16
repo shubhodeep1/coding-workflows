@@ -17,6 +17,11 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 - Extended staged AI memory schema lists to include the new cache schema
   entries for actions runs and workflow log analysis (best-effort staging
   until files exist on support refs).
+- H7: removed repo label-existence GET probes from `ensure_label_exists`
+  in `scripts/orchestrate_poll_process.sh` and `scripts/validate_process.sh`,
+  now relying on direct `gh label create` with idempotent `already_exists`/422
+  handling (including DEBUG skip logging) across those scripts and
+  `scripts/label_helpers.sh`.
 - Added H6 cross-run workflow log analysis cache persistence in
   `scripts/collect_workflow_logs.py` + `scripts/ai_memory_lib.py` using
   ai-memory branch fail-open reads/writes, ETag-aware run collection, 304

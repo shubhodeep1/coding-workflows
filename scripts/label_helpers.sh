@@ -88,9 +88,26 @@ ensure_label_exists() {
 		return 1
 	fi
 
-	gh_retry gh label create "${label_name}" \
+	local _label_err_file
+	_label_err_file="$(mktemp)"
+
+	if gh_retry gh label create "${label_name}" \
 		--repo "${repo}" \
 		--color "${color}" \
 		--description "${description}" \
-		2>/dev/null || true
+		>/dev/null 2>"${_label_err_file}"; then
+		rm -f "${_label_err_file}"
+		return 0
+	fi
+
+	local _label_err=""
+	_label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
+	rm -f "${_label_err_file}"
+
+	if printf '%s' "${_label_err}" | grep -Eiq 'already[ _-]*exists|422|unprocessable'; then
+		echo "::debug::ensure_label_exists: label already exists, skipping '${label_name}'." >&2
+		return 0
+	fi
+
+	return 0
 }
