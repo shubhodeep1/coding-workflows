@@ -171,7 +171,9 @@ capture_compose_logs()
 		if [ -n "${compose_log_tmp}" ]; then
 			docker compose -f "${COMPOSE_FILE}" logs --no-color > "${compose_log_tmp}" 2>&1 || true
 			if [ -s "${compose_log_tmp}" ]; then
-				mv "${compose_log_tmp}" "${COMPOSE_LOG}" 2>/dev/null || true
+				if ! mv "${compose_log_tmp}" "${COMPOSE_LOG}" 2>/dev/null; then
+					cp "${compose_log_tmp}" "${COMPOSE_LOG}" 2>/dev/null || true
+				fi
 			fi
 			rm -f "${compose_log_tmp}" >/dev/null 2>&1 || true
 		fi
@@ -194,7 +196,9 @@ capture_service_logs()
 		if [ -n "${service_log_tmp}" ]; then
 			docker compose -f "${COMPOSE_FILE}" logs --no-color -- "${service}" > "${service_log_tmp}" 2>&1 || true
 			if [ -s "${service_log_tmp}" ]; then
-				mv "${service_log_tmp}" "${dest}" 2>/dev/null || true
+				if ! mv "${service_log_tmp}" "${dest}" 2>/dev/null; then
+					cp "${service_log_tmp}" "${dest}" 2>/dev/null || true
+				fi
 			fi
 			rm -f "${service_log_tmp}" >/dev/null 2>&1 || true
 		fi
@@ -431,7 +435,10 @@ start_compose()
 				fi
 			} > "${merged_log}"
 			mkdir -p "$(dirname -- "${COMPOSE_LOG}")" >/dev/null 2>&1 || true
-			mv "${merged_log}" "${COMPOSE_LOG}" 2>/dev/null || true
+			if ! mv "${merged_log}" "${COMPOSE_LOG}" 2>/dev/null; then
+				cp "${merged_log}" "${COMPOSE_LOG}" 2>/dev/null || true
+				rm -f "${merged_log}" >/dev/null 2>&1 || true
+			fi
 		fi
 		rm -f "${build_log}" >/dev/null 2>&1 || true
 		fail_fast "preflight_compose_up" "failed to build/start compose services" "${COMPOSE_LOG}" "startup" 1
