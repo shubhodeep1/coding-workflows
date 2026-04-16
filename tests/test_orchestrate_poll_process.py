@@ -266,12 +266,12 @@ def _run_poller_subprocess(
 			shutil.rmtree(sandbox, ignore_errors=True)
 
 
-def test_judge_reasoning_effort_logic_is_adaptive_after_cycle_three():
+def test_judge_reasoning_effort_uses_configured_value_without_downgrade():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'JUDGE_INVOCATION_CYCLE=$((JUDGE_CYCLE + 1))' in script
-	assert 'if [ "${JUDGE_INVOCATION_CYCLE}" -gt 3 ] && [ "${MODEL_REASONING_EFFORT_JUDGE}" = "xhigh" ]; then' in script
-	assert 'EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE="high"' in script
-	assert 'EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE' in script
+	# No adaptive downgrade — configured effort is used as-is for all cycles.
+	assert 'EFFECTIVE_MODEL_REASONING_EFFORT_JUDGE' not in script
+	assert 'model_reasoning_effort = \\"${MODEL_REASONING_EFFORT_JUDGE:-xhigh}\\"' in script
 
 
 def _base_state(status: str = "in_progress") -> dict:

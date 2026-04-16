@@ -30,13 +30,18 @@ def _write_exec(path: Path, body: str) -> None:
 	path.chmod(0o755)
 
 
-def test_normalize_workflow_family_core_and_exclusion():
+def test_normalize_workflow_family_core_and_formerly_excluded():
 	assert collector.normalize_workflow_family("AI Clarify", ".github/workflows/clarify.yml") == "clarify"
 	assert collector.normalize_workflow_family("AI Plan", ".github/workflows/plan.yml") == "plan"
 	assert collector.normalize_workflow_family("AI Implement", ".github/workflows/implement.yml") == "implement"
 	assert collector.normalize_workflow_family("AI Review", ".github/workflows/review_autofix.yml") == "review_autofix"
-	assert collector.normalize_workflow_family("AI Validate", ".github/workflows/validate.yml") is None
-	assert collector.normalize_workflow_family("AI Orchestrate", ".github/workflows/orchestrate.yml") is None
+	assert collector.normalize_workflow_family("AI Validate", ".github/workflows/validate.yml") == "validate"
+	assert collector.normalize_workflow_family("AI Orchestrate", ".github/workflows/orchestrate.yml") == "orchestrate"
+	assert collector.normalize_workflow_family("AI Orchestrate Poll", ".github/workflows/orchestrate_poll.yml") == "orchestrate_poll"
+	assert collector.normalize_workflow_family("Clarify Respond", ".github/workflows/orchestrate_clarify_respond.yml") == "orchestrate_clarify_respond"
+	assert collector.normalize_workflow_family("CI", ".github/workflows/ci.yml") == "ci"
+	assert collector.normalize_workflow_family("Unknown", ".github/workflows/foo-bar.yml") == "foo_bar"
+	assert collector.normalize_workflow_family("", "") == "other"
 
 
 def test_compute_run_metrics_retries_and_duration_with_missing_timestamps():
@@ -88,7 +93,7 @@ def test_extract_failure_point_step_precedence_then_job_fallback():
 	assert point_job == {"job_name": "build", "step_name": None}
 
 
-def test_list_runs_for_repo_paginates_and_filters_core_scope():
+def test_list_runs_for_repo_paginates_and_includes_all_families():
 	orig = collector.gh_api_json
 	calls = []
 
@@ -124,8 +129,8 @@ def test_list_runs_for_repo_paginates_and_filters_core_scope():
 		collector.gh_api_json = orig
 
 	assert capped is False
-	assert [r["id"] for r in runs] == [1, 3]
-	assert [r["_workflow_family"] for r in runs] == ["plan", "implement"]
+	assert [r["id"] for r in runs] == [1, 2, 3]
+	assert [r["_workflow_family"] for r in runs] == ["plan", "validate", "implement"]
 	assert len(calls) == 3
 
 
@@ -213,6 +218,40 @@ def test_select_notable_runs_for_logs_prioritizes_failed_then_retried_then_slow_
 		("owner/repo-a", 202),
 		("owner/repo-b", 301),
 	]
+
+
+def test_select_notable_runs_success_sampling():
+	# Build 30 successful runs — the slow bucket picks the top SLOW_RUNS_PER_REPO (10)
+	# by duration; remaining successful runs are candidates for random sampling.
+	runs = [
+		{
+			"repository": "owner/repo",
+			"run_id": i,
+			"conclusion": "success",
+			"retries": 0,
+			"duration_seconds": 60,
+			"created_at": f"2026-04-10T{10 + (i % 12):02d}:00:00Z",
+		}
+		for i in range(1, 31)
+	]
+	selected = collector.select_notable_runs_for_logs(runs, max_log_runs=20, success_sample_rate=0.07)
+	sampled = [item for item in selected if item.get("_success_sampled")]
+	non_sampled = [item for item in selected if not item.get("_success_sampled")]
+	# Slow bucket picks 10 (SLOW_RUNS_PER_REPO); sampling picks from the remaining 20
+	assert len(non_sampled) == collector.SLOW_RUNS_PER_REPO
+	# ceil(20 * 0.07) = 2
+	assert len(sampled) == 2
+	assert all(item.get("_success_sampled") for item in sampled)
+	assert all(not item.get("_success_sampled") for item in non_sampled)
+
+	# Deterministic: same input produces same selection
+	selected2 = collector.select_notable_runs_for_logs(runs, max_log_runs=20, success_sample_rate=0.07)
+	assert [item["run_id"] for item in selected] == [item["run_id"] for item in selected2]
+
+	# Rate 0 disables sampling — only slow runs remain
+	selected_zero = collector.select_notable_runs_for_logs(runs, max_log_runs=20, success_sample_rate=0.0)
+	assert all(not item.get("_success_sampled") for item in selected_zero)
+	assert len(selected_zero) == collector.SLOW_RUNS_PER_REPO
 
 
 def test_main_partial_jobs_failure_still_emits_report_with_errors():
@@ -387,22 +426,24 @@ print(json.dumps({}))
 		assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
 
 		report = json.loads(report_file.read_text(encoding="utf-8"))
-		assert report["schema_version"] == "workflow_log_collector.v1"
-		assert report["scope"]["workflow_families"] == ["clarify", "plan", "implement", "review_autofix"]
-		assert report["summary"]["total_runs"] == 3
-		assert report["summary"]["success_count"] == 2
+		assert report["schema_version"] == "workflow_log_collector.v2"
+		# All families are now collected — validate is included
+		assert isinstance(report["scope"]["workflow_families"], list)
+		assert report["summary"]["total_runs"] == 4
+		assert report["summary"]["success_count"] == 3
 		assert report["summary"]["failure_count"] == 1
 		assert report["summary"]["cancelled_count"] == 0
 		assert report["summary"]["other_count"] == 0
 		assert isinstance(report["summary"]["p50_duration_seconds"], float)
 		assert isinstance(report["summary"]["p95_duration_seconds"], float)
+		assert "sampled_success_runs" in report["summary"]
+		assert "success_sample_rate" in report["scope"]
 		assert len(report["errors"]) == 2
 		assert sorted(item["scope"] for item in report["errors"]) == ["jobs", "logs"]
 
 		by_run_id = {item["run_id"]: item for item in report["runs"]}
 		assert by_run_id[101]["log_excerpts"] == [{"step_name": "plan", "excerpt": "plan ok\n"}]
 		assert by_run_id[102]["log_excerpts"] == [{"step_name": "failure", "excerpt": "failure details\n"}]
-		assert "log_excerpts" not in by_run_id[104]
 
 
 # ---------------------------------------------------------------------------
