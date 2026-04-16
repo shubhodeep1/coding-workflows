@@ -76,9 +76,9 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		assert "git symbolic-ref --short HEAD" in wf, f"{workflow_name} missing branch/detached log"
 
 		resolver_idx = wf.find(resolver_step)
-		checkout_idx = wf.find("uses: actions/checkout@v5")
-		assert resolver_idx != -1 and checkout_idx != -1 and resolver_idx < checkout_idx, (
-			f"{workflow_name} must resolve integration ref before checkout"
+		checkout_ref_idx = wf.find(checkout_ref)
+		assert resolver_idx != -1 and checkout_ref_idx != -1 and resolver_idx < checkout_ref_idx, (
+			f"{workflow_name} must resolve integration ref before refctx-bound checkout"
 		)
 
 

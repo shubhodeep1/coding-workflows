@@ -675,6 +675,58 @@ get_issue_state_labels_json() {
     || echo '{"state":"open","state_reason":"","labels":[]}'
 }
 
+_issue_timeline_with_cross_refs_json() {
+  local issue_num="$1"
+  local owner="${GITHUB_REPOSITORY%%/*}"
+  local repo="${GITHUB_REPOSITORY##*/}"
+
+  if type gh_issue_timeline_with_cross_refs >/dev/null 2>&1; then
+    gh_issue_timeline_with_cross_refs "${owner}" "${repo}" "${issue_num}"
+    return $?
+  fi
+
+  if type _gh_issue_timeline_with_cross_refs_rest >/dev/null 2>&1; then
+    _gh_issue_timeline_with_cross_refs_rest "${owner}" "${repo}" "${issue_num}"
+    return $?
+  fi
+
+  gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null | jq -s 'add // []' 2>/dev/null
+}
+
+_issue_cross_ref_pr_numbers_unique() {
+  local issue_num="$1"
+  local timeline_json
+
+  if ! timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}")"; then
+    return 1
+  fi
+
+  printf '%s' "${timeline_json}" | jq -r '
+    if (type == "array") then
+      [.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | unique | .[]
+    else
+      empty
+    end
+  ' 2>/dev/null
+}
+
+_issue_cross_ref_pr_number_last() {
+  local issue_num="$1"
+  local timeline_json
+
+  if ! timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}")"; then
+    return 1
+  fi
+
+  printf '%s' "${timeline_json}" | jq -r '
+    if (type == "array") then
+      [.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last // empty
+    else
+      empty
+    end
+  ' 2>/dev/null | tail -n1
+}
+
 has_label() {
   local labels_json="$1"
   local label="$2"
@@ -684,48 +736,32 @@ has_label() {
 validation_fix_issue_has_merged_pr_evidence() {
   local issue_num="$1"
   local timeline_json
-  local pr_urls
-  local pr_url
-  local pr_json
-  local lookup_failed="false"
-  local github_api_base="${GITHUB_API_URL:-https://api.github.com}"
-  local pr_api_prefix="${github_api_base}/repos/${GITHUB_REPOSITORY}/pulls/"
 
-  if ! timeline_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+  if ! timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}")"; then
     return 2
   fi
 
-  if ! echo "${timeline_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+  if ! printf '%s' "${timeline_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
     return 2
   fi
 
-  pr_urls="$(echo "${timeline_json}" | jq -r '[.[] | select(.event == "cross-referenced" and (.source.issue.pull_request.url? | type == "string")) | .source.issue.pull_request.url] | unique | .[]?' 2>/dev/null || true)"
-  if [ -z "${pr_urls}" ]; then
-    return 1
+  if printf '%s' "${timeline_json}" | jq -e '
+    [.[]
+      | select(.event == "cross-referenced")
+      | select((.source.issue.pull_request.url? | type == "string") and ((.source.issue.merged // false) == true))
+    ]
+    | length > 0
+  ' >/dev/null 2>&1; then
+    return 0
   fi
 
-  while IFS= read -r pr_url; do
-    [ -n "${pr_url}" ] || continue
-    if [[ "${pr_url}" != "${pr_api_prefix}"* ]]; then
-      continue
-    fi
-
-    if ! pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)"; then
-      lookup_failed="true"
-      continue
-    fi
-
-    if ! echo "${pr_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
-      lookup_failed="true"
-      continue
-    fi
-
-    if echo "${pr_json}" | jq -e '(.merged_at != null) or (.merged == true)' >/dev/null 2>&1; then
-      return 0
-    fi
-  done <<< "${pr_urls}"
-
-  if [ "${lookup_failed}" = "true" ]; then
+  if printf '%s' "${timeline_json}" | jq -e '
+    [.[]
+      | select(.event == "cross-referenced")
+      | select((.source.issue.lookup_failed // false) == true)
+    ]
+    | length > 0
+  ' >/dev/null 2>&1; then
     return 2
   fi
 
@@ -790,14 +826,14 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 
 # close_merged_issues_sweep — scans all OPEN GitHub issues that carry the
 # ai:merged label and closes any whose linked PR is verified merged via the
-# GitHub REST API. Runs for both orchestrator-managed child issues and
+# timeline cross-reference helper (GraphQL-first, fail-open to REST). Runs for both orchestrator-managed child issues and
 # non-orchestrator-managed standalone issues. Tracking issues
 # (label ai:orchestrator-tracking) are intentionally skipped — their
 # close lifecycle is handled by the orchestrator completion path.
 #
-# Verification policy (Q2: A — strict): walks the issue timeline for
-# cross-referenced PRs and only closes if at least one fetched PR reports
-# merged == true (or merged_at != null). If no merged PR can be verified
+# Verification policy (Q2: A — strict): walks timeline cross-references
+# and only closes if at least one linked PR is verified merged
+# (merged == true or merged_at != null). If no merged PR can be verified
 # (e.g. stale label, missing PR link, transient API failure), the issue is
 # left open and a Telegram alert is sent for operator investigation — this
 # sweep does NOT attempt any other recovery in that case.
@@ -830,9 +866,7 @@ close_merged_issues_sweep() {
     return 0
   fi
 
-  local idx issue_num has_tracking_label timeline_json pr_urls pr_url pr_json merged_pr_num
-  local github_api_base="${GITHUB_API_URL:-https://api.github.com}"
-  local pr_api_prefix="${github_api_base}/repos/${GITHUB_REPOSITORY}/pulls/"
+  local idx issue_num has_tracking_label timeline_json merged_pr_num
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -852,7 +886,7 @@ close_merged_issues_sweep() {
 
     # Walk the issue timeline for cross-referenced PR URLs. Reuses the
     # same pattern as validation_fix_issue_has_merged_pr_evidence().
-    if ! timeline_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+    if ! timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}")"; then
       echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} timeline_fetch_failed — skipping this cycle."
       skipped_count=$((skipped_count + 1))
       continue
@@ -864,27 +898,14 @@ close_merged_issues_sweep() {
       continue
     fi
 
-    pr_urls="$(echo "${timeline_json}" | jq -r '[.[] | select(.event == "cross-referenced" and (.source.issue.pull_request.url? | type == "string")) | .source.issue.pull_request.url] | unique | .[]?' 2>/dev/null || true)"
-
-    merged_pr_num=""
-    if [ -n "${pr_urls}" ]; then
-      while IFS= read -r pr_url; do
-        [ -n "${pr_url}" ] || continue
-        if [[ "${pr_url}" != "${pr_api_prefix}"* ]]; then
-          continue
-        fi
-        if ! pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)"; then
-          continue
-        fi
-        if ! echo "${pr_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
-          continue
-        fi
-        if echo "${pr_json}" | jq -e '(.merged_at != null) or (.merged == true)' >/dev/null 2>&1; then
-          merged_pr_num="$(echo "${pr_json}" | jq -r '.number // empty' 2>/dev/null || echo "")"
-          break
-        fi
-      done <<< "${pr_urls}"
-    fi
+    merged_pr_num="$(printf '%s' "${timeline_json}" | jq -r '
+      [.[]
+        | select(.event == "cross-referenced")
+        | select((.source.issue.pull_request.url? | type == "string") and ((.source.issue.merged // false) == true))
+        | .source.issue.number
+      ]
+      | first // empty
+    ' 2>/dev/null || echo "")"
 
     if [ -z "${merged_pr_num}" ]; then
       # Policy: do not close, send Telegram alert for investigation.
@@ -1251,9 +1272,7 @@ evaluate_sync_superseded_by_main() {
 
   while IFS= read -r issue_num; do
     [ -n "${issue_num}" ] || continue
-    if ! timeline_prs="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
-      --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | unique | .[]' \
-      2>/dev/null)"; then
+    if ! timeline_prs="$(_issue_cross_ref_pr_numbers_unique "${issue_num}" 2>/dev/null)"; then
       SYNC_SUPERSEDED_CONFIDENT="false"
       continue
     fi
@@ -2536,9 +2555,7 @@ close_linked_pr() {
   local issue_num="$1"
   local close_reason="${2:-Closed by orchestrator stall recovery.}"
   local pr_num
-  pr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
-    --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-    || echo "")"
+  pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
   if [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
     local pr_state
     pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' | grep -xE 'open|closed|merged' || echo "")"
@@ -2921,9 +2938,7 @@ STALL_EOF
     retrigger_review)
       echo "  Re-triggering review for issue #${issue_num}..."
       local pr_num
-      pr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
-        --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-        || echo "")"
+      pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
       if [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
         local head_ref
         head_ref="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' || echo "")"
@@ -3107,7 +3122,7 @@ invoke_stall_judge() {
   recent_comments="$(printf '%s' "${issue_comments_json}" | jq -c '[.[] | {author: (.user.login // ""), created_at: (.created_at // ""), body: (.body // "")}] | (if length > 8 then .[-8:] else . end)' 2>/dev/null || echo '[]')"
 
   local linked_pr
-  linked_pr="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' || echo "")"
+  linked_pr="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
 
   local linked_pr_json='{}'
   local target_pr=""
@@ -3906,9 +3921,7 @@ PY
         # disabling it still gives full opt-out.
         if { [ -z "${_std_linked_json}" ] || [ "${_std_linked_json}" = "null" ]; } && [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ]; then
           local _std_lpr_num _std_lpr_json _std_lpr_merged
-          _std_lpr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
-            --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-            2>/dev/null || echo "")"
+          _std_lpr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
           if [[ "${_std_lpr_num}" =~ ^[0-9]+$ ]]; then
             _std_lpr_json="$(_fetch_pr_json "${_std_lpr_num}")"
             _std_lpr_merged="$(_jq_field "${_std_lpr_json}" '.merged_at != null' 'true|false')"
@@ -4014,18 +4027,11 @@ STALL_EOF
         local pr_num
         local pr_lookup_ok="false"
         local head_ref
-        local timeline_json
         local pr_json
-        timeline_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null || echo "")"
-        pr_num="$(printf '%s' "${timeline_json}" | jq -r '
-          if (type == "array") then
-            [.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last // empty
-          else
-            empty
-          end
-        ' 2>/dev/null | tail -n1)"
-        if printf '%s' "${timeline_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+        if pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null)"; then
           pr_lookup_ok="true"
+        else
+          pr_lookup_ok="false"
         fi
         if [ "${pr_lookup_ok}" = "true" ] && [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
           pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" 2>/dev/null || echo "")"
@@ -4051,15 +4057,7 @@ STALL_EOF
         ;;
       attempt_merge)
         local merge_pr
-        local merge_timeline_json
-        merge_timeline_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" 2>/dev/null || echo "")"
-        merge_pr="$(printf '%s' "${merge_timeline_json}" | jq -r '
-          if (type == "array") then
-            [.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last // empty
-          else
-            empty
-          end
-        ' 2>/dev/null | tail -n1)"
+        merge_pr="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
         if [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
           local merge_pr_json
           local merge_state
@@ -4426,9 +4424,7 @@ recover_stalled_issue() {
       fi
       if [ -z "${_lpr_num}" ]; then
         # Cache miss — fall back to the legacy per-issue REST lookup.
-        _lpr_num="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/timeline" \
-          --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-          2>/dev/null || echo "")"
+        _lpr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
         if [[ "${_lpr_num}" =~ ^[0-9]+$ ]]; then
           local _lpr_json=""
           local _lpr_merged=""
@@ -5121,9 +5117,7 @@ The poller will resume processing on the next cycle."
           PRIOR_WAVE_REMEDIATED="true"
         elif echo "${PW_LABELS}" | jq -e 'index("ai:ready-to-merge")' >/dev/null 2>&1; then
           echo "  [backward-scan] #${pw_inum} is ai:ready-to-merge. Attempting auto-merge..."
-          PW_PR="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/timeline" \
-            --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-            || echo "")"
+          PW_PR="$(_issue_cross_ref_pr_number_last "${pw_inum}" 2>/dev/null || echo "")"
           if [[ "${PW_PR}" =~ ^[0-9]+$ ]]; then
             _pw_pr_json="$(_fetch_pr_json "${PW_PR}")"
             PW_PR_STATE="$(_jq_field "${_pw_pr_json}" '.state' 'open|closed|merged')"
@@ -5412,8 +5406,7 @@ json.dump(result, sys.stdout)
     ISSUE_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}" --jq '.state' | grep -xE 'open|closed' || echo "open")"
     ISSUE_STATES_JSON="$(echo "${ISSUE_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${ISSUE_STATE}" '. + {($key): $state}')"
 
-    LINKED_PR_NUM="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/timeline" \
-      --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last // empty' || echo "")"
+    LINKED_PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
     PR_STATE="unknown"
     PR_MERGED="false"
     if [[ "${LINKED_PR_NUM}" =~ ^[0-9]+$ ]]; then
@@ -5484,9 +5477,7 @@ json.dump(result, sys.stdout)
   echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "ready-to-merge") | .github_issue' | while read -r rtm_issue; do
     [[ "${rtm_issue}" =~ ^[0-9]+$ ]] || continue
     echo "  Issue #${rtm_issue} is ready-to-merge, finding linked PR..."
-    RTM_PR="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rtm_issue}/timeline" \
-      --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-      || echo "")"
+    RTM_PR="$(_issue_cross_ref_pr_number_last "${rtm_issue}" 2>/dev/null || echo "")"
     if [[ "${RTM_PR}" =~ ^[0-9]+$ ]]; then
       _rtm_pr_json="$(_fetch_pr_json "${RTM_PR}")"
       PR_STATE="$(_jq_field "${_rtm_pr_json}" '.state' 'open|closed|merged')"
@@ -5560,9 +5551,7 @@ json.dump(result, sys.stdout)
   # ---------------------------------------------------------------
   echo "${WAVE_STATUS}" | jq -r '.issues[] | select(.status == "in_progress" or .status == "done") | .github_issue' | while read -r ip_issue; do
     [[ "${ip_issue}" =~ ^[0-9]+$ ]] || continue
-    IP_PR="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ip_issue}/timeline" \
-      --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-      || echo "")"
+    IP_PR="$(_issue_cross_ref_pr_number_last "${ip_issue}" 2>/dev/null || echo "")"
     if ! [[ "${IP_PR}" =~ ^[0-9]+$ ]]; then
       continue
     fi
@@ -5715,9 +5704,7 @@ json.dump(result, sys.stdout)
       echo "  Retry count for #${rb_issue}: ${RETRY_COUNT}/${MAX_REVIEW_BLOCKED_RETRIES}"
 
       # Find linked PR
-      RB_PR="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/timeline" \
-        --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-        || echo "")"
+      RB_PR="$(_issue_cross_ref_pr_number_last "${rb_issue}" 2>/dev/null || echo "")"
       if ! [[ "${RB_PR}" =~ ^[0-9]+$ ]]; then
         echo "  No linked PR found for issue #${rb_issue}, skipping."
         continue
@@ -7262,9 +7249,7 @@ Manual intervention required." >/dev/null
   _sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"
   for inum in ${_sorted_issue_nums}; do
     [ -n "${inum}" ] || continue
-    PR_NUM="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/timeline" \
-      --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-      || echo "")"
+    PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
     if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
       # Fetch the diff into a temp file before truncating: piping
       # gh api directly into `head -500` causes SIGPIPE on gh api once
@@ -7602,9 +7587,7 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
         echo "Reverting ${REVERT_COUNT} PR(s)..."
         echo "${JUDGE_JSON}" | jq -r '.issues_to_revert[]' | while read -r revert_issue; do
           # Find PR linked to this issue
-          PR_TO_REVERT="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${revert_issue}/timeline" \
-            --jq '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-            || echo "")"
+          PR_TO_REVERT="$(_issue_cross_ref_pr_number_last "${revert_issue}" 2>/dev/null || echo "")"
           if [[ "${PR_TO_REVERT}" =~ ^[0-9]+$ ]]; then
             echo "  Reverting PR #${PR_TO_REVERT} (issue #${revert_issue})..."
             # Create revert PR via gh

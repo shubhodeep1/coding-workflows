@@ -24,10 +24,11 @@ def test_stall_control_env_defaults_are_declared() -> None:
 def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
 	wf = _workflow()
 	assert "for pf in mode-judge.txt mode-judge-review-blocked.txt mode-judge-stall-recovery.txt serena-efficiency-block.txt; do" in wf
-	assert "repos/${wf_source}/contents/prompts/${pf}?ref=${script_ref}" in wf
-	assert "${pf} not found on ${script_ref}; falling back to main" in wf
-	assert "repos/${wf_source}/contents/prompts/${pf}?ref=main" in wf
-	assert "::warning::${pf} not found on ${script_ref}; falling back to main" in wf
+	assert "src=\".codex-workflow-src/prompts/${pf}\"" in wf
+	assert "if [ ! -f \"${src}\" ] && [ -f \".codex-workflow-src-main/prompts/${pf}\" ]; then" in wf
+	assert "src=\".codex-workflow-src-main/prompts/${pf}\"" in wf
+	assert "::error::Missing required support file prompts/${pf}" in wf
+	assert "install -m 0644 \"${src}\" \"prompts/${pf}\"" in wf
 
 
 def main() -> int:
