@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n.github/workflows/test-and-mark-stable.yml\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/test-and-mark-stable.yml",
+  "fingerprint": "fa79f37d3ec1e45ac2fd85bbd68f0954f5af820839f342668e4c1e5fd70c916a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1204,
+    "run_id": "24513964920",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24513964920",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416135845_7a3d048d2d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1204,
+    "run_id": "24513964920"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-16T13:58:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
