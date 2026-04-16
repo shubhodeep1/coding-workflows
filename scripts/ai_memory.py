@@ -490,7 +490,6 @@ def cmd_processed_command_check(args: argparse.Namespace) -> int:
     args = _read_env_defaults(args)
     if not args.enabled:
         _print_json({"ok": True, "enabled": False, "exists": False, "entry": None})
-        _emit_telemetry("processed-command-check", ok=True, enabled=False, exists=False)
         return 0
 
     repo_root = _resolve_repo_root(args.repo_root)
@@ -529,7 +528,6 @@ def cmd_processed_command_check(args: argparse.Namespace) -> int:
         )
         if is_missing_branch:
             _print_json({"ok": True, "enabled": False, "exists": False, "entry": None, "warning": error_text})
-            _emit_telemetry("processed-command-check", ok=True, enabled=False, exists=False, warning="branch_unavailable")
             return 0
         print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
         _print_json({"ok": False, "enabled": True, "exists": False, "entry": None, "error": error_text})
@@ -543,7 +541,6 @@ def cmd_processed_command_list(args: argparse.Namespace) -> int:
     args = _read_env_defaults(args)
     if not args.enabled:
         _print_json({"ok": True, "enabled": False, "entries": [], "count": 0})
-        _emit_telemetry("processed-command-list", ok=True, enabled=False, count=0)
         return 0
 
     repo_root = _resolve_repo_root(args.repo_root)
@@ -583,7 +580,6 @@ def cmd_processed_command_list(args: argparse.Namespace) -> int:
         )
         if is_missing_branch:
             _print_json({"ok": True, "enabled": False, "entries": [], "count": 0, "warning": error_text})
-            _emit_telemetry("processed-command-list", ok=True, enabled=False, count=0, warning="branch_unavailable")
             return 0
         print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
         _print_json({"ok": False, "enabled": True, "entries": [], "count": 0, "error": error_text})
@@ -613,7 +609,6 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
                 "result": result,
             }
         )
-        _emit_telemetry("clarify-loop-guard", ok=True, enabled=False, blocked=bool(result.get("blocked")), cycle=_safe_int(result.get("cycle")), entries_considered=0)
         return 0
 
     repo_root = _resolve_repo_root(args.repo_root)
@@ -675,7 +670,6 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
                     "warning": error_text,
                 }
             )
-            _emit_telemetry("clarify-loop-guard", ok=True, enabled=False, blocked=bool(result.get("blocked")), cycle=_safe_int(result.get("cycle")), entries_considered=0, warning="branch_unavailable")
             return 0
         print(f"AI_MEMORY_ERROR: {exc}", file=sys.stderr)
         _print_json(
@@ -687,7 +681,6 @@ def cmd_clarify_loop_guard(args: argparse.Namespace) -> int:
                 "error": error_text,
             }
         )
-        _emit_telemetry("clarify-loop-guard", ok=False, enabled=True, error="git_error", warning=error_text)
         return 2
     finally:
         if branch_dir:
