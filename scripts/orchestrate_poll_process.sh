@@ -3220,15 +3220,18 @@ build_active_issue_set() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Fetch in_progress + queued runs (recent, max 50).
-  # _safe_gh_jq guarantees empty stdout on failure → fallback is valid JSON.
+  # Fetch active runs from the shared per-tick actions-runs loader.
+  # This preserves one conditional API retrieval per tick.
+  local actions_runs_blob
+  actions_runs_blob="$(_load_actions_runs_cached)"
+
+  # Preserve historical status selection semantics (in_progress/queued, max 50
+  # each) while sourcing from one shared payload.
   local runs_json
-  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
-    --jq '.workflow_runs' || echo '[]')"
+  runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
   local queued_json
-  queued_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
-    --jq '.workflow_runs' || echo '[]')"
+  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "queued")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${queued_json}" ] || queued_json='[]'
 
 
@@ -3299,11 +3302,12 @@ cancel_zombie_runs_for_issue() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Re-fetch in_progress runs and find zombies matching this issue.
-  # _safe_gh_jq guarantees empty stdout on failure → fallback stays valid.
+  # Reuse the shared actions-runs blob and preserve prior in_progress+50 scope.
+  local actions_runs_blob
+  actions_runs_blob="$(_load_actions_runs_cached)"
+
   local runs_json
-  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
-    --jq '.workflow_runs' || echo '[]')"
+  runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
 
   local zombie_run_ids
