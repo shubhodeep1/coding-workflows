@@ -561,7 +561,7 @@ def truncate_to_budget(context: dict[str, Any], prompt_token_budget: int) -> dic
 			continue
 		ordered_keys = sorted(
 			field_dict.keys(),
-			key=lambda key: (_to_int((field_dict.get(key) or {}).get("total_runs"), 0), key),
+			key=lambda key: (_to_int((field_dict.get(key) if isinstance(field_dict.get(key), dict) else {}).get("total_runs"), 0), key),
 		)
 		for key in ordered_keys:
 			if estimate() <= prompt_token_budget:
