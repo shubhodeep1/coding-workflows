@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/workflow_log_analysis_cache.v1.json",
+  "title": "WorkflowLogAnalysisCacheV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repositories"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "repositories": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "runs_etag",
+          "runs_window_start",
+          "jobs_seen_set",
+          "logs_seen_set",
+          "last_updated"
+        ],
+        "properties": {
+          "runs_etag": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "runs_window_start": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "jobs_seen_set": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "logs_seen_set": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "last_updated": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "runs_snapshot": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "rows_snapshot": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    }
+  }
+}
