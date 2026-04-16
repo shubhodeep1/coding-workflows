@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+# Pre-flight syntax check: detect transient file corruption (e.g. CI
+# runner filesystem issues) before executing.  On failure, print the
+# exact parse error, dump an md5 fingerprint for post-mortem, and exit
+# with a clear diagnostic instead of a cryptic "unexpected token" deep
+# in the script.
+if ! bash -n "${BASH_SOURCE[0]}" 2>/tmp/_rb_judge_syntax_err; then
+	echo "::error::review_rb_judge.sh failed pre-flight syntax check — file may be corrupt on this runner."
+	echo "--- syntax error detail ---"
+	cat /tmp/_rb_judge_syntax_err
+	echo "--- file fingerprint ---"
+	md5sum "${BASH_SOURCE[0]}" 2>/dev/null || wc -c < "${BASH_SOURCE[0]}"
+	echo "---"
+	rm -f /tmp/_rb_judge_syntax_err
+	exit 2
+fi
+rm -f /tmp/_rb_judge_syntax_err
+
 set -euo pipefail
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-/tmp/codex-support}"
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
