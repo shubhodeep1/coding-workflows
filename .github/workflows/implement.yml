@@ -206,6 +206,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true'
         run: |
           echo "Existing PR already present for this issue; exiting safely."
+          echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
           exit 0
 
       - name: Resolve integration ref

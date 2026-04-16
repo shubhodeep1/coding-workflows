@@ -1113,6 +1113,564 @@ def test_label_contract_matches_helper_catalog_and_phase_priority():
 
 
 # ---------------------------------------------------------------------------
+# Partition guard: files_touched validation, hot-file loader, and
+# auto-serialize sibling-overlap resolution
+# ---------------------------------------------------------------------------
+
+
+def test_validate_decomposition_accepts_missing_files_touched():
+	"""Backward compat: issues without files_touched still validate, and the
+	field is normalized to an empty list on the issue object."""
+	data = _make_decomposition()
+	validated = orchestrate_lib.validate_decomposition(data)
+	for issue in validated["issues"]:
+		assert issue["files_touched"] == [], f"expected empty list for {issue['id']}, got {issue['files_touched']!r}"
+
+
+def test_validate_decomposition_normalizes_files_touched_paths():
+	"""Paths are normalized: leading ./ stripped, backslashes → forward, dedup."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": [
+			"./src/a.py",
+			"src/a.py",
+			"scripts\\b.sh",
+			"  docs/c.md  ",
+		]},
+	])
+	validated = orchestrate_lib.validate_decomposition(data)
+	ft = validated["issues"][0]["files_touched"]
+	assert "src/a.py" in ft
+	assert ft.count("src/a.py") == 1, "duplicates should be collapsed"
+	assert "scripts/b.sh" in ft
+	assert "docs/c.md" in ft
+
+
+def test_validate_decomposition_rejects_non_list_files_touched():
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": "README.md"},
+	])
+	try:
+		orchestrate_lib.validate_decomposition(data)
+	except orchestrate_lib.OrchestrateError as exc:
+		assert "files_touched" in str(exc)
+	else:
+		raise AssertionError("expected OrchestrateError for non-list files_touched")
+
+
+def test_validate_decomposition_rejects_empty_path_in_files_touched():
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["src/a.py", ""]},
+	])
+	try:
+		orchestrate_lib.validate_decomposition(data)
+	except orchestrate_lib.OrchestrateError as exc:
+		assert "must not be empty" in str(exc)
+	else:
+		raise AssertionError("expected OrchestrateError for empty path")
+
+
+def test_validate_decomposition_caps_files_touched_length():
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1,
+		 "files_touched": [f"f{i}.py" for i in range(51)]},
+	])
+	try:
+		orchestrate_lib.validate_decomposition(data)
+	except orchestrate_lib.OrchestrateError as exc:
+		assert "max 50" in str(exc)
+	else:
+		raise AssertionError("expected OrchestrateError for oversize files_touched")
+
+
+def test_load_hot_files_missing_returns_empty_set(tmp_path_hack=None):
+	with tempfile.TemporaryDirectory() as td:
+		result = orchestrate_lib.load_hot_files(Path(td) / "does_not_exist.json")
+		assert result == set()
+
+
+def test_load_hot_files_parses_valid_registry():
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "hot_files.json"
+		_write_json(p, {"hot_files": ["README.md", "./agents.md", "scripts\\x.sh", ""]})
+		result = orchestrate_lib.load_hot_files(p)
+		assert "README.md" in result
+		assert "agents.md" in result, "./ prefix must be stripped"
+		assert "scripts/x.sh" in result, "backslash must be normalized"
+		assert "" not in result
+
+
+def test_load_hot_files_malformed_returns_empty_set():
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "hot_files.json"
+		p.write_text("not json", encoding="utf-8")
+		assert orchestrate_lib.load_hot_files(p) == set()
+
+
+def test_load_hot_files_wrong_shape_returns_empty_set():
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "hot_files.json"
+		_write_json(p, {"something_else": ["x"]})
+		assert orchestrate_lib.load_hot_files(p) == set()
+
+
+def test_validate_wave_file_partition_empty_issues_no_overlap():
+	"""Issues with empty files_touched are never flagged — the byte-level
+	poller probe handles unknown-scope issues at merge time."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": []},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": []},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+	overlaps = orchestrate_lib.validate_wave_file_partition(["a", "b"], issues_by_id)
+	assert overlaps == []
+
+
+def test_validate_wave_file_partition_detects_plain_pair_overlap():
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["src/x.py"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["src/x.py", "src/y.py"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+	overlaps = orchestrate_lib.validate_wave_file_partition(["a", "b"], issues_by_id, hot_files=set())
+	assert len(overlaps) == 1
+	assert overlaps[0]["type"] == "pair"
+	assert overlaps[0]["files"] == ["src/x.py"]
+	assert {overlaps[0]["issue_a"], overlaps[0]["issue_b"]} == {"a", "b"}
+
+
+def test_validate_wave_file_partition_separates_hot_file_category():
+	"""An overlap entirely on hot files is reported as type=hot_file; a
+	mixed overlap is reported twice (once hot_file, once pair)."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["README.md", "src/x.py"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["README.md", "src/x.py"]},
+		{"id": "c", "title": "T", "body": "b", "priority": 3, "files_touched": ["README.md"]},
+		{"id": "d", "title": "T", "body": "b", "priority": 4, "files_touched": ["README.md"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+	overlaps = orchestrate_lib.validate_wave_file_partition(["a", "b", "c", "d"], issues_by_id, hot_files={"README.md"})
+
+	hot_pairs = [o for o in overlaps if o["type"] == "hot_file"]
+	plain_pairs = [o for o in overlaps if o["type"] == "pair"]
+	# a vs b: both hot_file (README.md) and pair (src/x.py)
+	# a vs c, a vs d, b vs c, b vs d, c vs d: hot_file only
+	assert len(hot_pairs) == 6
+	assert len(plain_pairs) == 1
+	assert plain_pairs[0]["files"] == ["src/x.py"]
+
+
+def test_auto_serialize_file_overlaps_basic_pair():
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["src/shared.py"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["src/shared.py"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	serializations = orchestrate_lib.auto_serialize_file_overlaps(data, hot_files=set())
+	assert len(serializations) == 1
+	assert serializations[0]["winner"] == "a"  # lower priority number wins first-wave
+	assert serializations[0]["loser"] == "b"
+	# An edge a -> b should now exist
+	assert {"from": "a", "to": "b"} in data["dependency_edges"]
+
+
+def test_auto_serialize_file_overlaps_priority_tie_breaker_is_stable():
+	data = _make_decomposition(issues=[
+		{"id": "beta", "title": "T", "body": "b", "priority": 1, "files_touched": ["x.md"]},
+		{"id": "alpha", "title": "T", "body": "b", "priority": 1, "files_touched": ["x.md"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	serializations = orchestrate_lib.auto_serialize_file_overlaps(data, hot_files=set())
+	# Tie-break by lexicographic ID: alpha wins
+	assert serializations[0]["winner"] == "alpha"
+	assert serializations[0]["loser"] == "beta"
+
+
+def test_auto_serialize_file_overlaps_cycle_guard_wires_to_detect_cycles():
+	"""The cycle guard is defensive. In practice it is structurally
+	unreachable (a pre-existing edge always separates the two siblings
+	into different waves so no overlap is detected). This test verifies
+	that the guard is wired up by monkey-patching _detect_cycles to
+	raise, and asserting that auto_serialize_file_overlaps re-raises
+	with a 'cycle' marker so the orchestrate.yml check-partition step
+	surfaces the right diagnostic."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["x.py"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["x.py"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	orig = orchestrate_lib._detect_cycles
+	try:
+		def _fake(ids, edges):
+			# Raise only when the candidate edge (a -> b) is present, to
+			# mimic a cycle being introduced by the serializer.
+			if any(e.get("from") == "a" and e.get("to") == "b" for e in edges):
+				raise orchestrate_lib.OrchestrateError("synthetic cycle for test")
+		orchestrate_lib._detect_cycles = _fake
+		try:
+			orchestrate_lib.auto_serialize_file_overlaps(data, hot_files=set())
+		except orchestrate_lib.OrchestrateError as exc:
+			assert "cycle" in str(exc).lower()
+		else:
+			raise AssertionError("expected OrchestrateError for cycle")
+	finally:
+		orchestrate_lib._detect_cycles = orig
+
+
+def test_compute_waves_auto_serializes_sibling_overlap():
+	"""End-to-end: compute_waves() default path pushes the overlapping
+	sibling into a later wave."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["README.md"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["README.md"]},
+		{"id": "c", "title": "T", "body": "b", "priority": 3, "files_touched": ["src/other.py"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	waves = orchestrate_lib.compute_waves(data, hot_files=set())
+	# With auto-serialize, b is pushed to wave 2; a and c remain in wave 1
+	assert len(waves) == 2
+	w1_ids = {i["id"] for i in waves[0]}
+	w2_ids = {i["id"] for i in waves[1]}
+	assert w1_ids == {"a", "c"}
+	assert w2_ids == {"b"}
+	assert data["partition_serializations"], "serializations audit trail must be recorded"
+
+
+def test_compute_waves_opt_out_of_auto_serialize_returns_raw_waves():
+	"""auto_serialize=False yields the pre-rewrite wave layout."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["README.md"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["README.md"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	waves = orchestrate_lib.compute_waves(data, hot_files=set(), auto_serialize=False)
+	assert len(waves) == 1
+	assert {i["id"] for i in waves[0]} == {"a", "b"}
+
+
+def test_compute_waves_persists_files_touched_on_state_entries():
+	"""build_tracking_state carries files_touched onto each wave entry so
+	the poller can consult it without re-parsing issue bodies."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["src/a.py"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["src/b.py"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	waves = orchestrate_lib.compute_waves(data, hot_files=set())
+	state = orchestrate_lib.build_tracking_state(
+		data=data,
+		waves=waves,
+		issue_number_map={"a": 100, "b": 101},
+	)
+	wave_issues = state["waves"][0]["issues"]
+	ft_by_id = {i["id"]: i["files_touched"] for i in wave_issues}
+	assert ft_by_id["a"] == ["src/a.py"]
+	assert ft_by_id["b"] == ["src/b.py"]
+
+
+def test_cli_check_partition_reports_planned_serializations():
+	"""End-to-end CLI: check-partition emits planned rewrites without
+	mutating the input file."""
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "decomp.json"
+		_write_json(p, _make_decomposition(issues=[
+			{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["README.md"]},
+			{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["README.md"]},
+		]))
+		# Isolate from the real hot_files.json in CWD
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": []})
+		argv = [
+			"check-partition",
+			"--input-file", str(p),
+			"--hot-files-path", str(hot_p),
+		]
+		# Capture stdout
+		import io
+		from contextlib import redirect_stdout
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = orchestrate_lib.main(argv)
+		assert rc == 0, f"check-partition exit {rc}"
+		report = json.loads(buf.getvalue())
+		assert report["ok"] is True
+		assert report["total_overlaps"] == 1
+		assert len(report["planned_serializations"]) == 1
+		# Input file should be untouched (check-partition is dry-run)
+		roundtrip = json.loads(p.read_text(encoding="utf-8"))
+		assert roundtrip["dependency_edges"] == []
+
+
+def test_compute_effective_hot_files_no_telemetry_returns_seed():
+	"""Zero-config baseline: no committed seed, no telemetry => empty set."""
+	import orchestrate_lib as ol
+	eff, audit = ol.compute_effective_hot_files(set())
+	assert eff == set()
+	assert audit["committed_seed_count"] == 0
+	assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_only_committed_seed():
+	import orchestrate_lib as ol
+	eff, audit = ol.compute_effective_hot_files({"README.md", "src/a.py"})
+	assert eff == {"README.md", "src/a.py"}
+	assert audit["committed_seed_count"] == 2
+	assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_learns_from_telemetry_meeting_threshold():
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 5, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 10, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["scripts/god.sh", "README.md"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p)
+		assert "scripts/god.sh" in eff, "3 events / 2 projects should promote"
+		assert "README.md" not in eff, "1 event is below threshold"
+		assert audit["learned_count"] == 1
+		assert audit["learned_files"][0]["path"] == "scripts/god.sh"
+		assert audit["learned_files"][0]["events"] == 3
+		assert audit["learned_files"][0]["distinct_projects"] == 2
+
+
+def test_compute_effective_hot_files_window_excludes_old_events():
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			# Plenty of events — but all outside the 90-day window.
+			{"ts": now - 86400 * 120, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["old.py"]},
+			{"ts": now - 86400 * 130, "project": "B", "pr_a": 3, "pr_b": 4, "paths": ["old.py"]},
+			{"ts": now - 86400 * 140, "project": "C", "pr_a": 5, "pr_b": 6, "paths": ["old.py"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p, window_days=90)
+		assert "old.py" not in eff, "events outside window should not promote"
+		assert audit["telemetry_events_total"] == 3
+		assert audit["telemetry_events_in_window"] == 0
+		assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_distinct_projects_required():
+	"""Even with many events, a single project cannot promote on its own."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * i, "project": "only_one", "pr_a": i, "pr_b": i + 100, "paths": ["runaway.py"]}
+			for i in range(1, 10)
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p, min_distinct_projects=2)
+		assert "runaway.py" not in eff, "single project should not promote even with high event count"
+		assert audit["telemetry_events_in_window"] == 9
+		assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_unions_seed_and_learned():
+	"""Committed seed and learned telemetry compose via set union."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["learned.py"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["learned.py"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["learned.py"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files({"seeded.py"}, p)
+		assert eff == {"seeded.py", "learned.py"}
+		assert audit["committed_seed_count"] == 1
+		assert audit["learned_count"] == 1
+
+
+def test_compute_effective_hot_files_handles_missing_file_gracefully():
+	"""A missing JSONL path is equivalent to an empty telemetry source."""
+	import orchestrate_lib as ol
+	eff, audit = ol.compute_effective_hot_files({"seed.py"}, "/nonexistent/path/merge.jsonl")
+	assert eff == {"seed.py"}
+	assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_skips_malformed_records():
+	"""Non-JSON lines and records with wrong shapes are silently skipped."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		lines = [
+			"not json at all",
+			"{}",  # empty object
+			'{"ts": "not_an_int", "project": "X", "paths": ["x.py"]}',
+			'{"ts": %d, "project": "A", "paths": "not-a-list"}' % now,
+			# Three valid records across two projects meeting threshold
+			'{"ts": %d, "project": "A", "paths": ["valid.py"]}' % (now - 86400),
+			'{"ts": %d, "project": "A", "paths": ["valid.py"]}' % (now - 86400 * 2),
+			'{"ts": %d, "project": "B", "paths": ["valid.py"]}' % (now - 86400 * 3),
+		]
+		p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+		eff, audit = ol.compute_effective_hot_files(set(), p)
+		assert "valid.py" in eff
+		assert audit["telemetry_events_total"] >= 3
+
+
+def test_compute_effective_hot_files_normalizes_learned_paths():
+	"""Learned paths are normalized the same way the committed seed is."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["./src/a.py"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["src\\a.py"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["src/a.py"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p)
+		assert eff == {"src/a.py"}, f"paths should normalize to a single entry, got {eff}"
+		assert audit["learned_files"][0]["events"] == 3
+
+
+def test_cli_check_partition_uses_telemetry_jsonl():
+	"""End-to-end CLI: check-partition accepts --conflict-telemetry-jsonl
+	and promotes learned hot files into the effective set."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		decomp_p = Path(td) / "decomp.json"
+		_write_json(decomp_p, _make_decomposition(issues=[
+			{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["scripts/god.sh"]},
+			{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["scripts/god.sh"]},
+		]))
+		tel_p = Path(td) / "tel.jsonl"
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": []})
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["scripts/god.sh"]},
+		]
+		with tel_p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+
+		argv = [
+			"check-partition",
+			"--input-file", str(decomp_p),
+			"--hot-files-path", str(hot_p),
+			"--conflict-telemetry-jsonl", str(tel_p),
+		]
+		import io
+		from contextlib import redirect_stdout
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = ol.main(argv)
+		assert rc == 0
+		report = json.loads(buf.getvalue())
+		assert "scripts/god.sh" in report["hot_files"]
+		assert report["hot_files_audit"]["learned_count"] == 1
+		# The overlap is reported as hot_file (not just plain pair) because
+		# the learned set now includes scripts/god.sh.
+		hot_overlaps = [o for o in report["wave_reports"][0]["overlaps"] if o["type"] == "hot_file"]
+		assert len(hot_overlaps) >= 1
+
+
+def test_cli_compute_waves_uses_telemetry_for_serialization():
+	"""Auto-serialize uses the effective (seed ∪ learned) hot-file set."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		decomp_p = Path(td) / "decomp.json"
+		_write_json(decomp_p, _make_decomposition(issues=[
+			{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["shared.md"]},
+			{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["shared.md"]},
+		]))
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": []})
+		tel_p = Path(td) / "tel.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["shared.md"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["shared.md"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["shared.md"]},
+		]
+		with tel_p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		argv = [
+			"compute-waves",
+			"--input-file", str(decomp_p),
+			"--hot-files-path", str(hot_p),
+			"--conflict-telemetry-jsonl", str(tel_p),
+			"--write-back",
+		]
+		import io
+		from contextlib import redirect_stdout
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = ol.main(argv)
+		assert rc == 0
+		report = json.loads(buf.getvalue())
+		assert "shared.md" in report["hot_files"]
+		# b should be serialized into wave 2 because shared.md is learned hot
+		assert report["total_waves"] == 2
+
+
+def test_cli_compute_waves_write_back_mutates_input():
+	"""compute-waves --write-back persists serialized edges back to disk."""
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "decomp.json"
+		_write_json(p, _make_decomposition(issues=[
+			{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["x.md"]},
+			{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["x.md"]},
+		]))
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": []})
+		argv = [
+			"compute-waves",
+			"--input-file", str(p),
+			"--hot-files-path", str(hot_p),
+			"--write-back",
+		]
+		import io
+		from contextlib import redirect_stdout
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = orchestrate_lib.main(argv)
+		assert rc == 0
+		roundtrip = json.loads(p.read_text(encoding="utf-8"))
+		assert {"from": "a", "to": "b"} in roundtrip["dependency_edges"]
+		assert roundtrip.get("partition_serializations")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 

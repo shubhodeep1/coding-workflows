@@ -149,15 +149,28 @@ All code is production-bound. Verify: logic correctness, error paths, race condi
 
 ## 4. Environment Variables
 
+<!-- anchor:agents-env-vars -->
+<!-- Parallel orchestrator sub-issues: append new env-var bullets to the
+     bottom of this list under this anchor. Do NOT reorder existing
+     bullets or reflow paragraphs — parallel edits that rewrite
+     existing bullets here cause merge conflicts. -->
 - Always provide defaults for new env vars unless explicitly told otherwise.
 - Preserve all existing env var names.
 - Batch controls in this repo: `BATCH_API_DISABLED` (default `false`), `BATCH_API_PROVIDER` (default `auto`), `BATCH_API_POLL_TIMEOUT_HOURS` (default `24`).
+- Orchestrator clean-wave control: `ENABLE_CLEAN_WAVE_JUDGE_SKIP` (default `true`) skips judge invocation on clean completed waves (no failures, not stuck, project not complete) and advances wave mechanically.
+- Integration-sync conflict knobs (see also section 18 below):
+  - `INTEGRATION_CONFLICT_MAX_RETRIES` (default `3`) — global resolver-retry budget for non-orchestrator integration branches.
+  - `INTEGRATION_SYNC_CONFLICT_MAX_RETRIES` (default `1`) — tighter budget applied **only** when the head ref matches `orchestrator/project-*`. One resolver shot, then escalate to the integration judge.
+  - `FINGERPRINT_PER_FILE_CAP` (default `12`) — cap on captured patterns per file per direction.
+  - `FINGERPRINT_MIN_PATTERN_CHARS` (default `12`) — minimum trimmed-line length for a captured fingerprint pattern.
 - Clarify orchestrator override: `THINKING_LEVEL_CLARIFY_ORCHESTRATOR` (default `high`) applies only when clarify LLM runs for `ai:orchestrator-managed` issues via forced human `/reclarify`; non-forced orchestrator-managed clarify runs skip Codex and auto-post `/answer [auto-answered-by-orchestrator]`.
 - Stall recovery controls include `ENABLE_STALL_HUMAN_TERMINALIZATION` (default `false`): legacy autonomous ladder remains default; stall-judge `escalate_human` outputs are terminalization-gated to the non-human fallback action unless explicitly enabled.
 - Orchestrator pre-LLM short-circuit control: `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` (default `1200`) allows `orchestrate.yml` to skip decomposer and open one plain issue when description length is below threshold and no multi-step markers are detected.
 - Orchestrator clarify loop guard: `ORCHESTRATOR_MAX_CLARIFY_CYCLES` (default `3`) caps auto-answer clarification cycles before escalating to `ai:blocked`.
 - Implementation no-op reissue cap: `MAX_IMPL_NOOP_REISSUES` (default `2`) limits automatic re-issues for `ai:implementation-failed` before the poller closes the issue and lets the judge verify whether work is already present.
 - GitHub API rate-limit admin alert: `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600`) throttles the Telegram admin alert fired from `scripts/gh_helpers.sh` when a GH API rate limit is detected. State is kept in a Telegram pinned message (marker `<!-- gh_rl_ts:EPOCH -->`) to avoid spending GH API calls on dedup. Fail-closed on pin failure. See README "GitHub API rate-limit admin alert" section.
+- Orchestrator merge-conflict probe: `MAX_MERGE_DEFERRALS` (default `5`) caps how many consecutive poll cycles a single sub-PR may be deferred by `probe_sibling_merge_conflicts` in `scripts/orchestrate_poll_process.sh`. The probe uses local `git merge-tree --write-tree --name-only` against every other open sibling PR targeting the same integration branch, spending zero GH API calls per probe (one batched `gh pr list` + one batched `git fetch` per cycle). Exceeding the threshold emits a Telegram WARNING but does not fail the PR.
+- Orchestrator auto-learning hot-file registry: consumer repos get partitioning with ZERO manual setup. On every detected sibling conflict, the poller appends a record to `ai-memory/orchestrator/merge_conflicts.jsonl` on the `ai-memory` branch (git protocol only, 0 GH API calls, auto-creates the branch via `memory_ensure_branch`). On the next orchestrator run, the planner step in `.github/workflows/orchestrate.yml` does `git fetch --depth=50 origin ai-memory` (git protocol, 0 GH API calls), reads the JSONL via `git show`, and unions telemetry-learned files meeting `ORCHESTRATOR_HOT_FILE_MIN_EVENTS` (default `3`) across `ORCHESTRATOR_HOT_FILE_MIN_PROJECTS` (default `2`) distinct projects within `ORCHESTRATOR_HOT_FILE_WINDOW_DAYS` (default `90`) with the optional committed seed at `.github/ai/hot_files.json`. The committed seed is OPTIONAL — consumer repos do not need to create it. Both sources missing is a valid state: the partition guard degrades to pairwise file-touch overlap detection and the poller probe still catches byte-level conflicts.
 
 ## 4a. Post-Codex Recovery Docs Sync
 
@@ -379,6 +392,26 @@ If you need a new data shape that truly cannot be satisfied by any existing call
 - Resolver behavior must fail open: missing metadata, invalid format, missing branch, or GH API failure must emit warning/notice and leave `steps.refctx.outputs.ref` empty (checkout falls back to default branch).
 - `orchestrate_poll.yml` is an explicit exception: one run can process multiple tracking issues, so a single integration ref cannot be chosen safely for a shared checkout.
 - Regression guard: `tests/test_workflow_checkout_integration_ref_audit.py` scans all `.github/workflows/*.yml` checkout@v5 usages and fails unless each file is either in the required-resolver set above or in an explicit allow-list with rationale.
+
+---
+
+## 18. Orchestrator Integration-Sync Auto-Heal Hardening
+
+When a sub-issue PR merges into an orchestrator integration branch (head matches `orchestrator/project-*`), the poller captures intent fingerprints from the merged diff and persists them under the new top-level state field `merged_issue_fingerprints` (object keyed by GitHub issue number). Each entry stores `must_contain` and `must_not_contain` regex pattern lists derived from added/removed lines in the PR diff.
+
+When a `main → integration_branch` sync conflict subsequently triggers `heal_integration_branch_conflict`:
+
+- The resolver dispatch uses `prompts/integration-sync-conflict-resolver.txt` (rendered by `.github/workflows/review_autofix.yml` when the head ref matches `orchestrator/project-*`) instead of the generic `prompts/conflict-resolver.txt`. The integration template injects the tracking-issue title/body, the merged sub-issues list, and the full `merged_issue_fingerprints` JSON, and instructs the model to synthesise rather than pick a side when both sides of a hunk carry merged sub-issue intent.
+- After the codex resolver writes the working tree but **before** the `[ai-merge-resolve]` commit lands, the resolver step calls `scripts/verify_integration_fingerprints.py` against the captured fingerprints. A `must_contain` regex that no longer matches, or a `must_not_contain` regex that reappears, hard-fails the resolver step with `::error::` annotations. The merge state is left intact so the next poll tick re-enters healing and escalates to the integration judge (per `INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1` default).
+- The retry budget is **branch-aware** in `heal_integration_branch_conflict`: orchestrator integration branches honour the tighter `INTEGRATION_SYNC_CONFLICT_MAX_RETRIES` (default 1), all other dispatch sites honour the historical `INTEGRATION_CONFLICT_MAX_RETRIES` (default 3).
+
+Operational rules:
+
+- The fingerprint capture helper (`capture_intent_fingerprints_for_merged_subissue`) is **going-forward only** — sub-issues merged before this hardening landed have no fingerprints and are silently skipped by the verifier.
+- `verify_integration_fingerprints.py` lives in `OPTIONAL_BOOTSTRAP_SCRIPTS` so older consumer-repo `script_ref` pins bootstrap cleanly with a fail-open warning rather than a hard error. Do **not** promote it to `REQUIRED_BOOTSTRAP_SCRIPTS` until the next stable channel cut, otherwise consumer repos pinned to the prior `@stable` will break on bootstrap.
+- The verifier exits 0 on success, 1 on hard violation (resolver step aborts, no commit), 2 on plumbing failures (file missing or unparseable JSON — fail-open warn). Do not change those exit codes — `review_autofix.yml` keys its `case` on them.
+- New state field `merged_issue_fingerprints` must be seeded by `ensure_integration_conflict_state_fields` on every poll tick so jq arithmetic over it is safe.
+- All renames of the new env vars and new state field are **breaking changes** per CLAUDE.md §6 (Naming Immutability) and require an explicit alongside-old shim.
 
 ---
 

@@ -70,6 +70,7 @@ jobs:
             local ref="$1"
             local dest="$2"
             rm -rf "${dest}"
+            mkdir -p "$(dirname "${dest}")"
             if git clone --quiet --no-tags --depth 1 --branch "${ref}" "${WF_REMOTE_URL}" "${dest}" 2>/dev/null; then
               return 0
             fi
@@ -121,11 +122,11 @@ jobs:
             fi
 
             if [ -f "${target_path}" ]; then
-              echo "Using local fallback for ${target_path} (not found on ${script_ref}: ${repo_path})"
+              echo "Using local fallback for ${target_path} (not found on ${resolved_script_ref}: ${repo_path})"
               return 0
             fi
 
-            echo "Missing required file: ${repo_path} (${script_ref}) and local fallback ${target_path}" >&2
+            echo "Missing required file: ${repo_path} (${resolved_script_ref}) and local fallback ${target_path}" >&2
             return 1
           }
 
@@ -349,6 +350,7 @@ jobs:
 
           support_stage_root="${RUNNER_TEMP}/codex-issue-pr-status-alert-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           support_primary_dir="${support_stage_root}/primary"
+          mkdir -p "${support_stage_root}"
 
           alert_support_root=""
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
@@ -437,6 +439,7 @@ jobs:
 
           support_stage_root="${RUNNER_TEMP}/codex-issue-pr-status-cleanup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           support_primary_dir="${support_stage_root}/primary"
+          mkdir -p "${support_stage_root}"
 
           cleanup_support_root=""
           if [ "${{ github.repository }}" = "${wf_source}" ]; then

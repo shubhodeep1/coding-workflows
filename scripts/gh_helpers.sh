@@ -84,6 +84,32 @@ _gh_rate_limit_wait()
 }
 
 # ---------------------------------------------------------------
+# Circuit breaker: rate-limit flag file.
+#
+# When any gh_retry / curl_gh_api helper detects a GitHub API
+# rate limit, it touches this file.  Callers (e.g.
+# orchestrate_poll.yml) can check gh_rate_limit_breaker_tripped
+# to suppress self-retrigger and let the cron schedule handle the
+# next cycle instead.
+#
+# The file path defaults to /tmp/.gh_rate_limit_circuit_breaker
+# and can be overridden via GH_RATE_LIMIT_BREAKER_FILE env var.
+# ---------------------------------------------------------------
+_GH_RATE_LIMIT_BREAKER_FILE="${GH_RATE_LIMIT_BREAKER_FILE:-/tmp/.gh_rate_limit_circuit_breaker}"
+
+_gh_rate_limit_trip_breaker()
+{
+	touch "${_GH_RATE_LIMIT_BREAKER_FILE}" 2>/dev/null || true
+}
+
+# gh_rate_limit_breaker_tripped — returns 0 (true) if a rate
+# limit was encountered at any point during this run.
+gh_rate_limit_breaker_tripped()
+{
+	[ -f "${_GH_RATE_LIMIT_BREAKER_FILE}" ]
+}
+
+# ---------------------------------------------------------------
 # _gh_ratelimit_tg_alert — Telegram admin alert when a GitHub
 # API rate limit is hit in any workflow or script.
 #
@@ -335,6 +361,7 @@ gh_retry()
 		if _is_gh_rate_limit "${stderr_content}"; then
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
+			_gh_rate_limit_trip_breaker
 			_gh_rate_limit_wait
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
@@ -388,6 +415,7 @@ gh_retry_to_file()
 		if _is_gh_rate_limit "${stderr_content}"; then
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
+			_gh_rate_limit_trip_breaker
 			_gh_rate_limit_wait
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
@@ -487,6 +515,7 @@ gh_api_json_to_file()
 			if _is_gh_rate_limit "${stderr_content}"; then
 				echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 				_gh_ratelimit_tg_alert
+				_gh_rate_limit_trip_breaker
 				_gh_rate_limit_wait
 			else
 				local wait_secs=$(( 2 ** (attempt - 1) ))
@@ -793,6 +822,7 @@ _gh_issue_timeline_with_cross_refs_rest()
 				.
 			end
 		)
+		| map(select((.event == "cross-referenced") or (.event == "closed")))
 	' 2>/dev/null
 }
 
