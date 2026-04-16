@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 6\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/review_autofix.yml\n      Problem: The command correctly uses the local `gh_retry` function (defined at line 655 in that step), but the arguments passed to it are incorrect. The function expects the first argument to be the output file, and the remaining arguments to be the command to run. By passing `api graphql`, the resulting execution is `gh api graphql`, which then tries to run the `api` subcommand of `gh` with `graphql` as an argument. However, `gh` does not have an `api graphql` subcommand; the correct subcommand is `gh api graphql`.; The shell execution would be `gh api graphql ...`. While this *might* work if the local `gh_retry` implicitly prepends `gh`, the definition at line 659 is `if gh \"$@\" > \"$outfile\"`. Passing `api graphql` results in `gh api graphql`. This is actually correct for the `gh` CLI (`gh api` is the command, `graphql` is the subcommand). However, looking at the cross-pollination summary, there was a concern that a fallback `gh_retry` might exist. In this specific job step, the local `gh_retry` is correctly defined and prepends `gh`. **Correction**: Upon closer inspection of line 659, the `gh` command is indeed prepended. The initial suspicion of it failing is incorrect; `gh api graphql` is valid.; However, a different issue exists in the same file:\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: .github/workflows/review_autofix.yml\n      Problem: This transformation is applied to `_linked_raw` regardless of whether the fetch succeeded. While line 726 gates the environment export on `_linked_fetch_ok`, the `_linked_raw` variable is used at line 735 to build the context file. If the fetch failed, `_linked_raw` becomes `[]` via line 721, and the context file will contain \"No linked issues found.\"; This is technically a \"safe\" degradation, but it masks the distinction between \"fetch failed\" and \"no issues found\" in the logs/artifacts. More importantly, the `printf` at line 721 uses an unquoted `%s` which could trigger issues if the raw JSON contains certain characters, though the double quotes around `${_linked_raw}` mitigate this.\n      Confidence: avg 3.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [3] File: .github/workflows/review_autofix.yml\n      Problem: Location: 97; Issue: Observability of PR gate failures; Suggested minimal fix: While `2>/dev/null` was removed, adding a specific error message if the `if` block fails would help distinguish between \"PR is not open\" and \"API call failed\".; Estimated lines changed: 4; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: .github/workflows/review_autofix.yml\n      Problem: Location: 3052; Issue: Redundant check for `LINKED_ISSUES_JSON`; Suggested minimal fix: Consolidate the set-check and the non-empty check into a single `if [ \"${LINKED_ISSUES_JSON:-[]}\" != \"[]\" ]; then`.; Estimated lines changed: 5; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: scripts/build_issue_consensus.py\n      Problem: The use of `or` treats `0` as falsy. If `_extract_line` returns `0` (indicating the start of a file or a header section) for the first code reference, any subsequent code reference with a non-zero line number will overwrite it.; In scenarios where a reviewer reports an issue at line 0 (file-level) and then mentions a specific line later in the same block, the consensus logic will discard the line 0 reference.; ### HARDENING_SUGGESTIONS:\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [6] File: scripts/build_issue_consensus.py\n      Problem: Location: 100; Issue: Line 0 treated as falsy; Suggested minimal fix: `if line_number is None: line_number = _extract_line(new_code_ref)`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml\nscripts/build_issue_consensus.py",
+  "fingerprint": "cc2bf04b5fee57c83dd96f2a20542b89e1639ecc9885bfbf791cb2336da986c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1221,
+    "run_id": "24531134851",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24531134851",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416202449_09d8dbff2f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1221,
+    "run_id": "24531134851"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-16T20:24:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
