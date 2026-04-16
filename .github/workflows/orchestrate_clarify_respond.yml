@@ -746,6 +746,39 @@ jobs:
         with:
           path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Data-provision guard
+        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true')
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/clarify_data_provision_guard.py ]; then
+            echo "::notice::clarify_data_provision_guard.py not found; skipping data-provision guard."
+            exit 0
+          fi
+          if [ ! -f "${RUNTIME_DIR}/clarification_comment.txt" ] || [ ! -f "${CODEX_OUTPUT_FILE}" ]; then
+            echo "::notice::Missing clarification or answer files; skipping data-provision guard."
+            exit 0
+          fi
+
+          GUARDED_OUTPUT="${RUNTIME_DIR}/codex_output_guarded.txt"
+          if python3 scripts/clarify_data_provision_guard.py \
+            --clarification-file "${RUNTIME_DIR}/clarification_comment.txt" \
+            --answers-file "${CODEX_OUTPUT_FILE}" > "${GUARDED_OUTPUT}"; then
+            if ! diff -q "${CODEX_OUTPUT_FILE}" "${GUARDED_OUTPUT}" >/dev/null 2>&1; then
+              echo "::warning::Data-provision guard overrode one or more answers to prevent circular clarification loop."
+              echo "::group::Guard diff"
+              diff "${CODEX_OUTPUT_FILE}" "${GUARDED_OUTPUT}" || true
+              echo "::endgroup::"
+              cp "${GUARDED_OUTPUT}" "${CODEX_OUTPUT_FILE}"
+            else
+              echo "Data-provision guard: no overrides needed."
+            fi
+          else
+            echo "::warning::Data-provision guard script failed (fail-open); using original answers."
+          fi
+
       - name: Parse and post answer
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
         env:
@@ -865,6 +898,27 @@ jobs:
               fi
               PREVIOUS_CLARIFY_COMMENT_ID="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.previous_clarify_comment_id // 0' 2>/dev/null || echo "0")"
               PREVIOUS_ANSWER_COMMENT_ID="$(printf '%s' "${LOOP_GUARD_JSON}" | jq -r '.result.previous_answer_comment_id // 0' 2>/dev/null || echo "0")"
+            fi
+          fi
+
+          # --- Backup loop guard: comment-count fallback ---
+          # The memory-based guard may fail open (returns blocked=false) when
+          # the memory system has errors.  As a secondary check, count actual
+          # auto-answer comments on the issue thread.  This uses the already-
+          # fetched thread history (0 extra API calls).  If the count already
+          # meets or exceeds MAX_CYCLES and the memory guard didn't block,
+          # force a block to prevent runaway clarification loops.
+          if [ "${LOOP_BLOCKED}" != "true" ] && [ "${SKIP_AUTO_ANSWER}" != "true" ]; then
+            COMMENT_COUNT_GUARD=0
+            if [ -f "${THREAD_HISTORY_FILE:-/dev/null}" ]; then
+              COMMENT_COUNT_GUARD="$(grep -c '\[auto-answered-by-orchestrator\]' "${THREAD_HISTORY_FILE}" 2>/dev/null || true)"
+              COMMENT_COUNT_GUARD="${COMMENT_COUNT_GUARD:-0}"
+            fi
+            if [ "${COMMENT_COUNT_GUARD}" -ge "${MAX_CYCLES}" ]; then
+              echo "::warning::Backup loop guard: found ${COMMENT_COUNT_GUARD} prior auto-answer comments (MAX_CYCLES=${MAX_CYCLES}). Blocking to prevent runaway loop."
+              LOOP_BLOCKED="true"
+              LOOP_REASON="backup_comment_count_guard"
+              CYCLE="$((COMMENT_COUNT_GUARD + 1))"
             fi
           fi
 

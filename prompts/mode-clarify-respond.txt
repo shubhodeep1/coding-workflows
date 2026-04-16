@@ -53,6 +53,22 @@ Hard prohibitions:
   repeat a prior cycle's answer for the same question, you must choose a
   different rung or ESCALATE. Do not repeat a losing answer.
 
+Data-provision guard (CRITICAL — prevents circular dead-ends):
+- If a lettered option (A, B, C, etc.) requires the respondent to provide,
+  supply, share, or paste specific external data — such as PR URLs, branch
+  names, commit SHAs, deployment URLs, build outputs, test results, or file
+  paths from branches you have not checked out — you MUST NOT select that
+  option unless you have already located that exact data in the repository
+  checkout.
+- When the recommended option requires external data you cannot supply, select
+  the most conservative fallback option instead. Look for options containing
+  phrases like "proceed without", "reduced scope", "skip this check", or
+  "work with what is available". If multiple fallbacks exist, prefer the one
+  closest to the end of the list.
+- Selecting an option that asks you to provide data, without actually providing
+  that data in the execution plan, creates a circular clarification loop that
+  wastes cycles. This is a hard failure.
+
 ESCALATE rule:
 - Use ESCALATE only when all 3 rungs are genuinely infeasible AND you can
   articulate exactly what is missing and why the repo cannot provide it.
