@@ -123,7 +123,13 @@ fi
 # -----------------------------------------------------------
 PR_DIFF="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
   -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
-PRELOADED_PR_META="$(jq -c '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' "${PR_META_FILE}" 2>/dev/null || echo '{}')"
+PRELOADED_PR_META="$(jq -c '{
+  title: (.title // ""),
+  body: (.body // ""),
+  head_ref: (.head_ref // .head.ref // .headRefName // ""),
+  base_ref: (.base_ref // .base.ref // .baseRefName // ""),
+  head_sha: (.head_sha // .head.sha // .headSha // "")
+}' "${PR_META_FILE}" 2>/dev/null || echo '{}')"
 if type gh_pr_with_all_comments >/dev/null 2>&1; then
   PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
 elif type _gh_pr_with_all_comments_rest >/dev/null 2>&1; then
