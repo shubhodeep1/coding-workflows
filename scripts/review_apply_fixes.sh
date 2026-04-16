@@ -483,19 +483,33 @@ while [ "${attempt}" -le 3 ]; do
   ) &
   wd_pid=$!
 
-  # Run codex with stderr-based heartbeat tracking
+  # Run codex with stderr-based heartbeat tracking.
+  # Use a named pipe (FIFO) instead of process substitution (2> >(...))
+  # to avoid a bash 5.2 bug where process substitution combined with
+  # backgrounding (&) corrupts the shell's script-file read position,
+  # causing spurious syntax errors after the retry loop exits.
+  _hb_fifo="$(mktemp -u /tmp/hb_fifo_editor.XXXXXX)"
+  mkfifo "${_hb_fifo}"
+  # Start heartbeat reader in background — reads stderr lines through
+  # the FIFO, updates the heartbeat file, and writes to tmp_err.
   (
-    exec codex exec --model "${MODEL_EDITOR}" --full-auto < "${EDITOR_PROMPT_FILE}"
-  ) > "${tmp_output}" 2> >(
     while IFS= read -r line || [ -n "$line" ]; do
       printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
       printf '%s\n' "$line"
-    done > "${tmp_err}"
+    done < "${_hb_fifo}" > "${tmp_err}"
   ) &
+  _hb_reader_pid=$!
+  # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
+  (
+    exec codex exec --model "${MODEL_EDITOR}" --full-auto < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
+  ) > "${tmp_output}" &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"
   cmd_rc=0
   wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
+  # Wait for the heartbeat reader to finish draining the FIFO.
+  wait "${_hb_reader_pid}" 2>/dev/null || true
+  rm -f "${_hb_fifo}"
 
   kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
