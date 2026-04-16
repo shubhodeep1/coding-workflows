@@ -287,6 +287,7 @@ FINAL RESPONSE FORMAT
 Plain text only.
 Output exactly these sections in this order:
 Changes made:
+Change status:
 Already satisfied (suggested but already present):
 Ignored suggestions (with short reason):
 Reviewer files processed:
@@ -309,6 +310,17 @@ Under PR comment audit: include one bullet per bot PR review/review_comment entr
 - path and line (if available)
 - disposition: applied / already satisfied / ignored
 - short reason for the disposition
+Under Change status: emit exactly one bullet whose value is one of:
+- edited
+- not-edited
+This bullet is the authoritative machine-readable signal of whether
+you modified any repository file on disk. It MUST agree with
+"Changes made:": if that section contains any concrete file-change
+claim, emit "- edited"; if it only contains "- none" or equivalent
+no-modification statements (optionally with informational sub-bullets
+for validation runs, assumptions, or missing-context notes), emit
+"- not-edited". Do NOT put any other text, qualifier, or sub-bullet
+under this section — exactly one of those two values, on its own line.
 Under Regression fingerprint: and Runtime failure path:
 - ALWAYS emit both sections, even when no previously changed hunk was
   touched. Each section must contain at least one bullet. The commit
@@ -523,7 +535,7 @@ while [ "${attempt}" -le 3 ]; do
 
   if [ "${cmd_rc}" -eq 0 ]; then
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
-    if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints" "${tmp_output}"; then
+    if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Change status:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints" "${tmp_output}"; then
       reviewer_validation_ok=true
       changes_lost_detected=false
       while IFS= read -r manifest_path; do
@@ -671,6 +683,9 @@ else
   cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
 Changes made:
 - none (editor failed before producing a validated summary)
+
+Change status:
+- not-edited
 
 Already satisfied (suggested but already present):
 - none (editor failed before producing a validated summary)
