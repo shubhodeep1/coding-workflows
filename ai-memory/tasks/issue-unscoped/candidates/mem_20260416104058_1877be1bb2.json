@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "High confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nprompts/mode-workflow-analysis.txt\nprompts/mode-workflow-analysis.txt",
+  "fingerprint": "f960dcc72dc2072177d3f5c320cab1960a8e8c0ada71f8a691724b15202bb290",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1176,
+    "run_id": "24505067813",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24505067813",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260416104058_1877be1bb2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1176,
+    "run_id": "24505067813"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-16T10:40:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
