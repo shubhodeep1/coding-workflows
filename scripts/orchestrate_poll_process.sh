@@ -2710,7 +2710,7 @@ dispatch_validation_workflow() {
 extract_comprehensive_release_metadata() {
   local comments_json="$1"
 
-  echo "${comments_json}" | jq -rc '
+  if ! echo "${comments_json}" | jq -rc '
     [.[].body // ""] | reverse as $bodies
     | {
         version_tag: (
@@ -2730,7 +2730,10 @@ extract_comprehensive_release_metadata() {
           ] | .[0] // ""
         )
       }
-  ' 2>/dev/null || echo '{"version_tag":"","test_repo":""}'
+  ' 2>/dev/null; then
+    echo "::warning::Failed to extract comprehensive release metadata from tracking comments; continuing with defaults." >&2
+    echo '{"version_tag":"","test_repo":""}'
+  fi
 }
 
 dispatch_comprehensive_release_workflow() {
@@ -2762,12 +2765,16 @@ handle_comprehensive_release_callback_if_needed() {
   local project_status="$1"
   local tracking_labels="$2"
   local comments_json="$3"
+  local callback_handled
 
   if ! has_label "${tracking_labels}" "ai:comprehensive-test-pending"; then
     return 0
   fi
 
-  if [ "${project_status}" = "complete" ]; then
+  callback_handled="$(jq -r '.comprehensive_release_callback.handled // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+  if [ "${callback_handled}" = "true" ]; then
+    echo "Comprehensive release callback already handled for project #${TRACKING_NUM}; skipping dispatch."
+  elif [ "${project_status}" = "complete" ]; then
     local metadata_json
     local version_tag
     local test_repo
@@ -2776,6 +2783,10 @@ handle_comprehensive_release_callback_if_needed() {
     metadata_json="$(extract_comprehensive_release_metadata "${comments_json}")"
     version_tag="$(echo "${metadata_json}" | jq -r '.version_tag // ""' 2>/dev/null || echo "")"
     test_repo="$(echo "${metadata_json}" | jq -r '.test_repo // ""' 2>/dev/null || echo "")"
+
+    if ! [[ "${version_tag}" =~ ^[A-Za-z0-9._/+:-]{1,100}$ ]]; then
+      version_tag=""
+    fi
 
     if ! [[ "${test_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
       test_repo=""
@@ -2801,8 +2812,21 @@ handle_comprehensive_release_callback_if_needed() {
       fi
       tg_notify "${msg}" "CRITICAL"
     fi
+
+    jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at}' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
   elif [ "${project_status}" = "failed" ] || [ "${project_status}" = "validation-failed" ]; then
     tg_notify "Comprehensive pipeline aborted for project #${TRACKING_NUM} (status: ${project_status}). Release workflow not dispatched." "CRITICAL"
+
+    jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at}' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+  else
+    echo "::warning::Skipping comprehensive release callback for unexpected project status '${project_status}'."
+    return 0
   fi
 
   if gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:comprehensive-test-pending" >/dev/null 2>&1; then
