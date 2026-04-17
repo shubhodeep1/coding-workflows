@@ -706,7 +706,12 @@ while [ "${attempt}" -le 3 ]; do
             echo "(clean)"
           fi
           echo "--- git diff --stat HEAD ---"
-          git diff --stat HEAD 2>/dev/null | head -40 || true
+          _cp_diffstat="$(git diff --stat HEAD 2>/dev/null || true)"
+          if [ -n "${_cp_diffstat}" ]; then
+            printf '%s\n' "${_cp_diffstat}" | head -40
+            _cp_diffstat_lines="$(printf '%s\n' "${_cp_diffstat}" | wc -l | tr -d '[:space:]')"
+            [ "${_cp_diffstat_lines:-0}" -gt 40 ] && echo "[truncated: ${_cp_diffstat_lines} total diffstat lines]"
+          fi
           echo "::endgroup::"
           exit 0
         fi
