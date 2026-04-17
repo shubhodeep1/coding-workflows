@@ -30,6 +30,9 @@ name: AI Validate (Reusable)
       status:
         description: "Validation status (pass|fail|error)"
         value: ${{ jobs.validate.outputs.status }}
+      raw_status:
+        description: "Raw validation status (preserves diagnostic classifier values)"
+        value: ${{ jobs.validate.outputs.raw_status }}
       summary:
         description: "Validation summary"
         value: ${{ jobs.validate.outputs.summary }}
