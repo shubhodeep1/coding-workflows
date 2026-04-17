@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 1\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/detect_editor_changes_lost.sh\n      Problem: Location: line 37; Issue: The `awk` pattern for the \"Changes made:\" section is case-sensitive and ignores leading whitespace. While currently consistent with the generator, making it case-insensitive would increase resilience.; Suggested minimal fix: Change `awk` filter to `/^[[:space:]]*[Cc]hanges made:/` (standardizing headers is preferred over `tolower` for a simple start-of-line match).; Estimated lines changed: 1; **HARDENING_RISK_SCORE: 1**; **RESULT: No changes are required.**\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/detect_editor_changes_lost.sh",
+  "fingerprint": "c43c51e106e1488b4f00847a0a2385d46001d7a17f71c3a1993823154ea7409e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1255,
+    "run_id": "24548175747",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24548175747",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417053611_323d377047",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1255,
+    "run_id": "24548175747"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-17T05:36:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
