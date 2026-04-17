@@ -1063,6 +1063,34 @@ The label contract (`/.github/ai/label_contract.v1.json`) is the single source o
 
 The poller’s managed-wave reconciliation pass repairs labels against this contract each cycle before wave-status and stall logic.
 
+### Stall recovery: linked-PR closure and re-issue Gap-2 surfacing
+
+When stall recovery closes a stuck issue and opens a replacement, two contracts are enforced by `scripts/orchestrate_poll_process.sh`:
+
+**Linked-PR closure (`close_linked_pr`).** Every stall-recovery `close_and_reissue` invocation (main and standalone) enumerates every open PR linked to the stalled issue via three independent lookups and closes each one:
+
+1. **Timeline cross-reference events** (`_issue_cross_ref_pr_numbers_unique`) — the historical primary source; returns every PR whose creation registered a cross-reference event on the issue timeline.
+2. **Head branch name** (`_linked_prs_by_branch_name`) — `gh pr list --head ai/issue-<n> --state open`; catches PRs the orchestrator opened on its conventional branch even when the timeline cross-ref event was missed (observed in prod for PR #2568 / issue #2552, where the timeline API silently omitted the event).
+3. **Body-parse** (`_linked_prs_by_body_reference`) — `gh pr list --search "#<n> in:body"` narrowed to open PRs, post-filtered by a case-insensitive regex for the GitHub close keywords `close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved` followed by `#<n>` and a non-digit boundary (so `#25528` does not match for issue #2552).
+
+Results are deduped (`sort -u`) so a PR surfaced by multiple strategies is only acted on once. Already-closed and merged PRs are skipped. Each call emits one of these diagnostic lines to the workflow log, grep-able for audit:
+
+- `close_linked_pr: closing linked PR #<pr> for issue #<n> (state=open).`
+- `close_linked_pr: skipping PR #<pr> for issue #<n> (state=closed|merged|unknown).`
+- `close_linked_pr: issue=#<n> scanned=<k> closed=<k>`
+- `close_linked_pr: no linked PRs found for issue #<n> (timeline/branch/body lookups all empty).`
+
+This enforces the documented `ai:closed` label semantic ("Linked PR closed without merge") that the single-path timeline lookup could silently violate.
+
+**Re-issue Gap-2 surfacing (`surface_reissue_closed_without_pr`).** When stall recovery is about to close a task whose body carries the `Re-issued from #<parent>` marker AND `_find_all_linked_prs` returned nothing — i.e. a re-issue that never produced a PR before stall recovery exhausted (observed in prod for re-issue #2591 of #2552) — four stable signals are emitted before the close:
+
+- **Log prefix** (public contract, do not rename): `REISSUE_CLOSED_WITHOUT_PR issue=<n> parent=<p> phase=<label> stall_minutes=<m> recovery_count=<c> source=<main|standalone>`
+- **GHA annotation**: `::warning title=Re-issue closed without PR::...`
+- **Issue comment** on the re-issue (before it is closed) summarising phase, stall duration, recovery attempt count, and the parent issue link.
+- **ai-memory ledger event** via `memory_record_run_event --event-type reissue_closed_without_pr`, gated on `memory_helpers.sh` being loaded.
+
+Per design (Q3=A), the surfacing is **informational**: it does not block the subsequent `close_and_reissue`, so forward progress through the re-issue chain continues. Downstream alerting should grep the log prefix or watch the ai-memory event type to trigger human review of the parent issue and re-issue chain.
+
 ### Telegram Notifications & Cleanup
 
 Telegram notifications fall into three categories based on their lifecycle:

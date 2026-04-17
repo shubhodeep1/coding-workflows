@@ -3529,6 +3529,104 @@ def test_standalone_close_and_reissue_keeps_clarification_only_label():
 	assert '--label "ai:orchestrator-managed"' not in window
 
 
+def test_close_linked_pr_uses_multi_source_lookup_and_iterates():
+	"""Gap 1 regression guard: ``close_linked_pr`` MUST enumerate every
+	linked PR (cross-ref + branch-name + body-parse) and iterate, not
+	just consult the timeline ``last`` cross-ref. Enforced here as a
+	structural check so the prod miss that orphaned PR #2568 (issue
+	#2552) cannot silently regress."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("close_linked_pr() {")
+	end = script.index("\n}\n", start) + 2
+	body = script[start:end]
+	assert "_find_all_linked_prs" in body, (
+		"close_linked_pr must call _find_all_linked_prs (multi-source lookup)"
+	)
+	# Single-PR `_issue_cross_ref_pr_number_last` must NOT be used here;
+	# that's what caused the prod miss.
+	assert "_issue_cross_ref_pr_number_last" not in body, (
+		"close_linked_pr must not rely on the single-PR timeline lookup"
+	)
+	# Must iterate (while loop over lookup output) and record diagnostics.
+	assert "while IFS= read -r pr_num" in body
+	assert "close_linked_pr: closing linked PR #" in body
+	assert "close_linked_pr: skipping PR #" in body
+	assert "close_linked_pr: no linked PRs found for issue" in body
+
+
+def test_multi_source_lookup_helpers_present():
+	"""The three lookup strategies must exist as individually callable
+	helpers so future callers can reuse them without duplicating the
+	search logic."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "_linked_prs_by_branch_name()" in script
+	assert 'gh pr list --repo "${GITHUB_REPOSITORY}"' in script
+	assert '--head "ai/issue-${issue_num}"' in script
+	assert "_linked_prs_by_body_reference()" in script
+	body_ref_start = script.index("_linked_prs_by_body_reference()")
+	body_ref_end = script.index("\n}\n", body_ref_start) + 2
+	body_ref = script[body_ref_start:body_ref_end]
+	# Body-parse regex must include all three GitHub close keywords and
+	# a trailing word-boundary guard so "#25528" does not match for #2552.
+	assert "close[sd]?|fix(es|ed)?|resolve[sd]?" in body_ref
+	assert "\\\\b" in body_ref
+	assert "_find_all_linked_prs()" in script
+	# Dedup contract: sort -u so the same PR surfaced by multiple
+	# strategies is only acted on once.
+	find_all_start = script.index("_find_all_linked_prs()")
+	find_all_end = script.index("\n}\n", find_all_start) + 2
+	assert "sort -u" in script[find_all_start:find_all_end]
+
+
+def test_close_and_reissue_sites_surface_reissue_without_pr():
+	"""Gap 2 regression guard: BOTH close_and_reissue paths must call
+	``surface_reissue_closed_without_pr`` BEFORE closing the PR/issue,
+	so the surfacing lands on an open issue with the re-issue body
+	still accessible."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# Main-poll path.
+	main_anchor = '    close_and_reissue)\n      echo "  Closing and re-issuing stalled issue #${issue_num}..."'
+	assert main_anchor in script, "Could not locate main close_and_reissue"
+	main_window = script[script.index(main_anchor):script.index(main_anchor) + 600]
+	assert 'surface_reissue_closed_without_pr "${issue_num}"' in main_window
+	assert main_window.index('surface_reissue_closed_without_pr') < main_window.index('close_linked_pr'), (
+		"surface must run before close_linked_pr so the comment lands on an open issue"
+	)
+	assert '"main"' in main_window
+	# Standalone path.
+	standalone_anchor = 'close_linked_pr "${issue_num}" "Closed by standalone stall recovery'
+	assert standalone_anchor in script
+	idx = script.index(standalone_anchor)
+	pre = script[max(0, idx - 400):idx]
+	assert 'surface_reissue_closed_without_pr "${issue_num}"' in pre, (
+		"standalone close_and_reissue must also call surface_reissue_closed_without_pr"
+	)
+	assert '"standalone"' in pre
+
+
+def test_surface_reissue_closed_without_pr_emits_stable_signals():
+	"""The log prefix is a public contract (documented in agents.md)
+	because downstream alerting greps for it. Guard against accidental
+	rename."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("surface_reissue_closed_without_pr()")
+	end = script.index("\n}\n", start) + 2
+	body = script[start:end]
+	# Stable log prefix (documented contract).
+	assert 'echo "REISSUE_CLOSED_WITHOUT_PR issue=' in body
+	# GHA warning annotation.
+	assert "::warning title=Re-issue closed without PR::" in body
+	# Issue comment with the re-issue context.
+	assert "Re-issue closed without producing a PR" in body
+	# ai-memory ledger surface via the blessed helper — gated on
+	# helper availability so the script works in environments where
+	# memory_helpers.sh is not sourced.
+	assert "declare -F memory_record_run_event" in body
+	assert "reissue_closed_without_pr" in body
+	# Must no-op when body lacks the Re-issued marker.
+	assert "Re-issued from #" in body
+
+
 def test_implementation_failed_reissue_keeps_orchestrator_labels_and_updates_mapping():
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "implementation-failed"

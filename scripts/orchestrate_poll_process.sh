@@ -1077,6 +1077,69 @@ _issue_cross_ref_pr_number_last() {
   ' 2>/dev/null | tail -n1
 }
 
+# _linked_prs_by_branch_name — Return open PR numbers whose head branch
+# matches the orchestrator's conventional `ai/issue-<n>` naming.  Used by
+# `close_linked_pr` as a fallback when the issue timeline cross-reference
+# event was never recorded (observed in prod for issue #2552 / PR #2568,
+# where the timeline API did not expose the reference even though the PR
+# body said "Closes #<n>").
+# Output: newline-separated PR numbers, empty if none.  Fail-open.
+_linked_prs_by_branch_name()
+{
+	local issue_num="$1"
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 0
+	gh_retry gh pr list --repo "${GITHUB_REPOSITORY}" \
+		--head "ai/issue-${issue_num}" --state open \
+		--json number --jq '.[].number' 2>/dev/null || true
+}
+
+# _linked_prs_by_body_reference — Return open PR numbers whose body
+# contains a GitHub closing keyword ("Closes #N" / "Fixes #N" /
+# "Resolves #N", case-insensitive) targeting this issue.  Used as a second fallback
+# for `close_linked_pr` because relying solely on the timeline
+# cross-reference event is brittle (edits, Actions-bot-authored PRs, and
+# certain merge-queue interactions have all been observed to suppress the
+# event).  Narrows candidates via GitHub search then applies a
+# word-boundary regex so e.g. "#25528" does not match for issue #2552.
+# Output: newline-separated PR numbers, empty if none.  Fail-open.
+_linked_prs_by_body_reference()
+{
+	local issue_num="$1"
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 0
+	local candidates_json
+	candidates_json="$(gh_retry gh pr list --repo "${GITHUB_REPOSITORY}" --state open \
+		--search "#${issue_num} in:body" \
+		--json number,body --limit 100 2>/dev/null || echo "[]")"
+	printf '%s' "${candidates_json}" | jq -r --arg n "${issue_num}" '
+		(. // [])
+		| .[]
+		| select((.body // "") | test("(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#" + $n + "\\b"))
+		| .number
+	' 2>/dev/null || true
+}
+
+# _find_all_linked_prs — Union of the three lookup strategies above, used
+# by `close_linked_pr` to enumerate every PR that should be considered
+# for close-on-stall.  Dedupes across strategies so a PR surfaced by both
+# the timeline and the branch-name lookup is only emitted once.
+# API calls issued per invocation (upper bound):
+#   - 1 timeline fetch via _issue_cross_ref_pr_numbers_unique
+#   - 1 `gh pr list --head`
+#   - 1 `gh pr list --search` (narrowed; not a full-repo scan)
+# Fail-open: each strategy swallows its own errors; missing data never
+# raises an exception to the caller.
+# Output: newline-separated, sorted-unique PR numbers.
+_find_all_linked_prs()
+{
+	local issue_num="$1"
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 0
+	{
+		_issue_cross_ref_pr_numbers_unique "${issue_num}" 2>/dev/null || true
+		_linked_prs_by_branch_name "${issue_num}" 2>/dev/null || true
+		_linked_prs_by_body_reference "${issue_num}" 2>/dev/null || true
+	} | grep -E '^[0-9]+$' | sort -u
+}
+
 # _timeline_jq — Paginated timeline query with jq filter.
 # Fetches ALL pages of the timeline API (via _issue_timeline_with_cross_refs_json,
 # which is GraphQL-first with REST fallback) and applies a jq filter.
@@ -3529,17 +3592,124 @@ cancel_zombie_runs_for_issue() {
 close_linked_pr() {
   local issue_num="$1"
   local close_reason="${2:-Closed by orchestrator stall recovery.}"
-  local pr_num
-  pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
-  if [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
+  local pr_nums
+  pr_nums="$(_find_all_linked_prs "${issue_num}" 2>/dev/null || true)"
+
+  # Diagnostic: previously this helper only consulted the timeline
+  # cross-reference event and silently no-op'd when it returned nothing,
+  # which is exactly how PR #2568 was orphaned in prod (issue #2552 was
+  # re-issued but the PR stayed open).  Log every candidate source so any
+  # future miss leaves a trail in the workflow log.
+  if [ -z "${pr_nums}" ]; then
+    echo "  close_linked_pr: no linked PRs found for issue #${issue_num} (timeline/branch/body lookups all empty)." >&2
+    return 0
+  fi
+
+  local pr_num scanned=0 closed=0
+  while IFS= read -r pr_num; do
+    [[ "${pr_num}" =~ ^[0-9]+$ ]] || continue
+    scanned=$((scanned + 1))
     local pr_state
     pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' | grep -xE 'open|closed|merged' || echo "")"
     if [ "${pr_state}" = "open" ]; then
-      echo "  Closing linked PR #${pr_num} for issue #${issue_num}..."
-      gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
-        --comment "${close_reason}" 2>/dev/null || true
+      echo "  close_linked_pr: closing linked PR #${pr_num} for issue #${issue_num} (state=open)."
+      if gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
+          --comment "${close_reason}" 2>/dev/null; then
+        closed=$((closed + 1))
+      fi
+    else
+      echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (state=${pr_state:-unknown})."
     fi
-  fi
+  done <<< "${pr_nums}"
+  echo "  close_linked_pr: issue=#${issue_num} scanned=${scanned} closed=${closed}"
+}
+
+# surface_reissue_closed_without_pr — Emit a Gap-2 signal when stall
+# recovery is about to close a re-issued task that never produced a PR.
+# Observed in prod for issue #2591 (re-issue of #2552) which closed with
+# ai:closed after stall recovery exhausted, without ai/issue-2591 ever
+# receiving a PR.  Per spec (Q3=A) this function SURFACES only — it does
+# not block the subsequent close_and_reissue; forward progress continues.
+#
+# Must be called BEFORE the issue is closed so the issue comment lands
+# on an open issue.
+#
+# Args:
+#   issue_num       — number of the re-issue being closed
+#   phase           — last observed pipeline phase label (e.g. ai:done)
+#   stall_minutes   — how long it was stuck
+#   recovery_count  — prior stall-recovery attempts
+#   source          — "main" or "standalone" (recovery loop identifier)
+#
+# No-op when:
+#   - issue body lacks the "Re-issued from #<n>" marker (i.e. it is the
+#     original task, not itself a re-issue — still a gap but not Gap 2)
+#   - issue has at least one linked PR per _find_all_linked_prs
+#
+# Fail-open on every underlying call; the surfacing is best-effort and
+# must never block stall recovery.
+surface_reissue_closed_without_pr()
+{
+	local issue_num="$1"
+	local phase="${2:-}"
+	local stall_minutes="${3:-0}"
+	local recovery_count="${4:-0}"
+	local source_label="${5:-unknown}"
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 0
+
+	local issue_body parent_num
+	issue_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' 2>/dev/null || echo "")"
+	parent_num="$(printf '%s' "${issue_body}" | grep -oE 'Re-issued from #[0-9]+' | head -n1 | grep -oE '[0-9]+' | head -n1 || true)"
+	if [ -z "${parent_num}" ]; then
+		return 0
+	fi
+
+	local pr_nums
+	pr_nums="$(_find_all_linked_prs "${issue_num}" 2>/dev/null || true)"
+	if [ -n "${pr_nums}" ]; then
+		return 0
+	fi
+
+	# Stable structured log prefix — documented in agents.md so
+	# downstream alerting can grep it without parsing free-form text.
+	echo "REISSUE_CLOSED_WITHOUT_PR issue=${issue_num} parent=${parent_num} phase=${phase} stall_minutes=${stall_minutes} recovery_count=${recovery_count} source=${source_label}"
+	echo "::warning title=Re-issue closed without PR::Re-issue #${issue_num} (from #${parent_num}) closed without producing a PR; phase=${phase}, stuck ${stall_minutes}m, attempts=${recovery_count}, source=${source_label}."
+
+	gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<COMMENT_EOF
+⚠️ **Re-issue closed without producing a PR**
+
+This issue was created by orchestrator stall recovery as a re-issue of #${parent_num}, but no PR was ever opened against \`ai/issue-${issue_num}\` before stall recovery exhausted. Surfacing the close-out for operational review.
+
+- Last phase: \`${phase}\`
+- Stalled for: ${stall_minutes} minutes
+- Recovery attempts: ${recovery_count}
+- Source loop: ${source_label}
+
+The orchestrator will still create the next re-issue in the chain so forward progress continues, but a human should review issue #${parent_num} and the re-issue chain before further automation.
+COMMENT_EOF
+)" >/dev/null 2>&1 || true
+
+	if declare -F memory_record_run_event >/dev/null 2>&1; then
+		local meta
+		meta="$(jq -cn \
+			--arg repo "${GITHUB_REPOSITORY:-}" \
+			--arg issue "${issue_num}" \
+			--arg parent "${parent_num}" \
+			--arg phase "${phase}" \
+			--arg stall "${stall_minutes}" \
+			--arg attempts "${recovery_count}" \
+			--arg source "${source_label}" \
+			'{repository:$repo,issue_number:$issue,parent_issue_number:$parent,last_phase:$phase,stall_minutes:$stall,recovery_count:$attempts,source:$source}' 2>/dev/null || echo '{}')"
+		memory_record_run_event \
+			--run-id "${GITHUB_RUN_ID:-local}" \
+			--workflow "orchestrate_poll" \
+			--event-type "reissue_closed_without_pr" \
+			--status "warning" \
+			--message "Re-issue #${issue_num} (from #${parent_num}) closed without producing a PR" \
+			--issue-number "${issue_num}" \
+			--actor "${GITHUB_ACTOR:-orchestrator}" \
+			--metadata-json "${meta}" >/dev/null 2>&1 || true
+	fi
 }
 
 # ---------------------------------------------------------------
@@ -3951,6 +4121,7 @@ STALL_EOF
 
     close_and_reissue)
       echo "  Closing and re-issuing stalled issue #${issue_num}..."
+      surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${stall_minutes}" "${recovery_count}" "main"
       close_linked_pr "${issue_num}" \
         "Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
 
@@ -5097,6 +5268,7 @@ REISSUE_EOF
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
+          surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${elapsed_minutes}" "${recovery_count}" "standalone"
           close_linked_pr "${issue_num}" "Closed by standalone stall recovery — issue #${issue_num} was stuck in '${phase}' for ${elapsed_minutes}m."
           ensure_label_exists "ai:closed"
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
