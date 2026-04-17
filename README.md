@@ -30,6 +30,8 @@ Key behaviors:
 
 Memory operations are implemented in `scripts/memory_helpers.sh` (shared helper wrappers) and `scripts/ai_memory.py` (CLI). The `ai-memory` branch is created automatically on the first write.
 
+The memory schema set also includes the cross-run cache document used by workflow analysis tooling: `workflow_log_analysis_cache.v1.json`.
+
 **Telemetry:** Every memory operation emits a structured `AI_MEMORY_TELEMETRY: {...}` line to workflow logs (stderr from Python; shell wrappers use stdout unless stdout is reserved for machine-readable JSON, in which case telemetry is sent to stderr). These lines are picked up by the workflow log analysis pipeline and surfaced in the **AI Memory Health** section of optimization reports. Key fields: `op` (operation name), `ok`, `records_selected`, `estimated_tokens`, `keyword_method` (`llm`/`plain`/`none`), `fail_open`, `did_push`.
 
 ## Quickstart
@@ -111,6 +113,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `EDITOR_IDLE_TIMEOUT` | No | `1200` | review_autofix, implement | Editor watchdog idle timeout in seconds. The editor is killed if it produces no output for this long and has no active network connections. |
 | `EDITOR_MAX_WALL` | No | `3300` | review_autofix, implement | Maximum wall-clock seconds per editor attempt. Budget-aware: auto-capped to remaining job time minus a 2-min buffer. |
 | `EDITOR_MIN_ATTEMPT_SECS` | No | `300` | review_autofix | Minimum remaining job budget (seconds) required to start an editor attempt. Prevents futile retries near the job deadline. |
+| `REVIEW_PR_STATE_POLL_INTERVAL_SECS` | No | `10` | review_autofix | Sleep interval in seconds for the reviewer watchdog loop in `scripts/review_run_reviewers.sh`; the GitHub PR-state API check runs every 9 polls (default ~90s). Must be an integer in `10..3600`; invalid or out-of-range values emit `rate_limit_audit_fallback` warning and fail open to `10`. |
 | `MAX_POST_CODEX_REPAIR_ATTEMPTS` | No | `1` | implement | Maximum in-job post-Codex syntax-repair attempts after `Validate syntax of changed files` fails. Must be a non-negative integer (`0` disables in-job repair); invalid values fallback to `1`. The repair loop runs only for syntax-validator failures, enforces an allow-list scope guard, and then falls back to the existing diagnose/fix-up path when attempts are exhausted. |
 | `BULK_DELETE_THRESHOLD` | No | `3` | implement | Maximum number of file deletions allowed in a single AI implementation commit before the destructive-commit guard blocks it. Set higher for legitimate large refactors, or bypass on a per-run basis via `ALLOW_BULK_DELETE=true`. See "Destructive-commit guard" below. |
 | `ALLOW_BULK_DELETE` | No | `false` | implement | When `true`, the destructive-commit guard ignores the `BULK_DELETE_THRESHOLD` rejection path. Canonical workflow-source file deletions are still blocked unless `ALLOW_WORKFLOW_EDITS=true`. Use for legitimate large refactors approved by a human. |
@@ -799,6 +802,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `INTEGRATION_SYNC_CONFLICT_MAX_RETRIES` | `1` | Tighter ticks-before-judge budget applied only when head ref matches `orchestrator/project-*` (integration-sync conflicts) |
 | `FINGERPRINT_PER_FILE_CAP` | `12` | Cap on `must_contain`/`must_not_contain` patterns captured per file per merged sub-issue |
 | `FINGERPRINT_MIN_PATTERN_CHARS` | `12` | Minimum trimmed-line length for a captured fingerprint pattern |
+| `ACTIONS_RUNS_CACHE_TTL_SECONDS` | `60` | Cross-tick cache TTL (seconds) for `GET /actions/runs` snapshots persisted on the `ai-memory` branch and reused by orchestrator poll run-state readers |
 | `CONTEXT7_DISABLED` | `false` | Disable the optional Context7 MCP server setup in workflows |
 | `GIT_MCP_DISABLED` | `false` | Disable the optional Git MCP server setup in workflows (preloaded diff artifacts remain fallback) |
 | `AI_MEMORY_BRANCH` | `ai-memory` | Branch used for persistent AI memory |
@@ -830,6 +834,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `EDITOR_IDLE_TIMEOUT` | `1200` | Editor watchdog idle timeout (seconds); killed if no output and no active network connections |
 | `EDITOR_MAX_WALL` | `3300` | Max wall-clock seconds per editor attempt; auto-capped to remaining job budget |
 | `EDITOR_MIN_ATTEMPT_SECS` | `300` | Minimum job budget (seconds) required to start an editor attempt |
+| `REVIEW_PR_STATE_POLL_INTERVAL_SECS` | `10` | Sleep interval (seconds) for the reviewer watchdog loop in `scripts/review_run_reviewers.sh`; GitHub PR-state API checks run every 9 polls (default ~90s); must be integer `10..3600`, else warn (`rate_limit_audit_fallback`) and fall back to `10` |
 | `BATCH_API_DISABLED` | `false` | Kill switch for async batch mode in workflow-log-analysis (`true` forces sync fallback) |
 | `BATCH_API_PROVIDER` | `auto` | Batch provider hint (`auto`, `openai`, `anthropic`) for OpenRouter responses routing checks |
 | `BATCH_API_POLL_TIMEOUT_HOURS` | `24` | Maximum pending batch age before synchronous fallback |
@@ -1125,6 +1130,30 @@ The `gh_rate_limit_breaker_tripped` shell function is exported by `gh_helpers.sh
   - Script: `scripts/compare_issue_timeline_parity.sh`
   - Fixtures: `scripts/fixtures/issue-timeline/rest_timeline_fixture.json` and `scripts/fixtures/issue-timeline/graphql_timeline_fixture.json`
   - The script compares jq-normalized parity for merged-evidence detection, cross-reference URL/number extraction, and latest-linked-PR (`| last`) selection.
+
+### H4 PR Comments GraphQL Shim
+
+- `scripts/gh_helpers.sh` now exposes `gh_pr_with_all_comments owner repo pr_number`.
+- The helper fetches PR metadata + issue comments + review comments in one GraphQL call (`pullRequest` + `comments(first:100)` + `reviews(first:50)` + nested review `comments(first:100)`), then reshapes to the legacy contract consumed by existing jq filters:
+  - `meta`: `{title, body, head_ref, base_ref, head_sha}`
+  - `comments`: `[{author, body, created_at}]`
+  - `review_comments`: `[{author, path, line, body}]`
+- Fail-open fallback is mandatory and implemented: on GraphQL request/parse/transform failure, or if any `hasNextPage=true` (PR comments, reviews, or nested review comments), the helper falls back to the legacy REST pagination path.
+- Every fail-open path emits a structured warning with stable key: `::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments ...`.
+- `scripts/orchestrate_poll_process.sh` and `scripts/review_rb_judge.sh` now use this helper for comment-context hydration while preserving downstream prompt JSON semantics.
+- Manual parity check (`scripts/compare_issue_timeline_parity.sh`) now also validates PR context parity using:
+  - `scripts/fixtures/issue-timeline/rest_pr_with_comments_fixture.json`
+  - `scripts/fixtures/issue-timeline/graphql_pr_with_comments_fixture.json`
+
+### H5 Actions Runs Cross-Tick Cache
+
+- `scripts/orchestrate_poll_process.sh` now centralizes poller run-state reads behind `_load_actions_runs_cached`, so `build_active_issue_set`, `cancel_zombie_runs_for_issue`, and `invoke_stall_judge` filter one shared actions-runs blob per tick instead of issuing separate `GET /actions/runs` requests.
+- Cache payloads are stored per repository on the `ai-memory` branch and validated against `ai-memory/schemas/actions_runs_cache.v1.json`.
+- New CLI in `scripts/ai_memory.py`:
+  - `actions-runs-cache get --repo <owner/repo>`
+  - `actions-runs-cache put --repo <owner/repo> --runs-file <path> --etag <string>`
+- New env var `ACTIONS_RUNS_CACHE_TTL_SECONDS` (default `60`) controls freshness; invalid values fail-open to default with a warning.
+- Cache corruption/schema mismatch is fail-open and treated as cache miss with structured warning key `rate_limit_audit_fallback`.
 
 ## Runtime Validation Phase
 

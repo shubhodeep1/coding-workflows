@@ -11,6 +11,7 @@ import math
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -19,6 +20,27 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+try:
+    from ai_memory_lib import (
+        get_workflow_log_analysis_cache,
+        persist_memory_operation,
+        put_workflow_log_analysis_cache,
+        read_memory_root_from_branch,
+        resolve_memory_root_dir,
+    )
+except ModuleNotFoundError:
+    from scripts.ai_memory_lib import (
+        get_workflow_log_analysis_cache,
+        persist_memory_operation,
+        put_workflow_log_analysis_cache,
+        read_memory_root_from_branch,
+        resolve_memory_root_dir,
+    )
 
 SCHEMA_VERSION = "workflow_log_collector.v2"
 LOG_EXPORT_CATEGORIES = ("errors", "slow", "recent")
@@ -36,6 +58,8 @@ RETRY_MARKERS = (
     "503",
     "504",
 )
+WORKFLOW_LOG_CACHE_SCHEMA_VERSION = "v1"
+WORKFLOW_LOG_CACHE_SEEN_SET_LIMIT = 500
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -62,6 +86,230 @@ def _to_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_http_response(raw_output: str) -> tuple[int, dict[str, str], str]:
+    normalized = raw_output.replace("\r\n", "\n")
+    if not normalized.startswith("HTTP/"):
+        return 200, {}, normalized.strip()
+
+    status_code = 200
+    headers: dict[str, str] = {}
+    body = ""
+    remainder = normalized
+
+    while remainder.startswith("HTTP/"):
+        header_end = remainder.find("\n\n")
+        if header_end == -1:
+            header_block = remainder
+            remainder = ""
+        else:
+            header_block = remainder[:header_end]
+            remainder = remainder[header_end + 2 :]
+
+        lines = [line for line in header_block.split("\n") if line.strip()]
+        if lines:
+            match = re.match(r"HTTP/\S+\s+(\d{3})", lines[0].strip())
+            if match:
+                status_code = int(match.group(1))
+            parsed_headers: dict[str, str] = {}
+            for line in lines[1:]:
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                parsed_headers[key.strip().lower()] = value.strip()
+            headers = parsed_headers
+
+        if not remainder.startswith("HTTP/"):
+            body = remainder
+            break
+
+    return status_code, headers, body.strip()
+
+
+def _cache_default_payload() -> dict[str, Any]:
+    return {
+        "schema_version": WORKFLOW_LOG_CACHE_SCHEMA_VERSION,
+        "repositories": {},
+    }
+
+
+def _cache_enabled() -> bool:
+    enabled = str(os.getenv("AI_MEMORY_ENABLED", "true")).strip().lower()
+    return enabled in {"1", "true", "yes", "on", "y"}
+
+
+def _normalize_seen_set(values: Any, *, limit: int = WORKFLOW_LOG_CACHE_SEEN_SET_LIMIT) -> list[int]:
+    if not isinstance(values, list):
+        return []
+
+    ordered: list[int] = []
+    seen: set[int] = set()
+    for value in values:
+        run_id = _to_int(value, 0)
+        if run_id <= 0 or run_id in seen:
+            continue
+        ordered.append(run_id)
+        seen.add(run_id)
+
+    if len(ordered) > limit:
+        ordered = ordered[-limit:]
+    return ordered
+
+
+def _touch_seen_set(seen_set: list[int], run_id: int, *, limit: int = WORKFLOW_LOG_CACHE_SEEN_SET_LIMIT) -> list[int]:
+    if run_id <= 0:
+        return seen_set
+
+    next_values = [item for item in seen_set if item != run_id]
+    next_values.append(run_id)
+    if len(next_values) > limit:
+        next_values = next_values[-limit:]
+    return next_values
+
+
+def _normalize_runs_snapshot(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, list):
+        return []
+    return [dict(item) for item in values if isinstance(item, dict)]
+
+
+def _cache_run_key(run_id: int, run_attempt: int) -> tuple[int, int]:
+    return run_id, max(1, run_attempt)
+
+
+def _run_key_from_payload(payload: dict[str, Any]) -> tuple[int, int] | None:
+    run_id = _to_int(payload.get("run_id"), 0)
+    if run_id <= 0:
+        run_id = _to_int(payload.get("id"), 0)
+    if run_id <= 0:
+        return None
+
+    run_attempt = _to_int(payload.get("run_attempt"), 1)
+    return _cache_run_key(run_id, run_attempt)
+
+
+def _index_cached_rows(values: Any) -> dict[tuple[int, int], dict[str, Any]]:
+    indexed: dict[tuple[int, int], dict[str, Any]] = {}
+    if not isinstance(values, list):
+        return indexed
+
+    for row in values:
+        if not isinstance(row, dict):
+            continue
+        cache_key = _run_key_from_payload(row)
+        if cache_key is None:
+            continue
+        indexed[cache_key] = dict(row)
+    return indexed
+
+
+def _cached_log_excerpts(row: dict[str, Any] | None) -> list[dict[str, str]] | None:
+    if not isinstance(row, dict):
+        return None
+
+    values = row.get("log_excerpts")
+    if not isinstance(values, list):
+        return None
+
+    excerpts: list[dict[str, str]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        excerpts.append(
+            {
+                "step_name": str(item.get("step_name") or ""),
+                "excerpt": str(item.get("excerpt") or ""),
+            }
+        )
+    return excerpts
+
+
+def _run_snapshot_for_cache(run: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "id",
+        "name",
+        "path",
+        "status",
+        "conclusion",
+        "run_attempt",
+        "created_at",
+        "run_started_at",
+        "updated_at",
+    )
+    snapshot = {key: run.get(key) for key in keys}
+    snapshot["_workflow_family"] = run.get("_workflow_family")
+    return snapshot
+
+
+def _cache_warning(scope: str, error: Exception) -> None:
+    print(f"::warning::rate_limit_audit_fallback {scope}: {error}", file=sys.stderr)
+
+
+def _cache_read_context(
+    *,
+    repo_root: Path,
+    memory_branch: str,
+    memory_root_relative: str,
+) -> tuple[dict[str, Any], str | None, Path | None]:
+    if not _cache_enabled():
+        return _cache_default_payload(), None, None
+
+    branch_dir: Path | None = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=memory_branch,
+            memory_root_relative=memory_root_relative,
+        )
+        memory_root = resolve_memory_root_dir(branch_dir, memory_root_relative)
+        payload = get_workflow_log_analysis_cache(memory_root)
+        if not isinstance(payload, dict):
+            raise RuntimeError("cache payload is not an object")
+        return payload, None, branch_dir
+    except Exception as exc:  # noqa: BLE001
+        _cache_warning("workflow-log-analysis cache read failed", exc)
+        return _cache_default_payload(), str(exc), branch_dir
+
+
+def _cache_write_context(
+    *,
+    repo_root: Path,
+    memory_branch: str,
+    memory_root_relative: str,
+    push_retries: int,
+    payload: dict[str, Any],
+) -> bool:
+    if not _cache_enabled():
+        return False
+
+    try:
+        def _write_operation(clone_dir: Path) -> dict[str, Any] | None:
+            memory_root = resolve_memory_root_dir(clone_dir, memory_root_relative)
+            if put_workflow_log_analysis_cache(memory_root, payload) is None:
+                return None
+            return payload
+
+        result = persist_memory_operation(
+            repo_root,
+            memory_branch=memory_branch,
+            memory_root_relative=memory_root_relative,
+            push_retries=max(1, push_retries),
+            commit_message="Update workflow log analysis cache",
+            operation=_write_operation,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _cache_warning("workflow-log-analysis cache persist failed", exc)
+        return False
+
+    if result.get("operation_result") is None:
+        _cache_warning(
+            "workflow-log-analysis cache persist failed",
+            RuntimeError("cache write operation returned no payload"),
+        )
+        return False
+
+    return True
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -133,7 +381,9 @@ def gh_api_json(
     token: str,
     retries: int = 3,
     backoff_seconds: float = 1.0,
-) -> dict[str, Any]:
+    request_headers: dict[str, str] | None = None,
+    include_response_meta: bool = False,
+) -> dict[str, Any] | tuple[dict[str, Any], dict[str, Any]]:
     base_env = os.environ.copy()
     if token:
         base_env["GH_TOKEN"] = token
@@ -147,6 +397,14 @@ def gh_api_json(
         "-H",
         "Accept: application/vnd.github+json",
     ]
+    if request_headers:
+        for key, value in request_headers.items():
+            if not key or value is None:
+                continue
+            cmd.extend(["-H", f"{key}: {value}"])
+    if include_response_meta:
+        cmd.append("--include")
+
     for attempt in range(1, retries + 1):
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, env=base_env, timeout=60)
@@ -157,14 +415,23 @@ def gh_api_json(
             raise RuntimeError(f"gh api timed out for {endpoint} after {exc.timeout}s") from exc
 
         if proc.returncode == 0:
+            status_code = 200
+            response_headers: dict[str, str] = {}
             output = proc.stdout.strip()
+            if include_response_meta:
+                status_code, response_headers, output = _parse_http_response(proc.stdout)
             if not output:
-                return {}
+                payload: dict[str, Any] = {}
+                if include_response_meta:
+                    return payload, {"status_code": status_code, "headers": response_headers}
+                return payload
             try:
                 parsed = json.loads(output)
             except json.JSONDecodeError as exc:
                 raise RuntimeError(f"Invalid JSON from gh api ({endpoint}): {exc}") from exc
             if isinstance(parsed, dict):
+                if include_response_meta:
+                    return parsed, {"status_code": status_code, "headers": response_headers}
                 return parsed
             raise RuntimeError(f"Expected JSON object from gh api ({endpoint})")
 
@@ -289,15 +556,37 @@ def list_runs_for_repo(
     max_pages: int,
     max_runs: int,
     token: str,
-) -> tuple[list[dict[str, Any]], bool]:
+    etag: str | None = None,
+) -> tuple[list[dict[str, Any]], bool, dict[str, Any]]:
     runs: list[dict[str, Any]] = []
     capped = False
+    response_meta: dict[str, Any] = {
+        "status_code": 200,
+        "etag": etag,
+        "not_modified": False,
+    }
 
     for page in range(1, max_pages + 1):
-        payload = gh_api_json(
+        request_headers: dict[str, str] | None = None
+        if page == 1 and etag:
+            request_headers = {"If-None-Match": etag}
+
+        payload_obj, meta = gh_api_json(
             _build_runs_endpoint(repo, since_utc, per_page, page),
             token=token,
+            request_headers=request_headers,
+            include_response_meta=True,
         )
+        payload = payload_obj if isinstance(payload_obj, dict) else {}
+        status_code = _to_int(meta.get("status_code"), 200) if isinstance(meta, dict) else 200
+        response_headers = (meta.get("headers") if isinstance(meta, dict) else {}) or {}
+        response_meta["status_code"] = status_code
+        response_meta["etag"] = response_headers.get("etag") or response_meta.get("etag")
+
+        if page == 1 and status_code == 304:
+            response_meta["not_modified"] = True
+            return [], False, response_meta
+
         page_runs = payload.get("workflow_runs") or []
         if not page_runs:
             break
@@ -311,9 +600,9 @@ def list_runs_for_repo(
             runs.append(run_copy)
             if max_runs > 0 and len(runs) >= max_runs:
                 capped = True
-                return runs, capped
+                return runs, capped, response_meta
 
-    return runs, capped
+    return runs, capped, response_meta
 
 
 def _build_jobs_endpoint(repo: str, run_id: int, per_page: int, page: int) -> str:
@@ -871,6 +1160,22 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     token = os.getenv("GH_TOKEN", "") or os.getenv("GITHUB_TOKEN", "")
+    repo_root = REPO_ROOT
+    memory_branch = str(os.getenv("AI_MEMORY_BRANCH", "ai-memory")).strip() or "ai-memory"
+    memory_root_relative = str(os.getenv("AI_MEMORY_ROOT", "ai-memory")).strip() or "ai-memory"
+    push_retries = _to_int(os.getenv("AI_MEMORY_PUSH_RETRIES", "5"), 5)
+
+    cache_payload, _cache_load_error, cache_branch_dir = _cache_read_context(
+        repo_root=repo_root,
+        memory_branch=memory_branch,
+        memory_root_relative=memory_root_relative,
+    )
+    if cache_branch_dir is not None:
+        shutil.rmtree(cache_branch_dir, ignore_errors=True)
+
+    cached_repositories = cache_payload.get("repositories") if isinstance(cache_payload, dict) else {}
+    if not isinstance(cached_repositories, dict):
+        cached_repositories = {}
 
     errors: list[dict[str, str]] = []
     run_rows: list[dict[str, Any]] = []
@@ -878,15 +1183,45 @@ def main(argv: list[str] | None = None) -> int:
     log_archive_cache: dict[tuple[str, int], bytes | Exception] | None = {} if args.log_output_dir else None
 
     for repo in repositories:
+        repo_cache = cached_repositories.get(repo) if isinstance(cached_repositories, dict) else None
+        if not isinstance(repo_cache, dict):
+            repo_cache = {}
+
+        effective_since = since_utc
+
+        jobs_seen_set = _normalize_seen_set(repo_cache.get("jobs_seen_set"))
+        logs_seen_set = _normalize_seen_set(repo_cache.get("logs_seen_set"))
+        jobs_seen_lookup = set(jobs_seen_set)
+        cached_rows_by_run_id = _index_cached_rows(repo_cache.get("rows_snapshot"))
+        cached_runs_snapshot = _normalize_runs_snapshot(repo_cache.get("runs_snapshot"))
+        cached_etag = repo_cache.get("runs_etag")
+        if not isinstance(cached_etag, str) or not cached_etag.strip():
+            cached_etag = None
+
         try:
-            runs, capped = list_runs_for_repo(
+            runs, capped, run_meta = list_runs_for_repo(
                 repo,
-                since_utc=since_utc,
+                since_utc=effective_since,
                 per_page=args.per_page,
                 max_pages=args.max_pages,
                 max_runs=args.max_runs,
                 token=token,
+                etag=cached_etag,
             )
+            used_cached_runs = bool(run_meta.get("not_modified"))
+            if used_cached_runs:
+                if cached_runs_snapshot:
+                    runs = [dict(item) for item in cached_runs_snapshot]
+                else:
+                    runs, capped, run_meta = list_runs_for_repo(
+                        repo,
+                        since_utc=effective_since,
+                        per_page=args.per_page,
+                        max_pages=args.max_pages,
+                        max_runs=args.max_runs,
+                        token=token,
+                        etag=None,
+                    )
             successful_repo_queries += 1
             if capped:
                 errors.append(
@@ -906,8 +1241,24 @@ def main(argv: list[str] | None = None) -> int:
             )
             continue
 
+        collected_rows_for_repo: list[dict[str, Any]] = []
+        runs_snapshot_for_repo: list[dict[str, Any]] = []
+
         for run in runs:
             run_id = _to_int(run.get("id"), 0)
+            run_attempt = max(1, _to_int(run.get("run_attempt"), 1))
+            cache_key = _cache_run_key(run_id, run_attempt) if run_id > 0 else None
+            if run_id > 0:
+                runs_snapshot_for_repo.append(_run_snapshot_for_cache(run))
+
+            reused_row = cached_rows_by_run_id.get(cache_key) if cache_key is not None else None
+            if run_id > 0 and run_id in jobs_seen_lookup and isinstance(reused_row, dict):
+                row_copy = dict(reused_row)
+                row_copy.pop("_success_sampled", None)
+                run_rows.append(row_copy)
+                collected_rows_for_repo.append(dict(row_copy))
+                continue
+
             jobs: list[dict[str, Any]] = []
             if run_id > 0 and (run.get("conclusion") or "").lower() == "failure":
                 try:
@@ -927,20 +1278,93 @@ def main(argv: list[str] | None = None) -> int:
                             "message": str(exc),
                         }
                     )
+                else:
+                    jobs_seen_set = _touch_seen_set(jobs_seen_set, run_id)
+                    jobs_seen_lookup = set(jobs_seen_set)
 
-            run_rows.append(compute_run_metrics(repo, run, jobs))
+            elif run_id > 0:
+                jobs_seen_set = _touch_seen_set(jobs_seen_set, run_id)
+                jobs_seen_lookup = set(jobs_seen_set)
+
+            row = compute_run_metrics(repo, run, jobs)
+            run_rows.append(row)
+            collected_rows_for_repo.append(dict(row))
+
+        repo_cache_updated = {
+            "runs_etag": run_meta.get("etag") if isinstance(run_meta.get("etag"), str) else cached_etag,
+            "runs_window_start": _format_iso8601(effective_since),
+            "jobs_seen_set": jobs_seen_set,
+            "logs_seen_set": logs_seen_set,
+            "last_updated": _format_iso8601(datetime.now(timezone.utc)),
+            "runs_snapshot": runs_snapshot_for_repo,
+            "rows_snapshot": collected_rows_for_repo,
+        }
+        cached_repositories[repo] = repo_cache_updated
+
+    cache_payload["repositories"] = cached_repositories
+
+    run_rows_by_identity: dict[tuple[str, int], dict[str, Any]] = {
+        _run_identity(row): row
+        for row in run_rows
+        if _to_int(row.get("run_id"), 0) > 0 and row.get("repository")
+    }
 
     for run in select_notable_runs_for_logs(run_rows, args.max_log_runs, success_sample_rate=success_sample_rate):
         repository = str(run.get("repository") or "")
         run_id = _to_int(run.get("run_id"), 0)
         if not repository or run_id <= 0:
             continue
+
+        repo_cache = cached_repositories.get(repository)
+        if isinstance(repo_cache, dict):
+            logs_seen_set = _normalize_seen_set(repo_cache.get("logs_seen_set"))
+            logs_seen_lookup = set(logs_seen_set)
+            cached_rows_by_run_id = _index_cached_rows(repo_cache.get("rows_snapshot"))
+            cache_key = _cache_run_key(run_id, _to_int(run.get("run_attempt"), 1))
+            if run_id in logs_seen_lookup:
+                cached_excerpts = _cached_log_excerpts(cached_rows_by_run_id.get(cache_key))
+                if cached_excerpts is not None:
+                    run["log_excerpts"] = cached_excerpts
+                    identity = (repository, run_id)
+                    canonical = run_rows_by_identity.get(identity)
+                    if canonical is not None:
+                        canonical["log_excerpts"] = cached_excerpts
+                    continue
+
         try:
             if log_archive_cache is not None:
                 payload = _fetch_run_log_archive(repository, run_id, token=token, cache=log_archive_cache)
-                run["log_excerpts"] = extract_log_excerpts(payload)
+                log_excerpts = extract_log_excerpts(payload)
             else:
-                run["log_excerpts"] = list_run_log_excerpts(repository, run_id, token=token)
+                log_excerpts = list_run_log_excerpts(repository, run_id, token=token)
+
+            run["log_excerpts"] = log_excerpts
+            identity = (repository, run_id)
+            canonical = run_rows_by_identity.get(identity)
+            if canonical is not None:
+                canonical["log_excerpts"] = log_excerpts
+
+            if isinstance(repo_cache, dict):
+                logs_seen_set = _touch_seen_set(_normalize_seen_set(repo_cache.get("logs_seen_set")), run_id)
+                repo_cache["logs_seen_set"] = logs_seen_set
+                rows_snapshot = _normalize_runs_snapshot(repo_cache.get("rows_snapshot"))
+                updated_rows: list[dict[str, Any]] = []
+                replaced = False
+                for row in rows_snapshot:
+                    if _cache_run_key(_to_int(row.get("run_id"), 0), _to_int(row.get("run_attempt"), 1)) == cache_key:
+                        merged_row = dict(row)
+                        merged_row["run_attempt"] = _to_int(run.get("run_attempt"), 1)
+                        merged_row["log_excerpts"] = log_excerpts
+                        updated_rows.append(merged_row)
+                        replaced = True
+                    else:
+                        updated_rows.append(dict(row))
+                if not replaced:
+                    fallback_row = dict(run)
+                    fallback_row.pop("_success_sampled", None)
+                    updated_rows.append(fallback_row)
+                repo_cache["rows_snapshot"] = updated_rows
+                repo_cache["last_updated"] = _format_iso8601(datetime.now(timezone.utc))
         except Exception as exc:  # noqa: BLE001
             errors.append(
                 {
@@ -950,6 +1374,14 @@ def main(argv: list[str] | None = None) -> int:
                     "message": str(exc),
                 }
             )
+
+    _cache_write_context(
+        repo_root=repo_root,
+        memory_branch=memory_branch,
+        memory_root_relative=memory_root_relative,
+        push_retries=push_retries,
+        payload=cache_payload,
+    )
 
     run_rows.sort(key=lambda item: (item.get("created_at") or ""), reverse=True)
     if args.log_output_dir:

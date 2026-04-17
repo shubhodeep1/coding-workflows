@@ -584,6 +584,12 @@ if ! [[ "${STALL_THRESHOLD_MINUTES}" =~ ^[0-9]+$ ]] || [ "${STALL_THRESHOLD_MINU
   STALL_THRESHOLD_MINUTES="120"
 fi
 
+ACTIONS_RUNS_CACHE_TTL_SECONDS="${ACTIONS_RUNS_CACHE_TTL_SECONDS:-60}"
+if ! [[ "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" =~ ^[0-9]+$ ]] || [ "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" -lt 1 ]; then
+  echo "::warning::ACTIONS_RUNS_CACHE_TTL_SECONDS must be a positive integer; defaulting to 60"
+  ACTIONS_RUNS_CACHE_TTL_SECONDS="60"
+fi
+
 # Per-phase stall thresholds (override the global fallback above).
 # Each var maps to a pipeline phase label.  Unset vars use the built-in
 # defaults in orchestrate_lib.py (60 min for lightweight phases, 120 min
@@ -896,36 +902,30 @@ ensure_label_exists() {
     [ -n "${contract_description}" ] && description="${contract_description}"
   fi
 
-  # Check if label already exists to avoid futile retries (gh label create
-  # returns a non-zero exit code for existing labels, which is not transient).
-  #
-  # The two `gh api` probes below are intentionally NOT wrapped with
-  # `gh_retry`: a 404 (label missing) is the expected normal case on the
-  # first probe, and re-running it under exponential backoff would add
-  # ~31 s of latency to every label miss. Rate-limit detection + the
-  # Telegram admin alert still fire on the `gh_retry gh label create`
-  # immediately below, which is the write path that actually matters.
-  local encoded_name
-  encoded_name="$(printf '%s' "${label_name}" | jq -sRr @uri)"
-  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
-    _ENSURED_LABELS_CACHE[${label_name}]=1
-    return 0
-  fi
+  local _label_err_file
+  _label_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
 
   if gh_retry gh label create "${label_name}" \
     --repo "${GITHUB_REPOSITORY}" \
     --color "${color}" \
-    --description "${description}" >/dev/null 2>&1; then
+    --description "${description}" >/dev/null 2>"${_label_err_file}"; then
+    [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
     _ENSURED_LABELS_CACHE[${label_name}]=1
     return 0
   fi
 
-  # Creation can fail if another concurrent actor created the label first.
-  # Cache only when a follow-up read confirms the label now exists.
-  # (Same rationale as above — not wrapped with gh_retry.)
-  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+  local _label_err=""
+  _label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
+  [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
+
+  if printf '%s' "${_label_err}" | grep -Eiq 'already[ _-]*exists|already_exists'; then
+    echo "::debug::ensure_label_exists: label already exists, skipping '${label_name}'." >&2
     _ENSURED_LABELS_CACHE[${label_name}]=1
+    return 0
   fi
+
+  echo "::warning::ensure_label_exists: failed to create label '${label_name}' in repo '${GITHUB_REPOSITORY}': ${_label_err}" >&2
+  return 0
 }
 
 set_issue_phase_label() {
@@ -3236,6 +3236,172 @@ sync_validation_fix_issues_from_comments() {
 # Stall recovery: workflow run status checks
 # ---------------------------------------------------------------
 
+declare -g _ACTIONS_RUNS_BLOB_CACHE=''
+declare -g _ACTIONS_RUNS_BLOB_READY='false'
+
+_load_actions_runs_cached() {
+  local empty_blob='{"workflow_runs":[]}'
+  if [ "${_ACTIONS_RUNS_BLOB_READY}" = "true" ]; then
+    printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE:-${empty_blob}}"
+    return 0
+  fi
+
+  local repo="${GITHUB_REPOSITORY:-}"
+  if [ -z "${repo}" ]; then
+    _ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
+    _ACTIONS_RUNS_BLOB_READY="true"
+    printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+    return 0
+  fi
+
+  local cache_json='{}'
+  local cache_payload='{}'
+  local cache_hit='false'
+  local cached_runs='[]'
+  local cached_etag=''
+  local cached_fetched_at=''
+  local cache_age_seconds='999999'
+  local now_epoch
+  now_epoch="$(date +%s)"
+
+  if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
+    cache_json="$(python3 scripts/ai_memory.py actions-runs-cache get --repo "${repo}" || echo '{}')"
+    cache_hit="$(printf '%s' "${cache_json}" | jq -r 'if (.ok == true and .hit == true and (.cache | type == "object")) then "true" else "false" end' 2>/dev/null || echo 'false')"
+    if [ "${cache_hit}" = "true" ]; then
+      cache_payload="$(printf '%s' "${cache_json}" | jq -c '.cache // {}' 2>/dev/null || echo '{}')"
+      cached_runs="$(printf '%s' "${cache_payload}" | jq -c '.runs // []' 2>/dev/null || echo '[]')"
+      cached_etag="$(printf '%s' "${cache_payload}" | jq -r '.etag // ""' 2>/dev/null || echo '')"
+      cached_fetched_at="$(printf '%s' "${cache_payload}" | jq -r '.fetched_at // ""' 2>/dev/null || echo '')"
+      if [ -n "${cached_fetched_at}" ]; then
+        local cached_epoch
+        cached_epoch="$(jq -nr --arg ts "${cached_fetched_at}" '$ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601' 2>/dev/null || echo '0')"
+        if [[ "${cached_epoch}" =~ ^[0-9]+$ ]] && [ "${cached_epoch}" -le "${now_epoch}" ]; then
+          cache_age_seconds="$(( now_epoch - cached_epoch ))"
+        fi
+      fi
+    fi
+  fi
+
+  if [ "${cache_hit}" = "true" ] && [ "${cache_age_seconds}" -lt "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" ]; then
+    _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
+    _ACTIONS_RUNS_BLOB_READY="true"
+    printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+    return 0
+  fi
+
+  local response_file
+  local response_body_file
+  local response_err
+  local status_line=''
+  local body_json=''
+  local response_etag=''
+	response_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response.XXXXXX" 2>/dev/null || true)"
+	response_body_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response-body.XXXXXX" 2>/dev/null || true)"
+	response_err="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response-err.XXXXXX" 2>/dev/null || true)"
+	if [ -z "${response_file}" ] || [ -z "${response_body_file}" ] || [ -z "${response_err}" ]; then
+		echo "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=mktemp_failed repo=${repo}" >&2
+		if [ "${cache_hit}" = "true" ]; then
+			_ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
+		else
+			_ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
+		fi
+		_ACTIONS_RUNS_BLOB_READY="true"
+		printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+		return 0
+	fi
+
+  local -a api_cmd
+  # Existing gh wrappers in this script are body-only and do not expose HTTP
+  # response headers or 304 status lines. This direct `gh api -i` call is used
+  # so one conditional fetch can carry If-None-Match and parse ETag metadata.
+	api_cmd=(gh_retry gh api -i "repos/${repo}/actions/runs?status=in_progress&per_page=50")
+  if [ -n "${cached_etag}" ]; then
+    api_cmd+=(-H "If-None-Match: ${cached_etag}")
+  fi
+
+  local api_rc=0
+  if ! "${api_cmd[@]}" >"${response_file}" 2>"${response_err}"; then
+    api_rc=$?
+  fi
+
+  if [ -s "${response_file}" ] && head -n 1 "${response_file}" | grep -q '^HTTP/'; then
+    status_line="$(head -n 1 "${response_file}")"
+    response_etag="$(awk '{ line = $0; sub(/\r$/, "", line); if (tolower(line) ~ /^etag:[[:space:]]*/) { sub(/^[^:]*:[[:space:]]*/, "", line); print line; exit } }' "${response_file}" 2>/dev/null || echo '')"
+    body_json="$(awk 'f{print} /^\r?$/{f=1}' "${response_file}" 2>/dev/null)"
+  else
+    body_json="$(cat "${response_file}" 2>/dev/null || echo '')"
+  fi
+
+  if [ -n "${body_json}" ]; then
+    printf '%s\n' "${body_json}" > "${response_body_file}"
+  fi
+
+  if printf '%s' "${status_line}" | grep -Eq ' 304( |$)'; then
+    if [ "${cache_hit}" = "true" ]; then
+      local ttl_put_file
+      ttl_put_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-refresh.XXXXXX" 2>/dev/null || true)"
+      if [ -n "${ttl_put_file}" ]; then
+        jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' > "${ttl_put_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${ttl_put_file}"
+        if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
+          python3 scripts/ai_memory.py actions-runs-cache put \
+            --repo "${repo}" \
+            --runs-file "${ttl_put_file}" \
+            --etag "${response_etag:-${cached_etag}}" \
+            --ttl-seconds "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" >/dev/null || true
+        fi
+        rm -f "${ttl_put_file}"
+      else
+        echo "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=mktemp_failed_ttl_put_file repo=${repo}" >&2
+      fi
+      _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
+      _ACTIONS_RUNS_BLOB_READY="true"
+      rm -f "${response_file}" "${response_body_file}" "${response_err}"
+      printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+      return 0
+    fi
+  fi
+
+	if [ "${api_rc}" -eq 0 ] && [ -n "${body_json}" ] && printf '%s' "${body_json}" | jq -e 'type == "object" and (.workflow_runs | type == "array")' >/dev/null 2>&1; then
+		local runs_only
+		runs_only="$(printf '%s' "${body_json}" | jq -c '.workflow_runs // []' 2>/dev/null || echo '[]')"
+		local queued_runs='[]'
+		queued_runs="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?status=queued&per_page=50" --jq '.workflow_runs' || echo '[]')"
+		[ -n "${queued_runs}" ] || queued_runs='[]'
+		# Include a small completed window so stall-judge diagnostics can inspect
+		# recent review/autofix workflow outcomes (conclusions).
+		local completed_runs='[]'
+		completed_runs="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?status=completed&per_page=20" --jq '.workflow_runs' || echo '[]')"
+		[ -n "${completed_runs}" ] || completed_runs='[]'
+		runs_only="$(jq -cn --argjson in_progress "${runs_only}" --argjson queued "${queued_runs}" --argjson completed "${completed_runs}" '($in_progress + $queued + $completed)' 2>/dev/null || echo '[]')"
+		printf '%s\n' "${body_json}" | jq -c --argjson runs "${runs_only}" '.workflow_runs = $runs | .total_count = ($runs | length)' > "${response_body_file}" 2>/dev/null || true
+		if [ ! -s "${response_body_file}" ]; then
+			jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' > "${response_body_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${response_body_file}"
+		fi
+	if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
+		python3 scripts/ai_memory.py actions-runs-cache put \
+			--repo "${repo}" \
+			--runs-file "${response_body_file}" \
+	        --etag "${response_etag}" \
+	        --ttl-seconds "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" >/dev/null || true
+	fi
+		_ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
+    _ACTIONS_RUNS_BLOB_READY="true"
+    rm -f "${response_file}" "${response_body_file}" "${response_err}"
+    printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+    return 0
+  fi
+
+  if [ "${cache_hit}" = "true" ]; then
+    _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
+  else
+    _ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
+  fi
+  _ACTIONS_RUNS_BLOB_READY="true"
+  rm -f "${response_file}" "${response_body_file}" "${response_err}"
+  printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+  return 0
+}
+
 # Build a set of issue numbers that have *genuinely active* (in_progress or
 # queued) workflow runs — i.e., runs that started recently enough that they
 # could still be making progress.
@@ -3250,16 +3416,20 @@ build_active_issue_set() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Fetch in_progress + queued runs (recent, max 50).
-  # _safe_gh_jq guarantees empty stdout on failure → fallback is valid JSON.
+  # Fetch active runs from the shared per-tick actions-runs loader.
+  # This preserves one conditional API retrieval per tick.
+  local actions_runs_blob
+  actions_runs_blob="$(_load_actions_runs_cached)"
+
+  # Preserve historical status selection semantics (in_progress/queued, max 50
+  # each) while sourcing from one shared payload.
   local runs_json
-  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
-    --jq '.workflow_runs' || echo '[]')"
+  runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
   local queued_json
-  queued_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=50" \
-    --jq '.workflow_runs' || echo '[]')"
+  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "queued")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${queued_json}" ] || queued_json='[]'
+
 
   # Merge both lists
   local all_runs
@@ -3328,11 +3498,12 @@ cancel_zombie_runs_for_issue() {
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-  # Re-fetch in_progress runs and find zombies matching this issue.
-  # _safe_gh_jq guarantees empty stdout on failure → fallback stays valid.
+  # Reuse the shared actions-runs blob and preserve prior in_progress+50 scope.
+  local actions_runs_blob
+  actions_runs_blob="$(_load_actions_runs_cached)"
+
   local runs_json
-  runs_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=50" \
-    --jq '.workflow_runs' || echo '[]')"
+  runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
 
   local zombie_run_ids
@@ -3948,9 +4119,7 @@ invoke_stall_judge() {
 
   local workflows_json
   local workflow_outcomes
-  # _safe_gh_jq → clean empty stdout on failure so the `|| echo '{...}'`
-  # fallback stays valid JSON for downstream jq reads.
-  workflows_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=50" 2>/dev/null || echo '{"workflow_runs":[]}')"
+  workflows_json="$(_load_actions_runs_cached)"
   workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" '
     [.workflow_runs[]?
       | select((.name // "") == "AI Review"
@@ -6792,11 +6961,23 @@ json.dump(result, sys.stdout)
       # Collect full PR context for the judge
       PR_DIFF="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}" \
         -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
-      PR_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
-        | jq -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}]' 2>/dev/null || echo "[]")"
-      PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" \
-        | jq -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}]' 2>/dev/null || echo "[]")"
-      PR_META="$(echo "${_rb_pr_json}" | jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
+      RB_PRELOADED_META="$(echo "${_rb_pr_json}" | jq -c '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo '{}')"
+      if type gh_pr_with_all_comments >/dev/null 2>&1; then
+        RB_PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
+      elif type _gh_pr_with_all_comments_rest >/dev/null 2>&1; then
+        RB_PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
+      else
+        printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${GITHUB_REPOSITORY%%/*} repo=${GITHUB_REPOSITORY##*/} pr=${RB_PR}" >&2
+        RB_PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
+        RB_PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
+        RB_PR_CONTEXT_JSON="$(jq -cn --argjson meta "${RB_PRELOADED_META}" --argjson comments "${RB_PR_ISSUE_COMMENTS}" --argjson review_comments "${RB_PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"
+      fi
+      PR_COMMENTS="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.comments // []' 2>/dev/null || echo "[]")"
+      PR_REVIEW_COMMENTS="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.review_comments // []' 2>/dev/null || echo "[]")"
+      PR_META="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.meta // {}' 2>/dev/null || echo "{}")"
+      if [ "${PR_META}" = "{}" ]; then
+        PR_META="$(echo "${_rb_pr_json}" | jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
+      fi
       ISSUE_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' || echo "")"
 
       # Determine if this is a final decision (retries exhausted) or a fix attempt
