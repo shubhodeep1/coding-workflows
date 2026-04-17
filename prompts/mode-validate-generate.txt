@@ -98,7 +98,9 @@ Canary requirement (mandatory):
 - The canary must validate harness infrastructure before app assertions:
   - Connectivity to each declared Docker service
   - Reachability of application port/health endpoint
-  - Required CLI tools present (`curl`, `jq`, `python3`, plus service CLIs like `mongosh`/`psql` when used)
+  - Required CLI tools present **inside the app container** (`curl`, `jq`, `python3`, and any binary that the app's own tests/scripts invoke). This is the only set that belongs in the `CANARY_TOOLS` loop below.
+  - Service CLIs (for example `mongosh`, `psql`, `redis-cli`, `mysql`) MUST be probed **inside the corresponding service container** (`docker compose exec mongo mongosh --version`, `docker compose exec postgres psql --version`, etc.), NOT inside the app container. Slim app base images (e.g. `python:3.12-slim`) do not ship DB CLIs, and installing them just to satisfy a canary is a harness smell.
+  - If the app container itself needs to issue DB queries, use the language-native client (for example `python3` + `pymongo`, `psycopg2`, `redis-py`) from the app container and add a canary assertion that imports that client — do NOT add `mongosh`/`psql`/`redis-cli` to the app-container `CANARY_TOOLS` list.
 - If canary fails, remaining tests must be skipped and the failure must clearly indicate canary/infrastructure gating.
 
 CRITICAL — robust service-state detection in canary:
@@ -443,6 +445,7 @@ CRITICAL — custom_tests external tool dependency analysis (prevents FileNotFou
       ASSERTION=$((ASSERTION + 1))
     done
   Respect the shell-mode parity rule at the top of this prompt: the canary tool-check MUST use the same `/bin/sh -c` (or `/bin/sh -lc`) form as the subsequent test invocations.
+- HARD RULE — do NOT include DB/service CLIs (`mongosh`, `psql`, `mysql`, `redis-cli`, `mongo`, etc.) in the app-container `CANARY_TOOLS` list unless `validation/Dockerfile.app` explicitly installs them for an app-side invocation. These CLIs belong to the respective service container and must be probed there (`docker compose exec mongo mongosh --version`, `docker compose exec postgres psql --version`, …). Putting `mongosh` into the app-container `CANARY_TOOLS` loop against a `python:*-slim` base image is the canonical `harness_error` classified as `mongosh is NOT available in app` — the fix is to remove it from `CANARY_TOOLS` and probe it against the DB service instead (or replace the assertion with a `python3 -c 'import pymongo'` import probe when the app itself talks to Mongo via pymongo). Apply the same rule for `psql`/`redis-cli`/`mysql` versus their respective native clients.
 - Worked example. Given `.ai/validate.yml`:
     custom_tests:
       - python3 tests/test_validate_process_driver_guard_scope.py

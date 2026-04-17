@@ -54,6 +54,7 @@ jobs:
     timeout-minutes: 180
     outputs:
       status: ${{ steps.collect_status.outputs.status }}
+      raw_status: ${{ steps.collect_status.outputs.raw_status }}
       summary: ${{ steps.collect_status.outputs.summary }}
       failure_summary: ${{ steps.collect_status.outputs.failure_summary }}
       status_file: ${{ steps.collect_status.outputs.status_file }}
@@ -462,6 +463,7 @@ jobs:
           fi
 
           status="$(jq -r '.status // "error"' "${STATUS_FILE_PATH}")"
+          raw_status="$(jq -r '.raw_status // .status // "error"' "${STATUS_FILE_PATH}")"
           summary="$(jq -r '.summary // ""' "${STATUS_FILE_PATH}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
           failure_summary="$(jq -r '.failure_summary // ""' "${STATUS_FILE_PATH}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
 
@@ -480,6 +482,7 @@ jobs:
 
           {
             echo "status=${status}"
+            echo "raw_status=${raw_status}"
             echo "summary=${summary}"
             echo "failure_summary=${failure_summary}"
             echo "status_file=${STATUS_FILE_PATH}"
@@ -649,9 +652,18 @@ jobs:
         if: always()
         env:
           VALIDATION_STATUS: ${{ steps.collect_status.outputs.status }}
+          VALIDATION_RAW_STATUS: ${{ steps.collect_status.outputs.raw_status }}
         run: |
           set -euo pipefail
-          if [ "${VALIDATION_STATUS}" != "pass" ]; then
-            echo "Validation did not pass."
-            exit 1
+          if [ "${VALIDATION_STATUS}" = "pass" ]; then
+            exit 0
           fi
+          # Exit 2 for harness_error so orchestration can distinguish a harness
+          # defect (generator/canary produced an incorrect test) from an
+          # application-side failure; exit 1 for every other non-pass outcome.
+          if [ "${VALIDATION_RAW_STATUS}" = "harness_error" ]; then
+            echo "Validation did not pass (harness error)."
+            exit 2
+          fi
+          echo "Validation did not pass."
+          exit 1

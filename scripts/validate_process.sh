@@ -812,14 +812,22 @@ write_status_file()
   local status="$1"
   local summary="$2"
   local failure_summary="$3"
+  # Optional 4th arg: raw_status preserves the original diagnose classifier
+  # (for example `harness_error`, `needs_fixes`, `infeasible`) so downstream
+  # consumers can distinguish harness defects from app-side failures even
+  # though `status` is normalized to `pass`/`fail`/`error`. Defaults to the
+  # normalized status for backward compatibility.
+  local raw_status="${4:-${status}}"
 
   jq -n \
     --arg status "${status}" \
+    --arg raw_status "${raw_status}" \
     --arg summary "${summary}" \
     --arg failure_summary "${failure_summary}" \
     --arg tracking_issue "${TRACKING_ISSUE_RAW}" \
     '{
       status: $status,
+      raw_status: $raw_status,
       summary: $summary,
       failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
       tracking_issue: $tracking_issue
@@ -831,6 +839,7 @@ write_metadata_file()
   local status="$1"
   local summary="$2"
   local failure_summary="$3"
+  local raw_status="${4:-${status}}"
 
   local validation_file="${VALIDATION_RESULT_FILE}"
   local diagnosis_file="${DIAGNOSE_RESULT_FILE}"
@@ -845,6 +854,7 @@ write_metadata_file()
 
   jq -n \
     --arg status "${status}" \
+    --arg raw_status "${raw_status}" \
     --arg summary "${summary}" \
     --arg failure_summary "${failure_summary}" \
     --arg hints_source "${HINTS_SOURCE}" \
@@ -864,6 +874,7 @@ write_metadata_file()
     --slurpfile diagnosis "${diagnosis_file}" \
     '{
       status: $status,
+      raw_status: $raw_status,
       summary: $summary,
       failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
       hints_source: $hints_source,
@@ -893,9 +904,10 @@ write_result_files()
   local status="$1"
   local summary="$2"
   local failure_summary="$3"
+  local raw_status="${4:-${status}}"
 
-  write_status_file "${status}" "${summary}" "${failure_summary}"
-  write_metadata_file "${status}" "${summary}" "${failure_summary}"
+  write_status_file "${status}" "${summary}" "${failure_summary}" "${raw_status}"
+  write_metadata_file "${status}" "${summary}" "${failure_summary}" "${raw_status}"
 }
 
 cleanup_runtime_containers()
@@ -2011,7 +2023,7 @@ if [ "${CANARY_ONLY_FAILURE}" = true ]; then
 			failure_summary="Validation harness error: ${FIRST_FAILURE}"
 			post_tracking_comment "## ❌ Runtime validation harness error\n\n${failure_summary}\n\nCanary infrastructure check failed and remaining tests were skipped."
 			set_tracking_phase_label "ai:validation-failed"
-			write_result_files "fail" "Validation failed due to harness error" "${failure_summary}"
+			write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
 			tg_notify "Validation harness canary failure for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
 			exit 0
 		fi
@@ -2188,7 +2200,7 @@ case "${DIAG_STATUS}" in
 
     post_tracking_comment "## ❌ Runtime validation harness error\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}"
     set_tracking_phase_label "ai:validation-failed"
-    write_result_files "fail" "Validation failed due to harness error" "${failure_summary}"
+    write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
     tg_notify "Validation harness error for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
     ;;
 
