@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 5\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/orchestrate_poll_process.sh\n      Problem: Location: Line ~26.37-26.38 (when PR found/created); Issue: `.final_merge_error` is not cleared when starting a new merge attempt, leading to stale error messages in state; Suggested fix: Add `| .final_merge_error = \"\"` to the jq update that sets `.final_merge_status = \"pending\"`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1 (cosmetic issue only); ### FINAL VERDICT; The last run changes are **correct and complete** for the intended feature. No runtime correctness issues were identified. The hardening suggestion is cosmetic and optional.; REVIEW_ CONFIDENCE: 5\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\n  [2] File: scripts/orchestrate_poll_process.sh\n      Problem: Code reference:; jq --argjson final_pr \"${final_pr}\" '.final_merge_pr = $final_pr | .final_merge_status = \"pending\"' \\; \"${STATE_FILE}\" > \"${STATE_FILE}.tmp\" && mv \"${STATE_FILE}.tmp\" \"${STATE_FILE}\"; When a final PR is found/created and the state is advanced to `pending`, the `final_merge_error` field is not cleared. If a previous attempt recorded an error, that stale error remains in state while status resets, which can mislead operators or appear in escalation comments if the next attempt fails quickly or the poller crashes before a new error is recorded.; Diagnostic data shown in tracking comments and escalation messages includes `final_merge_error`. A stale error from a previous generation may be presented as the current failure reason even when the current attempt has not yet produced a new error, or after a successful merge the stale message could persist into the next project's lifecycle if not cleared.; **Issue 2: MAX_FINAL_MERGE_ATTEMPTS validation accepts leading zeros, causing arithmetic errors**\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [3] File: scripts/orchestrate_poll_process.sh\n      Problem: Lines: 734\u2013738; Code reference:; MAX_FINAL_MERGE_ATTEMPTS=\"${MAX_FINAL_MERGE_ATTEMPTS:-3}\"; if ! [[ \"${MAX_FINAL_MERGE_ATTEMPTS}\" =~ ^[0-9]+$ ]] || [ \"${MAX_FINAL_MERGE_ATTEMPTS}\" -lt 1 ]; then; echo \"::warning::MAX_FINAL_MERGE_ATTEMPTS must be a positive integer; defaulting to 3\"; MAX_FINAL_MERGE_ATTEMPTS=\"3\"; The regex `^[0-9]+$` matches numbers with leading zeros (e.g., `08`, `09`). Bash arithmetic (the `-lt` test) interprets such numbers as octal and emits \"integer expression expected\", then the `[` test fails and the fallback is used. While safe fallback exists, the spurious warning is unprofessional and the arithmetic error noise may obscure real problems.; A misconfigured value like `MAX_FINAL_MERGE_ATTEMPTS=08` produces a shell arithmetic error, clutters logs, and unexpectedly forces the default, which could surprise operators expecting their setting to take effect after fixing the digit issue.; **HARDENING_SUGGESTIONS**; **H1: Capture stderr from final PR creation for better diagnostics**\n      Confidence: avg 5.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [4] File: scripts/orchestrate_poll_process.sh\n      Problem: Location: lines ~2599\u20132605 (the `gh pr create` call); Issue: The command `gh pr create ... 2>/dev/null` discards stderr, losing valuable error output when the PR creation fails. A generic error is persisted, making manual investigation harder.; Suggested minimal fix: Capture stderr to a temporary variable and include it in the error context. For example, change the block to collect stderr (e.g., capture `2>&1` or use a separate stderr capture file) and append a short excerpt to the stored error.; Estimated lines changed: 3; HARDENING_RISK_SCORE: 2; **H2: Clear `final_merge_error` on transient/budget-ineligible early exits**\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\n  [5] File: scripts/orchestrate_poll_process.sh\n      Problem: Location: the transient return paths inside `finalize_integration_merge_if_needed` (e.g., after setting `FINAL_MERGE_BUDGET_ELIGIBLE=0` and before `return 1`); Issue: When the flow enters self-healing or \"not-ready\" paths, the prior `final_merge_error` is not cleared. While not incorrect, the stale error can remain in state and pollute monitoring during healing phases. Clearing it when we decide the failure is not budget-eligible improves observability.; Suggested minimal fix: In each budget-ineligible early-exit branch (unknown mergeability, checks pending, post-merge conflict), append `jq '.final_merge_error = \"\"'` update before returning 1.; Estimated lines changed: 4; HARDENING_RISK_SCORE: 1; **Assumptions made**; - The intended behavior for `final_merge_status=\"pending\"` is to start a fresh attempt, so error should be cleared (aligned with PR intent to avoid stale state).; - Leading-zero inputs are unintended misconfiguration; default fallback is correct but validation should reject them cleanly.; **No changes were made to the repository** \u2014 this is a code review report only.; **Files touched in Last Run (re-confirmed)**; - scripts/orchestrate_poll_process.sh; **Overall assessment**; The PR's core mechanics are sound. Issue 1 should be fixed because it directly affects diagnostic accuracy during retry cycles. Issue 2 should be fixed to make validation robust. Hardening suggestions H1\u2013H2 are optional but low-risk improvements near the changed code.\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/orchestrate_poll_process.sh",
+  "fingerprint": "f541dfb421b293aeac1af76f341e540139bf80c701c22d95670961993ad1a2f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1253,
+    "run_id": "24559128109",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24559128109",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417101724_a6c55aef9a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1253,
+    "run_id": "24559128109"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-17T10:17:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
