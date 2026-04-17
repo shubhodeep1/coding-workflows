@@ -2634,7 +2634,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     return 1
   fi
 
-  jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "pending"' \
+  jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "pending" | .final_merge_error = ""' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
 
