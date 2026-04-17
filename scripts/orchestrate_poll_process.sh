@@ -2540,13 +2540,9 @@ finalize_integration_merge_if_needed() {
   local project_title="$3"
   local final_pr
 
-  # Default behavior: failed finalize attempts consume retry budget.
-  # Transient "not-ready-yet" paths below opt out explicitly.
-  FINAL_MERGE_BUDGET_ELIGIBLE="1"
-
-  if [ -z "${integration_branch}" ]; then
-    return 0
-  fi
+	# Default behavior: failed finalize attempts consume retry budget.
+	# Transient "not-ready-yet" paths below opt out explicitly.
+	FINAL_MERGE_BUDGET_ELIGIBLE="1"
 
   local final_merge_status
   final_merge_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}")"
@@ -2556,13 +2552,19 @@ finalize_integration_merge_if_needed() {
 
   local sync_status
   sync_status="$(jq -r '.sync.status // "active"' "${STATE_FILE}")"
-  if [ "${sync_status}" = "superseded-by-main" ]; then
-    jq --arg reason "$(jq -r --arg default_branch "${default_branch}" '.sync.superseded_reason // ("Integration branch superseded by " + $default_branch + "; final merge intentionally skipped.")' "${STATE_FILE}")" \
-      '.final_merge_status = "superseded-by-main" | .final_merge_error = $reason' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
-    return 0
-  fi
+	if [ "${sync_status}" = "superseded-by-main" ]; then
+		jq --arg reason "$(jq -r --arg default_branch "${default_branch}" '.sync.superseded_reason // ("Integration branch superseded by " + $default_branch + "; final merge intentionally skipped.")' "${STATE_FILE}")" \
+			'.final_merge_status = "superseded-by-main" | .final_merge_error = $reason' \
+			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+		post_state_comment
+		return 0
+	fi
+
+	if [ -z "${integration_branch}" ]; then
+		FINAL_MERGE_BUDGET_ELIGIBLE="0"
+		mark_integration_branch_missing_failed "${integration_branch}"
+		return 1
+	fi
 
   final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}")"
   if [ -n "${final_pr}" ] && [ "${final_pr}" != "null" ]; then
@@ -2578,10 +2580,11 @@ finalize_integration_merge_if_needed() {
     fi
   fi
 
-  if ! integration_branch_exists "${integration_branch}"; then
-    mark_integration_branch_missing_failed "${integration_branch}"
-    return 1
-  fi
+	if ! integration_branch_exists "${integration_branch}"; then
+		FINAL_MERGE_BUDGET_ELIGIBLE="0"
+		mark_integration_branch_missing_failed "${integration_branch}"
+		return 1
+	fi
 
   if [ -z "${final_pr}" ] || [ "${final_pr}" = "null" ]; then
     final_pr="$(gh_retry gh pr list \
