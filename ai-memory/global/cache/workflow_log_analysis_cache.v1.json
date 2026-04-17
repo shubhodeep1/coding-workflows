@@ -1,0 +1,160 @@
+{
+  "repositories": {
+    "owner/repo": {
+      "jobs_seen_set": [
+        201,
+        202,
+        203,
+        204
+      ],
+      "last_updated": "2026-04-17T04:44:52Z",
+      "logs_seen_set": [
+        201,
+        202
+      ],
+      "rows_snapshot": [
+        {
+          "conclusion": "failure",
+          "created_at": "2026-04-10T14:00:00Z",
+          "duration_seconds": 400,
+          "failure_point": {
+            "job_name": "implement",
+            "step_name": "run implement"
+          },
+          "log_excerpts": [
+            {
+              "excerpt": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+              "step_name": "failure"
+            }
+          ],
+          "repository": "owner/repo",
+          "retries": 0,
+          "run_attempt": 1,
+          "run_id": 201,
+          "run_started_at": "2026-04-10T14:00:00Z",
+          "status": "completed",
+          "updated_at": "2026-04-10T14:06:40Z",
+          "workflow_family": "implement",
+          "workflow_name": "AI Implement",
+          "workflow_path": ".github/workflows/implement.yml"
+        },
+        {
+          "conclusion": "success",
+          "created_at": "2026-04-10T13:00:00Z",
+          "duration_seconds": 500,
+          "failure_point": {
+            "job_name": null,
+            "step_name": null
+          },
+          "log_excerpts": [
+            {
+              "excerpt": "plan full output\n",
+              "step_name": "plan"
+            }
+          ],
+          "repository": "owner/repo",
+          "retries": 0,
+          "run_attempt": 1,
+          "run_id": 202,
+          "run_started_at": "2026-04-10T13:00:00Z",
+          "status": "completed",
+          "updated_at": "2026-04-10T13:08:20Z",
+          "workflow_family": "plan",
+          "workflow_name": "AI Plan",
+          "workflow_path": ".github/workflows/plan.yml"
+        },
+        {
+          "conclusion": "success",
+          "created_at": "2026-04-10T12:00:00Z",
+          "duration_seconds": 100,
+          "failure_point": {
+            "job_name": null,
+            "step_name": null
+          },
+          "repository": "owner/repo",
+          "retries": 0,
+          "run_attempt": 1,
+          "run_id": 203,
+          "run_started_at": "2026-04-10T12:00:00Z",
+          "status": "completed",
+          "updated_at": "2026-04-10T12:01:40Z",
+          "workflow_family": "clarify",
+          "workflow_name": "AI Clarify",
+          "workflow_path": ".github/workflows/clarify.yml"
+        },
+        {
+          "conclusion": "success",
+          "created_at": "2026-04-10T11:00:00Z",
+          "duration_seconds": 300,
+          "failure_point": {
+            "job_name": null,
+            "step_name": null
+          },
+          "repository": "owner/repo",
+          "retries": 0,
+          "run_attempt": 1,
+          "run_id": 204,
+          "run_started_at": "2026-04-10T11:00:00Z",
+          "status": "completed",
+          "updated_at": "2026-04-10T11:05:00Z",
+          "workflow_family": "validate",
+          "workflow_name": "AI Validate",
+          "workflow_path": ".github/workflows/validate.yml"
+        }
+      ],
+      "runs_etag": null,
+      "runs_snapshot": [
+        {
+          "_workflow_family": "implement",
+          "conclusion": "failure",
+          "created_at": "2026-04-10T14:00:00Z",
+          "id": 201,
+          "name": "AI Implement",
+          "path": ".github/workflows/implement.yml",
+          "run_attempt": 1,
+          "run_started_at": "2026-04-10T14:00:00Z",
+          "status": "completed",
+          "updated_at": "2026-04-10T14:06:40Z"
+        },
+        {
+          "_workflow_family": "plan",
+          "conclusion": "success",
+          "created_at": "2026-04-10T13:00:00Z",
+          "id": 202,
+          "name": "AI Plan",
+          "path": ".github/workflows/plan.yml",
+          "run_attempt": 1,
+          "run_started_at": "2026-04-10T13:00:00Z",
+          "status": "completed",
+          "updated_at": "2026-04-10T13:08:20Z"
+        },
+        {
+          "_workflow_family": "clarify",
+          "conclusion": "success",
+          "created_at": "2026-04-10T12:00:00Z",
+          "id": 203,
+          "name": "AI Clarify",
+          "path": ".github/workflows/clarify.yml",
+          "run_attempt": 1,
+          "run_started_at": "2026-04-10T12:00:00Z",
+          "status": "completed",
+          "updated_at": "2026-04-10T12:01:40Z"
+        },
+        {
+          "_workflow_family": "validate",
+          "conclusion": "success",
+          "created_at": "2026-04-10T11:00:00Z",
+          "id": 204,
+          "name": "AI Validate",
+          "path": ".github/workflows/validate.yml",
+          "run_attempt": 1,
+          "run_started_at": "2026-04-10T11:00:00Z",
+          "status": "completed",
+          "updated_at": "2026-04-10T11:05:00Z"
+        }
+      ],
+      "runs_window_start": "2026-04-10T04:44:50Z"
+    }
+  },
+  "schema_version": "v1"
+}
