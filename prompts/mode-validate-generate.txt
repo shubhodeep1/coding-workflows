@@ -98,7 +98,8 @@ Canary requirement (mandatory):
 - The canary must validate harness infrastructure before app assertions:
   - Connectivity to each declared Docker service
   - Reachability of application port/health endpoint
-  - Required CLI tools present (`curl`, `jq`, `python3`, plus service CLIs like `mongosh`/`psql` when used)
+  - Required CLI tools present in the **app** container (`curl`, `jq`, `python3`, plus any binary the app's `validation/tests/*.sh` scripts invoke directly via `docker compose exec -T "$APP_SERVICE"`).
+  - Service CLIs (`mongosh`, `psql`, `redis-cli`, `mysql`, `kafkacat`, …) MUST be canary-checked **only inside the service container that ships them** (e.g. `mongosh` inside the `mongo` service for a Mongo ping), and MUST NOT be added to the app container's `CANARY_TOOLS` unless that exact binary is explicitly installed in `validation/Dockerfile.app`. The canonical pattern is one TAP assertion that runs the service CLI inside its own service (`docker compose exec -T mongo mongosh --quiet --eval ...`), not a `command -v mongosh` check inside the app. Putting `mongosh`/`psql`/etc. into the app's `CANARY_TOOLS` produces a guaranteed false-negative `not ok N - <cli> is NOT available in app` even when the database is fully reachable.
 - If canary fails, remaining tests must be skipped and the failure must clearly indicate canary/infrastructure gating.
 
 CRITICAL — robust service-state detection in canary:
@@ -486,6 +487,7 @@ CRITICAL — custom_tests external tool dependency analysis (prevents FileNotFou
       ASSERTION=$((ASSERTION + 1))
     done
   Respect the shell-mode parity rule at the top of this prompt: the canary tool-check MUST use the same `/bin/sh -c` (or `/bin/sh -lc`) form as the subsequent test invocations.
+- Hard rule for `CANARY_TOOLS` scoping: this list is the union of tools the app container's `validation/tests/*.sh` scripts invoke **inside `$APP_SERVICE`** AND that are installed in `validation/Dockerfile.app`. Do NOT add a tool here just because the project "uses" it elsewhere. In particular, NEVER add a service-side CLI (`mongosh`, `psql`, `redis-cli`, `mysql`, `kafkacat`, `mc`, etc.) to `CANARY_TOOLS` unless `validation/Dockerfile.app` actually installs that exact binary. Service-side CLIs belong in their own per-service canary assertion that runs `docker compose exec -T <service> <cli> ...` inside the service that ships them (for Mongo, the `ok N - mongo is reachable via mongosh ping` assertion already covers this). Adding `mongosh` to the app's `CANARY_TOOLS` is the canonical false-positive: assertion 4 (`ok N - mongo is reachable via mongosh ping` inside the `mongo` service) succeeds, then assertion 9 (`command -v mongosh` inside the app) fails on an image that legitimately has no reason to ship the Mongo client.
 - Worked example. Given `.ai/validate.yml`:
     custom_tests:
       - python3 tests/test_validate_process_driver_guard_scope.py
