@@ -456,10 +456,12 @@ jobs:
           if [ ! -f "${STATUS_FILE_PATH}" ]; then
             jq -n \
               --arg status "error" \
+              --arg raw_status "harness_error" \
               --arg summary "Validation process did not produce validation_status.json." \
               --arg failure_summary "Missing status artifact. Check validate_process.sh output and uploaded artifacts." \
               '{
                 status: $status,
+                raw_status: $raw_status,
                 summary: $summary,
                 failure_summary: $failure_summary
               }' > "${STATUS_FILE_PATH}"
@@ -473,10 +475,12 @@ jobs:
           if [ ! -f "${METADATA_FILE_PATH}" ]; then
             jq -n \
               --arg status "${status}" \
+              --arg raw_status "${raw_status}" \
               --arg summary "${summary}" \
               --arg failure_summary "${failure_summary}" \
               '{
                 status: $status,
+                raw_status: $raw_status,
                 summary: $summary,
                 failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
                 generated_at_utc: (now | todateiso8601)
@@ -499,6 +503,7 @@ jobs:
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           STATUS_FILE_PATH: ${{ steps.collect_status.outputs.status_file }}
           STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
+          RAW_STATUS_VALUE: ${{ steps.collect_status.outputs.raw_status }}
           SUMMARY_VALUE: ${{ steps.collect_status.outputs.summary }}
           FAILURE_SUMMARY_VALUE: ${{ steps.collect_status.outputs.failure_summary }}
         run: |
@@ -530,6 +535,14 @@ jobs:
               failure_summary_value="${parsed_failure_summary}"
             fi
           fi
+          raw_status="${RAW_STATUS_VALUE:-}"
+          if [ -z "${raw_status}" ] && [ -n "${STATUS_FILE_PATH:-}" ] && [ -f "${STATUS_FILE_PATH}" ]; then
+            parsed_raw_status="$(jq -r '.raw_status // empty' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+            if [ -n "${parsed_raw_status}" ]; then
+              raw_status="${parsed_raw_status}"
+            fi
+          fi
+          raw_status="${raw_status:-${status_value}}"
 
           summary_compact="$(printf '%s' "${summary_value}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
           failure_summary_compact="$(printf '%s' "${failure_summary_value}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
@@ -540,7 +553,7 @@ jobs:
           fi
           candidate_summary="${candidate_summary:0:220}"
 
-          candidate_details="status=${status_value}; summary=${summary_compact}; failure_summary=${failure_summary_compact}"
+          candidate_details="status=${status_value}; raw_status=${raw_status}; summary=${summary_compact}; failure_summary=${failure_summary_compact}"
           candidate_details="$(printf '%s' "${candidate_details}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
           candidate_details="${candidate_details:0:600}"
 
@@ -608,6 +621,7 @@ jobs:
         env:
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
+          RAW_STATUS_VALUE: ${{ steps.collect_status.outputs.raw_status }}
           SUMMARY_VALUE: ${{ steps.collect_status.outputs.summary }}
           FAILURE_SUMMARY_VALUE: ${{ steps.collect_status.outputs.failure_summary }}
         run: |
@@ -636,8 +650,16 @@ jobs:
           completion_message="$(printf '%s' "${completion_message}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
           completion_message="${completion_message:0:280}"
 
+          raw_status="${RAW_STATUS_VALUE:-}"
+          if [ -z "${raw_status}" ] && [ -n "${STATUS_FILE_PATH:-}" ] && [ -f "${STATUS_FILE_PATH}" ]; then
+            parsed_raw_status="$(jq -r '.raw_status // empty' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+            if [ -n "${parsed_raw_status}" ]; then
+              raw_status="${parsed_raw_status}"
+            fi
+          fi
+          raw_status="${raw_status:-${status_value}}"
           metadata_json="$(jq -cn \
-            --arg raw_status "${status_value}" \
+            --arg raw_status "${raw_status}" \
             --arg run_attempt "${{ github.run_attempt }}" \
             '{raw_status:$raw_status,run_attempt:$run_attempt}')"
 
