@@ -1996,7 +1996,8 @@ jobs:
             # Prefer the authoritative "Change status:" section emitted by
             # the editor prompt (see scripts/review_apply_fixes.sh editor
             # response format). The section contains exactly one bullet
-            # with value "edited" or "not-edited". Capture both the
+            # with value "edited" or "not-edited" (or "not edited",
+            # normalized to "not-edited"). Capture both the
             # below-header bullet form and any inline value on the header
             # line ("Change status: edited") to be robust to minor
             # formatting drift.
@@ -2011,7 +2012,7 @@ jobs:
               in_section && /^[[:space:]]*[A-Za-z].*:/ { exit }
               in_section { print }
             ' "${EDITOR_SUMMARY_FILE}")"
-            change_status="$(printf '%s\n' "${change_status_section}" | grep -iE '^[[:space:]]*-?[[:space:]]*(edited|not-edited|not[[:space:]]edited)[[:space:]]*$' | head -1 | sed -E 's/^[[:space:]]*-?[[:space:]]*//; s/[[:space:]]*$//; s/^not[[:space:]]edited$/not-edited/I' | tr '[:upper:]' '[:lower:]' || true)"
+            change_status="$(printf '%s\n' "${change_status_section}" | grep -iE '^[[:space:]]*-?[[:space:]]*(edited|not-edited|not[[:space:]]+edited)[[:space:]]*$' | head -1 | sed -E 's/^[[:space:]]*-?[[:space:]]*//; s/[[:space:]]*$//; s/^not[[:space:]]+edited$/not-edited/I' | tr '[:upper:]' '[:lower:]' || true)"
 
             # Extract the "Changes made:" section, stopping at the next
             # top-level section header (line starting with a non-dash
