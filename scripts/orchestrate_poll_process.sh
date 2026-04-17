@@ -3108,11 +3108,11 @@ mark_validation_complete() {
 
     # Budget exhausted — refuse to mark complete and escalate to a human.
     _final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
-    _final_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
     _final_err="$(jq -r '.final_merge_error // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
     jq '.status = "failed"
-        | .final_merge_status = (if .final_merge_status == "merged" then .final_merge_status else "failed" end)' \
+        | .final_merge_status = "failed"' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    _final_status="failed"
     post_state_comment
     _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
     handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
@@ -3123,11 +3123,11 @@ Runtime validation passed, but the final squash merge of \`${integration_branch}
 
 - Final PR: ${_final_pr:-unknown}
 - Final merge status: ${_final_status}
-- Last recorded error: ${_final_err:-n/a}
+- Last recorded error: ${_final_err:-No specific error recorded; check final PR for branch protection or required-check failures.}
 
 Manual intervention required: resolve the blocking condition on the final PR (merge conflicts, required checks, branch protections) and re-trigger the poller, or merge manually."
-    tg_notify "Project #${TRACKING_NUM} blocked: validation passed but integration→${default_branch} merge did not land after ${MAX_FINAL_MERGE_ATTEMPTS} attempts. Manual intervention required." "CRITICAL"
     tg_cleanup_msgs "${TRACKING_NUM}"
+    tg_notify "Project #${TRACKING_NUM} blocked: validation passed but integration→${default_branch} merge did not land after ${MAX_FINAL_MERGE_ATTEMPTS} attempts. Manual intervention required." "CRITICAL"
     return 0
   fi
 
