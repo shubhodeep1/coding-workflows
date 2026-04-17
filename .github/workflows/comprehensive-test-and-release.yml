@@ -94,7 +94,7 @@ jobs:
 
           list_dispatch_runs()
           {
-            gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50"
+            gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=100"
           }
 
           VERSION_TAG="$(sanitize_single_line "${VERSION_TAG_INPUT}")"
@@ -139,13 +139,12 @@ jobs:
               continue
             fi
 
-            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg actor "${GITHUB_ACTOR}" --arg bot_actor "github-actions[bot]" --arg branch "${GITHUB_REF_NAME}" '
+            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg branch "${GITHUB_REF_NAME}" '
               [
                 .workflow_runs[]
                 | select((.id as $id | ($before | index($id) | not)))
                 | select((.event // "") == "workflow_dispatch")
                 | select((.head_branch // "") == $branch)
-                | select(((.actor.login // "") == $actor) or ((.actor.login // "") == $bot_actor))
               ]
               | sort_by(.created_at)
             ' 2>/dev/null || echo '[]')"
@@ -286,7 +285,7 @@ jobs:
 
           list_dispatch_runs()
           {
-            gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50"
+            gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=100"
           }
 
           PHASE_TIMEOUT_STR="$(sanitize_single_line "${PHASE_TIMEOUT}")"
@@ -334,13 +333,12 @@ jobs:
               continue
             fi
 
-            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg actor "${GITHUB_ACTOR}" --arg bot_actor "github-actions[bot]" --arg branch "${GITHUB_REF_NAME}" '
+            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg branch "${GITHUB_REF_NAME}" '
               [
                 .workflow_runs[]
                 | select((.id as $id | ($before | index($id) | not)))
                 | select((.event // "") == "workflow_dispatch")
                 | select((.head_branch // "") == $branch)
-                | select(((.actor.login // "") == $actor) or ((.actor.login // "") == $bot_actor))
               ]
               | sort_by(.created_at)
             ' 2>/dev/null || echo '[]')"
@@ -507,7 +505,7 @@ jobs:
 
           list_dispatch_runs()
           {
-            gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50"
+            gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=100"
           }
 
           list_tracking_issue_numbers()
@@ -571,13 +569,12 @@ jobs:
               continue
             fi
 
-            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg actor "${GITHUB_ACTOR}" --arg bot_actor "github-actions[bot]" --arg branch "${GITHUB_REF_NAME}" '
+            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg branch "${GITHUB_REF_NAME}" '
               [
                 .workflow_runs[]
                 | select((.id as $id | ($before | index($id) | not)))
                 | select((.event // "") == "workflow_dispatch")
                 | select((.head_branch // "") == $branch)
-                | select(((.actor.login // "") == $actor) or ((.actor.login // "") == $bot_actor))
               ]
               | sort_by(.created_at)
             ' 2>/dev/null || echo '[]')"

@@ -1432,7 +1432,10 @@ def test_comprehensive_pending_complete_dispatches_release_with_metadata():
 		enable_validation="false",
 		max_validate_cycles="3",
 		tracking_labels=["ai:comprehensive-test-pending"],
-		tracking_comments=["version_tag: v9.9.9\ntest_repo: owner/release-tests"],
+		tracking_comments=[
+			"<!-- COMPREHENSIVE_RELEASE_METADATA_V1 -->\nversion_tag: v9.9.9\ntest_repo: owner/release-tests\n<!-- /COMPREHENSIVE_RELEASE_METADATA_V1 -->",
+			"version_tag: v0.0.1\ntest_repo: attacker/repo",
+		],
 		issue_labels={10: ["ai:merged"]},
 		prs=prs,
 		existing_branches=["main", "orchestrator/project-192"],

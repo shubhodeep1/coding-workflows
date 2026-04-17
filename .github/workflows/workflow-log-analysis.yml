@@ -353,6 +353,12 @@ jobs:
           if [ -n "${THINKING_LEVEL_ANALYSIS}" ]; then
             cmd+=(--thinking-level "${THINKING_LEVEL_ANALYSIS}")
           fi
+          LEGACY_PROMPT_TOKEN_BUDGET="${{ vars.WORKFLOW_LOG_ANALYSIS_LEGACY_PROMPT_TOKEN_BUDGET || '24000' }}"
+          if [[ ! "${LEGACY_PROMPT_TOKEN_BUDGET}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid WORKFLOW_LOG_ANALYSIS_LEGACY_PROMPT_TOKEN_BUDGET='${LEGACY_PROMPT_TOKEN_BUDGET}'. Use a non-negative integer."
+            exit 1
+          fi
+          cmd+=(--prompt-token-budget "${LEGACY_PROMPT_TOKEN_BUDGET}")
           case "${WORKFLOW_EDITOR_MODEL:-}" in
             *gemini*) cmd+=(--max-output-tokens 60000) ;;
           esac

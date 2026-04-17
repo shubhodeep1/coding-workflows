@@ -2732,23 +2732,37 @@ extract_comprehensive_release_metadata() {
   local comments_json="$1"
 
   if ! echo "${comments_json}" | jq -rc '
-    [.[].body // ""] | reverse as $bodies
+    [ .[] | ((.body // "") | gsub("\\\\n"; "\n")) ]
+    | reverse as $bodies
+    | (
+        [ $bodies[]
+          | select(test("<!--[[:space:]]*COMPREHENSIVE_RELEASE_METADATA_V1[[:space:]]*-->"))
+          | (
+              .
+              | (
+                  capture("(?s)<!--[[:space:]]*COMPREHENSIVE_RELEASE_METADATA_V1[[:space:]]*-->(?<block>.*?)(?:<!--[[:space:]]*/COMPREHENSIVE_RELEASE_METADATA_V1[[:space:]]*-->|\\z)")?
+                  | .block
+                )
+              // ""
+            )
+          | select(type == "string" and length > 0)
+        ]
+        | .[0] // ""
+      ) as $metadata_block
     | {
         version_tag: (
-          [ $bodies[]
-            | gsub("\\\\n"; "\n")
-            | split("\n")[]
+          [ ($metadata_block | split("\n")[])
             | (capture("(?i)^[[:space:]]*(?:[-*][[:space:]]*)?(?:version[ _-]?tag)[[:space:]]*[:=][[:space:]]*`?(?<value>[^`]+?)`?[[:space:]]*$") | .value)?
             | select(type == "string" and length > 0)
-          ] | .[0] // ""
+          ]
+          | .[0] // ""
         ),
         test_repo: (
-          [ $bodies[]
-            | gsub("\\\\n"; "\n")
-            | split("\n")[]
+          [ ($metadata_block | split("\n")[])
             | (capture("(?i)^[[:space:]]*(?:[-*][[:space:]]*)?(?:test[ _-]?repo)[[:space:]]*[:=][[:space:]]*`?(?<value>[^`]+?)`?[[:space:]]*$") | .value)?
             | select(type == "string" and length > 0)
-          ] | .[0] // ""
+          ]
+          | .[0] // ""
         )
       }
   ' 2>/dev/null; then
