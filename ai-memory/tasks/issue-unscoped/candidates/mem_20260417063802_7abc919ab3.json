@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 4\nIssues with multi-reviewer agreement: 2\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: .github/workflows/test-and-mark-stable.yml (line ~1030)\n      Problem: Unquoted command substitution for mktemp. The assignments `POST_OUT=$(mktemp 2>/dev/null)` and `POST_ERR=$(mktemp 2>/dev/null)` lack quotes around the command substitution, making them vulnerable to word splitting if the mktemp output contains whitespace. This is inconsistent with other mktemp usages in the same file (lines 827, 859, 1655) which correctly use `\"$(mktemp)\"`.; Bash performs word splitting on unquoted command substitution results. If the temporary directory path contains spaces (possible with custom runner configurations), the assignment would store only the first word. All subsequent operations using POST_OUT/POST_ERR (redirects, cat/head, rm) would then fail with \"No such file or directory\", breaking the diagnostic capture this PR aims to provide and potentially leaving temp files orphaned on partial failure paths.; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash\n\n  [2] File: .github/workflows/test-and-mark-stable.yml\n      Problem: Location: Lines 1030, 1034; Issue: Unquoted command substitution leaves code vulnerable to word splitting and inconsistent with file style; Suggested minimal fix: Quote the command substitutions: change `if ! POST_OUT=$(mktemp 2>/dev/null); then` to `if ! POST_OUT=\"$(mktemp 2>/dev/null)\"; then` and similarly for POST_ERR; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1; **Assessment of Other Findings from Cross-Pollination**; - The `trap` cleanup suggestion (from Gemini and Copilot) was appropriately rejected by the editor as it would broaden scope beyond the minimal required fix. The explicit cleanup pattern in both success and failure branches is sufficient for this linear script.; - The `/dev/null` fallback for mktemp errors is acceptable - exposing mktemp stderr is not required for the PR's diagnostic goals.; - The 4KB response body limit is correctly implemented and harmless if the file is empty.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [3] File: .github/workflows/test-and-mark-stable.yml (line ~10)\n      Problem: Unquoted command substitution for mktemp is inconsistent with other mktemp calls in the same file (lines 827, 859, 16:55 all use quoted `\"$(mktemp)\"` style). While `mktemp` typically returns paths without spaces, the unquoted form `POST_OUT=$(mktemp)` is vulnerable to word splitting if the temporary directory path contains whitespace (e.g., custom runner configurations).; Bash performs word splitting on unquoted command substitution results. If mktemp returns a path like \"/tmp/dir with spaces/tmp.XXXXXX\", the variable would be truncated to \"/tmp/dir\", causing subsequent file operations to fail with \"No such file or directory\".; **Notes on cross-pollination findings:**; - The trap cleanup suggestion was appropriately addressed by the editor - explicit cleanup in both branches is sufficient for this linear script; - The editor correctly chose explicit fail-fast over /dev/null fallback (preserves diagnostic quality per PR intent); - The unquoted mktemp issue was identified by multiple reviewers (stepfun, deepseek) but appears not to have been explicitly addressed in the editor's decision list; **HARDENING_UGGESTIONS:**\n      Confidence: avg 3.0\n      Flagged by: minimax_minimax-m2_5\n\n  [4] File: .github/workflows/test-and-mark--stable.yml\n      Problem: Location: Lines 10:30, 10:34; Issue: Unquoted command substitution leaves code vulnerable to word splitting, inconsistent with project style; Suggested minimal fix: Change `if ! POST_OUT=$(mktemp 2>/dev/null); then` to `if ! POST_OUT=\"$(mktemp 2>/dev/null)\"; then` and similarly for POST_ERR; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n.github/workflows/test-and-mark-stable.yml\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/test-and-mark--stable.yml",
+  "fingerprint": "b7dc50ccd4e1f9e34b44c0c9ebfa99fc8e6a4884aab007ba95c6b24c93c31bd8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1266,
+    "run_id": "24550940070",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24550940070",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417063802_7abc919ab3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1266,
+    "run_id": "24550940070"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-17T06:38:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
