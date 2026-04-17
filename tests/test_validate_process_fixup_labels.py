@@ -298,9 +298,11 @@ ensure_label_exists "ai:orchestrator-managed"
 			"/labels/" in path
 			for path in state.get("api_calls", [])
 		)
-		notify_text = notify_file.read_text(encoding="utf-8")
-		assert "label already exists, skipping 'ai:clarification'" in notify_text
-		assert "label already exists, skipping 'ai:orchestrator-managed'" in notify_text
+		notify_text = notify_file.read_text(encoding="utf-8") if notify_file.exists() else ""
+		assert "label already exists, skipping 'ai:clarification'" not in notify_text
+		assert "label already exists, skipping 'ai:orchestrator-managed'" not in notify_text
+		assert "::debug::ensure_label_exists: label already exists, skipping 'ai:clarification'." in proc.stderr
+		assert "::debug::ensure_label_exists: label already exists, skipping 'ai:orchestrator-managed'." in proc.stderr
 
 
 def main() -> int:
