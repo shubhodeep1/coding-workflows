@@ -26,7 +26,7 @@ Every finding MUST include:
 {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
 Output format:
-- Begin your output with the exact header line `## Deep Audit — Workflows & Scripts (<UTC date in YYYY-MM-DD>)`. Determine the UTC date from the analysis context block if provided; otherwise use today's UTC date.
+- Begin your output with the exact header line `## Deep Audit — Workflows & Scripts (YYYY-MM-DD)`. Determine the UTC date from the analysis context block if provided; otherwise use today's UTC date.
 - Emit sections in the exact order listed below. Use `###` subsection headings.
 - Do not include any preamble before the top-level `##` heading. Do not include a trailing closing remark after the final section.
 

@@ -57,7 +57,7 @@ Out of scope (do not raise here):
 {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
 
 Output format:
-- Begin output with the exact header line `## API Call Consolidation & Dead-Call Analysis (<UTC date in YYYY-MM-DD>)`. Determine the UTC date from the analysis context block if provided; otherwise use today's UTC date.
+- Begin output with the exact header line `## API Call Consolidation & Dead-Call Analysis (YYYY-MM-DD)`. Determine the UTC date from the analysis context block if provided; otherwise use today's UTC date.
 - Emit the following subsections, in order, using `###` headings. Emit every subsection even if empty (state "No findings." in that case).
 
 ### Safety Tag Legend
