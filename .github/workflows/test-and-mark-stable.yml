@@ -1023,9 +1023,34 @@ jobs:
           ${STATE_JSON}
           ORCHESTRATOR_STATE_V1 -->"
 
-          jq -n --arg body "${STATE_COMMENT}" '{"body": $body}' | \
-            gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}/comments" \
-              --method POST --input - >/dev/null
+          # Diagnostic: capture gh stdout + stderr so 4xx errors surface
+          # the API's errors[] payload instead of the opaque
+          # "gh: Validation Failed (HTTP 422)" that happens when the response
+          # body is redirected to /dev/null.
+          if ! POST_OUT="$(mktemp)"; then
+            echo "::error::Failed to create temp file for stdout capture (mktemp failed)"
+            exit 1
+          fi
+          if ! POST_ERR="$(mktemp)"; then
+            rm -f "${POST_OUT}"
+            echo "::error::Failed to create temp file for stderr capture (mktemp failed)"
+            exit 1
+          fi
+          if ! jq -n --arg body "${STATE_COMMENT}" '{"body": $body}' | \
+              gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}/comments" \
+                --method POST --input - >"${POST_OUT}" 2>"${POST_ERR}"; then
+            echo "::error::Failed to post orchestrator state comment (repo=${TEST_REPO} tracking_issue=${TRACKING_NUMBER})"
+            echo "::group::gh stderr"
+            cat "${POST_ERR}" || true
+            echo "::endgroup::"
+            echo "::group::API response body (first 4KB of stdout)"
+            head -c 4096 "${POST_OUT}" || true
+            echo ""
+            echo "::endgroup::"
+            rm -f "${POST_OUT}" "${POST_ERR}"
+            exit 1
+          fi
+          rm -f "${POST_OUT}" "${POST_ERR}"
 
           echo "Posted orchestrator state to tracking issue #${TRACKING_NUMBER}"
 
