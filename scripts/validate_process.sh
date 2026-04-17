@@ -812,14 +812,22 @@ write_status_file()
   local status="$1"
   local summary="$2"
   local failure_summary="$3"
+  # Optional 4th arg: raw_status preserves the original diagnose classifier
+  # (for example `harness_error`, `needs_fixes`, `infeasible`) so downstream
+  # consumers can distinguish harness defects from app-side failures even
+  # though `status` is normalized to `pass`/`fail`/`error`. Defaults to the
+  # normalized status for backward compatibility.
+  local raw_status="${4:-${status}}"
 
   jq -n \
     --arg status "${status}" \
+    --arg raw_status "${raw_status}" \
     --arg summary "${summary}" \
     --arg failure_summary "${failure_summary}" \
     --arg tracking_issue "${TRACKING_ISSUE_RAW}" \
     '{
       status: $status,
+      raw_status: $raw_status,
       summary: $summary,
       failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
       tracking_issue: $tracking_issue
@@ -831,6 +839,7 @@ write_metadata_file()
   local status="$1"
   local summary="$2"
   local failure_summary="$3"
+  local raw_status="${4:-${status}}"
 
   local validation_file="${VALIDATION_RESULT_FILE}"
   local diagnosis_file="${DIAGNOSE_RESULT_FILE}"
@@ -845,6 +854,7 @@ write_metadata_file()
 
   jq -n \
     --arg status "${status}" \
+    --arg raw_status "${raw_status}" \
     --arg summary "${summary}" \
     --arg failure_summary "${failure_summary}" \
     --arg hints_source "${HINTS_SOURCE}" \
@@ -864,6 +874,7 @@ write_metadata_file()
     --slurpfile diagnosis "${diagnosis_file}" \
     '{
       status: $status,
+      raw_status: $raw_status,
       summary: $summary,
       failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
       hints_source: $hints_source,
@@ -893,9 +904,10 @@ write_result_files()
   local status="$1"
   local summary="$2"
   local failure_summary="$3"
+  local raw_status="${4:-${status}}"
 
-  write_status_file "${status}" "${summary}" "${failure_summary}"
-  write_metadata_file "${status}" "${summary}" "${failure_summary}"
+  write_status_file "${status}" "${summary}" "${failure_summary}" "${raw_status}"
+  write_metadata_file "${status}" "${summary}" "${failure_summary}" "${raw_status}"
 }
 
 cleanup_runtime_containers()
@@ -1538,7 +1550,7 @@ if ! ensure_validation_harness_not_tracked; then
   local_failure_summary="${CANONICAL_VALIDATE_HARNESS_REL} is tracked in git. Runtime validation harness must remain untracked."
   post_tracking_comment "## ⚠️ Runtime validation harness tracking violation\n\n${local_failure_summary}\n\nRemove it from git tracking in the consumer repository and rerun validation."
   set_tracking_phase_label "ai:validation-failed"
-  write_result_files "error" "Validation harness tracking violation" "${local_failure_summary}"
+  write_result_files "error" "Validation harness tracking violation" "${local_failure_summary}" "harness_error"
   tg_notify "Validation harness tracking violation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
   exit 1
 fi
@@ -1698,7 +1710,7 @@ if [ "${GENERATE_SUCCESS}" != "true" ]; then
   attempt_self_heal_and_reexec "generate"
   post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for generation logs."
   set_tracking_phase_label "ai:validation-failed"
-  write_result_files "error" "Validation harness generation failed" "${local_failure_summary}"
+  write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
   tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
   exit 1
 fi
@@ -1714,7 +1726,7 @@ if command -v git >/dev/null 2>&1; then
     local_failure_summary="Codex modified files outside validation/ during harness generation."
     post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nUnexpected changes:\n\n\`\`\`\n${NON_VALIDATION_CHANGES}\n\`\`\`"
     set_tracking_phase_label "ai:validation-failed"
-    write_result_files "error" "Validation harness generation violated path constraints" "${local_failure_summary}"
+    write_result_files "error" "Validation harness generation violated path constraints" "${local_failure_summary}" "harness_error"
     tg_notify "Validation harness generation touched non-validation files for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
     exit 1
   fi
@@ -1726,7 +1738,7 @@ if ! ensure_validation_harness_not_tracked; then
   local_failure_summary="${CANONICAL_VALIDATE_HARNESS_REL} became tracked/staged after harness generation."
   post_tracking_comment "## ⚠️ Runtime validation harness tracking violation\n\n${local_failure_summary}\n\nValidation harness files must remain transient and untracked."
   set_tracking_phase_label "ai:validation-failed"
-  write_result_files "error" "Validation harness tracking violation" "${local_failure_summary}"
+  write_result_files "error" "Validation harness tracking violation" "${local_failure_summary}" "harness_error"
   tg_notify "Validation harness tracking violation after generation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
   exit 1
 fi
@@ -1751,7 +1763,7 @@ if ! run_preflight_checks; then
   attempt_self_heal_and_reexec "preflight"
   post_tracking_comment "## ❌ Runtime validation harness pre-flight failed\n\n${failure_summary}\n\n\`docker compose config\`, shell syntax, or build context/dockerfile path checks failed."
   set_tracking_phase_label "ai:validation-failed"
-  write_result_files "fail" "Validation failed due to harness pre-flight error" "${failure_summary}"
+  write_result_files "fail" "Validation failed due to harness pre-flight error" "${failure_summary}" "harness_error"
   tg_notify "Validation pre-flight failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
   exit 0
 fi
@@ -2035,7 +2047,7 @@ if [ "${CANARY_ONLY_FAILURE}" = true ]; then
 			failure_summary="Validation harness error: ${FIRST_FAILURE}"
 			post_tracking_comment "## ❌ Runtime validation harness error\n\n${failure_summary}\n\nCanary infrastructure check failed and remaining tests were skipped."
 			set_tracking_phase_label "ai:validation-failed"
-			write_result_files "fail" "Validation failed due to harness error" "${failure_summary}"
+			write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
 			tg_notify "Validation harness canary failure for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
 			exit 0
 		fi
@@ -2115,7 +2127,7 @@ case "${DIAG_STATUS}" in
       failure_summary="Diagnosis returned needs_fixes with empty fix_issues."
       post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
       set_tracking_phase_label "ai:validation-failed"
-      write_result_files "fail" "Runtime validation failed" "${failure_summary}"
+      write_result_files "fail" "Runtime validation failed" "${failure_summary}" "harness_error"
       tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: invalid diagnosis payload." "ERROR"
       exit 0
     fi
@@ -2167,7 +2179,7 @@ case "${DIAG_STATUS}" in
 
     if ! is_tracking_run; then
       failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). Tracking issue is not set, so the consolidated fix-up issue was not created."
-      write_result_files "fail" "Validation needs fixes" "${failure_summary}"
+      write_result_files "fail" "Validation needs fixes" "${failure_summary}" "needs_fixes"
       tg_notify "Validation for ${GITHUB_REPOSITORY} reported fixable failures, but TRACKING_ISSUE is not set." "WARNING"
       exit 0
     fi
@@ -2187,7 +2199,7 @@ case "${DIAG_STATUS}" in
 	  failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s), but creating the consolidated fix-up issue failed."
 	  post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
 	  set_tracking_phase_label "ai:validation-failed"
-	  write_result_files "fail" "Runtime validation failed" "${failure_summary}"
+	  write_result_files "fail" "Runtime validation failed" "${failure_summary}" "harness_error"
 	  tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: unable to create consolidated fix-up issue." "ERROR"
 	  exit 0
 	fi
@@ -2202,7 +2214,7 @@ case "${DIAG_STATUS}" in
     set_tracking_phase_label "ai:validation-fixing"
 
     failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). A single consolidated fix-up issue was created for ${FIX_COUNT} root cause(s)."
-    write_result_files "fail" "Validation needs fixes" "${failure_summary}"
+    write_result_files "fail" "Validation needs fixes" "${failure_summary}" "needs_fixes"
     tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes (${FIX_COUNT} root cause(s) consolidated into 1 issue)." "WARNING"
     ;;
 
@@ -2212,7 +2224,7 @@ case "${DIAG_STATUS}" in
 
     post_tracking_comment "## ❌ Runtime validation harness error\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}"
     set_tracking_phase_label "ai:validation-failed"
-    write_result_files "fail" "Validation failed due to harness error" "${failure_summary}"
+    write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
     tg_notify "Validation harness error for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
     ;;
 
@@ -2221,7 +2233,7 @@ case "${DIAG_STATUS}" in
 
     post_tracking_comment "## ❌ Runtime validation infeasible\n\n${DIAG_TEXT}"
     set_tracking_phase_label "ai:validation-failed"
-    write_result_files "fail" "Validation marked infeasible" "${failure_summary}"
+    write_result_files "fail" "Validation marked infeasible" "${failure_summary}" "infeasible"
     tg_notify "Validation infeasible for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
     ;;
 
@@ -2230,7 +2242,7 @@ case "${DIAG_STATUS}" in
 
     post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
     set_tracking_phase_label "ai:validation-failed"
-    write_result_files "fail" "Validation failed" "${failure_summary}"
+    write_result_files "fail" "Validation failed" "${failure_summary}" "harness_error"
     tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: unknown diagnosis status." "ERROR"
     ;;
 esac

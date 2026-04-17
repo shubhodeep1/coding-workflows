@@ -30,6 +30,9 @@ name: AI Validate (Reusable)
       status:
         description: "Validation status (pass|fail|error)"
         value: ${{ jobs.validate.outputs.status }}
+      raw_status:
+        description: "Raw validation status (preserves diagnostic classifier values)"
+        value: ${{ jobs.validate.outputs.raw_status }}
       summary:
         description: "Validation summary"
         value: ${{ jobs.validate.outputs.summary }}
@@ -54,6 +57,7 @@ jobs:
     timeout-minutes: 180
     outputs:
       status: ${{ steps.collect_status.outputs.status }}
+      raw_status: ${{ steps.collect_status.outputs.raw_status }}
       summary: ${{ steps.collect_status.outputs.summary }}
       failure_summary: ${{ steps.collect_status.outputs.failure_summary }}
       status_file: ${{ steps.collect_status.outputs.status_file }}
@@ -452,26 +456,31 @@ jobs:
           if [ ! -f "${STATUS_FILE_PATH}" ]; then
             jq -n \
               --arg status "error" \
+              --arg raw_status "harness_error" \
               --arg summary "Validation process did not produce validation_status.json." \
               --arg failure_summary "Missing status artifact. Check validate_process.sh output and uploaded artifacts." \
               '{
                 status: $status,
+                raw_status: $raw_status,
                 summary: $summary,
                 failure_summary: $failure_summary
               }' > "${STATUS_FILE_PATH}"
           fi
 
           status="$(jq -r '.status // "error"' "${STATUS_FILE_PATH}")"
+          raw_status="$(jq -r '.raw_status // .status // "error"' "${STATUS_FILE_PATH}")"
           summary="$(jq -r '.summary // ""' "${STATUS_FILE_PATH}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
           failure_summary="$(jq -r '.failure_summary // ""' "${STATUS_FILE_PATH}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
 
           if [ ! -f "${METADATA_FILE_PATH}" ]; then
             jq -n \
               --arg status "${status}" \
+              --arg raw_status "${raw_status}" \
               --arg summary "${summary}" \
               --arg failure_summary "${failure_summary}" \
               '{
                 status: $status,
+                raw_status: $raw_status,
                 summary: $summary,
                 failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
                 generated_at_utc: (now | todateiso8601)
@@ -480,6 +489,7 @@ jobs:
 
           {
             echo "status=${status}"
+            echo "raw_status=${raw_status}"
             echo "summary=${summary}"
             echo "failure_summary=${failure_summary}"
             echo "status_file=${STATUS_FILE_PATH}"
@@ -493,6 +503,7 @@ jobs:
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           STATUS_FILE_PATH: ${{ steps.collect_status.outputs.status_file }}
           STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
+          RAW_STATUS_VALUE: ${{ steps.collect_status.outputs.raw_status }}
           SUMMARY_VALUE: ${{ steps.collect_status.outputs.summary }}
           FAILURE_SUMMARY_VALUE: ${{ steps.collect_status.outputs.failure_summary }}
         run: |
@@ -524,6 +535,14 @@ jobs:
               failure_summary_value="${parsed_failure_summary}"
             fi
           fi
+          raw_status="${RAW_STATUS_VALUE:-}"
+          if [ -z "${raw_status}" ] && [ -n "${STATUS_FILE_PATH:-}" ] && [ -f "${STATUS_FILE_PATH}" ]; then
+            parsed_raw_status="$(jq -r '.raw_status // empty' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+            if [ -n "${parsed_raw_status}" ]; then
+              raw_status="${parsed_raw_status}"
+            fi
+          fi
+          raw_status="${raw_status:-${status_value}}"
 
           summary_compact="$(printf '%s' "${summary_value}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
           failure_summary_compact="$(printf '%s' "${failure_summary_value}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
@@ -534,7 +553,7 @@ jobs:
           fi
           candidate_summary="${candidate_summary:0:220}"
 
-          candidate_details="status=${status_value}; summary=${summary_compact}; failure_summary=${failure_summary_compact}"
+          candidate_details="status=${status_value}; raw_status=${raw_status}; summary=${summary_compact}; failure_summary=${failure_summary_compact}"
           candidate_details="$(printf '%s' "${candidate_details}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
           candidate_details="${candidate_details:0:600}"
 
@@ -601,7 +620,9 @@ jobs:
         continue-on-error: true
         env:
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
+          STATUS_FILE_PATH: ${{ steps.collect_status.outputs.status_file }}
           STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
+          RAW_STATUS_VALUE: ${{ steps.collect_status.outputs.raw_status }}
           SUMMARY_VALUE: ${{ steps.collect_status.outputs.summary }}
           FAILURE_SUMMARY_VALUE: ${{ steps.collect_status.outputs.failure_summary }}
         run: |
@@ -630,8 +651,16 @@ jobs:
           completion_message="$(printf '%s' "${completion_message}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
           completion_message="${completion_message:0:280}"
 
+          raw_status="${RAW_STATUS_VALUE:-}"
+          if [ -z "${raw_status}" ] && [ -n "${STATUS_FILE_PATH:-}" ] && [ -f "${STATUS_FILE_PATH}" ]; then
+            parsed_raw_status="$(jq -r '.raw_status // empty' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+            if [ -n "${parsed_raw_status}" ]; then
+              raw_status="${parsed_raw_status}"
+            fi
+          fi
+          raw_status="${raw_status:-${status_value}}"
           metadata_json="$(jq -cn \
-            --arg raw_status "${status_value}" \
+            --arg raw_status "${raw_status}" \
             --arg run_attempt "${{ github.run_attempt }}" \
             '{raw_status:$raw_status,run_attempt:$run_attempt}')"
 
@@ -649,9 +678,18 @@ jobs:
         if: always()
         env:
           VALIDATION_STATUS: ${{ steps.collect_status.outputs.status }}
+          VALIDATION_RAW_STATUS: ${{ steps.collect_status.outputs.raw_status }}
         run: |
           set -euo pipefail
-          if [ "${VALIDATION_STATUS}" != "pass" ]; then
-            echo "Validation did not pass."
-            exit 1
+          if [ "${VALIDATION_STATUS}" = "pass" ]; then
+            exit 0
           fi
+          # Exit 2 for harness_error so orchestration can distinguish a harness
+          # defect (generator/canary produced an incorrect test) from an
+          # application-side failure; exit 1 for every other non-pass outcome.
+          if [ "${VALIDATION_RAW_STATUS}" = "harness_error" ]; then
+            echo "Validation did not pass (harness error)."
+            exit 2
+          fi
+          echo "Validation did not pass."
+          exit 1
