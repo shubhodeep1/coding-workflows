@@ -699,8 +699,8 @@ while [ "${attempt}" -le 3 ]; do
           printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           _cp_status="$(git status --porcelain 2>/dev/null || true)"
           if [ -n "${_cp_status}" ]; then
-            printf '%s\n' "${_cp_status}" | head -40
-            _cp_status_lines="$(printf '%s\n' "${_cp_status}" | wc -l | tr -d '[:space:]')"
+            printf '%s\n' "${_cp_status}" | head -n 40 || true
+            _cp_status_lines="$(printf '%s\n' "${_cp_status}" | wc -l | tr -d '[:space:]' || echo 0)"
             [ "${_cp_status_lines:-0}" -gt 40 ] && echo "[truncated: ${_cp_status_lines} total porcelain lines]"
           else
             echo "(clean)"
@@ -708,8 +708,8 @@ while [ "${attempt}" -le 3 ]; do
           echo "--- git diff --stat HEAD ---"
           _cp_diffstat="$(git diff --stat HEAD 2>/dev/null || true)"
           if [ -n "${_cp_diffstat}" ]; then
-            printf '%s\n' "${_cp_diffstat}" | head -40
-            _cp_diffstat_lines="$(printf '%s\n' "${_cp_diffstat}" | wc -l | tr -d '[:space:]')"
+            printf '%s\n' "${_cp_diffstat}" | head -n 40 || true
+            _cp_diffstat_lines="$(printf '%s\n' "${_cp_diffstat}" | wc -l | tr -d '[:space:]' || echo 0)"
             [ "${_cp_diffstat_lines:-0}" -gt 40 ] && echo "[truncated: ${_cp_diffstat_lines} total diffstat lines]"
           fi
           echo "::endgroup::"
