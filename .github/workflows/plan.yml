@@ -1074,6 +1074,7 @@ jobs:
             --remove-label 'ai:clarification' \
             --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
 
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           {
             printf '%s\n' "Planning blocked: human input required."
             printf '\n'
@@ -1081,12 +1082,13 @@ jobs:
             printf '\n'
             printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
             printf '%s\n' "Provide the required input, then reply with /answer."
+            printf '\n'
+            printf '%s\n' "Run: ${RUN_URL}"
           } > "${PLAN_COMMENT_FILE}"
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${PLAN_COMMENT_FILE}")" >/dev/null
 
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MSG="Planning blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
           MSG+=$'\n'
           MSG+="Issue: ${ISSUE_URL}"
@@ -1293,7 +1295,8 @@ jobs:
             if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
               gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
             fi
-            REJECTION_BODY=$'The generated plan targets template-owned paths (`scripts/`, `.github/prompts/`, or `.github/scripts/`) which are fetched from the `coding-workflows` repository at runtime and are excluded from Codex commits in `implement.yml`. Implementing this plan would produce a no-op PR.\n\nIf a change to those files is genuinely required, open an issue or PR directly against [`shubhodeep1/coding-workflows`](https://github.com/shubhodeep1/coding-workflows) instead.'
+            RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            REJECTION_BODY=$'The generated plan targets template-owned paths (`scripts/`, `.github/prompts/`, or `.github/scripts/`) which are fetched from the `coding-workflows` repository at runtime and are excluded from Codex commits in `implement.yml`. Implementing this plan would produce a no-op PR.\n\nIf a change to those files is genuinely required, open an issue or PR directly against [`shubhodeep1/coding-workflows`](https://github.com/shubhodeep1/coding-workflows) instead.\n\nRun: '"${RUN_URL}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
               -f body="${REJECTION_BODY}" >/dev/null 2>&1 || true
             exit 1

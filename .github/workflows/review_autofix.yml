@@ -3553,6 +3553,7 @@ jobs:
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           BODY="$(cat <<EOF
           **AI review/autofix blocked — needs human intervention**
 
@@ -3564,6 +3565,8 @@ jobs:
           - Push a new commit to re-trigger the review workflow
 
           Linked issues have been labeled \`ai:review-blocked\`.
+
+          Run: ${RUN_URL}
           EOF
           )"
 
@@ -3878,6 +3881,8 @@ jobs:
               BODY+="Auto-merge has been **blocked**. All automated retry attempts have been exhausted."
               BODY+=$'\n'
               BODY+="**Next steps:** re-run the review workflow manually or apply the changes from the editor summary above."
+              BODY+=$'\n\n'
+              BODY+="Run: ${RUN_URL}"
               gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
             else
               MSG="⚠️ Editor changes lost (push disabled): #${PR_NUMBER}"

@@ -1794,6 +1794,7 @@ jobs:
           # treating this as success.
           echo "::warning::Implementation produced no repository changes. Labeling issue #${ISSUE_NUMBER} as ai:implementation-failed."
 
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           remaining_changes="${REMAINING_CHANGES:-}"
           noop_body="⚠️ AI implementation produced no repository changes despite an approved plan."
           if [ -n "${remaining_changes}" ]; then
@@ -1811,7 +1812,9 @@ jobs:
           fi
           noop_body="${noop_body}
 
-          Labeling \`ai:implementation-failed\` for orchestrator re-processing."
+          Labeling \`ai:implementation-failed\` for orchestrator re-processing.
+
+          Run: ${RUN_URL}"
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="${noop_body}"
@@ -2709,6 +2712,7 @@ jobs:
 
           DIAG_STATUS="$(jq -r '.status // "harness_error"' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
           DIAG_TEXT="$(jq -r '.diagnosis // "Implementation failed after Codex execution."' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           case "${DIAG_STATUS}" in
             needs_fixes)
@@ -2814,10 +2818,11 @@ jobs:
                 }')"
               BLOCKER_METADATA_BLOCK="$(printf '<!-- IMPLEMENT_FIXUP_BLOCKERS_V1\n%s\nIMPLEMENT_FIXUP_BLOCKERS_V1 -->' "${BLOCKER_METADATA_JSON}")"
 
-              SUMMARY_COMMENT_BODY="$(printf '## Post-Codex validation diagnosed follow-up fixes\n\n%s\n\nFailed step: %s\n\nCreated fix-up issues:\n%s\n\n%s\n' \
+              SUMMARY_COMMENT_BODY="$(printf '## Post-Codex validation diagnosed follow-up fixes\n\n%s\n\nFailed step: %s\n\nCreated fix-up issues:\n%s\n\nRun: %s\n\n%s\n' \
                 "${DIAG_TEXT}" \
                 "${FAILED_STEP_NAME}" \
                 "${issue_list_md}" \
+                "${RUN_URL}" \
                 "${BLOCKER_METADATA_BLOCK}")"
 
               gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
@@ -2829,21 +2834,21 @@ jobs:
             harness_error)
               HARNESS_FIXES="$(jq -r '.harness_fixes // "No harness fixes were provided."' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
               gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-                -f body="## Post-Codex validation harness error\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}" >/dev/null || true
+                -f body="## Post-Codex validation harness error\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}\n\nRun: ${RUN_URL}" >/dev/null || true
 
               ensure_implementation_failed_label
               ;;
 
             infeasible)
               gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-                -f body="## Post-Codex validation marked infeasible\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}" >/dev/null || true
+                -f body="## Post-Codex validation marked infeasible\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nRun: ${RUN_URL}" >/dev/null || true
 
               ensure_implementation_failed_label
               ;;
 
             *)
               gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-                -f body="## Post-Codex validation diagnosis returned unknown status\n\nStatus: ${DIAG_STATUS}\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}" >/dev/null || true
+                -f body="## Post-Codex validation diagnosis returned unknown status\n\nStatus: ${DIAG_STATUS}\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nRun: ${RUN_URL}" >/dev/null || true
 
               ensure_implementation_failed_label
               ;;
