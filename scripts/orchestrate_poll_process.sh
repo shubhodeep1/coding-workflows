@@ -726,10 +726,11 @@ fi
 
 # Bounded retry budget for the post-validation final integration→default
 # squash merge inside mark_validation_complete. Each poll tick that runs
-# mark_validation_complete and observes finalize_integration_merge_if_needed
-# returning non-zero increments .final_merge_attempt_count; on success the
-# counter is reset. After the budget is exhausted the project is escalated
-# to ai:blocked instead of being silently advanced to status=complete.
+# mark_validation_complete and observes a budget-eligible failure from
+# finalize_integration_merge_if_needed increments .final_merge_attempt_count;
+# transient/budget-ineligible deferrals do not consume retry budget. On
+# success the counter is reset. After the budget is exhausted the project is
+# escalated to ai:blocked instead of being silently advanced to status=complete.
 MAX_FINAL_MERGE_ATTEMPTS="${MAX_FINAL_MERGE_ATTEMPTS:-3}"
 if ! [[ "${MAX_FINAL_MERGE_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_FINAL_MERGE_ATTEMPTS}" -lt 1 ]; then
   echo "::warning::MAX_FINAL_MERGE_ATTEMPTS must be a positive integer; defaulting to 3"
@@ -3096,11 +3097,10 @@ mark_validation_complete() {
   ensure_integration_conflict_state_fields
 
   if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}"; then
-    # Transient mergeability/check-pending states should defer without
+    # Budget-ineligible final-merge deferrals/failures should return without
     # consuming the bounded retry budget.
     if [ "${FINAL_MERGE_BUDGET_ELIGIBLE:-1}" != "1" ]; then
-      echo "  [final-merge] transient deferral; retry budget unchanged."
-      post_state_comment
+      echo "  [final-merge] budget-ineligible deferral/failure; retry budget unchanged."
       return 0
     fi
 
