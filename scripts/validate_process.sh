@@ -727,6 +727,27 @@ cleanup()
 
 trap cleanup EXIT
 
+# Preflight: scan generated validation Dockerfiles for apt package names that
+# are known to be absent from default Debian/Ubuntu repositories. The canonical
+# case is `mongodb-mongosh`, which is only available via MongoDB's official apt
+# repo (key + source list). Catching this before `docker compose up --build`
+# turns a 20-second opaque `E: Unable to locate package` build failure into a
+# clear, actionable preflight diagnostic. Only trips when the bad package name
+# appears on a non-comment line AND no accompanying MongoDB apt-source hint
+# (`repo.mongodb.org`) is present in the same file.
+for dockerfile in validation/Dockerfile validation/Dockerfile.* validation/*.Dockerfile; do
+  [ -f "${dockerfile}" ] || continue
+  if grep -Eq '^[[:space:]]*[^#]*\bmongodb-mongosh\b' "${dockerfile}" \
+     && ! grep -q 'repo\.mongodb\.org' "${dockerfile}"; then
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    FAILED_TESTS=$((FAILED_TESTS + 1))
+    append_failure "preflight_bad_apt_package" \
+      "${dockerfile} installs 'mongodb-mongosh' but does not add MongoDB's official apt repo (no 'repo.mongodb.org' reference). mongodb-mongosh is NOT in Debian/Ubuntu default repos and will fail the compose build with 'E: Unable to locate package mongodb-mongosh'. Prefer pymongo, or emit the MongoDB apt source + GPG key in the same RUN layer. See mode-validate-generate.txt: 'installing mongosh in validation/Dockerfile.app'."
+    emit_result fail
+    exit 1
+  fi
+done
+
 if ! docker compose -f "${COMPOSE_FILE}" up -d --build >> "${COMPOSE_LOG}" 2>&1; then
   TOTAL_TESTS=$((TOTAL_TESTS + 1))
   FAILED_TESTS=$((FAILED_TESTS + 1))

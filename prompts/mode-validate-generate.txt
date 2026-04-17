@@ -165,6 +165,49 @@ CRITICAL — deterministic MongoDB / mongosh assertions:
 - If `mongosh` is unavailable in the container, use `python3` with `pymongo` or a direct HTTP health-check as a fallback.
 - ALWAYS add a brief retry/sleep loop (e.g. 5 attempts, 1s apart) before the assertion to tolerate async write propagation. The HTTP 202 response only means the request was accepted, not that the write has landed.
 
+CRITICAL — installing `mongosh` in `validation/Dockerfile.app` (mongodb-mongosh is NOT in Debian/Ubuntu default repos):
+- `mongosh` is NOT packaged in the default Debian apt repositories (bullseye, bookworm, trixie) or the default Ubuntu apt repositories. Any `apt-get install mongodb-mongosh` (or bare `apt-get install mongosh`) that relies only on the base image's default apt sources WILL fail with `E: Unable to locate package mongodb-mongosh`. The compose build aborts at that `RUN` layer with exit code 100 and the harness never reaches application startup — the canonical `preflight_compose_up` / `failed to build/start compose services` harness-error signature.
+- PREFERRED approach: do NOT install `mongosh` in the image at all. Use `python3` + `pymongo` for every MongoDB assertion instead. `python:*-slim` already ships Python, so only `pip install pymongo` is required, with no extra apt repo plumbing and no GPG key management. Apply the same sentinel-token / bounded-retry discipline described above, just with pymongo calls replacing `mongosh --eval`. Minimal Dockerfile example:
+    FROM python:3.12-slim
+    ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+    RUN apt-get update \
+        && apt-get install -y --no-install-recommends bash ca-certificates curl jq \
+        && rm -rf /var/lib/apt/lists/* \
+        && pip install --no-cache-dir pymongo
+  Sentinel example (replaces the `mongosh --quiet --eval` sentinel):
+    TOKEN=$(python3 - "$MONGO_URI" <<'PY'
+    import sys
+    from pymongo import MongoClient
+    try:
+        client = MongoClient(sys.argv[1], serverSelectionTimeoutMS=2000)
+        count = client.get_database("validation_smoke").inbound_events.count_documents({"event_id": "evt-001"})
+        print("FOUND" if count > 0 else "MISSING")
+    except Exception as exc:
+        print(f"ERROR:{exc}", file=sys.stderr)
+        sys.exit(2)
+    PY
+    ) || { echo "mongo query failed" >&2; exit 1; }
+- ONLY if `mongosh` itself is genuinely required (for example an existing test invokes the `mongosh` CLI directly and cannot be rewritten to pymongo), install it from MongoDB's official apt repository. This requires adding the MongoDB GPG key AND an apt source list BEFORE the second `apt-get update`. The `gnupg` package is required to dearmor the key on slim base images. Template:
+    RUN apt-get update \
+        && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+        && curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc \
+            | gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg \
+        && echo "deb [signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" \
+            > /etc/apt/sources.list.d/mongodb-org-7.0.list \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends mongodb-mongosh \
+        && rm -rf /var/lib/apt/lists/*
+  Notes on the apt-repo template:
+  1. The Debian codename in the `deb` line MUST match a codename that MongoDB actually publishes packages for. MongoDB typically lags behind the newest Debian release by one cycle. If your base image is newer than what MongoDB publishes (for example `python:3.12-slim` resolves to Debian `trixie` but MongoDB only publishes `bookworm`), use the closest older codename that MongoDB ships; confirm at https://www.mongodb.com/docs/mongodb-shell/install/ before committing. Do NOT leave the codename set to a distro MongoDB does not publish for — the second `apt-get update` will 404 and the build will fail with `E: Unable to locate package mongodb-mongosh` again.
+  2. Pin a specific MongoDB major (e.g. `7.0`). Do NOT substitute a floating `stable` / `latest` tag.
+  3. `ca-certificates`, `curl`, and `gnupg` MUST be installed in the same `RUN` layer BEFORE the key fetch; slim base images ship none of them.
+  4. Prefer `signed-by=/usr/share/keyrings/mongodb-server-<major>.gpg` over the legacy `apt-key add` flow (deprecated since Debian 11).
+- Bare `apt-get install mongodb-mongosh` against a default base image IS A HARD FAILURE. The generator MUST choose exactly one of: (i) the pymongo fallback (preferred), or (ii) the full MongoDB-apt-repo recipe above. There is no third option that "just works"; emitting a blockers[] entry is the right call if neither path is viable.
+- If you emit the apt-repo recipe, extend `00_canary.sh` to assert `mongosh --version` succeeds (NOT just `command -v mongosh`) so a misconfigured/out-of-date codename surfaces in the canary instead of mid-test:
+    if ! docker compose -f "$COMPOSE_FILE" exec -T "$APP_SERVICE" /bin/sh -c 'mongosh --version >/dev/null 2>&1'; then
+      echo "not ok $ASSERTION - mongosh --version failed (MongoDB apt repo misconfigured?)"
+      exit 1
+    fi
 
 CRITICAL — Ethereum / Hardhat JSON-RPC health checks:
 - Hardhat JSON-RPC (and any standard Ethereum node) returns a **JSON object**, not a JSON array.
@@ -429,7 +472,7 @@ CRITICAL — custom_tests external tool dependency analysis (prevents FileNotFou
   - Shell: bare `<bin> ...` at line start, `$(<bin> ...)`, backticks `` `<bin> ...` ``, `command -v <bin>`, `which <bin>`, `type <bin>`, `exec <bin>`, `hash <bin>`.
   - Makefiles / pyproject / package.json scripts referenced by the custom tests: recursively walk one level of indirection (`make <target>`, `npm run <script>`, `pnpm <script>`) and scan those targets too.
 - Extract the FIRST token of each match as the binary name. Discard shell builtins and POSIX coreutils that are present on every base image (`cd`, `pwd`, `echo`, `printf`, `test`, `[`, `[[`, `read`, `set`, `export`, `unset`, `true`, `false`, `exit`, `return`, `shift`, `ls`, `cat`, `mv`, `cp`, `rm`, `mkdir`, `rmdir`, `ln`, `touch`, `chmod`, `chown`, `head`, `tail`, `sort`, `uniq`, `wc`, `cut`, `tr`, `sed`, `awk`, `grep`, `find`, `xargs`, `env`, `sh`, `bash`, `dash`, `basename`, `dirname`, `readlink`, `realpath`, `tee`, `date`, `sleep`, `which`, `uname`, `id`). Everything else is a candidate dependency.
-- Map each candidate to its Debian/Ubuntu apt package name. Common mappings: `git` → `git`, `make` → `make`, `gcc`/`cc` → `build-essential`, `g++` → `build-essential`, `jq` → `jq`, `curl` → `curl`, `wget` → `wget`, `rsync` → `rsync`, `unzip` → `unzip`, `zip` → `zip`, `openssl` → `openssl`, `ssh` → `openssh-client`, `scp`/`sftp` → `openssh-client`, `ssh-keygen` → `openssh-client`, `pkg-config` → `pkg-config`, `xmllint` → `libxml2-utils`, `netcat`/`nc` → `netcat-openbsd`, `ip`/`ss` → `iproute2`, `ping` → `iputils-ping`, `ca-certificates` → `ca-certificates`, `patch` → `patch`, `file` → `file`. If a tool has no obvious mapping, emit a `blockers[]` entry explaining the gap rather than silently dropping it.
+- Map each candidate to its Debian/Ubuntu apt package name. Common mappings: `git` → `git`, `make` → `make`, `gcc`/`cc` → `build-essential`, `g++` → `build-essential`, `jq` → `jq`, `curl` → `curl`, `wget` → `wget`, `rsync` → `rsync`, `unzip` → `unzip`, `zip` → `zip`, `openssl` → `openssl`, `ssh` → `openssh-client`, `scp`/`sftp` → `openssh-client`, `ssh-keygen` → `openssh-client`, `pkg-config` → `pkg-config`, `xmllint` → `libxml2-utils`, `netcat`/`nc` → `netcat-openbsd`, `ip`/`ss` → `iproute2`, `ping` → `iputils-ping`, `ca-certificates` → `ca-certificates`, `patch` → `patch`, `file` → `file`, `mongosh` → NOT in default apt repos; see the "installing `mongosh` in `validation/Dockerfile.app`" section above — prefer the `pymongo` fallback, and only install `mongodb-mongosh` when the official MongoDB apt repo + GPG key are also emitted in the same `RUN` layer. If a tool has no obvious mapping, emit a `blockers[]` entry explaining the gap rather than silently dropping it.
 - Always install `ca-certificates` alongside anything that makes HTTPS calls (`git`, `curl`, `wget`). Always combine installs into a single `RUN apt-get update && apt-get install -y --no-install-recommends ... && rm -rf /var/lib/apt/lists/*` layer to keep the image lean.
 - After regenerating `validation/Dockerfile.app`, update `00_canary.sh` to include one TAP assertion per installed tool using the robust pattern:
     CANARY_TOOLS="${CANARY_TOOLS:-curl jq python3 git}"
