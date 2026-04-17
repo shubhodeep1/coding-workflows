@@ -449,18 +449,28 @@ ensure_label_exists()
     description="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].description // "AI workflow label"' "${contract_file}" 2>/dev/null || echo "AI workflow label")"
   fi
 
-  # Check if label already exists to avoid futile retries (gh label create
-  # returns a non-zero exit code for existing labels, which is not transient).
-  local encoded_name
-  encoded_name="$(printf '%s' "${label_name}" | jq -sRr @uri)"
-  if gh api "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" >/dev/null 2>&1; then
+  local _label_err_file
+  _label_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+
+  if gh_retry gh label create "${label_name}" \
+    --repo "${GITHUB_REPOSITORY}" \
+    --color "${color}" \
+    --description "${description}" >/dev/null 2>"${_label_err_file}"; then
+    [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
     return 0
   fi
 
-  gh_retry gh label create "${label_name}" \
-    --repo "${GITHUB_REPOSITORY}" \
-    --color "${color}" \
-    --description "${description}" >/dev/null || true
+  local _label_err=""
+  _label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
+  [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
+
+  if printf '%s' "${_label_err}" | grep -Eiq 'already[ _-]*exists|already_exists'; then
+    tg_notify "ensure_label_exists: label already exists, skipping '${label_name}'." "DEBUG"
+    return 0
+  fi
+
+  tg_notify "ensure_label_exists: failed to create label '${label_name}' in repo '${GITHUB_REPOSITORY}': ${_label_err}" "WARNING"
+  return 0
 }
 
 set_tracking_phase_label()
@@ -518,7 +528,7 @@ set_tracking_phase_label()
 
   if [ "${#edit_args[@]}" -gt 0 ]; then
     local _label_err_file
-    _label_err_file="$(mktemp)"
+    _label_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
     if ! gh_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
       --repo "${GITHUB_REPOSITORY}" \
       "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
@@ -526,14 +536,14 @@ set_tracking_phase_label()
       _label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
       if echo "${_label_err}" | grep -Eqi "could not remove label:|['\"][[:alnum:]:._/-]+['\"] not found"; then
         echo "::warning::set_tracking_phase_label: non-fatal missing label while applying '${phase_label}' to #${TRACKING_ISSUE_NUM}: ${_label_err}" >&2
-        rm -f "${_label_err_file}"
+        [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
         return 0
       fi
       echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_ISSUE_NUM}: ${_label_err}" >&2
-      rm -f "${_label_err_file}"
+      [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
       return 1
     fi
-    rm -f "${_label_err_file}"
+    [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
   fi
   return 0
 }
