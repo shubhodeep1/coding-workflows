@@ -3710,9 +3710,35 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+
+          # Preflight dedup: the push above fires a pull_request.synchronize
+          # event that produces its own review_autofix run via the caller
+          # workflow.  Both runs land in the `pr-autofix-${PR}` concurrency
+          # group with cancel-in-progress: true, so the loser burns runner
+          # minutes (and possibly LLM setup tokens) before being killed.
+          # Give the synchronize event a few seconds to show up in the Actions
+          # API, then skip our dispatch if a peer run is already queued or
+          # running.  Fails open — any detection failure falls through to the
+          # original dispatch logic so we never silently break the cycle.
+          #
+          # Tunable via AUTOFIX_RETRIGGER_PEER_WAIT_SECS (default 8s).
+          peer_wait="${AUTOFIX_RETRIGGER_PEER_WAIT_SECS:-8}"
+          if ! [[ "${peer_wait}" =~ ^[0-9]+$ ]] || [ "${peer_wait}" -gt 60 ]; then
+            peer_wait=8
+          fi
+          sleep "${peer_wait}"
+
+          if type autofix_retrigger_has_inflight_peer >/dev/null 2>&1 \
+            && autofix_retrigger_has_inflight_peer "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}"; then
+            echo "AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+            exit 0
+          fi
+
+          echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
 
           dispatched=false
 
@@ -3801,11 +3827,34 @@ jobs:
         if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CAN_PUSH == 'true' && github.event.pull_request.number"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
           echo "Editor changes lost — dispatching fresh review iteration for PR #${PR_NUMBER}."
+
+          # Preflight dedup: same rationale as the post-commit retrigger
+          # above.  When EDITOR_CHANGES_LOST fires the editor produced no
+          # commit, so no pull_request.synchronize event follows from us —
+          # but a sibling run from an earlier retrigger or from a user push
+          # may still be in flight.  Skip dispatch if so; fail open on any
+          # detection failure.
+          peer_wait="${AUTOFIX_RETRIGGER_PEER_WAIT_SECS:-8}"
+          if ! [[ "${peer_wait}" =~ ^[0-9]+$ ]] || [ "${peer_wait}" -gt 60 ]; then
+            peer_wait=8
+          fi
+          sleep "${peer_wait}"
+
+          if type autofix_retrigger_has_inflight_peer >/dev/null 2>&1 \
+            && autofix_retrigger_has_inflight_peer "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}"; then
+            echo "AUTOFIX_DISPATCH_SKIPPED reason=peer_inflight pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=editor_changes_lost_retrigger"
+            echo "CHANGES_LOST_REDISPATCHED=skipped_peer_inflight" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=editor_changes_lost_retrigger"
+
           dispatched=false
 
           if gh workflow run "review_autofix.yml" \
@@ -3864,6 +3913,8 @@ jobs:
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
             tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+          elif [ "${CHANGES_LOST_REDISPATCHED:-}" = "skipped_peer_inflight" ]; then
+            echo "Editor changes lost re-dispatch skipped; peer run already in flight."
           else
             if [ "${CAN_PUSH:-}" = "true" ]; then
               MSG="⚠️ Editor changes lost (exhausted): #${PR_NUMBER}"
