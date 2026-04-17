@@ -597,27 +597,71 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `orchestrate_poll.yml` | `schedule` (every ~30 min) + self-retrigger | Orchestrator progress poller + judge + auto-recovery. Self-retriggers via `workflow_dispatch` when active tracking issues exist for near-immediate next cycles; cron acts as fallback. A rate-limit circuit breaker suppresses self-retrigger when a GitHub API rate limit was hit during the run. |
 | `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates existing and creates new workflow wrappers from upstream templates |
 
+## Comprehensive Test And Release
+
+This repository includes [`.github/workflows/comprehensive-test-and-release.yml`](.github/workflows/comprehensive-test-and-release.yml) for end-to-end release orchestration across first-pass release testing, workflow-log analysis, and orchestrator follow-up.
+
+### How to run
+
+Run **Actions -> Comprehensive Test And Release -> Run workflow**.
+
+`workflow_dispatch` inputs:
+
+| Input | Default | Description |
+|---|---|---|
+| `version_tag` | `""` | Optional release tag for release testing and callback dispatch. Must match `vX.Y.Z` when set. |
+| `test_repo` | `""` | Optional `owner/repo` target for release testing and callback dispatch. |
+| `phase_timeout` | `30` | Per-phase inactivity timeout (minutes) for dispatch-monitor loops. |
+| `lookback_days_fallback` | `7` | Workflow-log-analysis window used when the saved timestamp cursor is missing or invalid. |
+
+### Phase behavior
+
+1. **Phase 1 (`phase1-first-pass-test`)** dispatches `test-and-mark-stable.yml` with `dry_run=true` and waits for successful completion.
+2. **Phase 2 (`phase2-collect-and-analyze-logs`)** dispatches `workflow-log-analysis.yml` with `codex_mode=true`, waits for completion, and resolves the analysis window from `analysis/last_collection_timestamp.txt`:
+   - if the file contains a valid UTC ISO timestamp (`YYYY-MM-DDTHH:MM:SSZ`), that value is passed as `since`.
+   - otherwise the workflow falls back to `lookback_days_fallback`.
+   - after a successful run, the workflow writes the current UTC timestamp back to `analysis/last_collection_timestamp.txt` and commits/pushes it when changed.
+3. **Phase 3 (`phase3-dispatch-orchestrator`)** dispatches `internal-orchestrate.yml`, tags the discovered tracking issue with `ai:comprehensive-test-pending`, and posts a metadata comment marker `COMPREHENSIVE_RELEASE_METADATA_V1` containing callback inputs and source links.
+
+### Callback behavior (poller-driven)
+
+The comprehensive release callback is not a standalone phase/job in `comprehensive-test-and-release.yml`. It is handled by the orchestrator poller (`scripts/orchestrate_poll_process.sh`, `handle_comprehensive_release_callback_if_needed`).
+
+- Callback logic runs only while the tracking issue carries `ai:comprehensive-test-pending`.
+- On project status `complete`, the poller dispatches `test-and-mark-stable.yml` with `dry_run=false`, reusing validated `version_tag`/`test_repo` extracted from tracking comments when present.
+- On project status `failed` or `validation-failed`, the poller sends an abort notification and does not dispatch the release workflow.
+- In successful completion and abort paths, the poller persists `comprehensive_release_callback` state (`handled`, `status`, `handled_at`) and removes `ai:comprehensive-test-pending` best-effort.
+- If release dispatch fails on `complete`, the callback remains unhandled and the label stays so the next poll cycle can retry.
+
 ## Workflow Log Analysis
 
 This repository includes [`.github/workflows/workflow-log-analysis.yml`](.github/workflows/workflow-log-analysis.yml) to collect AI workflow telemetry and generate a markdown optimization report.
 
 ### How to run
 
-Run **Actions -> Workflow Log Analysis -> Run workflow**, or let the built-in schedule fire automatically.
+Run **Actions -> Workflow Log Analysis -> Run workflow**.
 
 Triggers:
 
 - `workflow_dispatch` (manual).
-- `schedule`: `cron: "0 6 */2 * *"` — runs every other day (1, 3, 5, ...) at 06:00 UTC, approximating an every-48h cadence. Day-of-month `*/2` drifts at month boundaries (occasional 1-day or 2-day gap).
 
 `workflow_dispatch` inputs:
 
 | Input | Default | Description |
 |---|---|---|
-| `lookback_days` | `"7"` | Days of workflow runs to collect. Passed to `scripts/collect_workflow_logs.py --lookback-days`. On scheduled runs this falls back to `"2"` to match the 48h cadence; manual dispatch keeps the `"7"` default unless overridden. |
+| `since` | `""` | Optional ISO-8601 timestamp. When set, collector runs with `scripts/collect_workflow_logs.py --since <timestamp>`. |
+| `lookback_days` | `"7"` | Days of workflow runs to collect when `since` is empty. Passed to `scripts/collect_workflow_logs.py --lookback-days`. |
+| `codex_mode` | `true` | Codex-first analysis mode. When `true`, workflow runs analyzer preprocessing (`--codex-mode`) and then `codex exec` in the same run. When `false`, workflow uses the legacy analyzer inference/batch path (including deferred polling via batch-state artifact). |
+| `batch_api_disabled` | `""` | Optional `true`/`false` override for analyzer batch API behavior in non-codex mode only. Non-empty values are validated in all runs; invalid values fail the workflow before mode branching. Empty keeps `BATCH_API_DISABLED` env default. |
 | `repos_override` | `""` | Optional comma-separated `owner/repo` list. Each item is validated with `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`; invalid values fail the run. |
 
-Repository selection behavior (applies to both manual and scheduled runs):
+Mode behavior:
+
+- `codex_mode=true` (default): analyzer writes `analysis_context.json` (`--codex-mode`) and Codex generates the markdown report directly.
+- `codex_mode=false`: workflow restores latest non-expired `workflow-log-analysis-batch-state` artifact when available, runs analyzer in legacy mode, and may return pending (`exit 3`) until a later manual rerun completes polling.
+- `batch_api_disabled` input is validated whenever a non-empty value is provided, but only affects analyzer behavior in `codex_mode=false` runs.
+
+Repository selection behavior:
 
 1. If `repos_override` is set, only those repositories are used.
 2. Otherwise, the workflow reads `.github/ai/consumer_repos.json` (if present) and also includes `${GITHUB_REPOSITORY}`.
@@ -638,11 +682,25 @@ Collector script: [`scripts/collect_workflow_logs.py`](scripts/collect_workflow_
   - `--repo` (repeatable)
   - window selector (exactly one): `--lookback-days` or `--since`
   - `--output` (default `workflow_log_report.json`)
-  - `--per-page`, `--max-pages`, `--max-runs`, `--max-log-runs` (default `15`)
+  - `--log-output-dir` (optional categorized full-log export directory)
+  - `--per-page` (default `100`)
+  - `--max-pages` (default `10`)
+  - `--max-runs` (default `0`)
+  - `--max-log-runs` (default `15`)
   - `--success-sample-rate` (default `0.07` = ~7%) — fraction of successful runs randomly sampled for log analysis
 - Token handling in `main`: uses `GH_TOKEN` with `GITHUB_TOKEN` fallback.
 - All workflow families are collected (no family filter). The `workflow_families` field in the report is derived from observed runs rather than a static list.
+- Workflow family normalization covers pipeline families (`clarify`, `plan`, `implement`, `review_autofix`, `validate`, `orchestrate`, `orchestrate_poll`, `orchestrate_clarify_respond`, `issue_pr_status`, `cancel_on_pr_close`, `memory_maintenance`) and keeps fallback buckets (for example `ci`, `workflow_log_analysis`, and sanitized filename-derived families) so non-pipeline runs remain observable.
 - For notable runs (failed, retries > 0, top 10 slowest per repository, and ~7% randomly sampled successful runs), the collector also downloads raw run logs from `repos/{repo}/actions/runs/{run_id}/logs`, extracts ZIP contents in memory, and stores truncated per-step excerpts. Random sampling uses a deterministic seed derived from the collection window for reproducibility.
+
+When `--log-output-dir` is set, collector additionally writes:
+
+- `<log-output-dir>/summary.json` (same schema payload as `--output`)
+- `<log-output-dir>/errors/<repo_slug>/<family>/<run_id>/metadata.json` and full `step-*.log`
+- `<log-output-dir>/slow/<repo_slug>/<family>/<run_id>/metadata.json` and full `step-*.log`
+- `<log-output-dir>/recent/<repo_slug>/<family>/<run_id>/metadata.json` and full `step-*.log`
+
+Full-log downloads for disk export are restricted to the selected `errors`/`slow`/`recent` runs and deduplicated per `(repository, run_id)` across overlapping categories.
 
 Generated JSON report (`workflow_log_report.json`) includes:
 
@@ -657,9 +715,12 @@ Generated JSON report (`workflow_log_report.json`) includes:
 
 Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_logs.py)
 
-- Workflow invocation: `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json`
+- Codex-first workflow path (`codex_mode=true`):
+  1. `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --output <report.md> --codex-mode` (writes `analysis_context.json` and prints its path)
+  2. `codex exec --model <WORKFLOW_EDITOR_MODEL> --full-auto` with `prompts/mode-workflow-analysis.txt` + generated analysis context, writing the final markdown report file.
+- Legacy workflow path (`codex_mode=false`): `python3 scripts/analyze_workflow_logs.py --input workflow_log_report.json --batch-state-file workflow_log_analysis_batch_state.json`
 - `--max-output-tokens` default is `100000`. The workflow auto-caps this to `60000` when the resolved `WORKFLOW_EDITOR_MODEL` contains `gemini` (Gemini 3.1 Pro Preview's max output is 65536).
-- Model resolution for this workflow only: the `Run workflow log analysis` step pins `WORKFLOW_EDITOR_MODEL` to `google/gemini-3.1-pro-preview` by default (pilot). Override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL` (e.g. `openai/gpt-5.3-codex`) to revert. This override is scoped to the analysis step env and does not affect the global `WORKFLOW_EDITOR_MODEL` used by `clarify`/`plan`/`implement`/`review_autofix`/`validate`/`orchestrate`.
+- Model resolution for this workflow only: the `Run workflow log analysis` step defaults `WORKFLOW_EDITOR_MODEL` to `openai/gpt-5.3-codex` and allows override via repo variable `WORKFLOW_LOG_ANALYSIS_MODEL`. This override is scoped to this workflow and does not affect the global `WORKFLOW_EDITOR_MODEL` used by `clarify`/`plan`/`implement`/`review_autofix`/`validate`/`orchestrate`.
 - `load_input_data` accepts either:
   - `--input` with a collector report (`runs` list; `runs[].log_excerpts` are flattened into `deep_dive_logs` as `{name: <repo>/<run_id>/<step_name>, excerpt}`), a combined bundle object (`run_metrics`, `summary_stats`, optional `deep_dive_logs`), or a JSON array of run metrics
   - `--data-dir` containing `workflow_log_report.json` or `run_metrics.json` + `summary_stats.json` (optionally `run_logs/`)
@@ -681,7 +742,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 - Repository commit: generated markdown report is committed/pushed to `${{ github.ref_name }}`.
 - No-op behavior: if the report file has no diff, commit/push is skipped (`No report changes to commit.`).
 - Telegram summary: when configured, sends either a pending-batch message or a completion message with report URL and workflow run URL.
-- Deferred artifact contract: pending batch metadata is uploaded as artifact `workflow-log-analysis-batch-state` containing `workflow_log_analysis_batch_state.json`; later runs fetch latest non-expired artifact and continue polling.
+- Deferred artifact contract (non-codex mode): pending batch metadata is uploaded as artifact `workflow-log-analysis-batch-state` containing `workflow_log_analysis_batch_state.json`; later manual dispatch runs fetch latest non-expired artifact and continue polling.
 - Structured logs are emitted for batch decisions and lifecycle (`batch_submit`, `batch_poll`, `batch_complete`, `batch_fallback`).
 - `memory_maintenance.yml` remains functionally unchanged (no LLM path in current repo) and now emits structured `batch_noop` compatibility logging with batch env values.
 - Low-data windows are valid: the analyzer still writes a report when input data is sparse.
@@ -961,6 +1022,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 Capture is **going-forward only**: sub-issues merged before fingerprinting was enabled have no entries in `merged_issue_fingerprints` and are silently skipped by the verifier (fail-open). Capture and verification are tunable via `FINGERPRINT_PER_FILE_CAP` / `FINGERPRINT_MIN_PATTERN_CHARS`. The verifier script is in `OPTIONAL_BOOTSTRAP_SCRIPTS` so consumer-repo runs whose pinned `script_ref` predates the script bootstrap cleanly with a fail-open warning rather than a hard error. Operationally: a verification rejection always surfaces in the workflow run log with `::error::Aborting [ai-merge-resolve] commit: integration fingerprint verification rejected the resolver output.`, the resolver step exits 1, the conflict resolver workflow lands without a commit, and the orchestrator's next poll tick takes the judge path because `unresolved_ticks` was already incremented by the dispatch.
 12d. **Atomic final merge:** When a project is complete (or validated), the poller creates/reuses a final PR from integration branch to default branch and squash-merges it.
 12e. **Phase-agnostic feature-PR drift sweep:** On every poll tick the orchestrator enumerates all open PRs whose head branch matches `ai/issue-*` and calls the GitHub update-branch endpoint for any whose `mergeStateStatus` is `behind`. This fast-forwards clean-mergeable branches before they accumulate enough drift to become conflicted, regardless of the issue's current pipeline phase. Real conflicts (`dirty`) are left for the existing in-progress conflict loop to handle via the resolver dispatch path.
+12f. **Comprehensive release callback (poller-owned):** Tracking issues labeled `ai:comprehensive-test-pending` are handled by `handle_comprehensive_release_callback_if_needed` in the poller, not by a separate comprehensive-workflow phase. On `complete`, the poller dispatches `test-and-mark-stable.yml` with `dry_run=false` using validated `version_tag`/`test_repo` extracted from tracking comments when present. On `failed` or `validation-failed`, it sends an abort notification and skips dispatch. Successful completion and abort paths record `comprehensive_release_callback.{handled,status,handled_at}` and remove `ai:comprehensive-test-pending` best-effort; dispatch failures in the `complete` path leave callback state/label untouched so a later poll cycle can retry.
 13. **Stall detection and self-healing:** Every poll cycle, the poller tracks how long each issue has been in its current pipeline phase. Stall thresholds are **adaptive per phase**: lightweight phases (clarification, planning, approval, merge) default to 60 minutes, while heavy phases (implementation, review/autofix) default to 120 minutes. Each threshold is independently configurable via `STALL_THRESHOLD_<PHASE>_MINUTES` env vars, with `STALL_THRESHOLD_MINUTES` as the global fallback. Before stall checks, the poller reconciles managed-issue labels and state truth (labels + issue open/closed + linked PR merge state), repairs missing/conflicting phase labels, and persists reconciled statuses every cycle. Closed/terminal issues are hard-guarded out of retrigger paths; stale `no_labels` on closed issues is healed (label/state repair) instead of retriggered. Early-phase recovery actions (`retrigger_pipeline`, `auto_respond_clarify`, `retrigger_plan`, `auto_approve`, `retrigger_implement`) are additionally guarded against issues that already have an open linked PR. The guard is **state-aware**: (a) if the PR has merge conflicts (`mergeable: false`), the guard dispatches the conflict resolver workflow instead of skipping entirely; (b) if the PR has `CHANGES_REQUESTED` reviews, the guard dispatches the review/autofix workflow; (c) if the PR is clean and progressing, the guard skips the recovery action as before. This prevents re-triggering earlier pipeline phases on issues whose implementation PR already exists, while still routing stuck PRs to the appropriate corrective action. The guard uses the batched GraphQL prefetch cache first (0 extra API calls on hit), with a per-issue REST fallback that reuses the PR JSON already fetched for the merged-PR sub-guard. The review-state check adds at most 1 REST call per stalled issue with an open PR. When an issue exceeds its phase threshold, the poller first selects a declarative action from `STALL_RECOVERY_ACTIONS` by `stall_recovery_count` (per issue): `no_labels` → `retrigger_pipeline`, `ai:clarification` → `auto_respond_clarify`, `ai:planning` → `retrigger_plan`, `ai:awaiting-approval` → `auto_approve`, `ai:implementing` → `retrigger_implement`, `ai:done` → `retrigger_review`, `ai:ready-to-merge` → `attempt_merge`, with each phase ladder ending in `escalate_human`. Backward-compatible default behavior keeps human terminalization disabled: with `ENABLE_STALL_HUMAN_TERMINALIZATION=false` (default), any terminal `escalate_human` result (declarative or judged) is downgraded to the nearest prior non-human phase action. Set `ENABLE_STALL_HUMAN_TERMINALIZATION=true` to allow terminal human escalation. If `ENABLE_STALL_JUDGE=true` and `stall_recovery_count >= STALL_JUDGE_TRIGGER_COUNT` (while still below `MAX_STALL_RECOVERIES_PER_ISSUE`), the recovery action switches to `run_stall_judge` for diagnostics-driven action selection. The stall judge may choose targeted actions including `resolve_merge_conflict`; that path attempts GitHub `update-branch` for the target PR and then dispatches `_dispatch_review_for_conflicts`. If stall-judge execution fails, output parsing fails, or the returned action is unsupported, the poller fail-opens to the same declarative ladder action for that phase/recovery count. If `stall_recovery_count` exceeds the phase ladder length, the final declarative action is repeated until the max budget is hit. After `MAX_STALL_RECOVERIES_PER_ISSUE` (default 5) attempts, the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion and decides whether to reissue, accept, or fail. When `ENABLE_STALL_JUDGE=false`, or when `STALL_JUDGE_TRIGGER_COUNT` is effectively unreachable within the configured recovery budget, recovery remains on the declarative `STALL_RECOVERY_ACTIONS` ladder without judge escalation. All stall recoveries trigger Telegram notifications. Standalone AI issues (not linked to any active orchestrator tracking state) also use the same stall recovery engine and the same human-terminalization gate when `ENABLE_STANDALONE_STALL_RECOVERY=true`; standalone recovery state is persisted per issue in a hidden marker comment. Additionally, all orchestrator-created issues (Wave 1, deferred waves, reissues, and judge fix-ups) now receive the `ai:clarification` label at creation time, ensuring they enter the pipeline immediately without relying solely on the `issues.opened` event trigger.
 13a. **Missing state recovery:** If the orchestrate.yml workflow creates issues but fails before posting the initial state comment (e.g. due to a transient API error or timeout), the poller automatically reconstructs the state. It parses the tracking issue body to extract the wave structure and dependency graph, searches for child issues that reference the tracking issue, and builds a new state object. The reconstructed state is posted as a comment so subsequent poll cycles operate normally. This prevents projects from being permanently stuck when the initial orchestration run fails mid-execution.
 14. **Validation gate:** When the judge says "complete" and `ENABLE_VALIDATION=true`, the poller dispatches `ai-validate.yml` on the integration branch (`--ref <integration_branch>`), marks the tracking issue `ai:validating`, and only transitions to complete after `ai:validated` plus successful final squash merge.

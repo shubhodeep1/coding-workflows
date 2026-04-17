@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 import urllib.error
+import contextlib
 from datetime import date, datetime, timezone
 from pathlib import Path
 import sys
@@ -71,9 +72,35 @@ def test_truncate_to_budget_drops_deep_dive_before_recent_runs():
 	assert trimmed["truncation"]["removed"]["recent_runs"] == 0
 
 
+def test_truncate_to_budget_zero_budget_preserves_fields():
+	context = {
+		"summary": {"total_runs": 2},
+		"deep_dive_logs": [{"name": "a.log", "excerpt": "x" * 1000}],
+		"recent_runs": [{"run_id": 1, "detail": "y" * 200}],
+		"slow_runs": [{"run_id": 2}],
+		"failing_runs": [],
+		"errors": [],
+		"per_repo": {"owner/repo": {"total_runs": 2}},
+		"per_workflow_family": {"plan": {"total_runs": 2}},
+	}
+	trimmed = analyzer.truncate_to_budget(context, 0)
+	assert trimmed["deep_dive_logs"] == context["deep_dive_logs"]
+	assert trimmed["recent_runs"] == context["recent_runs"]
+	assert trimmed["truncation"]["prompt_token_budget"] == 0
+	assert trimmed["truncation"]["removed"]["deep_dive_logs"] == 0
+	assert "truncation" not in context
+
+
 def test_build_parser_thinking_level_defaults_to_xhigh():
 	args = analyzer.build_parser().parse_args([])
 	assert args.thinking_level == "xhigh"
+	assert args.prompt_token_budget == 0
+	assert args.codex_mode is False
+
+
+def test_build_parser_accepts_zero_prompt_token_budget():
+	args = analyzer.build_parser().parse_args(["--prompt-token-budget", "0"])
+	assert args.prompt_token_budget == 0
 
 
 def test_build_parser_accepts_explicit_thinking_level():
@@ -912,6 +939,80 @@ def test_main_missing_openrouter_api_key_returns_2():
 		else:
 			os.environ["OPENROUTER_API_KEY"] = original
 	assert exit_code == 2
+
+
+def test_main_codex_mode_writes_context_and_skips_inference_calls():
+	with tempfile.TemporaryDirectory(prefix="analyze-main-codex-") as td:
+		tmp = Path(td)
+		data_dir = tmp / "data"
+		output_dir = tmp / "analysis"
+		_write_json(
+			data_dir / "workflow_log_report.json",
+			{
+				"schema_version": "workflow_log_collector.v1",
+				"scope": {"repositories": ["owner/repo"], "workflow_families": ["plan"]},
+				"runs": [
+					{
+						"repository": "owner/repo",
+						"run_id": 101,
+						"workflow_name": "AI Plan",
+						"workflow_family": "plan",
+						"conclusion": "success",
+						"duration_seconds": 42,
+						"created_at": "2026-04-11T10:00:00Z",
+					}
+				],
+				"summary": {"total_runs": 1},
+				"errors": [],
+			},
+		)
+
+		orig_call_openrouter = analyzer.call_openrouter
+		orig_submit_openrouter_batch = analyzer.submit_openrouter_batch
+		orig_poll_openrouter_batch = analyzer.poll_openrouter_batch
+		orig_batch_capability_decision = analyzer._batch_capability_decision
+
+		def fail_if_called(**kwargs):
+			del kwargs
+			raise AssertionError("inference path should not run in codex mode")
+
+		analyzer.call_openrouter = fail_if_called
+		analyzer.submit_openrouter_batch = fail_if_called
+		analyzer.poll_openrouter_batch = fail_if_called
+		analyzer._batch_capability_decision = fail_if_called
+
+		stdout = io.StringIO()
+		original_key = os.environ.get("OPENROUTER_API_KEY")
+		try:
+			if "OPENROUTER_API_KEY" in os.environ:
+				del os.environ["OPENROUTER_API_KEY"]
+			with contextlib.redirect_stdout(stdout):
+				exit_code = analyzer.main(
+					[
+						"--data-dir",
+						str(data_dir),
+						"--output",
+						str(output_dir / "report.md"),
+						"--codex-mode",
+					]
+				)
+		finally:
+			if original_key is None:
+				os.environ.pop("OPENROUTER_API_KEY", None)
+			else:
+				os.environ["OPENROUTER_API_KEY"] = original_key
+			analyzer.call_openrouter = orig_call_openrouter
+			analyzer.submit_openrouter_batch = orig_submit_openrouter_batch
+			analyzer.poll_openrouter_batch = orig_poll_openrouter_batch
+			analyzer._batch_capability_decision = orig_batch_capability_decision
+
+		assert exit_code == 0
+		context_path = output_dir / "analysis_context.json"
+		assert stdout.getvalue().strip() == str(context_path)
+		assert context_path.exists()
+		payload = json.loads(context_path.read_text(encoding="utf-8"))
+		assert payload["summary"]["total_runs"] == 1
+		assert "truncation" not in payload
 
 
 def test_main_generates_dated_report_using_stubs():

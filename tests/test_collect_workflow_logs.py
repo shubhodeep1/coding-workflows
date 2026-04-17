@@ -37,9 +37,15 @@ def test_normalize_workflow_family_core_and_formerly_excluded():
 	assert collector.normalize_workflow_family("AI Review", ".github/workflows/review_autofix.yml") == "review_autofix"
 	assert collector.normalize_workflow_family("AI Validate", ".github/workflows/validate.yml") == "validate"
 	assert collector.normalize_workflow_family("AI Orchestrate", ".github/workflows/orchestrate.yml") == "orchestrate"
+	assert collector.normalize_workflow_family("AI Orchestrate Poller", ".github/workflows/orchestrate_poll.yml") == "orchestrate_poll"
 	assert collector.normalize_workflow_family("AI Orchestrate Poll", ".github/workflows/orchestrate_poll.yml") == "orchestrate_poll"
+	assert collector.normalize_workflow_family("AI Orchestrate Clarify Respond", ".github/workflows/orchestrate_clarify_respond.yml") == "orchestrate_clarify_respond"
 	assert collector.normalize_workflow_family("Clarify Respond", ".github/workflows/orchestrate_clarify_respond.yml") == "orchestrate_clarify_respond"
+	assert collector.normalize_workflow_family("AI Issue PR Status", ".github/workflows/issue_pr_status.yml") == "issue_pr_status"
+	assert collector.normalize_workflow_family("AI Cancel on PR Close", ".github/workflows/cancel_on_pr_close.yml") == "cancel_on_pr_close"
+	assert collector.normalize_workflow_family("AI Memory Maintenance", ".github/workflows/memory_maintenance.yml") == "memory_maintenance"
 	assert collector.normalize_workflow_family("CI", ".github/workflows/ci.yml") == "ci"
+	assert collector.normalize_workflow_family("Not A Pipeline Workflow", ".github/workflows/custom.yml") == "custom"
 	assert collector.normalize_workflow_family("Unknown", ".github/workflows/foo-bar.yml") == "foo_bar"
 	assert collector.normalize_workflow_family("", "") == "other"
 
@@ -121,6 +127,7 @@ def test_list_runs_for_repo_paginates_and_includes_all_families():
 			payload = {
 				"workflow_runs": [
 					{"id": 3, "name": "AI Implement", "path": ".github/workflows/implement.yml"},
+					{"id": 4, "name": "Release CI", "path": ".github/workflows/ci.yml"},
 				]
 			}
 			return (payload, meta) if include_response_meta else payload
@@ -141,8 +148,8 @@ def test_list_runs_for_repo_paginates_and_includes_all_families():
 		collector.gh_api_json = orig
 
 	assert capped is False
-	assert [r["id"] for r in runs] == [1, 2, 3]
-	assert [r["_workflow_family"] for r in runs] == ["plan", "validate", "implement"]
+	assert [r["id"] for r in runs] == [1, 2, 3, 4]
+	assert [r["_workflow_family"] for r in runs] == ["plan", "validate", "implement", "ci"]
 	assert meta["not_modified"] is False
 	assert meta["etag"] == "W/\"abc\""
 	assert len(calls) == 3
@@ -368,6 +375,85 @@ def test_select_notable_runs_for_logs_prioritizes_failed_then_retried_then_slow_
 	]
 
 
+def test_select_runs_for_log_export_categories_deterministic_and_capped():
+	runs = [
+		{
+			"repository": "owner/repo",
+			"run_id": 11,
+			"conclusion": "failure",
+			"duration_seconds": 500,
+			"created_at": "2026-04-10T11:00:00Z",
+		},
+		{
+			"repository": "owner/repo",
+			"run_id": 12,
+			"conclusion": "success",
+			"duration_seconds": 900,
+			"created_at": "2026-04-10T12:00:00Z",
+		},
+		{
+			"repository": "owner/repo",
+			"run_id": 13,
+			"conclusion": "success",
+			"duration_seconds": 120,
+			"created_at": "2026-04-10T10:00:00Z",
+		},
+		{
+			"repository": "owner/repo",
+			"run_id": 14,
+			"conclusion": "failure",
+			"duration_seconds": 300,
+			"created_at": "2026-04-10T09:00:00Z",
+		},
+	]
+
+	categories = collector.select_runs_for_log_export_categories(runs, max_log_runs=2)
+	assert list(categories.keys()) == ["errors", "slow", "recent"]
+	assert [item["run_id"] for item in categories["errors"]] == [11, 14]
+	assert [item["run_id"] for item in categories["slow"]] == [12, 11]
+	assert [item["run_id"] for item in categories["recent"]] == [12, 11]
+
+
+def test_select_runs_for_log_export_categories_tiebreakers_are_deterministic():
+	runs = [
+		{
+			"repository": "owner/repo",
+			"run_id": 21,
+			"conclusion": "failure",
+			"duration_seconds": 500,
+			"created_at": "2026-04-10T11:00:00Z",
+		},
+		{
+			"repository": "owner/repo",
+			"run_id": 22,
+			"conclusion": "failure",
+			"duration_seconds": 500,
+			"created_at": "2026-04-10T11:00:00Z",
+		},
+		{
+			"repository": "owner/repo",
+			"run_id": 23,
+			"conclusion": "success",
+			"duration_seconds": 500,
+			"created_at": "2026-04-10T11:00:00Z",
+		},
+	]
+
+	categories = collector.select_runs_for_log_export_categories(runs, max_log_runs=3)
+	assert [item["run_id"] for item in categories["errors"]] == [22, 21]
+	assert [item["run_id"] for item in categories["slow"]] == [23, 22, 21]
+	assert [item["run_id"] for item in categories["recent"]] == [23, 22, 21]
+
+
+def test_extract_full_logs_decodes_without_truncation():
+	buffer = io.BytesIO()
+	with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+		archive.writestr("logs/01_failure.txt", "E" * 5000)
+
+	full_logs = collector.extract_full_logs(buffer.getvalue())
+	assert full_logs == [{"step_name": "failure", "content": "E" * 5000}]
+
+
 def test_select_notable_runs_success_sampling():
 	# Build 30 successful runs — the slow bucket picks the top SLOW_RUNS_PER_REPO (10)
 	# by duration; remaining successful runs are candidates for random sampling.
@@ -576,8 +662,7 @@ print(json.dumps({}))
 
 		report = json.loads(report_file.read_text(encoding="utf-8"))
 		assert report["schema_version"] == "workflow_log_collector.v2"
-		# All families are now collected — validate is included
-		assert isinstance(report["scope"]["workflow_families"], list)
+		assert report["scope"]["workflow_families"] == ["clarify", "implement", "plan", "validate"]
 		assert report["summary"]["total_runs"] == 4
 		assert report["summary"]["success_count"] == 3
 		assert report["summary"]["failure_count"] == 1
@@ -593,6 +678,214 @@ print(json.dumps({}))
 		by_run_id = {item["run_id"]: item for item in report["runs"]}
 		assert by_run_id[101]["log_excerpts"] == [{"step_name": "plan", "excerpt": "plan ok\n"}]
 		assert by_run_id[102]["log_excerpts"] == [{"step_name": "failure", "excerpt": "failure details\n"}]
+		assert "log_excerpts" not in by_run_id[104]
+		assert "log_excerpts" not in by_run_id[103]
+
+
+def test_main_log_output_dir_writes_categorized_full_logs_and_dedupes_downloads():
+	with tempfile.TemporaryDirectory(prefix="collector-log-export-test-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir(parents=True)
+		store_file = tmp / "gh_store.json"
+		report_file = tmp / "report.json"
+		log_output_dir = tmp / "log-output"
+
+		store = {
+			"runs_pages": {
+				"1": [
+					{
+						"id": 201,
+						"name": "AI Implement",
+						"path": ".github/workflows/implement.yml",
+						"status": "completed",
+						"conclusion": "failure",
+						"run_attempt": 1,
+						"created_at": "2026-04-10T14:00:00Z",
+						"run_started_at": "2026-04-10T14:00:00Z",
+						"updated_at": "2026-04-10T14:06:40Z",
+					},
+					{
+						"id": 202,
+						"name": "AI Plan",
+						"path": ".github/workflows/plan.yml",
+						"status": "completed",
+						"conclusion": "success",
+						"run_attempt": 1,
+						"created_at": "2026-04-10T13:00:00Z",
+						"run_started_at": "2026-04-10T13:00:00Z",
+						"updated_at": "2026-04-10T13:08:20Z",
+					},
+					{
+						"id": 203,
+						"name": "AI Clarify",
+						"path": ".github/workflows/clarify.yml",
+						"status": "completed",
+						"conclusion": "success",
+						"run_attempt": 1,
+						"created_at": "2026-04-10T12:00:00Z",
+						"run_started_at": "2026-04-10T12:00:00Z",
+						"updated_at": "2026-04-10T12:01:40Z",
+					},
+					{
+						"id": 204,
+						"name": "AI Validate",
+						"path": ".github/workflows/validate.yml",
+						"status": "completed",
+						"conclusion": "success",
+						"run_attempt": 1,
+						"created_at": "2026-04-10T11:00:00Z",
+						"run_started_at": "2026-04-10T11:00:00Z",
+						"updated_at": "2026-04-10T11:05:00Z",
+					},
+				],
+				"2": [],
+			},
+			"jobs": {
+				"201": {
+					"1": [
+						{
+							"id": 9201,
+							"name": "implement",
+							"conclusion": "failure",
+							"steps": [
+								{"name": "setup", "conclusion": "success"},
+								{"name": "run implement", "conclusion": "failure"},
+							],
+						}
+					],
+					"2": [],
+				}
+			},
+			"log_files": {
+				"201": {"01_failure.txt": "E" * 5000},
+				"202": {"01_plan.txt": "plan full output\n"},
+				"203": {"01_clarify.txt": "clarify full output\n"},
+				"204": {"01_validate.txt": "validate full output\n"},
+			},
+			"log_call_counts": {},
+		}
+		store_file.write_text(json.dumps(store), encoding="utf-8")
+
+		gh_mock = r'''#!/usr/bin/env python3
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+store_path = Path(os.environ["GH_MOCK_STORE"])
+store = json.loads(store_path.read_text(encoding="utf-8"))
+args = sys.argv[1:]
+if not args or args[0] != "api":
+	print("unsupported", file=sys.stderr)
+	sys.exit(1)
+
+endpoint = ""
+for arg in args[1:]:
+	if not arg.startswith("-"):
+		endpoint = arg
+		break
+if not endpoint:
+	print("missing endpoint", file=sys.stderr)
+	sys.exit(1)
+
+if "/actions/runs?" in endpoint and "/jobs?" not in endpoint:
+	query = parse_qs(urlparse("https://api/" + endpoint).query)
+	page = query.get("page", ["1"])[0]
+	print(json.dumps({"workflow_runs": store.get("runs_pages", {}).get(page, [])}))
+	sys.exit(0)
+
+m = re.search(r"/actions/runs/(\d+)/jobs\?", endpoint)
+if m:
+	run_id = int(m.group(1))
+	query = parse_qs(urlparse("https://api/" + endpoint).query)
+	page = query.get("page", ["1"])[0]
+	run_pages = store.get("jobs", {}).get(str(run_id), {})
+	print(json.dumps({"jobs": run_pages.get(page, [])}))
+	sys.exit(0)
+
+m = re.search(r"/actions/runs/(\d+)/logs$", endpoint)
+if m:
+	run_id = int(m.group(1))
+	counts = store.setdefault("log_call_counts", {})
+	key = str(run_id)
+	counts[key] = int(counts.get(key, 0)) + 1
+	store_path.write_text(json.dumps(store), encoding="utf-8")
+	import io
+	import zipfile
+	buffer = io.BytesIO()
+	with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+		for filename, content in store.get("log_files", {}).get(str(run_id), {}).items():
+			archive.writestr(filename, content)
+	sys.stdout.buffer.write(buffer.getvalue())
+	sys.exit(0)
+
+print(json.dumps({}))
+'''
+		_write_exec(bin_dir / "gh", gh_mock)
+
+		env = os.environ.copy()
+		env.update(
+			{
+				"GH_TOKEN": "token",
+				"GH_MOCK_STORE": str(store_file),
+				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			}
+		)
+		proc = subprocess.run(
+			[
+				"python3",
+				str(COLLECTOR_PATH),
+				"--repo",
+				"owner/repo",
+				"--lookback-days",
+				"7",
+				"--max-pages",
+				"2",
+				"--max-log-runs",
+				"2",
+				"--log-output-dir",
+				str(log_output_dir),
+				"--output",
+				str(report_file),
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+		summary = json.loads((log_output_dir / "summary.json").read_text(encoding="utf-8"))
+		assert summary == report
+		assert report["scope"]["workflow_families"] == ["clarify", "implement", "plan", "validate"]
+		assert report["summary"]["total_runs"] == 4
+
+		by_run_id = {item["run_id"]: item for item in report["runs"]}
+		assert len(by_run_id[201]["log_excerpts"][0]["excerpt"]) == collector.LOG_EXCERPT_MAX_CHARS
+		assert by_run_id[201]["log_excerpts"][0]["excerpt"] == "E" * collector.LOG_EXCERPT_MAX_CHARS
+		assert "log_excerpts" not in by_run_id[203]
+		assert "log_excerpts" not in by_run_id[204]
+
+		errors_dir = log_output_dir / "errors" / "owner_repo" / "implement" / "201"
+		slow_impl_dir = log_output_dir / "slow" / "owner_repo" / "implement" / "201"
+		slow_plan_dir = log_output_dir / "slow" / "owner_repo" / "plan" / "202"
+		recent_impl_dir = log_output_dir / "recent" / "owner_repo" / "implement" / "201"
+		recent_plan_dir = log_output_dir / "recent" / "owner_repo" / "plan" / "202"
+		for run_dir in (errors_dir, slow_impl_dir, slow_plan_dir, recent_impl_dir, recent_plan_dir):
+			assert (run_dir / "metadata.json").exists()
+
+		assert (errors_dir / "step-001-failure.log").read_text(encoding="utf-8") == "E" * 5000
+		assert (slow_plan_dir / "step-001-plan.log").read_text(encoding="utf-8") == "plan full output\n"
+
+		assert not (log_output_dir / "errors" / "owner_repo" / "clarify" / "203").exists()
+		assert not (log_output_dir / "recent" / "owner_repo" / "validate" / "204").exists()
+
+		store_after = json.loads(store_file.read_text(encoding="utf-8"))
+		assert store_after["log_call_counts"] == {"201": 1, "202": 1}
 
 
 # ---------------------------------------------------------------------------
