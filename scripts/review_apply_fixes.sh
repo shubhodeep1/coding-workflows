@@ -633,11 +633,56 @@ while [ "${attempt}" -le 3 ]; do
         # treat this attempt as failed so the retry loop can try again.
         # See: PR #1136, #1137 where this mismatch caused premature
         # auto-merge of un-fixed PRs.
-        _claimed_changes="$(awk '
+        changes_section="$(awk '
           /^[[:space:]]*Changes made:/ { in_s=1; next }
           in_s && /^[[:space:]]*[A-Za-z].*:/ { exit }
           in_s { print }
-        ' "${tmp_output}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context|No [^:]*modified|No [^:]*changed|No [^:]*touched|No changes|No modifications)' || true)"
+        ' "${tmp_output}")"
+        no_change_phrase_regex='no ((repository|repo|code|file)[[:space:]]+)?(file[[:space:]]+)?(changes?|modifications?|edits?)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)|no[[:space:]]+(repository[[:space:]]+)?files[[:space:]]+(were[[:space:]]+)?modified|no[[:space:]]+changes[[:space:]]+(were[[:space:]]+)?made|no[[:space:]]+modifications|no[[:space:]]+(repository[[:space:]]+)?files[[:space:]]+(are|is)[[:space:]]+modified|no[[:space:]]+(repository[[:space:]]+)?files[[:space:]]+(were[[:space:]]+)?changed|no[[:space:]]+changes\b'
+        no_change_declaration_regex="^[[:space:]]*(-[[:space:]]*)?([^;:,]*[;:,-][[:space:]]*)?(${no_change_phrase_regex})([[:space:]]*[[:punct:]]*)?"
+        strong_edit_claim_regex='\b(modif(y|ied|ies|ying)|change(d|s|ing)?|updat(e|ed|es|ing)|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\b'
+        bullet_edit_regex='^[[:space:]]*-[[:space:]]*\b(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\b([[:space:][:punct:]]|$)'
+
+        # Base set of claims after removing blank lines, "- none" bullets,
+        # validation-metadata bullets, and explicit no-change declarations.
+        _claimed_base="$(printf '%s\n' "${changes_section}" \
+          | grep -vE '^[[:space:]]*$' \
+          | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)' \
+          | grep -viE '^[[:space:]]{2,}-' \
+          | grep -viE '^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' \
+          | grep -viE "${no_change_declaration_regex}" \
+          || true)"
+
+        # Detect lines that contain both an edit claim and a no-change phrase;
+        # these are always kept as they directly claim edits.
+        mixed_claim_lines="$(printf '%s\n' "${changes_section}" | grep -iE "((${strong_edit_claim_regex}).*(${no_change_phrase_regex})|(${no_change_phrase_regex}).*(${strong_edit_claim_regex}))" || true)"
+
+        # Determine whether the first bullet explicitly declares no changes.
+        first_line="$(printf '%s\n' "${changes_section}" | grep -vE '^[[:space:]]*$' | head -1 || true)"
+        no_change_first=false
+        if [ -n "${first_line}" ]; then
+          if printf '%s\n' "${first_line}" | grep -qiE "^[[:space:]]*-[[:space:]]*(${no_change_phrase_regex})([[:space:][:punct:]].*)?$"; then
+            no_change_first=true
+          elif printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)'; then
+            no_change_first=true
+          fi
+        fi
+
+        # If the editor's first bullet says no changes, prune the base set to
+        # only lines that start with a concrete edit verb.  This prevents
+        # purely informational bullets from being counted as claimed changes.
+        if [ "${no_change_first}" = true ]; then
+          if [ -n "${_claimed_base}" ]; then
+            _claimed_base="$(printf '%s\n' "${_claimed_base}" | grep -iE "${bullet_edit_regex}" || true)"
+          fi
+        fi
+
+        # Merge the (possibly pruned) base claims with the mixed-claim lines.
+        if [ -n "${mixed_claim_lines}" ]; then
+          _claimed_changes="$(printf '%s\n%s\n' "${_claimed_base}" "${mixed_claim_lines}" | grep -vE '^[[:space:]]*$' | awk '!seen[$0]++' || true)"
+        else
+          _claimed_changes="${_claimed_base}"
+        fi
 
         if [ -n "${_claimed_changes}" ]; then
           # Editor claims it made changes — verify git agrees.

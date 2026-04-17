@@ -2025,6 +2025,11 @@ jobs:
               in_section { print }
             ' "${EDITOR_SUMMARY_FILE}")"
 
+            edit_claim_regex='\b(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\b'
+            strong_edit_claim_regex='\b(modif(y|ied|ies|ying)|change(d|s|ing)?|updat(e|ed|es|ing)|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\b'
+            no_change_phrase_regex='no ((repository|repo|code|file)[[:space:]]+)?(file[[:space:]]+)?(changes?|modifications?|edits?)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)|no[[:space:]]+(repository[[:space:]]+)?files[[:space:]]+(were[[:space:]]+)?modified|no[[:space:]]+changes[[:space:]]+(were[[:space:]]+)?made|no[[:space:]]+modifications|no[[:space:]]+(repository[[:space:]]+)?files[[:space:]]+(are|is)[[:space:]]+modified|no[[:space:]]+(repository[[:space:]]+)?files[[:space:]]+(were[[:space:]]+)?changed|no[[:space:]]+changes\b'
+            no_change_declaration_regex="^[[:space:]]*(-[[:space:]]*)?([^;:,]*[;:,-][[:space:]]*)?(${no_change_phrase_regex})([[:space:]]*[[:punct:]]*)?"
+
             has_real_changes="false"
             if [ "${change_status}" = "edited" ] || [ "${change_status}" = "not-edited" ]; then
               # Authoritative path: trust the editor's self-reported status.
@@ -2034,7 +2039,7 @@ jobs:
               if [ "${change_status}" = "edited" ]; then
                 has_real_changes="true"
               elif [ -n "${changes_section}" ] && \
-                printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' | grep -viE '^[[:space:]]*-[[:space:]]*(no (repository )?files (were )?modified|no [^:]*modified|no [^:]*changed|no [^:]*touched|no changes( (were )?made)?|no modifications)([[:space:][:punct:]]*)$' | grep -qiE '\b(modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|ing)?|patch(ed|ing)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\b'; then
+                printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' | grep -viE "^[[:space:]]*-[[:space:]]*(${no_change_phrase_regex})([[:space:][:punct:]]*)$" | grep -qiE "${edit_claim_regex}"; then
                 echo "::warning::Editor reported Change status: not-edited but Changes made contains edit-like claims; trusting Change status."
               fi
             elif [ -n "${changes_section}" ]; then
@@ -2056,17 +2061,10 @@ jobs:
               # nested sub-bullets (continuations of validation/assumption
               # headers), or are informational metadata bullets
               # (e.g. "- Validation executed").
-              substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' || true)"
-              # Word-boundary anchors prevent substring matches inside
-              # identifiers (e.g. "WILL_FIX" in "(WILL_FIX issues after
-              # code validation: 0)." must not match `fix`. Keep fix/patch
-              # to verb forms (fix/fixed/fixing, patch/patched/patching)
-              # so noun tails like "validated fixes" do not trigger false
-              # positives.
-              edit_claim_regex='\b(modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|ing)?|patch(ed|ing)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))\b'
+              substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' || true)"
               # Stricter bullet-start edit regex for multi-line contradiction checks.
-              bullet_edit_regex='^[[:space:]]*-[[:space:]]*(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|ing)?|patch(ed|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))([[:space:][:punct:]]|$)'
-              if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*(no (repository )?files (were )?modified|no [^:]*modified|no [^:]*changed|no [^:]*touched|no changes( (were )?made)?|no modifications)([[:space:][:punct:]].*)?$'; then
+              bullet_edit_regex='^[[:space:]]*-[[:space:]]*(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))([[:space:][:punct:]]|$)'
+              if printf '%s\n' "${first_line}" | grep -qiE "^[[:space:]]*-[[:space:]]*(${no_change_phrase_regex})([[:space:][:punct:]].*)?$"; then
                 # Explicit "no files modified / no changes made / no
                 # modifications" first-bullet is a deliberate declaration
                 # from the editor. Trust it and short-circuit to "no real
@@ -2076,29 +2074,31 @@ jobs:
                 # would fire a false-positive EDITOR_CHANGES_LOST error.
                 # Same-line contradictions ("no files modified but updated
                 # X") and multi-line explicit edit bullets are still caught.
-                first_line_suffix="$(printf '%s\n' "${first_line}" | sed -E 's/^[[:space:]]*-[[:space:]]*(no (repository )?files (were )?modified|no [^:]*modified|no [^:]*changed|no [^:]*touched|no changes( (were )?made)?|no modifications)[[:space:][:punct:]]*//I')"
+                first_line_suffix="$(printf '%s\n' "${first_line}" | sed -E "s/^[[:space:]]*-[[:space:]]*(${no_change_phrase_regex})[[:space:][:punct:]]*//I")"
                 if printf '%s\n' "${first_line_suffix}" | grep -qiE "${edit_claim_regex}"; then
                   has_real_changes="true"
                 elif [ -n "${substantive}" ]; then
-                  if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files (were )?modified|no [^:]*modified|no [^:]*changed|no [^:]*touched|no changes( (were )?made)?|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
+                  if printf '%s\n' "${substantive}" | grep -qiE "(${no_change_phrase_regex}).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
                     has_real_changes="true"
                   else
                     # Multi-line contradiction detection: check remaining
                     # bullets for explicit edit verbs at bullet start.
-                    remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files (were )?modified|no [^:]*modified|no [^:]*changed|no [^:]*touched|no changes( (were )?made)?|no modifications)([[:space:][:punct:]].*)?$' || true)"
+                    remainder="$(printf '%s\n' "${substantive}" | grep -viE "${no_change_declaration_regex}" || true)"
                     if printf '%s\n' "${remainder}" | grep -qiE "${bullet_edit_regex}"; then
                       has_real_changes="true"
                     fi
                   fi
                 fi
-              elif printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:]]|$)'; then
+              elif printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)'; then
                 # Preserve contradictory summaries such as "- none" followed
                 # by "- created ...".
                 if [ -n "${substantive}" ]; then
-                  if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files (were )?modified|no [^:]*modified|no [^:]*changed|no [^:]*touched|no changes( (were )?made)?|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
+                  if printf '%s\n' "${substantive}" | grep -qiE "((${strong_edit_claim_regex}).*(${no_change_phrase_regex})|(${no_change_phrase_regex}).*(${strong_edit_claim_regex}))"; then
+                    has_real_changes="true"
+                  elif printf '%s\n' "${substantive}" | grep -qiE "(${no_change_phrase_regex}).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
                     has_real_changes="true"
                   else
-                    remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files (were )?modified|no [^:]*modified|no [^:]*changed|no [^:]*touched|no changes( (were )?made)?|no modifications)([[:space:][:punct:]].*)?$' || true)"
+                    remainder="$(printf '%s\n' "${substantive}" | grep -viE "${no_change_declaration_regex}" || true)"
                     if printf '%s\n' "${remainder}" | grep -qiE "${edit_claim_regex}"; then
                       has_real_changes="true"
                     fi
@@ -2111,17 +2111,19 @@ jobs:
                 # (e.g. "- Validation executed: ...") that the editor may
                 # emit when no files changed. Keep explicit "no changes"
                 # lines for contradiction detection.
-                substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' || true)"
+                substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)|^[[:space:]]{2,}-|^[[:space:]]*-[[:space:]]*(Validation executed|Validation limitation|Ran [^:]*(validation|check|test)|Assumptions?( applied| made)|Missing[- ]context)' || true)"
                 if [ -n "${substantive}" ]; then
-                  if printf '%s\n' "${substantive}" | grep -qiE 'no (repository )?files (were )?modified|no [^:]*modified|no [^:]*changed|no [^:]*touched|no changes( (were )?made)?|no modifications'; then
+                  if printf '%s\n' "${substantive}" | grep -qiE "((${strong_edit_claim_regex}).*(${no_change_phrase_regex})|(${no_change_phrase_regex}).*(${strong_edit_claim_regex}))"; then
+                    has_real_changes="true"
+                  elif printf '%s\n' "${substantive}" | grep -qiE "${no_change_phrase_regex}"; then
                     # Preserve contradictory mixed lines ("no changes, but
                     # updated ...") so they still count as real change claims.
-                    if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files (were )?modified|no [^:]*modified|no [^:]*changed|no [^:]*touched|no changes( (were )?made)?|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
+                    if printf '%s\n' "${substantive}" | grep -qiE "(${no_change_phrase_regex}).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
                       has_real_changes="true"
                     else
                       # Remove standalone no-modification declarations, but
                       # still detect mixed sections that claim concrete edits.
-                      remainder="$(printf '%s\n' "${substantive}" | grep -viE '^[[:space:]]*(-[[:space:]]*)?(no (repository )?files (were )?modified|no [^:]*modified|no [^:]*changed|no [^:]*touched|no changes( (were )?made)?|no modifications)([[:space:][:punct:]].*)?$' || true)"
+                      remainder="$(printf '%s\n' "${substantive}" | grep -viE "${no_change_declaration_regex}" || true)"
                       if printf '%s\n' "${remainder}" | grep -qiE "${edit_claim_regex}"; then
                         has_real_changes="true"
                       fi
@@ -2174,6 +2176,93 @@ jobs:
           fi
 
           echo "EDITOR_CHANGES_LOST=${EDITOR_CHANGES_LOST}" >> "$GITHUB_ENV"
+
+      - name: Validate editor no-op disposition
+        # When the editor claims no changes are needed (did_commit=false,
+        # EDITOR_CHANGES_LOST=false), verify the claim is trustworthy
+        # before allowing auto-merge.  Two failure modes can reach here
+        # with a false "clean review" signal:
+        #
+        # 1. Editor completely failed (all retries exhausted) and the
+        #    fallback summary was used — its "- none (editor failed...)"
+        #    text passes the Changes-Lost filter but the editor never
+        #    actually reviewed the code.
+        #
+        # 2. Editor ran but silently errored during code analysis,
+        #    dismissing all reviewer issues without validating them.
+        #    The audit section would show inconsistent counts.
+        #
+        # Sets EDITOR_NOOP_SUSPICIOUS=true to block auto-merge when
+        # the no-op claim cannot be verified.
+        if: "!cancelled() && steps.commit_changes.outputs.did_commit != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true'"
+        run: |
+          set -euo pipefail
+
+          EDITOR_NOOP_SUSPICIOUS="false"
+
+          if [ ! -s "${EDITOR_SUMMARY_FILE:-}" ]; then
+            echo "::warning::Editor summary file is missing or empty — editor never produced output."
+            EDITOR_NOOP_SUSPICIOUS="true"
+          else
+            # ── Check 1: Detect editor fallback/failure markers ──
+            # The fallback summary (review_apply_fixes.sh) writes known
+            # sentinel phrases when all editor attempts fail.  These must
+            # never reach auto-merge.
+            if grep -qiE 'editor failed before producing|unavailable \(editor fallback\)' "${EDITOR_SUMMARY_FILE}"; then
+              echo "::warning::Editor summary contains failure/fallback markers — editor never completed a validated review."
+              EDITOR_NOOP_SUSPICIOUS="true"
+            fi
+
+            # ── Check 2: Reviewer audit sanity ──
+            # When reviewer execution succeeded (REVIEWERS_SUCCESSFUL > 0)
+            # but the editor claims no changes, verify the audit section has
+            # real entries and the arithmetic adds up.
+            if [ "${EDITOR_NOOP_SUSPICIOUS}" = "false" ] && [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ]; then
+              audit_section="$(awk '
+                /^[[:space:]]*Review file issue audit:/ { in_s=1; next }
+                in_s && /^[[:space:]]*[A-Za-z][A-Za-z ()-]*:[[:space:]]*$/ { exit }
+                in_s { print }
+              ' "${EDITOR_SUMMARY_FILE}")"
+
+              real_audit="$(printf '%s\n' "${audit_section}" \
+                | grep -vE '^[[:space:]]*$' \
+                | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)' \
+                | grep -viE 'editor failed' \
+                || true)"
+
+              if [ -z "${real_audit}" ]; then
+                echo "::warning::${REVIEWERS_SUCCESSFUL:-0} reviewer(s) succeeded but editor audit section is empty or contains only fallback text."
+                EDITOR_NOOP_SUSPICIOUS="true"
+              else
+                # Parse each audit entry and verify total == applied + already_applied + ignored.
+                mismatch_found=false
+                while IFS= read -r line; do
+                  [ -n "${line}" ] || continue
+                  t="$(printf '%s' "${line}" | grep -ioP 'total issues listed[^0-9]*\K[0-9]+' || echo "")"
+                  a="$(printf '%s' "${line}" | grep -ioP '(?<!already )issues applied[^0-9]*\K[0-9]+' || echo "")"
+                  aa="$(printf '%s' "${line}" | grep -ioP 'issues already applied[^0-9]*\K[0-9]+' || echo "")"
+                  ig="$(printf '%s' "${line}" | grep -ioP 'issues ignored[^0-9]*\K[0-9]+' || echo "")"
+
+                  # Skip entries that don't have parseable counts (not audit lines)
+                  [ -n "${t}" ] || continue
+
+                  t="${t:-0}"; a="${a:-0}"; aa="${aa:-0}"; ig="${ig:-0}"
+                  sum=$((a + aa + ig))
+
+                  if [ "${t}" -gt 0 ] && [ "${sum}" -ne "${t}" ]; then
+                    echo "::warning::Audit entry arithmetic mismatch: total=${t} but applied(${a})+already_applied(${aa})+ignored(${ig})=${sum}"
+                    mismatch_found=true
+                  fi
+                done <<< "${real_audit}"
+
+                if [ "${mismatch_found}" = true ]; then
+                  EDITOR_NOOP_SUSPICIOUS="true"
+                fi
+              fi
+            fi
+          fi
+
+          echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
         # Run conflict detection regardless of max_iterations_reached or
@@ -3208,7 +3297,7 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Mark linked issues ready to merge
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3433,7 +3522,7 @@ jobs:
           fi
 
       - name: Enable auto-merge on PR
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -3623,7 +3712,7 @@ jobs:
           fi
 
       - name: Telegram success
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -3751,6 +3840,37 @@ jobs:
               tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
             fi
           fi
+
+      - name: Telegram editor-noop-suspicious warning
+        if: "success() && env.EDITOR_NOOP_SUSPICIOUS == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'"
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          MSG="⚠️ Editor no-op suspicious: #${PR_NUMBER}"
+          MSG+=$'\n'
+          MSG+="Editor claimed no changes needed but disposition could not be verified."
+          MSG+=$'\n'
+          MSG+="Auto-merge blocked. Manual review or re-run required."
+          MSG+=$'\n'
+          MSG+="PR: ${PR_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+
+          BODY="⚠️ **Editor no-op suspicious** — the editor claimed no changes were needed but the disposition could not be verified."
+          BODY+=$'\n\n'
+          BODY+="Possible causes: editor failed silently, did not read reviewer files, or audit counts are inconsistent."
+          BODY+=$'\n'
+          BODY+="Auto-merge has been **blocked**. Please review the editor summary and re-run the workflow if appropriate."
+          gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
 
       - name: Telegram review-blocked judge decision
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && env.PR_CLOSED != 'true'
