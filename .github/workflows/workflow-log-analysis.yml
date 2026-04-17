@@ -488,7 +488,7 @@ jobs:
 
   deep-audit:
     needs: analyze-commit-notify
-    if: needs.analyze-commit-notify.outputs.analysis_status == 'completed'
+    if: needs.analyze-commit-notify.outputs.analysis_status == 'completed' && inputs.codex_mode
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -533,6 +533,7 @@ jobs:
       - name: Create Codex config
         env:
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
+          THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || 'xhigh' }}
         run: |
           set -euo pipefail
           mkdir -p ~/.codex
@@ -541,7 +542,7 @@ jobs:
             echo 'web_search = "live"'
             echo 'model_provider = "openrouter"'
             echo "model = \"${WORKFLOW_EDITOR_MODEL}\""
-            echo 'model_reasoning_effort = "medium"'
+            echo "model_reasoning_effort = \"${THINKING_LEVEL_ANALYSIS}\""
             if [ -f "${CATALOG_PATH}" ]; then
               echo "model_catalog_json = \"${CATALOG_PATH}\""
             fi
@@ -574,6 +575,7 @@ jobs:
         id: audit
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -591,6 +593,7 @@ jobs:
 
           SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"
+          trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           {
             bash scripts/render_prompt.sh prompts/mode-workflow-audit.txt
             echo
@@ -625,8 +628,8 @@ jobs:
             fi
           done
 
-          if ! head -n1 "${SECTION_FILE}" | grep -q '^## Deep Audit'; then
-            echo "::error::Deep audit Codex output did not start with the required '## Deep Audit' heading."
+          if ! head -n1 "${SECTION_FILE}" | grep -qE '^## Deep Audit — Workflows & Scripts \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$'; then
+            echo "::error::Deep audit Codex output did not start with the required '## Deep Audit — Workflows & Scripts (YYYY-MM-DD)' heading."
             head -n5 "${SECTION_FILE}" >&2 || true
             exit 1
           fi
@@ -694,7 +697,7 @@ jobs:
 
   api-redundancy:
     needs: [analyze-commit-notify, deep-audit]
-    if: needs.deep-audit.outputs.audit_status == 'completed'
+    if: needs.deep-audit.outputs.audit_status == 'completed' && inputs.codex_mode
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -739,6 +742,7 @@ jobs:
       - name: Create Codex config
         env:
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
+          THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || 'xhigh' }}
         run: |
           set -euo pipefail
           mkdir -p ~/.codex
@@ -747,7 +751,7 @@ jobs:
             echo 'web_search = "live"'
             echo 'model_provider = "openrouter"'
             echo "model = \"${WORKFLOW_EDITOR_MODEL}\""
-            echo 'model_reasoning_effort = "medium"'
+            echo "model_reasoning_effort = \"${THINKING_LEVEL_ANALYSIS}\""
             if [ -f "${CATALOG_PATH}" ]; then
               echo "model_catalog_json = \"${CATALOG_PATH}\""
             fi
@@ -780,6 +784,7 @@ jobs:
         id: api_redundancy
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -797,6 +802,7 @@ jobs:
 
           SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"
+          trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           {
             bash scripts/render_prompt.sh prompts/mode-workflow-api-redundancy.txt
             echo
@@ -831,8 +837,8 @@ jobs:
             fi
           done
 
-          if ! head -n1 "${SECTION_FILE}" | grep -q '^## API Call Consolidation'; then
-            echo "::error::API redundancy Codex output did not start with the required '## API Call Consolidation' heading."
+          if ! head -n1 "${SECTION_FILE}" | grep -qE '^## API Call Consolidation & Dead-Call Analysis \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$'; then
+            echo "::error::API redundancy Codex output did not start with the required '## API Call Consolidation & Dead-Call Analysis (YYYY-MM-DD)' heading."
             head -n5 "${SECTION_FILE}" >&2 || true
             exit 1
           fi

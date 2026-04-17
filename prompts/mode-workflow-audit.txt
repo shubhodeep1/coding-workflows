@@ -34,7 +34,7 @@ Sections (emit all, in this order):
 
 ### Section 1: Bug & Correctness Sweep
 For every workflow and script, check for:
-- Unquoted variables in shell — especially inside `[[ ]]`, `if`, and command arguments where word-splitting or glob expansion could bite.
+- Unquoted variables in shell — especially in command arguments and test expressions where word-splitting or glob expansion could bite (note that `[[ ]]` is generally safe).
 - Missing error handling — commands without `set -euo pipefail`, unchecked return codes, missing `|| true` on intentionally-failable commands.
 - Race conditions — concurrent label mutations, parallel issue comment writes, TOCTOU on file/branch existence checks.
 - Logic errors — inverted conditionals, unreachable code after early returns, wrong variable referenced (copy-paste from adjacent block).
@@ -68,8 +68,8 @@ For each finding, propose: which shared module (`scripts/*_helpers.sh` or a new 
 GitHub Actions enforces a hard limit of 21,000 characters per template expression (any single `${{ }}` block, including interpolated `run:` bodies). The runner rejects the entire workflow with `Exceeded max expression length 21000` if any expression exceeds this.
 
 This repo has already hit this limit at least 3 times:
-- `review_autofix.yml:2147` — step split after hitting 24.6 KB.
-- `review_autofix.yml:2353` — prompt heredoc moved to external file.
+- `review_autofix.yml:2370` — step split after hitting 24.6 KB.
+- `review_autofix.yml:2576` — prompt heredoc moved to external file.
 - `orchestrate_poll_process.sh:3` — extracted from `orchestrate_poll.yml`.
 
 Audit each workflow:
