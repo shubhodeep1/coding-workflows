@@ -2011,7 +2011,7 @@ jobs:
               in_section && /^[[:space:]]*[A-Za-z].*:/ { exit }
               in_section { print }
             ' "${EDITOR_SUMMARY_FILE}")"
-            change_status="$(printf '%s\n' "${change_status_section}" | grep -iE '^[[:space:]]*-?[[:space:]]*(edited|not-edited)[[:space:]]*$' | head -1 | sed -E 's/^[[:space:]]*-?[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]' || true)"
+            change_status="$(printf '%s\n' "${change_status_section}" | grep -iE '^[[:space:]]*-?[[:space:]]*(edited|not-edited|not[[:space:]]edited)[[:space:]]*$' | head -1 | sed -E 's/^[[:space:]]*-?[[:space:]]*//; s/[[:space:]]*$//; s/^not[[:space:]]edited$/not-edited/I' | tr '[:upper:]' '[:lower:]' || true)"
 
             # Extract the "Changes made:" section, stopping at the next
             # top-level section header (line starting with a non-dash
