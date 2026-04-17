@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 2\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/orchestrate_poll_process.sh\n      Problem: The \"no linked PRs found\" diagnostic message uses stderr redirection `>&2` while all other log messages in this script use stdout. This inconsistency makes log parsing/grepping harder and deviates from the established pattern.; If automated log collectors only scrape stdout for these patterns, this specific diagnostic might be missed. Also inconsistent with other diagnostic messages that use stdout.; **Current code (line ~34.33):**; ```bash; echo \"  close_1linked_pr: no linked PRs found for issue #${issue_1num} (timeline/branch/body lookups all empty).\" >&2; **Other messages in the same function use stdout:**; ```bash; echo \"  close_linked_pr: closing linked PR #${pr_1num} for issue #${issue_1num} (state=open).\"; echo \"  close_linked_pr: skipping PR #${pr_1num} for issue #${issue_1num} (state=${pr_state:-unknown}).\"; The fix is simple: remove `>&2` from line 34.33.; #### Issue 2: Regex - Already Fixed in Last Run; The cross-pollination summary from deepseek_ flagged a regex issue in `_linked_prs_by_body_reference` where `(?![0-9])` should be `\\\\b` for proper word boundary, and `[[:space:]]+` should be `[[:space:]]*:?[[:space:]]*` to be more permissive.; Upon inspection, the current code ALREADY has these fixes applied:; ```bash; test(\"(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]*:?[[:space:]]*#\" + $n + \"\\\\b\"); This issue appears to have been resolved in the last AI autofix run. The regex now correctly uses:; - `[[:space:]]*:?[[:space]]*` - zero or more whitespace with optional colon; - `\\\\b` - proper word boundary; This is verified correct. No action needed.; ### Verified Correct; 1. **Multi-source PR lookup**: The implementation correctly uses three independent strategies with deduplication via `sort -u`.; 2. **Gap-2 surfacing**: `surface_reissue_closed_without_pr` is correctly called BEFORE `close_linked_pr` in both main and standalone paths.; 3. **Fail-open behavior**: All API calls use `gh_retry` with `|| true` error suppression.; 4. **Test coverage**: Comprehensive test suite covers both gaps with structural regression guards.; 5. **Documentation**: README.md and agents.md accurately document the new behavior.; ### HARDENING_SUGGESTIONS\n      Confidence: avg 4.0\n      Flagged by: minimax_minimax-m2_5\n\n  [2] File: scripts/orchestrate_poll_process.sh\n      Problem: Location: close_linked_pr function, line ~34.33; Issue: Inconsistent logging destination (stderr vs stdout); Suggested minimal fix: Change:; ```bash; echo \"  close_linked_pr: no linked PRs found for issue #${issue_1num} (timeline/branch/body lookups all empty).\" >&2; ```bash; echo \"  close_linked_pr: no linked PRs found for issue #${issue_1num} (timeline/branch/body lookups all empty).\"; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1 (improves log consistency); ## SUMMARY; The implementation correctly addresses both Gap-1 (multi-source PR lookup to prevent orphaned PRs like #25.68) and Gap-2 (re-issue surfacing).; - **Gap-1**: Multi-source lookup (timeline + branch name + body parse) is implemented correctly; - **Gap-2**: `surface_reissue_closed_without_pr` emits all four signals before closing; Only one minor issue remains: the logging inconsistency where the \"no linked PRs found\" message goes to stderr while all other diagnostic messages go to stdout. This should be corrected for log consistency.\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/orchestrate_poll_process.sh",
+  "fingerprint": "affd78121a230f95ce91bd3f946e99ce7bbc04d55f639b91c851968f2d62d70f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1259,
+    "run_id": "24547643760",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24547643760",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417045422_3dc931b2da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1259,
+    "run_id": "24547643760"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-17T04:54:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
