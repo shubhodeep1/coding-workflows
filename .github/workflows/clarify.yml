@@ -983,6 +983,7 @@ jobs:
             --remove-label 'ai:planning' \
             --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
 
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           BLOCKED_COMMENT_FILE="${RUNTIME_DIR}/blocked_comment.md"
           {
             printf '%s\n' "Clarification blocked: human input required."
@@ -991,12 +992,12 @@ jobs:
             printf '\n'
             printf '%s\n' "Auto-answer has been paused to avoid unsatisfiable clarification loops."
             printf '%s\n' "Provide the required input, then run /reclarify or continue with /answer as appropriate."
+            printf '\n'
+            printf '%s\n' "Run: ${RUN_URL}"
           } > "${BLOCKED_COMMENT_FILE}"
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$(cat "${BLOCKED_COMMENT_FILE}")" >/dev/null
-
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MSG="Clarification blocked for issue #${ISSUE_NUMBER}: ${BLOCKED_REASON}"
           MSG+=$'\n'
           MSG+="Issue: ${ISSUE_URL}"
