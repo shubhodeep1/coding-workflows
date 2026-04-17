@@ -3262,9 +3262,9 @@ def test_multi_source_lookup_helpers_present():
 	assert '--head "ai/issue-${issue_num}"' in script
 	assert "_linked_prs_by_body_reference()" in script
 	# Body-parse regex must include all three GitHub close keywords and
-	# a trailing non-digit guard so "#25528" does not match for #2552.
+	# a trailing word-boundary guard so "#25528" does not match for #2552.
 	assert "close[sd]?|fix(es|ed)?|resolve[sd]?" in script
-	assert "(?![0-9])" in script
+	assert "\\\\b" in script
 	assert "_find_all_linked_prs()" in script
 	# Dedup contract: sort -u so the same PR surfaced by multiple
 	# strategies is only acted on once.
