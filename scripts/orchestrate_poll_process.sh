@@ -2640,6 +2640,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   # the primary fix for the #832-style stall: previously this code path
   # set final_merge_status=conflict and halted with no recovery.
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "false" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] PR #${final_pr} is not mergeable; invoking self-healing flow."
     heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "final PR #${final_pr} mergeable=false" || true
     return 1
@@ -2657,7 +2658,8 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     return 1
   fi
 
-  if gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch >/dev/null 2>&1; then
+  local merge_err=""
+  if merge_err="$(gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch 2>&1 >/dev/null)"; then
     jq --argjson final_pr "${final_pr}" \
       '.final_merge_pr = $final_pr |
        .final_merge_status = "merged" |
@@ -2683,10 +2685,16 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     return 0
   fi
 
+  if [ -n "${merge_err}" ]; then
+    jq --arg err "${merge_err}" '.final_merge_error = $err' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  fi
+
   # Post-merge-attempt conflict path: squash merge was rejected by
   # GitHub despite our pre-merge mergeability check (race with a push
   # to default). Hand off to the healing flow instead of halting.
   if [ "${pr_mergeable}" = "false" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] Post-attempt mergeability=false on PR #${final_pr}; invoking self-healing flow."
     heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "final PR #${final_pr} became unmergeable during merge" || true
     return 1
