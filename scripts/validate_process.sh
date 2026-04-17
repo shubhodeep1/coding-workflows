@@ -1189,9 +1189,12 @@ PY2
 		[ -f "${dockerfile}" ] || continue
 		if grep -Evi '^[[:space:]]*#' "${dockerfile}" \
 		   | sed -E 's/[[:space:]]+#.*$//' \
+		   | sed -E ':a;N;$!ba;s/\\[[:space:]]*\n[[:space:]]*/ /g' \
 		   | grep -Eq 'apt(-get)?[[:space:]].*install.*(^|[^[:alnum:]_-])(mongodb-)?mongosh(=[^[:space:]\\]+)?($|[^[:alnum:]_-])' \
-		   && ! grep -qi 'repo\.mongodb\.org' "${dockerfile}"; then
-			echo "${dockerfile} references 'mongosh'/'mongodb-mongosh' but does not add MongoDB's official apt repo (no 'repo.mongodb.org' reference). mongosh is NOT in Debian/Ubuntu default repos and will fail the compose build with 'E: Unable to locate package mongosh'. Prefer pymongo, or add the MongoDB apt source + GPG key to the Dockerfile. See mode-validate-generate.txt: 'installing mongosh in validation/Dockerfile.app'." >> "${PRE_FLIGHT_LOG_FILE}"
+		   && ! grep -Evi '^[[:space:]]*#' "${dockerfile}" \
+		   | sed -E 's/[[:space:]]+#.*$//' \
+		   | grep -qi 'repo\.mongodb\.org'; then
+			echo "${dockerfile} references 'mongosh'/'mongodb-mongosh' but does not add MongoDB's official apt repo (no 'repo.mongodb.org' reference). mongosh is NOT in Debian/Ubuntu default repos and will fail the compose build with 'E: Unable to locate package mongosh' or 'E: Unable to locate package mongodb-mongosh'. Prefer pymongo, or add the MongoDB apt source + GPG key to the Dockerfile. See mode-validate-generate.txt: 'installing mongosh in validation/Dockerfile.app'." >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
 			_emit_preflight_tail "mongosh installation in ${dockerfile} requires official MongoDB apt repo"
 			return 1
