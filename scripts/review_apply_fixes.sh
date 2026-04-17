@@ -686,6 +686,28 @@ while [ "${attempt}" -le 3 ]; do
           mv "${tmp_output}" "${EDITOR_SUMMARY_FILE}"
           rm -f "${tmp_err}"
           echo "Editor succeeded on attempt ${attempt}."
+          # Diagnostic: capture working tree state at the very last moment
+          # before this script exits.  Combined with checkpoints at the
+          # start of the Commit step and just before the touched-file
+          # comparison loop, this pinpoints whether an observed "Editor
+          # changes lost" is caused by reversion at the step boundary
+          # (Serena shutdown / runner cleanup) or by logic inside the
+          # commit-prep step itself.  See PR #1255 investigation: editor
+          # edits present here (attempt 1, 9+/9-), absent ~5s later at
+          # commit-prep with no visible git command in between.
+          echo "::group::Working tree state (checkpoint=editor_exit)"
+          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+          _cp_status="$(git status --porcelain 2>/dev/null || true)"
+          if [ -n "${_cp_status}" ]; then
+            printf '%s\n' "${_cp_status}" | head -40
+            _cp_status_lines="$(printf '%s\n' "${_cp_status}" | wc -l | tr -d '[:space:]')"
+            [ "${_cp_status_lines:-0}" -gt 40 ] && echo "[truncated: ${_cp_status_lines} total porcelain lines]"
+          else
+            echo "(clean)"
+          fi
+          echo "--- git diff --stat HEAD ---"
+          git diff --stat HEAD 2>/dev/null | head -40 || true
+          echo "::endgroup::"
           exit 0
         fi
         echo "Editor output passed format/manifest validation but claimed changes did not persist on attempt ${attempt}; retrying."
