@@ -1602,25 +1602,25 @@ prepare_tracking_judge_checkout() {
         rm -rf "${_wf_backup}"
         if [ -n "${integration_branch}" ]; then
           echo "::error::Integration branch '${integration_branch}' exists but could not be checked out for judge context (resolved ref '${target_ref}')." >&2
-          return 1
+        else
+          echo "::error::Default branch '${target_branch}' could not be checked out for judge context (resolved ref '${target_ref}')." >&2
         fi
-        JUDGE_EXECUTION_SOURCE="current_ref"
-        echo "::warning::Could not check out '${target_branch}' for judge context; continuing on current ref." >&2
+        return 1
       fi
     fi
   else
     if [ -n "${integration_branch}" ]; then
       echo "::error::Integration branch '${integration_branch}' exists but its analysis ref could not be resolved for judge context." >&2
-      return 1
+    else
+      echo "::error::Default branch '${target_branch}' could not be resolved for judge context." >&2
     fi
-    JUDGE_EXECUTION_SOURCE="current_ref"
-    echo "::warning::Could not resolve '${target_branch}' for judge context; continuing on current ref." >&2
+    return 1
   fi
 
   JUDGE_EXECUTION_REF="$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
   if [ -f .orchestrator_judge_context_sentinel.txt ]; then
     JUDGE_CONTEXT_SENTINEL_PRESENT="true"
-    JUDGE_CONTEXT_SENTINEL_VALUE="$(head -n 1 .orchestrator_judge_context_sentinel.txt 2>/dev/null | tr -d '\r' | head -c 200)"
+    JUDGE_CONTEXT_SENTINEL_VALUE="$(head -c 200 .orchestrator_judge_context_sentinel.txt 2>/dev/null | head -n 1 | tr -d '\r')"
   fi
 
   echo "  Judge execution context for tracking #${TRACKING_NUM}: source=${JUDGE_EXECUTION_SOURCE} ref=${JUDGE_EXECUTION_REF} sentinel_present=${JUDGE_CONTEXT_SENTINEL_PRESENT}"
