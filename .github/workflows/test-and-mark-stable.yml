@@ -1027,11 +1027,11 @@ jobs:
           # the API's errors[] payload instead of the opaque
           # "gh: Validation Failed (HTTP 422)" that happens when the response
           # body is redirected to /dev/null.
-          if ! POST_OUT="$(mktemp 2>/dev/null)"; then
+          if ! POST_OUT="$(mktemp)"; then
             echo "::error::Failed to create temp file for stdout capture (mktemp failed)"
             exit 1
           fi
-          if ! POST_ERR="$(mktemp 2>/dev/null)"; then
+          if ! POST_ERR="$(mktemp)"; then
             rm -f "${POST_OUT}"
             echo "::error::Failed to create temp file for stderr capture (mktemp failed)"
             exit 1
