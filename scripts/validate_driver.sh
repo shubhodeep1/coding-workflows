@@ -300,7 +300,7 @@ teardown()
 	fi
 
 	TEARDOWN_DONE=1
-	if [ "${RESULT}" = "fail" ] && { [ "${PHASE}" = "startup" ] || [ "${PHASE}" = "health" ]; }; then
+	if [ "${RESULT}" = "fail" ] && { [ "${PHASE}" = "startup" ] || [ "${PHASE}" = "health" ] || [ "${PHASE}" = "dependency_resolution" ]; }; then
 		preserve_failure_log=1
 	fi
 
@@ -413,21 +413,135 @@ run_preflight_checks()
 	fi
 }
 
+# Detect npm ERESOLVE signatures in a build log. Returns 0 if any of the
+# recognised npm dependency-resolution error markers are present, 1 otherwise.
+# Kept intentionally broad — npm's wording varies across major versions
+# ("npm ERR!" vs. "npm error", with or without a "code ERESOLVE" prefix).
+detect_eresolve()
+{
+	local log_file="$1"
+	[ -f "${log_file}" ] || return 1
+	if grep -Eaiq 'npm.*(ERR!|error).*ERESOLVE' "${log_file}" \
+		|| grep -Eaiq 'npm.*(ERR!|error).*Could not resolve dependency' "${log_file}" \
+		|| grep -Eaiq 'npm.*(ERR!|error).*Conflicting peer dependency' "${log_file}"; then
+		return 0
+	fi
+	return 1
+}
+
+# Emit a concise one-line diagnostic describing the ERESOLVE conflict found
+# in the given log, including the conflicting package/version pairs and the
+# filesystem paths of the npm artifacts (eresolve-report.txt / debug log)
+# so diagnosis is deterministic without having to scrape log_tail.
+describe_eresolve()
+{
+	local log_file="$1"
+	if [ ! -f "${log_file}" ]; then
+		printf 'npm ERESOLVE dependency conflict (no build log available)\n'
+		return 0
+	fi
+	python3 - "${log_file}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "rb") as fh:
+        fh.seek(0, 2)
+        size = fh.tell()
+        tail_bytes = 1024 * 1024
+        if size > tail_bytes:
+            fh.seek(-tail_bytes, 2)
+        else:
+            fh.seek(0)
+        text = fh.read().decode("utf-8", errors="replace")
+except OSError:
+    print("npm ERESOLVE dependency conflict (build log unreadable)")
+    sys.exit(0)
+
+def first(pattern):
+    m = re.search(pattern, text)
+    return m.group(1).strip() if m else ""
+
+resolving   = first(r'npm (?:ERR!|error)\s+While resolving:\s*(.+)')
+found       = first(r'npm (?:ERR!|error)\s+Found:\s*(.+)')
+conflicting = first(r'npm (?:ERR!|error)\s+Conflicting peer dependency:\s*(.+)')
+
+artifacts = sorted({
+    m for m in re.findall(
+        r'[^ \n]*\.npm/_logs/[^ \n]+-(?:eresolve-report\.txt|debug-\d+\.log)',
+        text,
+    )
+})
+
+parts = []
+if resolving:
+    parts.append(f"while resolving {resolving}")
+if found:
+    parts.append(f"found {found}")
+if conflicting:
+    parts.append(f"conflicting peer {conflicting}")
+
+msg = "npm ERESOLVE dependency conflict"
+if parts:
+    msg += ": " + "; ".join(parts)
+if artifacts:
+    msg += " (see " + ", ".join(artifacts) + ")"
+print(msg)
+PY
+}
+
 start_compose()
 {
+	# Dependency precheck: run `docker compose build` as an explicit step
+	# before `up -d`. Splitting build from up lets us bucket dependency-
+	# resolution failures (e.g. npm ERESOLVE during `RUN npm ci`) as a
+	# dedicated `phase=dependency_resolution` harness failure instead of
+	# conflating them with generic application startup defects, and keeps
+	# runtime/startup assertions gated on a successful image build.
 	local build_log
 	build_log="$(mktemp "${TMPDIR:-/tmp}/compose_build.XXXXXX")" || fail_fast "preflight_compose_up" "failed to create temp file for compose build output" "${COMPOSE_LOG}" "startup"
-	if ! docker compose -f "${COMPOSE_FILE}" up -d --build >"${build_log}" 2>&1; then
-		capture_compose_logs
-		# Prepend the build/start output so the log_tail includes the
-		# actual error (e.g. buildx permission denied) that docker emitted
-		# before any container runtime logs.
+	if ! docker compose -f "${COMPOSE_FILE}" build >"${build_log}" 2>&1; then
+		# Prepend the build output so the log_tail contains the actual
+		# build error (ERESOLVE, buildx permission denied, missing COPY
+		# source, etc.) that docker emitted.
 		if [ -s "${build_log}" ]; then
 			local merged_log
 			merged_log="$(mktemp "${TMPDIR:-/tmp}/compose_merged.XXXXXX")" || fail_fast "preflight_compose_up" "failed to create temp file for compose merged output" "${build_log}" "startup" 1
 			{
-				echo "=== docker compose up --build output ==="
+				echo "=== docker compose build output ==="
 				cat "${build_log}"
+			} > "${merged_log}"
+			mkdir -p "$(dirname -- "${COMPOSE_LOG}")" >/dev/null 2>&1 || true
+			if ! mv "${merged_log}" "${COMPOSE_LOG}" 2>/dev/null; then
+				cp "${merged_log}" "${COMPOSE_LOG}" 2>/dev/null || true
+				rm -f "${merged_log}" >/dev/null 2>&1 || true
+			fi
+		fi
+
+		if detect_eresolve "${build_log}"; then
+			local eresolve_msg
+			eresolve_msg="$(describe_eresolve "${build_log}" 2>/dev/null || true)"
+			[ -n "${eresolve_msg}" ] || eresolve_msg="npm ERESOLVE dependency conflict during image build"
+			rm -f "${build_log}" >/dev/null 2>&1 || true
+			fail_fast "preflight_dependency_resolution" "${eresolve_msg}" "${COMPOSE_LOG}" "dependency_resolution" 1
+		fi
+
+		rm -f "${build_log}" >/dev/null 2>&1 || true
+		fail_fast "preflight_compose_up" "failed to build compose services" "${COMPOSE_LOG}" "startup" 1
+	fi
+	rm -f "${build_log}" >/dev/null 2>&1 || true
+
+	local up_log
+	up_log="$(mktemp "${TMPDIR:-/tmp}/compose_up.XXXXXX")" || fail_fast "preflight_compose_up" "failed to create temp file for compose up output" "${COMPOSE_LOG}" "startup"
+	if ! docker compose -f "${COMPOSE_FILE}" up -d >"${up_log}" 2>&1; then
+		capture_compose_logs
+		if [ -s "${up_log}" ]; then
+			local merged_log
+			merged_log="$(mktemp "${TMPDIR:-/tmp}/compose_merged.XXXXXX")" || fail_fast "preflight_compose_up" "failed to create temp file for compose merged output" "${up_log}" "startup" 1
+			{
+				echo "=== docker compose up -d output ==="
+				cat "${up_log}"
 				echo ""
 				if [ -f "${COMPOSE_LOG}" ]; then
 					echo "=== container logs ==="
@@ -440,10 +554,10 @@ start_compose()
 				rm -f "${merged_log}" >/dev/null 2>&1 || true
 			fi
 		fi
-		rm -f "${build_log}" >/dev/null 2>&1 || true
-		fail_fast "preflight_compose_up" "failed to build/start compose services" "${COMPOSE_LOG}" "startup" 1
+		rm -f "${up_log}" >/dev/null 2>&1 || true
+		fail_fast "preflight_compose_up" "failed to start compose services" "${COMPOSE_LOG}" "startup" 1
 	fi
-	rm -f "${build_log}" >/dev/null 2>&1 || true
+	rm -f "${up_log}" >/dev/null 2>&1 || true
 
 	capture_compose_logs
 }

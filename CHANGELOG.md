@@ -8,6 +8,8 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 ## [Unreleased]
 
 ### Changed
+- H8: made reviewer watchdog PR-state polling interval configurable via `REVIEW_PR_STATE_POLL_INTERVAL_SECS` in `scripts/review_run_reviewers.sh` (default `10`, valid `10..3600`), with `rate_limit_audit_fallback` warning and fail-open fallback to default for invalid/out-of-range inputs.
+- Added H4 PR comment hydration shim in `scripts/gh_helpers.sh`: `gh_pr_with_all_comments` now uses a single GraphQL call for PR metadata + issue/review comments with deterministic ordering, mandatory fail-open REST fallback, and shared legacy JSON output contract for judge consumers.
 - review/autofix now caches PR `closingIssuesReferences(first: 50)` once per job in `LINKED_ISSUES_JSON` and reuses it for linked-issue status/label updates and Telegram single-issue links, preserving existing PR title/body REST fallback and downstream behavior.
 - Completed H1 migration for remaining workflow surfaces by replacing
   support-file GitHub Contents API fetch loops in `validate.yml` and
@@ -16,6 +18,15 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 - Extended staged AI memory schema lists to include the new cache schema
   entries for actions runs and workflow log analysis (best-effort staging
   until files exist on support refs).
+- H7: removed repo label-existence GET probes from `ensure_label_exists`
+  in `scripts/orchestrate_poll_process.sh` and `scripts/validate_process.sh`,
+  now relying on direct `gh label create` with idempotent `already_exists`/422
+  handling (including DEBUG skip logging) across those scripts and
+  `scripts/label_helpers.sh`.
+- Added H6 cross-run workflow log analysis cache persistence in
+  `scripts/collect_workflow_logs.py` + `scripts/ai_memory_lib.py` using
+  ai-memory branch fail-open reads/writes, ETag-aware run collection, 304
+  snapshot reuse, and 500-entry LRU seen-set trimming for jobs/log archives.
 - Removed all cycle-based runtime reasoning effort downgrades — every phase now
   uses the configured `THINKING_LEVEL_*` as-is (`xhigh` by default) for all cycles:
   - Removed adaptive judge downgrade (`xhigh` → `high` after cycle 3) in `orchestrate_poll_process.sh`.

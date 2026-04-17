@@ -31,6 +31,18 @@ def _extract_needs_fixes_branch() -> str:
 	return match.group("branch")
 
 
+def _extract_ensure_label_exists_function() -> str:
+	text = _validate_process_text()
+	match = re.search(
+		r'(ensure_label_exists\(\)\n\{\n.*?\n\})\n\nset_tracking_phase_label\(\)',
+		text,
+		re.DOTALL,
+	)
+	if not match:
+		raise AssertionError("could not extract ensure_label_exists from validate_process.sh")
+	return match.group(1)
+
+
 def _install_mock_gh(bin_dir: Path, state_file: Path) -> None:
 	gh_script = r'''#!/usr/bin/env python3
 import json
@@ -68,6 +80,32 @@ if args[:2] == ["issue", "create"]:
 	print(f"https://github.com/{repo}/issues/{next_num}")
 	sys.exit(0)
 
+if args[:2] == ["label", "create"]:
+	label_name = args[2] if len(args) > 2 else ""
+	state.setdefault("label_create_args", []).append(args)
+	responses = state.get("label_create_responses", {})
+	response = responses.get(label_name)
+	if isinstance(response, dict):
+		message = str(response.get("stderr", ""))
+		exit_code = int(response.get("exit_code", 0))
+		save()
+		if message:
+			print(message, file=sys.stderr)
+		sys.exit(exit_code)
+	save()
+	sys.exit(0)
+
+if args and args[0] == "api":
+	path = ""
+	for arg in args[1:]:
+		if not arg.startswith("-"):
+			path = arg
+			break
+	if path:
+		state.setdefault("api_calls", []).append(path)
+	save()
+	sys.exit(0)
+
 save()
 sys.exit(0)
 '''
@@ -89,6 +127,7 @@ def test_validate_needs_fixes_creates_orchestrator_labeled_issue() -> None:
 
 		gh_state_file = runtime_dir / "gh_state.json"
 		_install_mock_gh(bin_dir, gh_state_file)
+		gh_state_file.write_text(json.dumps({"label_create_responses": {}}), encoding="utf-8")
 
 		diagnose_file = runtime_dir / "validation_diagnosis.json"
 		diagnose_file.write_text(
@@ -170,6 +209,10 @@ printf '%s' "${{CREATED_FIX_ISSUES_JSON}}" > "${{CREATED_JSON_FILE}}"
 		assert ensured == ["ai:clarification", "ai:orchestrator-managed"]
 
 		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		assert not any(
+			"/labels/" in path
+			for path in state.get("api_calls", [])
+		)
 		issue_creates = state.get("issue_create_args", [])
 		assert len(issue_creates) == 1
 		create_args = issue_creates[0]
@@ -179,6 +222,85 @@ printf '%s' "${{CREATED_FIX_ISSUES_JSON}}" > "${{CREATED_JSON_FILE}}"
 
 		created_json = json.loads(created_json_file.read_text(encoding="utf-8"))
 		assert created_json == [1201]
+
+
+def test_validate_needs_fixes_label_create_already_exists_is_idempotent() -> None:
+	ensure_label_exists_fn = _extract_ensure_label_exists_function()
+
+	with tempfile.TemporaryDirectory(prefix="test_validate_fixup_labels_exists_") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		bin_dir = tmp_path / "bin"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		bin_dir.mkdir(parents=True, exist_ok=True)
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+		gh_state_file.write_text(
+			json.dumps(
+				{
+					"label_create_responses": {
+						"ai:clarification": {
+							"exit_code": 1,
+							"stderr": "HTTP 422 Unprocessable Entity: already_exists",
+						},
+						"ai:orchestrator-managed": {
+							"exit_code": 1,
+							"stderr": "already_exists",
+						},
+					},
+				}
+			),
+			encoding="utf-8",
+		)
+
+		notify_file = runtime_dir / "notify.log"
+		harness_script = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+gh_retry() {{ "$@"; }}
+tg_notify() {{ printf '%s\\n' "$1" >> "${{NOTIFY_LOG_FILE}}"; }}
+
+TRACKING_ISSUE_NUM=1043
+
+{ensure_label_exists_fn}
+
+ensure_label_exists "ai:clarification"
+ensure_label_exists "ai:orchestrator-managed"
+"""
+		script_path = runtime_dir / "needs_fixes_harness.sh"
+		script_path.write_text(harness_script, encoding="utf-8")
+		script_path.chmod(0o755)
+
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"NOTIFY_LOG_FILE": str(notify_file),
+			"GITHUB_REPOSITORY": "owner/repo",
+		}
+		run_env = os.environ.copy()
+		run_env.update(env)
+
+		proc = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(tmp_path),
+			env=run_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		label_creates = state.get("label_create_args", [])
+		assert [args[2] for args in label_creates] == ["ai:clarification", "ai:orchestrator-managed"]
+		assert not any(
+			"/labels/" in path
+			for path in state.get("api_calls", [])
+		)
+		notify_text = notify_file.read_text(encoding="utf-8")
+		assert "label already exists, skipping 'ai:clarification'" in notify_text
+		assert "label already exists, skipping 'ai:orchestrator-managed'" in notify_text
 
 
 def main() -> int:

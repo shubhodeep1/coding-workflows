@@ -103,28 +103,40 @@ def test_list_runs_for_repo_paginates_and_includes_all_families():
 	orig = collector.gh_api_json
 	calls = []
 
-	def fake_gh_api_json(endpoint: str, *, token: str, retries: int = 3, backoff_seconds: float = 1.0):
+	def fake_gh_api_json(
+		endpoint: str,
+		*,
+		token: str,
+		retries: int = 3,
+		backoff_seconds: float = 1.0,
+		request_headers: dict[str, str] | None = None,
+		include_response_meta: bool = False,
+	):
 		calls.append(endpoint)
 		page = int(parse_qs(urlparse("https://x/" + endpoint).query).get("page", ["1"])[0])
+		meta = {"status_code": 200, "headers": {"etag": "W/\"abc\""}}
 		if page == 1:
-			return {
+			payload = {
 				"workflow_runs": [
 					{"id": 1, "name": "AI Plan", "path": ".github/workflows/plan.yml"},
 					{"id": 2, "name": "AI Validate", "path": ".github/workflows/validate.yml"},
 				]
 			}
+			return (payload, meta) if include_response_meta else payload
 		if page == 2:
-			return {
+			payload = {
 				"workflow_runs": [
 					{"id": 3, "name": "AI Implement", "path": ".github/workflows/implement.yml"},
 					{"id": 4, "name": "Release CI", "path": ".github/workflows/ci.yml"},
 				]
 			}
-		return {"workflow_runs": []}
+			return (payload, meta) if include_response_meta else payload
+		payload = {"workflow_runs": []}
+		return (payload, meta) if include_response_meta else payload
 
 	collector.gh_api_json = fake_gh_api_json
 	try:
-		runs, capped = collector.list_runs_for_repo(
+		runs, capped, meta = collector.list_runs_for_repo(
 			"owner/repo",
 			since_utc=datetime(2026, 4, 1, tzinfo=timezone.utc),
 			per_page=100,
@@ -138,7 +150,143 @@ def test_list_runs_for_repo_paginates_and_includes_all_families():
 	assert capped is False
 	assert [r["id"] for r in runs] == [1, 2, 3, 4]
 	assert [r["_workflow_family"] for r in runs] == ["plan", "validate", "implement", "ci"]
+	assert meta["not_modified"] is False
+	assert meta["etag"] == "W/\"abc\""
 	assert len(calls) == 3
+
+
+def test_list_runs_for_repo_uses_etag_and_returns_not_modified() -> None:
+	orig = collector.gh_api_json
+
+	def fake_gh_api_json(
+		endpoint: str,
+		*,
+		token: str,
+		retries: int = 3,
+		backoff_seconds: float = 1.0,
+		request_headers: dict[str, str] | None = None,
+		include_response_meta: bool = False,
+	):
+		assert request_headers == {"If-None-Match": "W/\"cached\""}
+		payload = {}
+		meta = {"status_code": 304, "headers": {"etag": "W/\"cached\""}}
+		return (payload, meta) if include_response_meta else payload
+
+	collector.gh_api_json = fake_gh_api_json
+	try:
+		runs, capped, meta = collector.list_runs_for_repo(
+			"owner/repo",
+			since_utc=datetime(2026, 4, 1, tzinfo=timezone.utc),
+			per_page=100,
+			max_pages=3,
+			max_runs=0,
+			token="x",
+			etag="W/\"cached\"",
+		)
+	finally:
+		collector.gh_api_json = orig
+
+	assert runs == []
+	assert capped is False
+	assert meta["not_modified"] is True
+	assert meta["etag"] == "W/\"cached\""
+
+
+def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
+	with tempfile.TemporaryDirectory(prefix="collector-cache-test-") as td:
+		report_file = Path(td) / "report.json"
+		cached_run = {
+			"id": 501,
+			"name": "AI Implement",
+			"path": ".github/workflows/implement.yml",
+			"status": "completed",
+			"conclusion": "failure",
+			"run_attempt": 1,
+			"created_at": "2026-04-10T11:00:00Z",
+			"run_started_at": "2026-04-10T11:00:30Z",
+			"updated_at": "2026-04-10T11:05:30Z",
+			"_workflow_family": "implement",
+		}
+		cached_row = collector.compute_run_metrics("owner/repo", cached_run, jobs=[])
+		cached_row["log_excerpts"] = [{"step_name": "failure", "excerpt": "cached log"}]
+
+		cache_payload = {
+			"schema_version": "v1",
+			"repositories": {
+				"owner/repo": {
+					"runs_etag": "W/\"cached\"",
+					"runs_window_start": "2026-04-01T00:00:00Z",
+					"jobs_seen_set": [501],
+					"logs_seen_set": [501],
+					"last_updated": "2026-04-11T00:00:00Z",
+					"runs_snapshot": [cached_run],
+					"rows_snapshot": [cached_row],
+				}
+			},
+		}
+
+		orig_cache_read = collector._cache_read_context
+		orig_cache_write = collector._cache_write_context
+		orig_list_runs = collector.list_runs_for_repo
+		orig_list_jobs = collector.list_jobs_for_run
+		orig_list_logs = collector.list_run_log_excerpts
+
+		calls = {"jobs": 0, "logs": 0}
+		persisted: dict[str, dict] = {}
+
+		def fake_cache_read_context(**_: object):
+			return cache_payload, None, None
+
+		def fake_cache_write_context(**kwargs: object):
+			payload = kwargs.get("payload")
+			if isinstance(payload, dict):
+				persisted["payload"] = payload
+			return True
+
+		def fake_list_runs_for_repo(*args: object, **kwargs: object):
+			assert kwargs.get("etag") == "W/\"cached\""
+			return [], False, {"not_modified": True, "etag": "W/\"cached\"", "status_code": 304}
+
+		def fake_list_jobs_for_run(*args: object, **kwargs: object):
+			calls["jobs"] += 1
+			raise AssertionError("jobs API should be skipped when cached row exists")
+
+		def fake_list_run_log_excerpts(*args: object, **kwargs: object):
+			calls["logs"] += 1
+			raise AssertionError("logs API should be skipped when cached excerpt exists")
+
+		collector._cache_read_context = fake_cache_read_context
+		collector._cache_write_context = fake_cache_write_context
+		collector.list_runs_for_repo = fake_list_runs_for_repo
+		collector.list_jobs_for_run = fake_list_jobs_for_run
+		collector.list_run_log_excerpts = fake_list_run_log_excerpts
+		try:
+			rc = collector.main(
+				[
+					"--repo",
+					"owner/repo",
+					"--since",
+					"2026-04-01T00:00:00Z",
+					"--max-log-runs",
+					"1",
+					"--output",
+					str(report_file),
+				]
+			)
+		finally:
+			collector._cache_read_context = orig_cache_read
+			collector._cache_write_context = orig_cache_write
+			collector.list_runs_for_repo = orig_list_runs
+			collector.list_jobs_for_run = orig_list_jobs
+			collector.list_run_log_excerpts = orig_list_logs
+
+		assert rc == 0
+		assert calls == {"jobs": 0, "logs": 0}
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+		assert report["summary"]["total_runs"] == 1
+		assert report["runs"][0]["run_id"] == 501
+		assert report["runs"][0]["log_excerpts"] == [{"step_name": "failure", "excerpt": "cached log"}]
+		assert "payload" in persisted
 
 
 def test_list_jobs_for_run_paginates():
@@ -485,6 +633,7 @@ print(json.dumps({}))
 		env.update(
 			{
 				"GH_TOKEN": "token",
+				"AI_MEMORY_ENABLED": "false",
 				"GH_MOCK_STORE": str(store_file),
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			}
