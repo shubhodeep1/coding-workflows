@@ -1536,8 +1536,8 @@ mark_integration_branch_missing_failed() {
 ${reason}"
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
-  tg_notify "❌ Project #${TRACKING_NUM} failed: ${tg_reason}."
   tg_cleanup_msgs "${TRACKING_NUM}"
+  tg_notify "❌ Project #${TRACKING_NUM} failed: ${tg_reason}."
 }
 
 sync_rebuild_runbook_url() {
@@ -2701,6 +2701,7 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   fi
 
   if [ -n "${merge_err}" ]; then
+    merge_err="$(printf '%s' "${merge_err}" | head -c 5000)"
     jq --arg err "${merge_err}" '.final_merge_error = $err' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   fi
