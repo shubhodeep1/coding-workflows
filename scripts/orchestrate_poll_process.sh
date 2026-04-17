@@ -2589,7 +2589,7 @@ finalize_integration_merge_if_needed() {
     existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
     existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
     if [ "${existing_pr_state}" = "closed" ] && [ "${existing_pr_merged}" = "true" ]; then
-      jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+      jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
       return 0
@@ -2626,6 +2626,8 @@ Refs #${TRACKING_NUM}" 2>/dev/null || true)"
   fi
 
   if [ -z "${final_pr}" ]; then
+    jq --arg err "Unable to create or locate the final integration PR from ${integration_branch} to ${default_branch}." '.final_merge_error = $err' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_tracking_comment "## ⚠️ Final merge could not start
 
 Unable to create or locate the final integration PR from \`${integration_branch}\` to \`${default_branch}\`."
@@ -2644,7 +2646,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
 
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
-    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     return 0
@@ -2678,6 +2680,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     jq --argjson final_pr "${final_pr}" \
       '.final_merge_pr = $final_pr |
        .final_merge_status = "merged" |
+       .final_merge_error = "" |
        .integration_sync_status = "clean" |
        .integration_sync_last_error = "" |
        .integration_conflict_unresolved_ticks = 0' \
@@ -2694,7 +2697,7 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
 
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
-    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     return 0
@@ -2722,6 +2725,8 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     return 1
   fi
 
+  jq --arg err "Final PR #${final_pr} could not be merged automatically (state=${pr_state:-unknown}, mergeable=${pr_mergeable:-unknown})." '.final_merge_error = $err' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_tracking_comment "## ⚠️ Final merge blocked
 
 Final PR #${final_pr} could not be merged automatically. Review branch protections/checks and merge manually if needed."
