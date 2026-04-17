@@ -2577,9 +2577,11 @@ finalize_integration_merge_if_needed() {
 	fi
 
 	if [ -z "${integration_branch}" ]; then
+		# Legacy/default-branch flows can validly omit integration_branch.
+		# In that mode there is no integration→default final merge to perform,
+		# so treat validation completion as merge-satisfied.
 		FINAL_MERGE_BUDGET_ELIGIBLE="0"
-		mark_integration_branch_missing_failed "${integration_branch}"
-		return 1
+		return 0
 	fi
 
   final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}")"
