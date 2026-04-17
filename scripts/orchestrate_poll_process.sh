@@ -724,6 +724,19 @@ if ! [[ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDAT
   MAX_VALIDATION_RECOVERY_ATTEMPTS="2"
 fi
 
+# Bounded retry budget for the post-validation final integration→default
+# squash merge inside mark_validation_complete. Each poll tick that runs
+# mark_validation_complete increments .final_merge_attempt_count when
+# finalize_integration_merge_if_needed returns a budget-eligible failure;
+# transient/budget-ineligible deferrals do not consume retry budget. On
+# success the counter is reset. After the budget is exhausted the project is
+# escalated to ai:blocked instead of being silently advanced to status=complete.
+MAX_FINAL_MERGE_ATTEMPTS="${MAX_FINAL_MERGE_ATTEMPTS:-3}"
+if ! [[ "${MAX_FINAL_MERGE_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_FINAL_MERGE_ATTEMPTS}" -lt 1 ]; then
+  echo "::warning::MAX_FINAL_MERGE_ATTEMPTS must be a positive integer; defaulting to 3"
+  MAX_FINAL_MERGE_ATTEMPTS="3"
+fi
+
 # Per-batch ceiling for "validation-fixing" poll cycles.  The fix-up loop
 # iterates whatever issue numbers a validation workflow posted in its latest
 # "Runtime validation found fixable issues" comment and waits for all of them
@@ -1558,21 +1571,36 @@ resolve_active_orchestrator_context_for_issue() {
 mark_integration_branch_missing_failed() {
   local integration_branch="$1"
   local _tracking_labels
-  local reason="Integration branch '${integration_branch}' is missing. It may have been deleted externally. Manual intervention required."
-  jq --arg reason "${reason}" --arg branch "${integration_branch}" \
-    '.status = "failed" |
-     .final_merge_status = "failed" |
-     .integration_branch = $branch |
-     .final_merge_error = $reason' \
-    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  local reason
+  local tg_reason
+
+  if [ -n "${integration_branch}" ]; then
+    reason="Integration branch '${integration_branch}' is missing. It may have been deleted externally. Manual intervention required."
+    tg_reason="missing integration branch '${integration_branch}'"
+    jq --arg reason "${reason}" --arg branch "${integration_branch}" \
+      '.status = "failed" |
+       .final_merge_status = "failed" |
+       .integration_branch = $branch |
+       .final_merge_error = $reason' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  else
+    reason="Integration branch is not set in state. Final merge cannot proceed until this is repaired. Manual intervention required."
+    tg_reason="integration branch is not set in state"
+    jq --arg reason "${reason}" \
+      '.status = "failed" |
+       .final_merge_status = "failed" |
+       .final_merge_error = $reason' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  fi
+
   post_state_comment
   post_tracking_comment "## ❌ Integration branch missing
 
 ${reason}"
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
-  tg_notify "❌ Project #${TRACKING_NUM} failed: missing integration branch '${integration_branch}'."
   tg_cleanup_msgs "${TRACKING_NUM}"
+  tg_notify "❌ Project #${TRACKING_NUM} failed: ${tg_reason}."
 }
 
 sync_rebuild_runbook_url() {
@@ -1886,7 +1914,8 @@ ensure_integration_conflict_state_fields() {
         integration_conflict_dispatch_count: (.integration_conflict_dispatch_count // 0),
         integration_conflict_dispatch_ts: (.integration_conflict_dispatch_ts // 0),
         integration_conflict_unresolved_ticks: (.integration_conflict_unresolved_ticks // 0),
-        merged_issue_fingerprints: (.merged_issue_fingerprints // {})
+        merged_issue_fingerprints: (.merged_issue_fingerprints // {}),
+        final_merge_attempt_count: (.final_merge_attempt_count // 0)
       }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
@@ -2590,9 +2619,9 @@ finalize_integration_merge_if_needed() {
   local project_title="$3"
   local final_pr
 
-  if [ -z "${integration_branch}" ]; then
-    return 0
-  fi
+	# Default behavior: failed finalize attempts consume retry budget.
+	# Transient "not-ready-yet" paths below opt out explicitly.
+	FINAL_MERGE_BUDGET_ELIGIBLE="1"
 
   local final_merge_status
   final_merge_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}")"
@@ -2602,13 +2631,21 @@ finalize_integration_merge_if_needed() {
 
   local sync_status
   sync_status="$(jq -r '.sync.status // "active"' "${STATE_FILE}")"
-  if [ "${sync_status}" = "superseded-by-main" ]; then
-    jq --arg reason "$(jq -r --arg default_branch "${default_branch}" '.sync.superseded_reason // ("Integration branch superseded by " + $default_branch + "; final merge intentionally skipped.")' "${STATE_FILE}")" \
-      '.final_merge_status = "superseded-by-main" | .final_merge_error = $reason' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-    post_state_comment
-    return 0
-  fi
+	if [ "${sync_status}" = "superseded-by-main" ]; then
+		jq --arg reason "$(jq -r --arg default_branch "${default_branch}" '.sync.superseded_reason // ("Integration branch superseded by " + $default_branch + "; final merge intentionally skipped.")' "${STATE_FILE}")" \
+			'.final_merge_status = "superseded-by-main" | .final_merge_error = $reason' \
+			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+		post_state_comment
+		return 0
+	fi
+
+	if [ -z "${integration_branch}" ]; then
+		# Legacy/default-branch flows can validly omit integration_branch.
+		# In that mode there is no integration→default final merge to perform,
+		# so treat validation completion as merge-satisfied.
+		FINAL_MERGE_BUDGET_ELIGIBLE="0"
+		return 0
+	fi
 
   final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}")"
   if [ -n "${final_pr}" ] && [ "${final_pr}" != "null" ]; then
@@ -2617,17 +2654,18 @@ finalize_integration_merge_if_needed() {
     existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
     existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
     if [ "${existing_pr_state}" = "closed" ] && [ "${existing_pr_merged}" = "true" ]; then
-      jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+      jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment
       return 0
     fi
   fi
 
-  if ! integration_branch_exists "${integration_branch}"; then
-    mark_integration_branch_missing_failed "${integration_branch}"
-    return 1
-  fi
+	if ! integration_branch_exists "${integration_branch}"; then
+		FINAL_MERGE_BUDGET_ELIGIBLE="0"
+		mark_integration_branch_missing_failed "${integration_branch}"
+		return 1
+	fi
 
   if [ -z "${final_pr}" ] || [ "${final_pr}" = "null" ]; then
     final_pr="$(gh_retry gh pr list \
@@ -2653,13 +2691,15 @@ Refs #${TRACKING_NUM}" 2>/dev/null || true)"
   fi
 
   if [ -z "${final_pr}" ]; then
+    jq --arg err "Unable to create or locate the final integration PR from ${integration_branch} to ${default_branch}." '.final_merge_error = $err' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_tracking_comment "## ⚠️ Final merge could not start
 
 Unable to create or locate the final integration PR from \`${integration_branch}\` to \`${default_branch}\`."
     return 1
   fi
 
-  jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "pending"' \
+  jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "pending" | .final_merge_error = ""' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
 
@@ -2671,7 +2711,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
 
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
-    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     return 0
@@ -2682,25 +2722,30 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   # the primary fix for the #832-style stall: previously this code path
   # set final_merge_status=conflict and halted with no recovery.
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "false" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] PR #${final_pr} is not mergeable; invoking self-healing flow."
     heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "final PR #${final_pr} mergeable=false" || true
     return 1
   fi
 
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" != "true" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] PR #${final_pr} mergeability is '${pr_mergeable:-unknown}'. Will retry next poll."
     return 1
   fi
 
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}"; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] Required checks not complete for PR #${final_pr}. Will retry next poll."
     return 1
   fi
 
-  if gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch >/dev/null 2>&1; then
+  local merge_err=""
+  if merge_err="$(gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch 2>&1 >/dev/null)"; then
     jq --argjson final_pr "${final_pr}" \
       '.final_merge_pr = $final_pr |
        .final_merge_status = "merged" |
+       .final_merge_error = "" |
        .integration_sync_status = "clean" |
        .integration_sync_last_error = "" |
        .integration_conflict_unresolved_ticks = 0' \
@@ -2717,26 +2762,36 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
 
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
-    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged"' \
+    jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     return 0
+  fi
+
+  if [ -n "${merge_err}" ]; then
+    merge_err="$(printf '%s' "${merge_err}" | head -c 5000)"
+    jq --arg err "${merge_err}" '.final_merge_error = $err' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   fi
 
   # Post-merge-attempt conflict path: squash merge was rejected by
   # GitHub despite our pre-merge mergeability check (race with a push
   # to default). Hand off to the healing flow instead of halting.
   if [ "${pr_mergeable}" = "false" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] Post-attempt mergeability=false on PR #${final_pr}; invoking self-healing flow."
     heal_integration_branch_conflict "${integration_branch}" "${default_branch}" "${project_title}" "final PR #${final_pr} became unmergeable during merge" || true
     return 1
   fi
 
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" != "true" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] PR #${final_pr} mergeability is '${pr_mergeable:-unknown}' after merge attempt. Will retry next poll."
     return 1
   fi
 
+  jq --arg err "Final PR #${final_pr} could not be merged automatically (state=${pr_state:-unknown}, mergeable=${pr_mergeable:-unknown})." '.final_merge_error = $err' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_tracking_comment "## ⚠️ Final merge blocked
 
 Final PR #${final_pr} could not be merged automatically. Review branch protections/checks and merge manually if needed."
@@ -3123,16 +3178,76 @@ mark_validation_complete() {
   local default_branch
   local project_title
   local _tracking_labels
+  local merge_attempt_count
+  local _final_pr
+  local _final_status
+  local _final_err
 
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   project_title="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
 
+  # Seed final_merge_attempt_count on legacy state blobs that predate this field.
+  ensure_integration_conflict_state_fields
+
   if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}"; then
+    # Budget-ineligible final-merge deferrals/failures should return without
+    # consuming the bounded retry budget.
+    if [ "${FINAL_MERGE_BUDGET_ELIGIBLE:-1}" != "1" ]; then
+      echo "  [final-merge] budget-ineligible deferral/failure; retry budget unchanged."
+      return 0
+    fi
+
+    # Per the validation-gate contract (README §14): a project must NOT
+    # advance to status=complete until the integration branch is squash-
+    # merged into the default branch. Count this failed attempt, defer
+    # to the next poll tick until the budget is exhausted, then escalate
+    # to ai:blocked for human intervention instead of silently advancing.
+    merge_attempt_count="$(jq -r '.final_merge_attempt_count // 0' "${STATE_FILE}")"
+    if ! [[ "${merge_attempt_count}" =~ ^[0-9]+$ ]]; then
+      merge_attempt_count="0"
+    fi
+    merge_attempt_count=$((merge_attempt_count + 1))
+    jq --argjson n "${merge_attempt_count}" '.final_merge_attempt_count = $n' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+    if [ "${merge_attempt_count}" -lt "${MAX_FINAL_MERGE_ATTEMPTS}" ]; then
+      echo "  [final-merge] attempt ${merge_attempt_count}/${MAX_FINAL_MERGE_ATTEMPTS} did not land; deferring completion to next poll tick."
+      post_state_comment
+      tg_notify "Project #${TRACKING_NUM}: final integration→${default_branch} merge attempt ${merge_attempt_count}/${MAX_FINAL_MERGE_ATTEMPTS} did not land; will retry next tick." "WARNING"
+      return 0
+    fi
+
+    # Budget exhausted — refuse to mark complete and escalate to a human.
+    _final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+    _final_err="$(jq -r '.final_merge_error // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+    jq '.status = "failed"
+        | .final_merge_status = "failed"' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    _final_status="failed"
+    post_state_comment
+    _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
+    handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
+    set_tracking_phase_label "ai:blocked"
+    post_tracking_comment "## ❌ Final integration merge could not complete
+
+Runtime validation passed, but the final squash merge of \`${integration_branch}\` into \`${default_branch}\` did not land after ${merge_attempt_count}/${MAX_FINAL_MERGE_ATTEMPTS} attempts.
+
+- Final PR: ${_final_pr:-unknown}
+- Final merge status: ${_final_status}
+- Last recorded error: ${_final_err:-No specific error recorded; check final PR for branch protection or required-check failures.}
+
+Manual intervention required: resolve the blocking condition on the final PR (merge conflicts, required checks, branch protections) and re-trigger the poller, or merge manually."
+    tg_cleanup_msgs "${TRACKING_NUM}"
+    tg_notify "Project #${TRACKING_NUM} blocked: validation passed but integration→${default_branch} merge did not land after ${MAX_FINAL_MERGE_ATTEMPTS} attempts. Manual intervention required." "CRITICAL"
     return 0
   fi
 
-  jq --argjson cycle "${validation_cycle}" '.status = "complete" | .validation_completed_cycle = $cycle' \
+  # Merge landed; reset the retry counter and mark the project complete.
+  jq --argjson cycle "${validation_cycle}" \
+    '.status = "complete"
+     | .validation_completed_cycle = $cycle
+     | .final_merge_attempt_count = 0' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
