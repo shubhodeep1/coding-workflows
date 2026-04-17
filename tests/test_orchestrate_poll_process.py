@@ -4916,7 +4916,7 @@ def test_actions_runs_shared_loader_reuses_single_fetch_per_tick() -> None:
 		],
 		validation_workflow_runs=[run],
 	)
-	assert result["actions_runs_fetch_count"] == 2
+	assert result["actions_runs_fetch_count"] == 3
 
 
 def test_actions_runs_cached_loader_uses_if_none_match_when_stale() -> None:
@@ -4952,7 +4952,23 @@ def test_actions_runs_cached_loader_uses_if_none_match_when_stale() -> None:
 		"fetched_at": "2024-01-01T00:00:00Z",
 		"ttl_seconds": 60,
 		"etag": '"etag-old"',
-		"runs": [run],
+		"runs": [
+			run,
+			{
+				"id": 1002,
+				"status": "completed",
+				"conclusion": "success",
+				"name": "Internal Review",
+				"workflow_id": 11,
+				"created_at": "2026-01-01T00:00:10Z",
+				"updated_at": "2026-01-01T00:01:10Z",
+				"run_started_at": "2026-01-01T00:00:40Z",
+				"head_branch": "ai/issue-10",
+				"event": "pull_request",
+				"run_attempt": 1,
+				"html_url": "https://example.invalid/runs/1002",
+			},
+		],
 	}
 	result = _run_poller(
 		state=state,

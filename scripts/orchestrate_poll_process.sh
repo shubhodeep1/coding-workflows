@@ -903,20 +903,20 @@ ensure_label_exists() {
   fi
 
   local _label_err_file
-  _label_err_file="$(mktemp)"
+  _label_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
 
   if gh_retry gh label create "${label_name}" \
     --repo "${GITHUB_REPOSITORY}" \
     --color "${color}" \
     --description "${description}" >/dev/null 2>"${_label_err_file}"; then
-    rm -f "${_label_err_file}"
+    [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
     _ENSURED_LABELS_CACHE[${label_name}]=1
     return 0
   fi
 
   local _label_err=""
   _label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
-  rm -f "${_label_err_file}"
+  [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
 
   if printf '%s' "${_label_err}" | grep -Eiq 'already[ _-]*exists|already_exists'; then
     echo "::debug::ensure_label_exists: label already exists, skipping '${label_name}'." >&2
@@ -3339,16 +3339,20 @@ _load_actions_runs_cached() {
   if printf '%s' "${status_line}" | grep -Eq ' 304( |$)'; then
     if [ "${cache_hit}" = "true" ]; then
       local ttl_put_file
-      ttl_put_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-refresh.XXXXXX")"
-      jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' > "${ttl_put_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${ttl_put_file}"
-      if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
-        python3 scripts/ai_memory.py actions-runs-cache put \
-          --repo "${repo}" \
-          --runs-file "${ttl_put_file}" \
-          --etag "${response_etag:-${cached_etag}}" \
-          --ttl-seconds "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" >/dev/null || true
+      ttl_put_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-refresh.XXXXXX" 2>/dev/null || true)"
+      if [ -n "${ttl_put_file}" ]; then
+        jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' > "${ttl_put_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${ttl_put_file}"
+        if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
+          python3 scripts/ai_memory.py actions-runs-cache put \
+            --repo "${repo}" \
+            --runs-file "${ttl_put_file}" \
+            --etag "${response_etag:-${cached_etag}}" \
+            --ttl-seconds "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" >/dev/null || true
+        fi
+        rm -f "${ttl_put_file}"
+      else
+        echo "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=mktemp_failed_ttl_put_file repo=${repo}" >&2
       fi
-      rm -f "${ttl_put_file}"
       _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
       _ACTIONS_RUNS_BLOB_READY="true"
       rm -f "${response_file}" "${response_body_file}" "${response_err}"
@@ -3363,7 +3367,12 @@ _load_actions_runs_cached() {
 		local queued_runs='[]'
 		queued_runs="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?status=queued&per_page=50" --jq '.workflow_runs' || echo '[]')"
 		[ -n "${queued_runs}" ] || queued_runs='[]'
-		runs_only="$(jq -cn --argjson in_progress "${runs_only}" --argjson queued "${queued_runs}" '($in_progress + $queued)' 2>/dev/null || echo '[]')"
+		# Include a small completed window so stall-judge diagnostics can inspect
+		# recent review/autofix workflow outcomes (conclusions).
+		local completed_runs='[]'
+		completed_runs="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?status=completed&per_page=20" --jq '.workflow_runs' || echo '[]')"
+		[ -n "${completed_runs}" ] || completed_runs='[]'
+		runs_only="$(jq -cn --argjson in_progress "${runs_only}" --argjson queued "${queued_runs}" --argjson completed "${completed_runs}" '($in_progress + $queued + $completed)' 2>/dev/null || echo '[]')"
 		printf '%s\n' "${body_json}" | jq -c --argjson runs "${runs_only}" '.workflow_runs = $runs | .total_count = ($runs | length)' > "${response_body_file}" 2>/dev/null || true
 		if [ ! -s "${response_body_file}" ]; then
 			jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' > "${response_body_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${response_body_file}"

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -44,6 +45,8 @@ def _actions_run(run_id: int) -> dict:
 
 def _memory_root_with_actions_schema() -> Path:
 	tmp = Path(tempfile.mkdtemp(prefix="ai-memory-actions-cache-"))
+	test_cleanup_paths = globals().setdefault("_TEST_CLEANUP_PATHS", [])
+	test_cleanup_paths.append(tmp)
 	memory_root = tmp / "ai-memory"
 	ai_memory_lib.ensure_memory_layout(memory_root)
 	schema_src = REPO_ROOT / "ai-memory" / "schemas" / "actions_runs_cache.v1.json"
@@ -166,6 +169,7 @@ def test_actions_runs_cache_get_rejects_corrupt_payload() -> None:
 
 
 def main() -> int:
+	test_cleanup_paths = globals().setdefault("_TEST_CLEANUP_PATHS", [])
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
 	failed = 0
@@ -179,6 +183,8 @@ def main() -> int:
 			print(f"  FAIL  {name}: {exc}")
 			failed += 1
 
+	for cleanup_path in test_cleanup_paths:
+		shutil.rmtree(cleanup_path, ignore_errors=True)
 	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
 	return 1 if failed else 0
 
