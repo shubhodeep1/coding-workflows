@@ -397,7 +397,7 @@ def gh_api_json(
                 continue
             cmd.extend(["-H", f"{key}: {value}"])
     if include_response_meta:
-        cmd.extend(["--include", "--silent"])
+        cmd.append("--include")
 
     for attempt in range(1, retries + 1):
         try:
@@ -968,10 +968,7 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(repo_cache, dict):
             repo_cache = {}
 
-        cached_window_start = _parse_iso8601(str(repo_cache.get("runs_window_start") or ""))
         effective_since = since_utc
-        if cached_window_start and cached_window_start > effective_since:
-            effective_since = cached_window_start
 
         jobs_seen_set = _normalize_seen_set(repo_cache.get("jobs_seen_set"))
         logs_seen_set = _normalize_seen_set(repo_cache.get("logs_seen_set"))
@@ -1130,8 +1127,9 @@ def main(argv: list[str] | None = None) -> int:
                 updated_rows: list[dict[str, Any]] = []
                 replaced = False
                 for row in rows_snapshot:
-                    if _to_int(row.get("run_id"), 0) == run_id:
+                    if _cache_run_key(_to_int(row.get("run_id"), 0), _to_int(row.get("run_attempt"), 1)) == cache_key:
                         merged_row = dict(row)
+                        merged_row["run_attempt"] = _to_int(run.get("run_attempt"), 1)
                         merged_row["log_excerpts"] = log_excerpts
                         updated_rows.append(merged_row)
                         replaced = True

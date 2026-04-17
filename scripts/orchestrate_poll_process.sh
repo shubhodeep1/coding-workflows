@@ -3142,15 +3142,26 @@ _load_actions_runs_cached() {
   local status_line=''
   local body_json=''
   local response_etag=''
-  response_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response.XXXXXX")"
-  response_body_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response-body.XXXXXX")"
-  response_err="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response-err.XXXXXX")"
+	response_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response.XXXXXX" 2>/dev/null || true)"
+	response_body_file="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response-body.XXXXXX" 2>/dev/null || true)"
+	response_err="$(mktemp "${TMPDIR:-/tmp}/actions-runs-response-err.XXXXXX" 2>/dev/null || true)"
+	if [ -z "${response_file}" ] || [ -z "${response_body_file}" ] || [ -z "${response_err}" ]; then
+		echo "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=mktemp_failed repo=${repo}" >&2
+		if [ "${cache_hit}" = "true" ]; then
+			_ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
+		else
+			_ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
+		fi
+		_ACTIONS_RUNS_BLOB_READY="true"
+		printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+		return 0
+	fi
 
   local -a api_cmd
   # Existing gh wrappers in this script are body-only and do not expose HTTP
   # response headers or 304 status lines. This direct `gh api -i` call is used
   # so one conditional fetch can carry If-None-Match and parse ETag metadata.
-  api_cmd=(gh_retry gh api -i "repos/${repo}/actions/runs?per_page=100")
+	api_cmd=(gh_retry gh api -i "repos/${repo}/actions/runs?status=in_progress&per_page=50")
   if [ -n "${cached_etag}" ]; then
     api_cmd+=(-H "If-None-Match: ${cached_etag}")
   fi
@@ -3193,17 +3204,25 @@ _load_actions_runs_cached() {
     fi
   fi
 
-  if [ "${api_rc}" -eq 0 ] && [ -n "${body_json}" ] && printf '%s' "${body_json}" | jq -e 'type == "object" and (.workflow_runs | type == "array")' >/dev/null 2>&1; then
-    local runs_only
-    runs_only="$(printf '%s' "${body_json}" | jq -c '.workflow_runs // []' 2>/dev/null || echo '[]')"
-    if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
-      python3 scripts/ai_memory.py actions-runs-cache put \
-        --repo "${repo}" \
-        --runs-file "${response_body_file}" \
-        --etag "${response_etag}" \
-        --ttl-seconds "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" >/dev/null || true
-    fi
-    _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
+	if [ "${api_rc}" -eq 0 ] && [ -n "${body_json}" ] && printf '%s' "${body_json}" | jq -e 'type == "object" and (.workflow_runs | type == "array")' >/dev/null 2>&1; then
+		local runs_only
+		runs_only="$(printf '%s' "${body_json}" | jq -c '.workflow_runs // []' 2>/dev/null || echo '[]')"
+		local queued_runs='[]'
+		queued_runs="$(gh_retry _safe_gh_jq "repos/${repo}/actions/runs?status=queued&per_page=50" --jq '.workflow_runs' || echo '[]')"
+		[ -n "${queued_runs}" ] || queued_runs='[]'
+		runs_only="$(jq -cn --argjson in_progress "${runs_only}" --argjson queued "${queued_runs}" '($in_progress + $queued)' 2>/dev/null || echo '[]')"
+		printf '%s\n' "${body_json}" | jq -c --argjson runs "${runs_only}" '.workflow_runs = $runs | .total_count = ($runs | length)' > "${response_body_file}" 2>/dev/null || true
+		if [ ! -s "${response_body_file}" ]; then
+			jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' > "${response_body_file}" 2>/dev/null || echo '{"workflow_runs":[]}' > "${response_body_file}"
+		fi
+	if type _memory_enabled >/dev/null 2>&1 && _memory_enabled && [ -f "scripts/ai_memory.py" ]; then
+		python3 scripts/ai_memory.py actions-runs-cache put \
+			--repo "${repo}" \
+			--runs-file "${response_body_file}" \
+	        --etag "${response_etag}" \
+	        --ttl-seconds "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" >/dev/null || true
+	fi
+		_ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
     _ACTIONS_RUNS_BLOB_READY="true"
     rm -f "${response_file}" "${response_body_file}" "${response_err}"
     printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"

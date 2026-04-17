@@ -4767,7 +4767,7 @@ def test_actions_runs_shared_loader_reuses_single_fetch_per_tick() -> None:
 		],
 		validation_workflow_runs=[run],
 	)
-	assert result["actions_runs_fetch_count"] == 1
+	assert result["actions_runs_fetch_count"] == 2
 
 
 def test_actions_runs_cached_loader_uses_if_none_match_when_stale() -> None:

@@ -697,6 +697,7 @@ run_reviewer() {
 	local reviewer_pr_poll_interval_norm=""
 	local reviewer_pr_poll_interval_warn=0
 	local reviewer_pr_poll_interval_raw_escaped=""
+	local reviewer_watchdog_sleep="${reviewer_pr_poll_interval_default}"
 	local attempt=1
 
 	if [[ "${reviewer_pr_poll_interval_raw}" =~ ^[0-9]+$ ]]; then
@@ -714,8 +715,13 @@ run_reviewer() {
 	fi
 	if [ "${reviewer_pr_poll_interval_warn}" -ne 0 ]; then
 		reviewer_pr_poll_interval_raw_escaped="$(printf '%q' "${reviewer_pr_poll_interval_raw}")"
-		echo "::warning::rate_limit_audit_fallback key=REVIEW_PR_STATE_POLL_INTERVAL_SECS invalid=${reviewer_pr_poll_interval_raw_escaped} fallback=${reviewer_pr_poll_interval_default} min=10 max=3600"
+		echo "::warning::rate_limit_audit_fallback key=REVIEW_PR_STATE_POLL_INTERVAL_SECS invalid=${reviewer_pr_poll_interval_raw_escaped} fallback=${reviewer_pr_poll_interval_default} min=10 max=3600" >&2
 		reviewer_pr_poll_interval="${reviewer_pr_poll_interval_default}"
+	fi
+	reviewer_watchdog_sleep="${reviewer_pr_poll_interval}"
+	if [ "${reviewer_watchdog_sleep}" -gt "${reviewer_idle_timeout}" ]; then
+		reviewer_watchdog_sleep="${reviewer_idle_timeout}"
+		echo "::warning::rate_limit_audit_fallback key=REVIEW_PR_STATE_POLL_INTERVAL_SECS capped=${reviewer_pr_poll_interval} idle_timeout=${reviewer_idle_timeout} effective_sleep=${reviewer_watchdog_sleep}" >&2
 	fi
 
   : > "${log_file}"
@@ -777,7 +783,7 @@ run_reviewer() {
 	(
 		wd_iter=$(( RANDOM % 9 ))  # jitter: stagger PR state checks across reviewers
 		while true; do
-			sleep "${reviewer_pr_poll_interval}"
+			sleep "${reviewer_watchdog_sleep}"
 
         # Fast path: if another reviewer (or the pre-flight check) already
         # detected PR closure, short-circuit immediately instead of waiting
