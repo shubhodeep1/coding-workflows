@@ -131,7 +131,7 @@ def _make_poller_sandbox(target: Path) -> None:
 		stderr=subprocess.DEVNULL,
 	)
 	(target / ".orchestrator_judge_context_sentinel.txt").write_text(
-		"integration-branch-only-symbol\\n",
+		"integration-branch-only-symbol\n",
 		encoding="utf-8",
 	)
 	subprocess.run(
