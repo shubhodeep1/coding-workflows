@@ -194,8 +194,8 @@ def build_parser() -> argparse.ArgumentParser:
 		"--prompt-token-budget",
 		dest="prompt_token_budget",
 		type=int,
-		default=24000,
-		help="Approximate max prompt tokens before deterministic truncation.",
+		default=0,
+		help="Approximate max prompt tokens before deterministic truncation (0 = no truncation).",
 	)
 	parser.add_argument(
 		"--max-output-tokens",
@@ -249,6 +249,11 @@ def build_parser() -> argparse.ArgumentParser:
 			DEFAULT_BATCH_POLL_TIMEOUT_HOURS,
 		),
 		help="Maximum age of pending batch job before sync fallback.",
+	)
+	parser.add_argument(
+		"--codex-mode",
+		action="store_true",
+		help="Skip inference and write preprocessed analysis_context.json for Codex handoff.",
 	)
 	return parser
 
@@ -517,7 +522,6 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def truncate_to_budget(context: dict[str, Any], prompt_token_budget: int) -> dict[str, Any]:
-	trimmed = copy.deepcopy(context)
 	removed = {
 		"deep_dive_logs": 0,
 		"recent_runs": 0,
@@ -529,12 +533,15 @@ def truncate_to_budget(context: dict[str, Any], prompt_token_budget: int) -> dic
 	}
 
 	if prompt_token_budget <= 0:
+		trimmed = dict(context)
 		trimmed["truncation"] = {
 			"estimated_tokens": _estimate_tokens(trimmed),
 			"prompt_token_budget": prompt_token_budget,
 			"removed": removed,
 		}
 		return trimmed
+
+	trimmed = copy.deepcopy(context)
 
 	def estimate() -> int:
 		return _estimate_tokens(trimmed)
@@ -554,7 +561,7 @@ def truncate_to_budget(context: dict[str, Any], prompt_token_budget: int) -> dic
 			continue
 		ordered_keys = sorted(
 			field_dict.keys(),
-			key=lambda key: (_to_int((field_dict.get(key) or {}).get("total_runs"), 0), key),
+			key=lambda key: (_to_int((field_dict.get(key) if isinstance(field_dict.get(key), dict) else {}).get("total_runs"), 0), key),
 		)
 		for key in ordered_keys:
 			if estimate() <= prompt_token_budget:
@@ -1117,8 +1124,8 @@ def main(argv: list[str] | None = None) -> int:
 	parser = build_parser()
 	args = parser.parse_args(argv)
 
-	if args.prompt_token_budget <= 0:
-		print("ERROR: --prompt-token-budget must be > 0", file=sys.stderr)
+	if args.prompt_token_budget < 0:
+		print("ERROR: --prompt-token-budget must be >= 0", file=sys.stderr)
 		return 2
 	if args.max_output_tokens <= 0:
 		print("ERROR: --max-output-tokens must be > 0", file=sys.stderr)
@@ -1130,16 +1137,31 @@ def main(argv: list[str] | None = None) -> int:
 		print("ERROR: --batch-poll-timeout-hours must be > 0", file=sys.stderr)
 		return 2
 
-	api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-	if not api_key:
-		print("ERROR: OPENROUTER_API_KEY is required", file=sys.stderr)
-		return 2
+	api_key = ""
+	if not args.codex_mode:
+		api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+		if not api_key:
+			print("ERROR: OPENROUTER_API_KEY is required", file=sys.stderr)
+			return 2
 
 	try:
 		input_data = load_input_data(args)
 	except ValueError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
 		return 2
+
+	analysis_context = prepare_analysis_context(input_data)
+
+	if args.codex_mode:
+		context_output_base = resolve_dated_output_path(args.output, args.output_dir)
+		context_path = context_output_base.parent / "analysis_context.json"
+		try:
+			_write_json_atomic(context_path, analysis_context)
+		except OSError as exc:
+			print(f"ERROR: failed to write analysis context {context_path}: {exc}", file=sys.stderr)
+			return 1
+		print(str(context_path))
+		return 0
 
 	prompt_path = Path(args.prompt_file)
 	try:
@@ -1148,7 +1170,6 @@ def main(argv: list[str] | None = None) -> int:
 		print(f"ERROR: {exc}", file=sys.stderr)
 		return 2
 
-	analysis_context = prepare_analysis_context(input_data)
 	trimmed_context = truncate_to_budget(analysis_context, args.prompt_token_budget)
 	messages = build_prompt_messages(prompt_template, trimmed_context)
 

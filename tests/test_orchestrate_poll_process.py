@@ -350,6 +350,7 @@ def _run_poller(
 	gql_labels: dict[int, list[str]] | None = None,
 	codex_json: dict | None = None,
 	fail_validation_dispatch: bool = False,
+	fail_release_dispatch: bool = False,
 	prs: list[dict] | None = None,
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
@@ -451,6 +452,7 @@ def _run_poller(
 			"issues": issues,
 			"next_comment_id": next_comment_id,
 			"validation_dispatches": [],
+			"release_dispatches": [],
 			"review_dispatches": [],
 			"closed_issues": [],
 			"graphql_mode": gql_mode,
@@ -459,6 +461,7 @@ def _run_poller(
 			"label_batch_graphql_calls": 0,
 			"issue_label_calls": {},
 			"fail_validation_dispatch": fail_validation_dispatch,
+			"fail_release_dispatch": fail_release_dispatch,
 			"default_branch": "main",
 			"prs": prs,
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
@@ -587,6 +590,20 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 			print('dispatch failed', file=sys.stderr)
 			sys.exit(1)
 		store['review_dispatches'].append({'workflow': wf, 'pr_number': pr_number, 'ref': ref})
+		save()
+		sys.exit(0)
+	if wf == 'test-and-mark-stable.yml':
+		if store.get('fail_release_dispatch'):
+			print('dispatch failed', file=sys.stderr)
+			sys.exit(1)
+		dispatch = {'workflow': wf}
+		for i, arg in enumerate(args):
+			if arg == '-f' and i + 1 < len(args):
+				field = args[i + 1]
+				if '=' in field:
+					k, v = field.split('=', 1)
+					dispatch[k] = v
+		store['release_dispatches'].append(dispatch)
 		save()
 		sys.exit(0)
 	sys.exit(1)
@@ -1249,6 +1266,7 @@ print(json.dumps(parsed))
 		result["merge_calls"] = result.get("merge_calls", [])
 		result["review_dispatches"] = result.get("review_dispatches", [])
 		result["update_branch_calls"] = result.get("update_branch_calls", [])
+		result["release_dispatches"] = result.get("release_dispatches", [])
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
 		return result
@@ -1378,6 +1396,7 @@ def test_complete_verdict_keeps_open_when_validation_disabled():
 	assert "ai:merged" in result["tracking_labels"]
 	assert result["latest_state"]["final_merge_pr"] == 350
 	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["release_dispatches"] == []
 
 
 def test_missing_integration_branch_marks_failed():
@@ -1393,6 +1412,134 @@ def test_missing_integration_branch_marks_failed():
 	assert result["latest_state"]["status"] == "failed"
 	assert result["latest_state"]["final_merge_status"] == "failed"
 	assert "final_merge_error" in result["latest_state"]
+	assert result["release_dispatches"] == []
+
+def test_comprehensive_pending_complete_dispatches_release_with_metadata():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 351,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		tracking_comments=[
+			"<!-- COMPREHENSIVE_RELEASE_METADATA_V1 -->\nversion_tag: v9.9.9\ntest_repo: owner/release-tests\n<!-- /COMPREHENSIVE_RELEASE_METADATA_V1 -->",
+			"version_tag: v0.0.1\ntest_repo: attacker/repo",
+		],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert len(result["release_dispatches"]) == 1
+	dispatch = result["release_dispatches"][0]
+	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["dry_run"] == "false"
+	assert dispatch["version_tag"] == "v9.9.9"
+	assert dispatch["test_repo"] == "owner/release-tests"
+	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
+
+
+def test_comprehensive_pending_complete_dispatches_release_without_optional_metadata():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 352,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert len(result["release_dispatches"]) == 1
+	dispatch = result["release_dispatches"][0]
+	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["dry_run"] == "false"
+	assert "version_tag" not in dispatch
+	assert "test_repo" not in dispatch
+	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
+
+
+def test_comprehensive_pending_already_complete_dispatches_release():
+	state = _base_state(status="complete")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 353,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert len(result["release_dispatches"]) == 1
+	dispatch = result["release_dispatches"][0]
+	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["dry_run"] == "false"
+	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
+
+
+def test_comprehensive_pending_failed_does_not_dispatch_release():
+	state = _base_state(status="failed")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		issue_labels={10: ["ai:merged"]},
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["release_dispatches"] == []
+	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
+
+
+def test_comprehensive_pending_complete_dispatch_failure_is_retryable():
+	state = _base_state(status="complete")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:comprehensive-test-pending"],
+		issue_labels={10: ["ai:merged"]},
+		fail_release_dispatch=True,
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["release_dispatches"] == []
+	assert "ai:comprehensive-test-pending" in result["tracking_labels"]
 
 
 def test_wave_judge_uses_integration_branch_context_when_available():
@@ -2073,6 +2220,7 @@ def test_final_merge_treats_closed_merged_pr_as_success():
 	assert result["latest_state"]["status"] == "complete"
 	assert result["latest_state"]["final_merge_pr"] == 353
 	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["release_dispatches"] == []
 
 
 def test_merge_conflict_state_completes_when_final_pr_already_merged_and_branch_deleted():
@@ -2103,6 +2251,7 @@ def test_merge_conflict_state_completes_when_final_pr_already_merged_and_branch_
 	assert "ai:merged" in result["tracking_labels"]
 	assert result["latest_state"]["final_merge_pr"] == 354
 	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["release_dispatches"] == []
 
 
 def test_standalone_conflict_sweep_skips_integration_base_prs():
