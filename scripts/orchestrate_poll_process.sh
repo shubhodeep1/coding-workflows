@@ -718,6 +718,18 @@ if ! [[ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDAT
   MAX_VALIDATION_RECOVERY_ATTEMPTS="2"
 fi
 
+# Bounded retry budget for the post-validation final integration→default
+# squash merge inside mark_validation_complete. Each poll tick that runs
+# mark_validation_complete and observes finalize_integration_merge_if_needed
+# returning non-zero increments .final_merge_attempt_count; on success the
+# counter is reset. After the budget is exhausted the project is escalated
+# to ai:blocked instead of being silently advanced to status=complete.
+MAX_FINAL_MERGE_ATTEMPTS="${MAX_FINAL_MERGE_ATTEMPTS:-3}"
+if ! [[ "${MAX_FINAL_MERGE_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_FINAL_MERGE_ATTEMPTS}" -lt 1 ]; then
+  echo "::warning::MAX_FINAL_MERGE_ATTEMPTS must be a positive integer; defaulting to 3"
+  MAX_FINAL_MERGE_ATTEMPTS="3"
+fi
+
 # Per-batch ceiling for "validation-fixing" poll cycles.  The fix-up loop
 # iterates whatever issue numbers a validation workflow posted in its latest
 # "Runtime validation found fixable issues" comment and waits for all of them
@@ -1823,7 +1835,8 @@ ensure_integration_conflict_state_fields() {
         integration_conflict_dispatch_count: (.integration_conflict_dispatch_count // 0),
         integration_conflict_dispatch_ts: (.integration_conflict_dispatch_ts // 0),
         integration_conflict_unresolved_ticks: (.integration_conflict_unresolved_ticks // 0),
-        merged_issue_fingerprints: (.merged_issue_fingerprints // {})
+        merged_issue_fingerprints: (.merged_issue_fingerprints // {}),
+        final_merge_attempt_count: (.final_merge_attempt_count // 0)
       }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
@@ -3060,16 +3073,69 @@ mark_validation_complete() {
   local default_branch
   local project_title
   local _tracking_labels
+  local merge_attempt_count
+  local _final_pr
+  local _final_status
+  local _final_err
 
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   project_title="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
 
+  # Seed final_merge_attempt_count on legacy state blobs that predate this field.
+  ensure_integration_conflict_state_fields
+
   if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}"; then
+    # Per the validation-gate contract (README §14): a project must NOT
+    # advance to status=complete until the integration branch is squash-
+    # merged into the default branch. Count this failed attempt, defer
+    # to the next poll tick until the budget is exhausted, then escalate
+    # to ai:blocked for human intervention instead of silently advancing.
+    merge_attempt_count="$(jq -r '.final_merge_attempt_count // 0' "${STATE_FILE}")"
+    if ! [[ "${merge_attempt_count}" =~ ^[0-9]+$ ]]; then
+      merge_attempt_count="0"
+    fi
+    merge_attempt_count=$((merge_attempt_count + 1))
+    jq --argjson n "${merge_attempt_count}" '.final_merge_attempt_count = $n' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+    if [ "${merge_attempt_count}" -lt "${MAX_FINAL_MERGE_ATTEMPTS}" ]; then
+      echo "  [final-merge] attempt ${merge_attempt_count}/${MAX_FINAL_MERGE_ATTEMPTS} did not land; deferring completion to next poll tick."
+      post_state_comment
+      tg_notify "Project #${TRACKING_NUM}: final integration→${default_branch} merge attempt ${merge_attempt_count}/${MAX_FINAL_MERGE_ATTEMPTS} did not land; will retry next tick." "WARNING"
+      return 0
+    fi
+
+    # Budget exhausted — refuse to mark complete and escalate to a human.
+    _final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+    _final_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
+    _final_err="$(jq -r '.final_merge_error // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+    jq '.status = "failed"
+        | .final_merge_status = (if .final_merge_status == "merged" then .final_merge_status else "failed" end)' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+    _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
+    handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
+    set_tracking_phase_label "ai:blocked"
+    post_tracking_comment "## ❌ Final integration merge could not complete
+
+Runtime validation passed, but the final squash merge of \`${integration_branch}\` into \`${default_branch}\` did not land after ${merge_attempt_count}/${MAX_FINAL_MERGE_ATTEMPTS} attempts.
+
+- Final PR: ${_final_pr:-unknown}
+- Final merge status: ${_final_status}
+- Last recorded error: ${_final_err:-n/a}
+
+Manual intervention required: resolve the blocking condition on the final PR (merge conflicts, required checks, branch protections) and re-trigger the poller, or merge manually."
+    tg_notify "Project #${TRACKING_NUM} blocked: validation passed but integration→${default_branch} merge did not land after ${MAX_FINAL_MERGE_ATTEMPTS} attempts. Manual intervention required." "CRITICAL"
+    tg_cleanup_msgs "${TRACKING_NUM}"
     return 0
   fi
 
-  jq --argjson cycle "${validation_cycle}" '.status = "complete" | .validation_completed_cycle = $cycle' \
+  # Merge landed; reset the retry counter and mark the project complete.
+  jq --argjson cycle "${validation_cycle}" \
+    '.status = "complete"
+     | .validation_completed_cycle = $cycle
+     | .final_merge_attempt_count = 0' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
