@@ -2025,6 +2025,11 @@ jobs:
               in_section { print }
             ' "${EDITOR_SUMMARY_FILE}")"
 
+            edit_claim_regex='modif(y|ied|ies|ying)|update(d|s)?|change(d|s|ing)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)|`[^`]+\.[[:alpha:]]+`'
+            strong_edit_claim_regex='modif(y|ied|ies|ying)?|change(d|s|ing)?|update(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)|`[^`]+\.[[:alpha:]]+`'
+            no_change_phrase_regex='no ((repository|repo|code|file)[[:space:]]+)?(file[[:space:]]+)?(changes|modifications|edits)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)|no (repository )?files were modified|no changes (were )?made|no modifications|no (repository )?files (were )?changed'
+            no_change_declaration_regex="^[[:space:]]*(-[[:space:]]*)?([^;:-]*[;:-][[:space:]]*)?(${no_change_phrase_regex})([[:space:]]*[[:punct:]]*)?$"
+
             has_real_changes="false"
             if [ "${change_status}" = "edited" ] || [ "${change_status}" = "not-edited" ]; then
               # Authoritative path: trust the editor's self-reported status.
@@ -2034,7 +2039,7 @@ jobs:
               if [ "${change_status}" = "edited" ]; then
                 has_real_changes="true"
               elif [ -n "${changes_section}" ] && \
-                printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed|^[[:space:]]{2,}-' | grep -viE '^[[:space:]]*-[[:space:]]*(no (repository )?files (were )?modified|no changes (were )?made|no modifications)([[:space:][:punct:]]*)$' | grep -qiE 'modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)'; then
+                printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed|^[[:space:]]{2,}-' | grep -viE "^[[:space:]]*-[[:space:]]*(${no_change_phrase_regex})([[:space:][:punct:]]*)$" | grep -qiE "${edit_claim_regex}"; then
                 echo "::warning::Editor reported Change status: not-edited but Changes made contains edit-like claims; trusting Change status."
               fi
             elif [ -n "${changes_section}" ]; then
@@ -2057,13 +2062,9 @@ jobs:
               # headers), or are informational metadata bullets
               # (e.g. "- Validation executed").
               substantive="$(printf '%s\n' "${changes_section}" | grep -viE '^[[:space:]]*$|^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)|^[[:space:]]*-[[:space:]]*Validation executed|^[[:space:]]{2,}-' || true)"
-              edit_claim_regex='modif(y|ied|ies)|update(d|s)?|change(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)|`[^`]+\.[[:alpha:]]+`'
-              strong_edit_claim_regex='update(d|s)?|add(ed|s)?|remove(d|s)?|delete(d|s)?|rename(d|s)?|create(d|s)?|fix(ed|es)?|patch(ed|es)?|implement(ed|s)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing)|`[^`]+\.[[:alpha:]]+`'
-              no_change_phrase_regex='no ((repository|repo|code|file)[[:space:]]+)?(file[[:space:]]+)?(changes|modifications|edits)([[:space:]]+(were|was|are|is))?[[:space:]]+(required|needed|made|necessary)|no (repository )?files were modified|no changes (were )?made|no modifications'
-              no_change_declaration_regex="^[[:space:]]*(-[[:space:]]*)?([^;:-]*[;:-][[:space:]]*)?(${no_change_phrase_regex})([[:space:]]*[[:punct:]]*)?$"
               # Stricter bullet-start edit regex for multi-line contradiction checks.
               bullet_edit_regex='^[[:space:]]*-[[:space:]]*(modif(y|ied|ies|ying)|updat(e|ed|es|ing)|change(d|s|ing)?|add(ed|s|ing)?|remov(e|ed|es|ing)|delet(e|ed|es|ing)|renam(e|ed|es|ing)|creat(e|ed|es|ing)|fix(ed|es|ing)?|patch(ed|es|ing)?|implement(ed|s|ing)?|refactor(ed|s|ing)?|tweak(ed|s|ing)?|adjust(ed|s|ing)?|improv(e|ed|es|ing)|resolv(e|ed|es|ing))([[:space:][:punct:]]|$)'
-              if printf '%s\n' "${first_line}" | grep -qiE '^[[:space:]]*-[[:space:]]*(no (repository )?files (were )?modified|no changes (were )?made|no modifications)([[:space:][:punct:]].*)?$'; then
+              if printf '%s\n' "${first_line}" | grep -qiE "^[[:space:]]*-[[:space:]]*(${no_change_phrase_regex})([[:space:][:punct:]].*)?$"; then
                 # Explicit "no files modified / no changes made / no
                 # modifications" first-bullet is a deliberate declaration
                 # from the editor. Trust it and short-circuit to "no real
@@ -2073,11 +2074,11 @@ jobs:
                 # would fire a false-positive EDITOR_CHANGES_LOST error.
                 # Same-line contradictions ("no files modified but updated
                 # X") and multi-line explicit edit bullets are still caught.
-                first_line_suffix="$(printf '%s\n' "${first_line}" | sed -E 's/^[[:space:]]*-[[:space:]]*(no (repository )?files (were )?modified|no changes (were )?made|no modifications)[[:space:][:punct:]]*//I')"
+                first_line_suffix="$(printf '%s\n' "${first_line}" | sed -E "s/^[[:space:]]*-[[:space:]]*(${no_change_phrase_regex})[[:space:][:punct:]]*//I")"
                 if printf '%s\n' "${first_line_suffix}" | grep -qiE "${edit_claim_regex}"; then
                   has_real_changes="true"
                 elif [ -n "${substantive}" ]; then
-                  if printf '%s\n' "${substantive}" | grep -qiE "(no (repository )?files (were )?modified|no changes (were )?made|no modifications).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
+                  if printf '%s\n' "${substantive}" | grep -qiE "(${no_change_phrase_regex}).*(but|however|yet|although|still|nevertheless).*(${edit_claim_regex})"; then
                     has_real_changes="true"
                   else
                     # Multi-line contradiction detection: check remaining
