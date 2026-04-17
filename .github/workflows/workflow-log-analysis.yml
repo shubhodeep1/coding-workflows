@@ -156,6 +156,9 @@ jobs:
     needs: collect-logs
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      report_file: ${{ steps.analyze.outputs.report_file }}
+      analysis_status: ${{ steps.analyze.outputs.analysis_status }}
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
     steps:
@@ -481,4 +484,416 @@ jobs:
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
           fi
+          tg_send_msg "${MSG}" "DEBUG" >/dev/null
+
+  deep-audit:
+    needs: analyze-commit-notify
+    if: needs.analyze-commit-notify.outputs.analysis_status == 'completed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      audit_status: ${{ steps.audit.outputs.audit_status }}
+    env:
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Codex CLI
+        id: cache-codex
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.tool_cache }}/codex
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Install Codex CLI
+        if: steps.cache-codex.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+          CODEX_BIN="$(which codex)"
+          mkdir -p "${{ runner.tool_cache }}/codex"
+          cp -r "$(npm root -g)/@openai/codex" "${{ runner.tool_cache }}/codex/package"
+          cp "${CODEX_BIN}" "${{ runner.tool_cache }}/codex/codex"
+
+      - name: Restore Codex CLI from cache
+        if: steps.cache-codex.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          npm install -g "${{ runner.tool_cache }}/codex/package" --no-audit --no-fund
+
+      - name: Create Codex config
+        env:
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.codex
+          CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
+          {
+            echo 'web_search = "live"'
+            echo 'model_provider = "openrouter"'
+            echo "model = \"${WORKFLOW_EDITOR_MODEL}\""
+            echo 'model_reasoning_effort = "medium"'
+            if [ -f "${CATALOG_PATH}" ]; then
+              echo "model_catalog_json = \"${CATALOG_PATH}\""
+            fi
+            echo
+            echo '[model_providers.openrouter]'
+            echo 'name = "OpenRouter"'
+            echo 'base_url = "https://openrouter.ai/api/v1"'
+            echo 'env_key = "OPENROUTER_API_KEY"'
+            echo 'wire_api = "responses"'
+            echo 'stream_idle_timeout_ms = 600000'
+            echo 'stream_max_retries = 5'
+            echo 'request_max_retries = 3'
+            echo
+            echo '[sandbox_workspace_write]'
+            echo 'network_access = true'
+          } > ~/.codex/config.toml
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Sync latest report from target branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          TARGET_BRANCH="${GITHUB_REF_NAME}"
+          git fetch origin "${TARGET_BRANCH}" --depth=1
+          git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
+          git pull --rebase origin "${TARGET_BRANCH}"
+
+      - name: Run deep audit pass
+        id: audit
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
+          REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+
+          if [ -z "${REPORT_FILE}" ]; then
+            echo "::error::Upstream job did not provide report_file."
+            exit 1
+          fi
+          if [ ! -f "${REPORT_FILE}" ]; then
+            echo "::error::Report file '${REPORT_FILE}' not found on target branch."
+            exit 1
+          fi
+
+          SECTION_FILE="$(mktemp)"
+          CODEX_PROMPT_FILE="$(mktemp)"
+          {
+            bash scripts/render_prompt.sh prompts/mode-workflow-audit.txt
+            echo
+            echo "=== ANALYSIS CONTEXT ==="
+            echo "Report file path: ${REPORT_FILE}"
+            echo "Current UTC date: $(date -u +%F)"
+            echo "--- Begin current report contents ---"
+            cat "${REPORT_FILE}"
+            echo "--- End current report contents ---"
+          } > "${CODEX_PROMPT_FILE}"
+
+          max_attempts=3
+          AUDIT_EXIT=0
+          for attempt in $(seq 1 "${max_attempts}"); do
+            set +e
+            codex exec --model "${WORKFLOW_EDITOR_MODEL}" --full-auto < "${CODEX_PROMPT_FILE}" > "${SECTION_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
+            AUDIT_EXIT=$?
+            set -e
+            if [ "${AUDIT_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
+              break
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$((10 * (2 ** (attempt - 1))))
+              sleep "${sleep_secs}"
+            else
+              if [ "${AUDIT_EXIT}" -eq 0 ]; then
+                echo "::error::Deep audit Codex returned empty output after ${max_attempts} attempts."
+                exit 1
+              fi
+              echo "::error::Deep audit Codex failed after ${max_attempts} attempts with exit code ${AUDIT_EXIT}."
+              exit "${AUDIT_EXIT}"
+            fi
+          done
+
+          if ! head -n1 "${SECTION_FILE}" | grep -q '^## Deep Audit'; then
+            echo "::error::Deep audit Codex output did not start with the required '## Deep Audit' heading."
+            head -n5 "${SECTION_FILE}" >&2 || true
+            exit 1
+          fi
+
+          printf '\n' >> "${REPORT_FILE}"
+          cat "${SECTION_FILE}" >> "${REPORT_FILE}"
+
+          echo "audit_status=completed" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push deep audit section
+        if: steps.audit.outputs.audit_status == 'completed'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
+        run: |
+          set -euo pipefail
+
+          TARGET_BRANCH="${GITHUB_REF_NAME}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "${REPORT_FILE}"
+          if git diff --cached --quiet; then
+            echo "No deep audit section changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: append deep audit section to workflow log analysis report"
+          git pull --rebase origin "${TARGET_BRANCH}"
+          git push origin "HEAD:${TARGET_BRANCH}"
+
+      - name: Send Telegram notification
+        if: always()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "::warning::Telegram not configured (TG_BOT_SECRET or TG_ADMIN_CHAT_ID missing) — skipping notification."
+            exit 0
+          fi
+
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::scripts/tg_helpers.sh not found — skipping Telegram notification."
+            exit 0
+          fi
+
+          source scripts/tg_helpers.sh
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          STAGE_STATUS="${{ steps.audit.outputs.audit_status || 'failed' }}"
+          if [ "${STAGE_STATUS}" = "completed" ]; then
+            MSG="Deep audit pass completed for ${{ github.repository }}"
+          else
+            MSG="Deep audit pass FAILED for ${{ github.repository }}"
+          fi
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_msg "${MSG}" "DEBUG" >/dev/null
+
+  api-redundancy:
+    needs: [analyze-commit-notify, deep-audit]
+    if: needs.deep-audit.outputs.audit_status == 'completed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      api_redundancy_status: ${{ steps.api_redundancy.outputs.api_redundancy_status }}
+    env:
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Codex CLI
+        id: cache-codex
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.tool_cache }}/codex
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Install Codex CLI
+        if: steps.cache-codex.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex@"${CODEX_VERSION}" --no-audit --no-fund
+          CODEX_BIN="$(which codex)"
+          mkdir -p "${{ runner.tool_cache }}/codex"
+          cp -r "$(npm root -g)/@openai/codex" "${{ runner.tool_cache }}/codex/package"
+          cp "${CODEX_BIN}" "${{ runner.tool_cache }}/codex/codex"
+
+      - name: Restore Codex CLI from cache
+        if: steps.cache-codex.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          npm install -g "${{ runner.tool_cache }}/codex/package" --no-audit --no-fund
+
+      - name: Create Codex config
+        env:
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.codex
+          CATALOG_PATH="$(pwd)/scripts/codex_model_catalog.json"
+          {
+            echo 'web_search = "live"'
+            echo 'model_provider = "openrouter"'
+            echo "model = \"${WORKFLOW_EDITOR_MODEL}\""
+            echo 'model_reasoning_effort = "medium"'
+            if [ -f "${CATALOG_PATH}" ]; then
+              echo "model_catalog_json = \"${CATALOG_PATH}\""
+            fi
+            echo
+            echo '[model_providers.openrouter]'
+            echo 'name = "OpenRouter"'
+            echo 'base_url = "https://openrouter.ai/api/v1"'
+            echo 'env_key = "OPENROUTER_API_KEY"'
+            echo 'wire_api = "responses"'
+            echo 'stream_idle_timeout_ms = 600000'
+            echo 'stream_max_retries = 5'
+            echo 'request_max_retries = 3'
+            echo
+            echo '[sandbox_workspace_write]'
+            echo 'network_access = true'
+          } > ~/.codex/config.toml
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Sync latest report from target branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          TARGET_BRANCH="${GITHUB_REF_NAME}"
+          git fetch origin "${TARGET_BRANCH}" --depth=1
+          git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
+          git pull --rebase origin "${TARGET_BRANCH}"
+
+      - name: Run API redundancy pass
+        id: api_redundancy
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
+          REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+
+          if [ -z "${REPORT_FILE}" ]; then
+            echo "::error::Upstream job did not provide report_file."
+            exit 1
+          fi
+          if [ ! -f "${REPORT_FILE}" ]; then
+            echo "::error::Report file '${REPORT_FILE}' not found on target branch."
+            exit 1
+          fi
+
+          SECTION_FILE="$(mktemp)"
+          CODEX_PROMPT_FILE="$(mktemp)"
+          {
+            bash scripts/render_prompt.sh prompts/mode-workflow-api-redundancy.txt
+            echo
+            echo "=== ANALYSIS CONTEXT ==="
+            echo "Report file path: ${REPORT_FILE}"
+            echo "Current UTC date: $(date -u +%F)"
+            echo "--- Begin current report contents (includes prior Deep Audit section) ---"
+            cat "${REPORT_FILE}"
+            echo "--- End current report contents ---"
+          } > "${CODEX_PROMPT_FILE}"
+
+          max_attempts=3
+          API_EXIT=0
+          for attempt in $(seq 1 "${max_attempts}"); do
+            set +e
+            codex exec --model "${WORKFLOW_EDITOR_MODEL}" --full-auto < "${CODEX_PROMPT_FILE}" > "${SECTION_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
+            API_EXIT=$?
+            set -e
+            if [ "${API_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
+              break
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$((10 * (2 ** (attempt - 1))))
+              sleep "${sleep_secs}"
+            else
+              if [ "${API_EXIT}" -eq 0 ]; then
+                echo "::error::API redundancy Codex returned empty output after ${max_attempts} attempts."
+                exit 1
+              fi
+              echo "::error::API redundancy Codex failed after ${max_attempts} attempts with exit code ${API_EXIT}."
+              exit "${API_EXIT}"
+            fi
+          done
+
+          if ! head -n1 "${SECTION_FILE}" | grep -q '^## API Call Consolidation'; then
+            echo "::error::API redundancy Codex output did not start with the required '## API Call Consolidation' heading."
+            head -n5 "${SECTION_FILE}" >&2 || true
+            exit 1
+          fi
+
+          printf '\n' >> "${REPORT_FILE}"
+          cat "${SECTION_FILE}" >> "${REPORT_FILE}"
+
+          echo "api_redundancy_status=completed" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push API redundancy section
+        if: steps.api_redundancy.outputs.api_redundancy_status == 'completed'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
+        run: |
+          set -euo pipefail
+
+          TARGET_BRANCH="${GITHUB_REF_NAME}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "${REPORT_FILE}"
+          if git diff --cached --quiet; then
+            echo "No API redundancy section changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: append API redundancy section to workflow log analysis report"
+          git pull --rebase origin "${TARGET_BRANCH}"
+          git push origin "HEAD:${TARGET_BRANCH}"
+
+      - name: Send Telegram notification
+        if: always()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "::warning::Telegram not configured (TG_BOT_SECRET or TG_ADMIN_CHAT_ID missing) — skipping notification."
+            exit 0
+          fi
+
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::scripts/tg_helpers.sh not found — skipping Telegram notification."
+            exit 0
+          fi
+
+          source scripts/tg_helpers.sh
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          STAGE_STATUS="${{ steps.api_redundancy.outputs.api_redundancy_status || 'failed' }}"
+          if [ "${STAGE_STATUS}" = "completed" ]; then
+            MSG="API redundancy pass completed for ${{ github.repository }}"
+          else
+            MSG="API redundancy pass FAILED for ${{ github.repository }}"
+          fi
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
           tg_send_msg "${MSG}" "DEBUG" >/dev/null
