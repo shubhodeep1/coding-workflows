@@ -414,6 +414,10 @@ jobs:
           set -euo pipefail
 
           REPORT_FILE="${{ steps.analyze.outputs.report_file }}"
+          if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
+            echo "::error::Workflow log analysis can only push report updates from branch refs (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
+            exit 1
+          fi
           TARGET_BRANCH="${{ github.ref_name }}"
 
           git config user.name "github-actions[bot]"
@@ -438,7 +442,6 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
 
@@ -486,7 +489,7 @@ jobs:
             MSG+="Run: ${RUN_URL}"
             ALERT_LEVEL="DEBUG"
           else
-            MSG="Workflow log analysis FAILED for ${{ github.repository }}"
+            MSG="Workflow log analysis FAILED for ${{ github.repository }} (status: ${ANALYSIS_STATUS:-unknown})"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
             ALERT_LEVEL="CRITICAL"
@@ -573,6 +576,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
+            echo "::error::Deep audit requires a branch ref for report sync/push (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
+            exit 1
+          fi
           TARGET_BRANCH="${GITHUB_REF_NAME}"
           git fetch origin "${TARGET_BRANCH}" --depth=1
           git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
@@ -701,7 +708,6 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
 
@@ -723,7 +729,7 @@ jobs:
             MSG="Deep audit pass completed for ${{ github.repository }}"
             ALERT_LEVEL="DEBUG"
           else
-            MSG="Deep audit pass FAILED for ${{ github.repository }}"
+            MSG="Deep audit pass FAILED for ${{ github.repository }} (status: ${STAGE_STATUS:-unknown})"
             ALERT_LEVEL="CRITICAL"
           fi
           MSG+=$'\n'
@@ -810,6 +816,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
+            echo "::error::API redundancy pass requires a branch ref for report sync/push (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
+            exit 1
+          fi
           TARGET_BRANCH="${GITHUB_REF_NAME}"
           git fetch origin "${TARGET_BRANCH}" --depth=1
           git checkout "${TARGET_BRANCH}" 2>/dev/null || git checkout -b "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
@@ -937,7 +947,6 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
 
@@ -959,7 +968,7 @@ jobs:
             MSG="API redundancy pass completed for ${{ github.repository }}"
             ALERT_LEVEL="DEBUG"
           else
-            MSG="API redundancy pass FAILED for ${{ github.repository }}"
+            MSG="API redundancy pass FAILED for ${{ github.repository }} (status: ${STAGE_STATUS:-unknown})"
             ALERT_LEVEL="CRITICAL"
           fi
           MSG+=$'\n'
