@@ -660,6 +660,56 @@ while [ "${attempt}" -le 3 ]; do
         fi
 
         if [ "${reviewer_validation_ok}" = true ]; then
+          # ── Normalize contradictory "Change status:" signals ──
+          # The editor emits two signals in its summary: a narrative
+          # "Changes made:" block and a machine-readable "Change status:"
+          # bullet ("edited" | "not-edited"). They can disagree when the
+          # narrative correctly reports "- none" but the status bullet
+          # still says "edited". Downstream the workflow treats
+          # "Change status:" as authoritative and fires a false-positive
+          # EDITOR_CHANGES_LOST warning (see fun-token-multi-chain PR #117
+          # runs 24537598009 / 24540975236).
+          #
+          # If the narrative reports no concrete changes (_claimed_changes
+          # is empty after the same filter the retry loop uses) AND the
+          # working tree is clean, rewrite "Change status:" to
+          # "- not-edited" so the authoritative signal agrees with reality.
+          if [ -z "${_claimed_changes}" ]; then
+            _norm_git_clean=true
+            if ! git diff --quiet HEAD 2>/dev/null; then
+              _norm_git_clean=false
+            elif [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+              _norm_git_clean=false
+            fi
+            if [ "${_norm_git_clean}" = true ]; then
+              _norm_status="$(awk '
+                /^[[:space:]]*Change status:/ {
+                  header=$0
+                  sub(/^[[:space:]]*Change status:[[:space:]]*/, "", header)
+                  if (header != "") print header
+                  in_section=1
+                  next
+                }
+                in_section && /^[[:space:]]*[A-Za-z].*:/ { exit }
+                in_section { print }
+              ' "${tmp_output}" | grep -iE '^[[:space:]]*-?[[:space:]]*(edited|not-edited|not[[:space:]]+edited)[[:space:]]*$' | head -1 | sed -E 's/^[[:space:]]*-?[[:space:]]*//; s/[[:space:]]*$//; s/^not[[:space:]]+edited$/not-edited/I' | tr '[:upper:]' '[:lower:]' || true)"
+              if [ "${_norm_status}" = "edited" ]; then
+                echo "Notice: normalizing Change status: edited → not-edited on attempt ${attempt} (Changes made: narrative reports no changes and working tree is clean)."
+                awk '
+                  /^[[:space:]]*Change status:/ {
+                    print "Change status:"
+                    print "- not-edited"
+                    in_section=1
+                    next
+                  }
+                  in_section && /^[[:space:]]*[A-Za-z].*:/ { in_section=0; print; next }
+                  in_section { next }
+                  { print }
+                ' "${tmp_output}" > "${tmp_output}.norm" && mv -f "${tmp_output}.norm" "${tmp_output}"
+              fi
+            fi
+          fi
+
           # Record on-disk change stats at the moment of success so that a later
           # "Editor claimed changes but no commit was produced" alert can be
           # diagnosed against an authoritative baseline instead of speculation.
