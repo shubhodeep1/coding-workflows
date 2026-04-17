@@ -1508,20 +1508,35 @@ resolve_active_orchestrator_context_for_issue() {
 mark_integration_branch_missing_failed() {
   local integration_branch="$1"
   local _tracking_labels
-  local reason="Integration branch '${integration_branch}' is missing. It may have been deleted externally. Manual intervention required."
-  jq --arg reason "${reason}" --arg branch "${integration_branch}" \
-    '.status = "failed" |
-     .final_merge_status = "failed" |
-     .integration_branch = $branch |
-     .final_merge_error = $reason' \
-    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  local reason
+  local tg_reason
+
+  if [ -n "${integration_branch}" ]; then
+    reason="Integration branch '${integration_branch}' is missing. It may have been deleted externally. Manual intervention required."
+    tg_reason="missing integration branch '${integration_branch}'"
+    jq --arg reason "${reason}" --arg branch "${integration_branch}" \
+      '.status = "failed" |
+       .final_merge_status = "failed" |
+       .integration_branch = $branch |
+       .final_merge_error = $reason' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  else
+    reason="Integration branch is not set in state. Final merge cannot proceed until this is repaired. Manual intervention required."
+    tg_reason="integration branch is not set in state"
+    jq --arg reason "${reason}" \
+      '.status = "failed" |
+       .final_merge_status = "failed" |
+       .final_merge_error = $reason' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  fi
+
   post_state_comment
   post_tracking_comment "## ❌ Integration branch missing
 
 ${reason}"
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
-  tg_notify "❌ Project #${TRACKING_NUM} failed: missing integration branch '${integration_branch}'."
+  tg_notify "❌ Project #${TRACKING_NUM} failed: ${tg_reason}."
   tg_cleanup_msgs "${TRACKING_NUM}"
 }
 
