@@ -1599,6 +1599,31 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Diagnostic: working tree state at the start of this step.
+          # Pairs with the "checkpoint=editor_exit" group emitted at the
+          # end of review_apply_fixes.sh.  If editor_exit shows edits but
+          # commit_step_start shows a clean tree, the reversion happens
+          # at the step boundary (Serena shutdown / runner transition)
+          # and no logic inside this step can recover.  See PR #1255.
+          echo "::group::Working tree state (checkpoint=commit_step_start)"
+          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          _cp_status="$(git status --porcelain 2>/dev/null || true)"
+          if [ -n "${_cp_status}" ]; then
+            printf '%s\n' "${_cp_status}" | head -n 40 || true
+            _cp_status_lines="$(printf '%s\n' "${_cp_status}" | wc -l | tr -d '[:space:]' || echo 0)"
+            [ "${_cp_status_lines:-0}" -gt 40 ] && echo "[truncated: ${_cp_status_lines} total porcelain lines]"
+          else
+            echo "(clean)"
+          fi
+          echo "--- git diff --stat HEAD ---"
+          _cp_diffstat="$(git diff --stat HEAD 2>/dev/null || true)"
+          if [ -n "${_cp_diffstat}" ]; then
+            printf '%s\n' "${_cp_diffstat}" | head -n 40 || true
+            _cp_diffstat_lines="$(printf '%s\n' "${_cp_diffstat}" | wc -l | tr -d '[:space:]' || echo 0)"
+            [ "${_cp_diffstat_lines:-0}" -gt 40 ] && echo "[truncated: ${_cp_diffstat_lines} total diffstat lines]"
+          fi
+          echo "::endgroup::"
+
           echo "DID_COMMIT=false" >> "$GITHUB_ENV"
           echo "did_commit=false" >> "$GITHUB_OUTPUT"
 
@@ -1653,6 +1678,31 @@ jobs:
           git config user.name "codex-bot"
           git config user.email "codex@users.noreply.github.com"
           git rm -r --cached node_modules 2>/dev/null || true
+
+          # Diagnostic: working tree state immediately before the
+          # touched-file comparison loop.  If commit_step_start showed
+          # edits but pre_touched_loop shows a clean tree, the reversion
+          # happens inside this step (untracked cleanup, protected-path
+          # reset, artifact rm, or similar).  See PR #1255.
+          echo "::group::Working tree state (checkpoint=pre_touched_loop)"
+          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          _cp_status="$(git status --porcelain 2>/dev/null || true)"
+          if [ -n "${_cp_status}" ]; then
+            printf '%s\n' "${_cp_status}" | head -n 40 || true
+            _cp_status_lines="$(printf '%s\n' "${_cp_status}" | wc -l | tr -d '[:space:]' || echo 0)"
+            [ "${_cp_status_lines:-0}" -gt 40 ] && echo "[truncated: ${_cp_status_lines} total porcelain lines]"
+          else
+            echo "(clean)"
+          fi
+          echo "--- git diff --stat HEAD ---"
+          _cp_diffstat="$(git diff --stat HEAD 2>/dev/null || true)"
+          if [ -n "${_cp_diffstat}" ]; then
+            printf '%s\n' "${_cp_diffstat}" | head -n 40 || true
+            _cp_diffstat_lines="$(printf '%s\n' "${_cp_diffstat}" | wc -l | tr -d '[:space:]' || echo 0)"
+            [ "${_cp_diffstat_lines:-0}" -gt 40 ] && echo "[truncated: ${_cp_diffstat_lines} total diffstat lines]"
+          fi
+          echo "::endgroup::"
+
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
             # On the workflow source repo, commit ONLY files the editor
             # actually wrote to.  Compared to the old pathspec-exclusion list,
