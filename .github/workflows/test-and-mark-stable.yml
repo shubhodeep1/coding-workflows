@@ -1027,7 +1027,15 @@ jobs:
           # the API's errors[] payload instead of the opaque
           # "gh: Validation Failed (HTTP 422)" that happens when the response
           # body is redirected to /dev/null.
-          POST_OUT=$(mktemp); POST_ERR=$(mktemp)
+          if ! POST_OUT=$(mktemp 2>/dev/null); then
+            echo "::error::Failed to create temp file for stdout capture (mktemp failed)"
+            exit 1
+          fi
+          if ! POST_ERR=$(mktemp 2>/dev/null); then
+            rm -f "${POST_OUT}"
+            echo "::error::Failed to create temp file for stderr capture (mktemp failed)"
+            exit 1
+          fi
           if ! jq -n --arg body "${STATE_COMMENT}" '{"body": $body}' | \
               gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}/comments" \
                 --method POST --input - >"${POST_OUT}" 2>"${POST_ERR}"; then
