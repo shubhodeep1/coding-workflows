@@ -3771,6 +3771,8 @@ jobs:
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
             tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARN"
+          elif [ "${CHANGES_LOST_REDISPATCHED:-}" = "skipped_peer_inflight" ]; then
+            echo "Editor changes lost re-dispatch skipped; peer run already in flight."
           else
             if [ "${CAN_PUSH:-}" = "true" ]; then
               MSG="⚠️ Editor changes lost (exhausted): #${PR_NUMBER}"

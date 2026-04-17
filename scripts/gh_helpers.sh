@@ -1125,18 +1125,19 @@ autofix_retrigger_has_inflight_peer()
 	fi
 
 	# Filter: in-flight (queued or in_progress), not ourselves, and
-	# running one of the review/autofix workflow files.  Match by
-	# workflow file path so renamed jobs in consumer repos still
-	# count as peers.  Prefer queued peers over in_progress peers so
-	# we surface a waiting dispatch even if the current sync run is
-	# also in_progress.
+	# running one of the review/autofix workflow files for the same
+	# PR number. Match by workflow file path so renamed jobs in
+	# consumer repos still count as peers. Prefer queued peers over
+	# in_progress peers so we surface a waiting dispatch even if the
+	# current sync run is also in_progress.
 	local peer_info
-	peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" '
+	peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" --arg pr_num "${pr_number}" '
 		[
 			.workflow_runs[]?
 			| select(.status == "queued" or .status == "in_progress")
 			| select((.id | tostring) != $current)
 			| select(.path | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
+			| select((.pull_requests // []) | any((.number | tostring) == $pr_num))
 		]
 		| {count: length, first_id: (.[0].id // "-"), first_path: (.[0].path // "-")}
 		| "\(.count) \(.first_id) \(.first_path)"
