@@ -411,6 +411,23 @@ run_preflight_checks()
 	if [ "${APP_URL_EXPLICIT}" = "1" ] && [ -n "${APP_URL}" ] && ! command -v curl >/dev/null 2>&1; then
 		fail_fast "preflight_curl" "curl is required for APP_URL health checks" "${COMPOSE_LOG}" "preflight"
 	fi
+	# Preflight: scan generated validation Dockerfiles for apt package names that
+	# are known to be absent from default Debian/Ubuntu repositories. The canonical
+	# case is `mongodb-mongosh`, which is only available via MongoDB's official apt
+	# repo (key + source list). Catching this before `docker compose up --build`
+	# turns a 20-second opaque `E: Unable to locate package` build failure into a
+	# clear, actionable preflight diagnostic. Only trips when the bad package name
+	# appears on a non-comment line AND no accompanying MongoDB apt-source hint
+	# (`repo.mongodb.org`) is present in the same file.
+	for dockerfile in validation/Dockerfile validation/Dockerfile.* validation/*.Dockerfile; do
+		[ -f "${dockerfile}" ] || continue
+		if grep -Evi '^[[:space:]]*#' "${dockerfile}" \
+		   | sed -E 's/[[:space:]]+#.*$//' \
+		   | grep -Eq 'apt(-get)?[[:space:]].*install.*(^|[^[:alnum:]_-])(mongodb-)?mongosh(=[^[:space:]\\]+)?($|[^[:alnum:]_-])' \
+		   && ! grep -qi 'repo\.mongodb\.org' "${dockerfile}"; then
+			fail_fast "preflight_bad_apt_package" "${dockerfile} references 'mongosh'/'mongodb-mongosh' but does not add MongoDB's official apt repo (no 'repo.mongodb.org' reference). mongosh is NOT in Debian/Ubuntu default repos and will fail the compose build with 'E: Unable to locate package mongosh'. Prefer pymongo, or add the MongoDB apt source + GPG key to the Dockerfile. See mode-validate-generate.txt: 'installing mongosh in validation/Dockerfile.app'." "${COMPOSE_LOG}" "preflight"
+		fi
+	done
 }
 
 start_compose()
