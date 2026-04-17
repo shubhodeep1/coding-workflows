@@ -467,7 +467,8 @@ jobs:
             MSG+="Report: pending (rerun this workflow manually to continue polling)"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
-          else
+            ALERT_LEVEL="DEBUG"
+          elif [ "${ANALYSIS_STATUS}" = "completed" ]; then
             SUMMARY_LINE="Analysis report generated."
             if [ -n "${REPORT_FILE}" ] && [ -f "${REPORT_FILE}" ]; then
               SUMMARY_LINE="$(grep -m1 -E '^- |^[0-9]+\. ' "${REPORT_FILE}" || true)"
@@ -483,12 +484,18 @@ jobs:
             MSG+="Summary: ${SUMMARY_LINE}"
             MSG+=$'\n'
             MSG+="Run: ${RUN_URL}"
+            ALERT_LEVEL="DEBUG"
+          else
+            MSG="Workflow log analysis FAILED for ${{ github.repository }}"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+            ALERT_LEVEL="CRITICAL"
           fi
-          tg_send_msg "${MSG}" "DEBUG" >/dev/null
+          tg_send_msg "${MSG}" "${ALERT_LEVEL}" >/dev/null
 
   deep-audit:
     needs: analyze-commit-notify
-    if: needs.analyze-commit-notify.outputs.analysis_status == 'completed' && inputs.codex_mode
+    if: success() && needs.analyze-commit-notify.outputs.analysis_status == 'completed' && inputs.codex_mode
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -591,9 +598,11 @@ jobs:
             exit 1
           fi
 
+          SECTION_FILE=""
+          CODEX_PROMPT_FILE=""
+          trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"
-          trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           {
             bash scripts/render_prompt.sh prompts/mode-workflow-audit.txt
             echo
@@ -723,7 +732,7 @@ jobs:
 
   api-redundancy:
     needs: [analyze-commit-notify, deep-audit]
-    if: needs.deep-audit.outputs.audit_status == 'completed' && inputs.codex_mode
+    if: success() && needs.deep-audit.outputs.audit_status == 'completed' && inputs.codex_mode
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -826,9 +835,11 @@ jobs:
             exit 1
           fi
 
+          SECTION_FILE=""
+          CODEX_PROMPT_FILE=""
+          trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"
-          trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           {
             bash scripts/render_prompt.sh prompts/mode-workflow-api-redundancy.txt
             echo
