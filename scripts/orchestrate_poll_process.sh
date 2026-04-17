@@ -2540,6 +2540,10 @@ finalize_integration_merge_if_needed() {
   local project_title="$3"
   local final_pr
 
+  # Default behavior: failed finalize attempts consume retry budget.
+  # Transient "not-ready-yet" paths below opt out explicitly.
+  FINAL_MERGE_BUDGET_ELIGIBLE="1"
+
   if [ -z "${integration_branch}" ]; then
     return 0
   fi
@@ -2638,11 +2642,13 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   fi
 
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" != "true" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] PR #${final_pr} mergeability is '${pr_mergeable:-unknown}'. Will retry next poll."
     return 1
   fi
 
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}"; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] Required checks not complete for PR #${final_pr}. Will retry next poll."
     return 1
   fi
@@ -2683,6 +2689,7 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   fi
 
   if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" != "true" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] PR #${final_pr} mergeability is '${pr_mergeable:-unknown}' after merge attempt. Will retry next poll."
     return 1
   fi
@@ -3086,6 +3093,14 @@ mark_validation_complete() {
   ensure_integration_conflict_state_fields
 
   if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}"; then
+    # Transient mergeability/check-pending states should defer without
+    # consuming the bounded retry budget.
+    if [ "${FINAL_MERGE_BUDGET_ELIGIBLE:-1}" != "1" ]; then
+      echo "  [final-merge] transient deferral; retry budget unchanged."
+      post_state_comment
+      return 0
+    fi
+
     # Per the validation-gate contract (README §14): a project must NOT
     # advance to status=complete until the integration branch is squash-
     # merged into the default branch. Count this failed attempt, defer
