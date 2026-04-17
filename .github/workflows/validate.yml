@@ -620,6 +620,7 @@ jobs:
         continue-on-error: true
         env:
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
+          STATUS_FILE_PATH: ${{ steps.collect_status.outputs.status_file }}
           STATUS_VALUE: ${{ steps.collect_status.outputs.status }}
           RAW_STATUS_VALUE: ${{ steps.collect_status.outputs.raw_status }}
           SUMMARY_VALUE: ${{ steps.collect_status.outputs.summary }}
