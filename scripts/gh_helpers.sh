@@ -1105,7 +1105,7 @@ autofix_retrigger_has_inflight_peer()
 	local head_branch="${2:-}"
 	local current_run_id="${3:-}"
 
-	if [ -z "${head_branch}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+	if [ -z "${head_branch}" ] || [ -z "${current_run_id}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
 		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch:-?} reason=missing_inputs" >&2
 		return 1
 	fi
@@ -1113,7 +1113,9 @@ autofix_retrigger_has_inflight_peer()
 	local response
 	if ! response=$(gh_retry gh api \
 		-H "Accept: application/vnd.github+json" \
-		"/repos/${GITHUB_REPOSITORY}/actions/runs?branch=${head_branch}&per_page=30" \
+		"/repos/${GITHUB_REPOSITORY}/actions/runs" \
+		-f "branch=${head_branch}" \
+		-f "per_page=30" \
 		2>/dev/null); then
 		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=api_error" >&2
 		return 1
@@ -1125,23 +1127,23 @@ autofix_retrigger_has_inflight_peer()
 	fi
 
 	# Filter: in-flight (queued or in_progress), not ourselves, and
-	# running one of the review/autofix workflow files for the same
-	# PR number. Match by workflow file path so renamed jobs in
-	# consumer repos still count as peers. Prefer queued peers over
-	# in_progress peers so we surface a waiting dispatch even if the
-	# current sync run is also in_progress.
+	# running one of the review/autofix workflow files. Match by
+	# workflow file path so renamed jobs in consumer repos still count
+	# as peers. The first matched run in API order is surfaced in logs.
 	local peer_info
-	peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" --arg pr_num "${pr_number}" '
+	if ! peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" '
 		[
 			.workflow_runs[]?
 			| select(.status == "queued" or .status == "in_progress")
 			| select((.id | tostring) != $current)
 			| select(.path | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
-			| select((.pull_requests // []) | any((.number | tostring) == $pr_num))
 		]
 		| {count: length, first_id: (.[0].id // "-"), first_path: (.[0].path // "-")}
 		| "\(.count) \(.first_id) \(.first_path)"
-	' 2>/dev/null || echo "0 - -")
+	' 2>/dev/null); then
+		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=jq_error" >&2
+		return 1
+	fi
 
 	local peer_count peer_run peer_path
 	peer_count=$(printf '%s' "${peer_info}" | awk '{print $1}')
