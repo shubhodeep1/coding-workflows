@@ -25,7 +25,7 @@
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": false,
       "context_window": 200000,
-      "auto_compact_token_limit": null,
+      "auto_compact_token_limit": 144000,
       "effective_context_window_percent": 90,
       "experimental_supported_tools": [],
       "input_modalities": ["text"]
@@ -55,7 +55,7 @@
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": false,
       "context_window": 1000000,
-      "auto_compact_token_limit": null,
+      "auto_compact_token_limit": 720000,
       "effective_context_window_percent": 90,
       "experimental_supported_tools": [],
       "input_modalities": ["text", "image"]
@@ -85,7 +85,7 @@
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": false,
       "context_window": 256000,
-      "auto_compact_token_limit": null,
+      "auto_compact_token_limit": 184000,
       "effective_context_window_percent": 90,
       "experimental_supported_tools": [],
       "input_modalities": ["text", "image"]
@@ -115,7 +115,7 @@
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": false,
       "context_window": 128000,
-      "auto_compact_token_limit": null,
+      "auto_compact_token_limit": 92000,
       "effective_context_window_percent": 90,
       "experimental_supported_tools": [],
       "input_modalities": ["text"]
@@ -145,7 +145,7 @@
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": false,
       "context_window": 200000,
-      "auto_compact_token_limit": null,
+      "auto_compact_token_limit": 144000,
       "effective_context_window_percent": 90,
       "experimental_supported_tools": [],
       "input_modalities": ["text"]
@@ -175,7 +175,7 @@
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": false,
       "context_window": 262144,
-      "auto_compact_token_limit": null,
+      "auto_compact_token_limit": 188000,
       "effective_context_window_percent": 90,
       "experimental_supported_tools": [],
       "input_modalities": ["text", "image"]
@@ -205,7 +205,7 @@
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": false,
       "context_window": 262144,
-      "auto_compact_token_limit": null,
+      "auto_compact_token_limit": 188000,
       "effective_context_window_percent": 90,
       "experimental_supported_tools": [],
       "input_modalities": ["text"]
@@ -236,7 +236,7 @@
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": false,
       "context_window": 400000,
-      "auto_compact_token_limit": null,
+      "auto_compact_token_limit": 304000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
       "input_modalities": ["text", "image"]
@@ -267,7 +267,7 @@
       "supports_parallel_tool_calls": true,
       "supports_image_detail_original": false,
       "context_window": 400000,
-      "auto_compact_token_limit": null,
+      "auto_compact_token_limit": 304000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
       "input_modalities": ["text", "image"]
