@@ -1113,7 +1113,7 @@ _linked_prs_by_body_reference()
 	printf '%s' "${candidates_json}" | jq -r --arg n "${issue_num}" '
 		(. // [])
 		| .[]
-		| select((.body // "") | test("(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#" + $n + "\\b"))
+		| select((.body // "") | test("(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#" + $n + "\\b"))
 		| .number
 	' 2>/dev/null || true
 }
