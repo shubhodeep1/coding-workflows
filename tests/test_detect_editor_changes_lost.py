@@ -114,6 +114,15 @@ def test_missing_summary_fails_open(tmp_path: Path) -> None:
 	)
 
 
+def test_non_git_directory_fails_open(tmp_path: Path) -> None:
+	"""If the shim runs outside a git worktree, git-state is unknown and it
+	must fail open ('true') rather than classifying as a clean tree."""
+	result = _run_shim(tmp_path, FIXTURES / "narrative_none_status_edited.txt")
+	assert result == "true", (
+		f"Expected fail-open 'true' when git status is unavailable; got {result!r}."
+	)
+
+
 # ---------------------------------------------------------------------------
 # Static assertions: the normalization + defense-in-depth wiring stays wired
 # ---------------------------------------------------------------------------

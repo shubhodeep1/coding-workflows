@@ -705,7 +705,7 @@ while [ "${attempt}" -le 3 ]; do
                   in_section && /^[[:space:]]*[A-Za-z].*:/ { in_section=0; print; next }
                   in_section { next }
                   { print }
-                ' "${tmp_output}" > "${tmp_output}.norm" && mv -f "${tmp_output}.norm" "${tmp_output}"
+                ' "${tmp_output}" > "${tmp_output}.norm" && [ -s "${tmp_output}.norm" ] && mv -f "${tmp_output}.norm" "${tmp_output}"
               fi
             fi
           fi

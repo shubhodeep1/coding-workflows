@@ -17,7 +17,8 @@
 #   $1 — path to the editor summary file (EDITOR_SUMMARY_FILE).
 # Output shape:
 #   stdout: single token "true" or "false", newline-terminated.
-#   exit code: always 0 unless argv[1] is wildly malformed.
+#   exit code: 0 for handled fail-open paths; may be non-zero on
+#   unexpected command errors (caller should use `|| echo "true"`).
 # Git calls: one (`git status --porcelain`) in the caller's CWD.
 # Fail-open: yes — when the summary is unreadable we print "true" and
 #   leave the existing heuristic in control.
@@ -33,7 +34,10 @@ if [ -z "${summary_file}" ] || [ ! -s "${summary_file}" ]; then
 	exit 0
 fi
 
-porcelain="$(git status --porcelain 2>/dev/null || true)"
+if ! porcelain="$(git status --porcelain 2>/dev/null)"; then
+	echo "true"
+	exit 0
+fi
 
 changes_section="$(awk '
 	/^[[:space:]]*Changes made:/ { in_section=1; next }
