@@ -1494,6 +1494,7 @@ resolve_active_orchestrator_context_for_issue() {
 
 mark_integration_branch_missing_failed() {
   local integration_branch="$1"
+  local _tracking_labels
   local reason="Integration branch '${integration_branch}' is missing. It may have been deleted externally. Manual intervention required."
   jq --arg reason "${reason}" --arg branch "${integration_branch}" \
     '.status = "failed" |
@@ -1505,6 +1506,8 @@ mark_integration_branch_missing_failed() {
   post_tracking_comment "## ❌ Integration branch missing
 
 ${reason}"
+  _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
+  handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
   tg_notify "❌ Project #${TRACKING_NUM} failed: missing integration branch '${integration_branch}'."
   tg_cleanup_msgs "${TRACKING_NUM}"
 }
@@ -2725,6 +2728,150 @@ dispatch_validation_workflow() {
   return 1
 }
 
+extract_comprehensive_release_metadata() {
+  local comments_json="$1"
+
+  if ! echo "${comments_json}" | jq -rc '
+    [ .[] | ((.body // "") | gsub("\\\\n"; "\n")) ]
+    | reverse as $bodies
+    | (
+        [ $bodies[]
+          | select(test("<!--[[:space:]]*COMPREHENSIVE_RELEASE_METADATA_V1[[:space:]]*-->"))
+          | (
+              .
+              | (
+                  capture("(?s)<!--[[:space:]]*COMPREHENSIVE_RELEASE_METADATA_V1[[:space:]]*-->(?<block>.*?)(?:<!--[[:space:]]*/COMPREHENSIVE_RELEASE_METADATA_V1[[:space:]]*-->|\\z)")?
+                  | .block
+                )
+              // ""
+            )
+          | select(type == "string" and length > 0)
+        ]
+        | .[0] // ""
+      ) as $metadata_block
+    | {
+        version_tag: (
+          [ ($metadata_block | split("\n")[])
+            | (capture("(?i)^[[:space:]]*(?:[-*][[:space:]]*)?(?:version[ _-]?tag)[[:space:]]*[:=][[:space:]]*`?(?<value>[^`]+?)`?[[:space:]]*$") | .value)?
+            | select(type == "string" and length > 0)
+          ]
+          | .[0] // ""
+        ),
+        test_repo: (
+          [ ($metadata_block | split("\n")[])
+            | (capture("(?i)^[[:space:]]*(?:[-*][[:space:]]*)?(?:test[ _-]?repo)[[:space:]]*[:=][[:space:]]*`?(?<value>[^`]+?)`?[[:space:]]*$") | .value)?
+            | select(type == "string" and length > 0)
+          ]
+          | .[0] // ""
+        )
+      }
+  ' 2>/dev/null; then
+    echo "::warning::Failed to extract comprehensive release metadata from tracking comments; continuing with defaults." >&2
+    echo '{"version_tag":"","test_repo":""}'
+  fi
+}
+
+dispatch_comprehensive_release_workflow() {
+  local version_tag="${1:-}"
+  local test_repo="${2:-}"
+  local run_args=("test-and-mark-stable.yml" "--repo" "${GITHUB_REPOSITORY}" "-f" "dry_run=false")
+
+  if [ -n "${version_tag}" ]; then
+    run_args+=("-f" "version_tag=${version_tag}")
+  fi
+  if [ -n "${test_repo}" ]; then
+    run_args+=("-f" "test_repo=${test_repo}")
+  fi
+
+  local _dispatch_err
+  _dispatch_err="$(mktemp)"
+  if gh_retry gh workflow run "${run_args[@]}" >/dev/null 2>"${_dispatch_err}"; then
+    COMPREHENSIVE_RELEASE_DISPATCH_ERROR=""
+    rm -f "${_dispatch_err}"
+    return 0
+  fi
+
+  COMPREHENSIVE_RELEASE_DISPATCH_ERROR="$(cat "${_dispatch_err}" 2>/dev/null || true)"
+  rm -f "${_dispatch_err}"
+  return 1
+}
+
+handle_comprehensive_release_callback_if_needed() {
+  local project_status="$1"
+  local tracking_labels="$2"
+  local comments_json="$3"
+  local callback_handled
+
+  if ! has_label "${tracking_labels}" "ai:comprehensive-test-pending"; then
+    return 0
+  fi
+
+  callback_handled="$(jq -r '.comprehensive_release_callback.handled // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+  if [ "${callback_handled}" = "true" ]; then
+    echo "Comprehensive release callback already handled for project #${TRACKING_NUM}; skipping dispatch."
+  elif [ "${project_status}" = "complete" ]; then
+    local metadata_json
+    local version_tag
+    local test_repo
+    local msg
+
+    metadata_json="$(extract_comprehensive_release_metadata "${comments_json}")"
+    version_tag="$(echo "${metadata_json}" | jq -r '.version_tag // ""' 2>/dev/null || echo "")"
+    test_repo="$(echo "${metadata_json}" | jq -r '.test_repo // ""' 2>/dev/null || echo "")"
+
+    if ! [[ "${version_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      version_tag=""
+    fi
+
+    if ! [[ "${test_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+      test_repo=""
+    fi
+
+    if dispatch_comprehensive_release_workflow "${version_tag}" "${test_repo}"; then
+      msg="Comprehensive release callback dispatched for project #${TRACKING_NUM}."
+      msg+=$'\n'"Workflow: test-and-mark-stable.yml"
+      msg+=$'\n'"dry_run: false"
+      if [ -n "${version_tag}" ]; then
+        msg+=$'\n'"version_tag: ${version_tag}"
+      fi
+      if [ -n "${test_repo}" ]; then
+        msg+=$'\n'"test_repo: ${test_repo}"
+      fi
+      tg_notify "${msg}" "DEBUG"
+
+      jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at}' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment
+    else
+      msg="Comprehensive release callback failed for project #${TRACKING_NUM}."
+      msg+=$'\n'"Workflow: test-and-mark-stable.yml"
+      msg+=$'\n'"dry_run: false"
+      if [ -n "${COMPREHENSIVE_RELEASE_DISPATCH_ERROR:-}" ]; then
+        msg+=$'\n'"Error: ${COMPREHENSIVE_RELEASE_DISPATCH_ERROR}"
+      fi
+      tg_notify "${msg}" "CRITICAL"
+      return 0
+    fi
+  elif [ "${project_status}" = "failed" ] || [ "${project_status}" = "validation-failed" ]; then
+    tg_notify "Comprehensive pipeline aborted for project #${TRACKING_NUM} (status: ${project_status}). Release workflow not dispatched." "CRITICAL"
+
+    jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at}' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment
+  else
+    echo "::warning::Skipping comprehensive release callback for unexpected project status '${project_status}'."
+    return 0
+  fi
+
+  if gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:comprehensive-test-pending" >/dev/null 2>&1; then
+    TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+  else
+    echo "::warning::Failed to remove ai:comprehensive-test-pending from tracking issue #${TRACKING_NUM}."
+  fi
+}
+
 # Check whether the validation workflow (ai-validate.yml or internal-validate.yml)
 # has any currently active (in_progress or queued) runs.  Used to avoid
 # redispatching when a previous dispatch is still executing.
@@ -2859,6 +3006,7 @@ dispatch_validation_if_needed() {
 
 mark_validation_failed() {
   local reason="$1"
+  local _tracking_labels
 
   # Check validation recovery budget before going terminal
   local val_recovery_count
@@ -2894,6 +3042,8 @@ Transitioning back to judge for re-evaluation."
   jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason | .validation_active_fix_issues = [] | .validation_fix_issues_batch_cycles = 0' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
+  _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
+  handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validation-failed"
   post_tracking_comment "## ❌ Runtime validation failed
 
@@ -2909,6 +3059,7 @@ mark_validation_complete() {
   local integration_branch
   local default_branch
   local project_title
+  local _tracking_labels
 
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
@@ -2921,6 +3072,8 @@ mark_validation_complete() {
   jq --argjson cycle "${validation_cycle}" '.status = "complete" | .validation_completed_cycle = $cycle' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment
+  _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
+  handle_comprehensive_release_callback_if_needed "complete" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validated"
   post_tracking_comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle}). Issue kept open for manual review."
   tg_cleanup_msgs "${TRACKING_NUM}"
@@ -5472,6 +5625,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     echo "Project complete!"
     jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
+    handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:merged"
     post_tracking_comment "Project completed successfully. Issue kept open for manual review."
     tg_cleanup_msgs "${TRACKING_NUM}"
@@ -5786,6 +5940,7 @@ The poller will resume processing on the next cycle."
   fi
 
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
+    handle_comprehensive_release_callback_if_needed "${PROJECT_STATUS}" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
     echo "Project already ${PROJECT_STATUS}, skipping."
     continue
   fi
@@ -7976,6 +8131,7 @@ with open('${STATE_FILE}', 'w') as f:
     echo "::error::Judge stall cycle limit reached ($((JUDGE_STALL_CYCLES + 1)) > ${MAX_JUDGE}). Marking project as failed."
     jq '.status = "failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
+    handle_comprehensive_release_callback_if_needed "failed" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
       -f body="## Project Failed — Judge stall cycle limit exceeded
 
@@ -8311,6 +8467,7 @@ PRs to revert: ${REVERT_COUNT}"
         echo "Project complete!"
         jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment
+        handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
 
         set_tracking_phase_label "ai:merged"
         post_tracking_comment "Project completed successfully after $((JUDGE_CYCLE + 1)) judge cycle(s) (${JUDGE_STALL_CYCLES} stall). Issue kept open for manual review."
@@ -8372,6 +8529,7 @@ All waves have merged and the judge is satisfied. Transitioning to runtime valid
         jq '.status = "failed" | .judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
         post_state_comment
+        handle_comprehensive_release_callback_if_needed "failed" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
 
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
           -f body="## Project Failed
