@@ -33,7 +33,7 @@ POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 def _run_bash(script: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
 	full_env = os.environ.copy()
 	full_env["PYTHONDONTWRITEBYTECODE"] = "1"
-	full_env.setdefault("GITHUB_REPOSITORY", "owner/repo")
+	full_env["GITHUB_REPOSITORY"] = "owner/repo"
 	if env:
 		full_env.update(env)
 	return subprocess.run(
