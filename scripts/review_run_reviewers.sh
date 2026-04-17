@@ -688,10 +688,41 @@ run_reviewer() {
   local reasoning_level="${5:-}"
   local output_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.txt"
   local status_file="${PREVIOUS_REVIEWS_DIR}/status_${output_prefix}_${safe_name}.txt"
-  local log_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log"
-  local reviewer_idle_timeout="${HEARTBEAT_IDLE_TIMEOUT:-900}"
-  local reviewer_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
-  local attempt=1
+	local log_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log"
+	local reviewer_idle_timeout="${HEARTBEAT_IDLE_TIMEOUT:-900}"
+	local reviewer_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
+	local reviewer_pr_poll_interval_default=10
+	local reviewer_pr_poll_interval_raw="${REVIEW_PR_STATE_POLL_INTERVAL_SECS:-${reviewer_pr_poll_interval_default}}"
+	local reviewer_pr_poll_interval="${reviewer_pr_poll_interval_default}"
+	local reviewer_pr_poll_interval_norm=""
+	local reviewer_pr_poll_interval_warn=0
+	local reviewer_pr_poll_interval_raw_escaped=""
+	local reviewer_watchdog_sleep="${reviewer_pr_poll_interval_default}"
+	local attempt=1
+
+	if [[ "${reviewer_pr_poll_interval_raw}" =~ ^[0-9]+$ ]]; then
+		reviewer_pr_poll_interval_norm="$(printf '%s' "${reviewer_pr_poll_interval_raw}" | sed -E 's/^0+//')"
+		if [ -z "${reviewer_pr_poll_interval_norm}" ]; then
+			reviewer_pr_poll_interval_norm=0
+		fi
+		if [ "${#reviewer_pr_poll_interval_norm}" -le 4 ] && [ "${reviewer_pr_poll_interval_norm}" -ge 10 ] && [ "${reviewer_pr_poll_interval_norm}" -le 3600 ]; then
+			reviewer_pr_poll_interval="${reviewer_pr_poll_interval_norm}"
+		else
+			reviewer_pr_poll_interval_warn=1
+		fi
+	else
+		reviewer_pr_poll_interval_warn=1
+	fi
+	if [ "${reviewer_pr_poll_interval_warn}" -ne 0 ]; then
+		reviewer_pr_poll_interval_raw_escaped="$(printf '%q' "${reviewer_pr_poll_interval_raw}")"
+		echo "::warning::rate_limit_audit_fallback key=REVIEW_PR_STATE_POLL_INTERVAL_SECS invalid=${reviewer_pr_poll_interval_raw_escaped} fallback=${reviewer_pr_poll_interval_default} min=10 max=3600" >&2
+		reviewer_pr_poll_interval="${reviewer_pr_poll_interval_default}"
+	fi
+	reviewer_watchdog_sleep="${reviewer_pr_poll_interval}"
+	if [ "${reviewer_watchdog_sleep}" -gt "${reviewer_idle_timeout}" ]; then
+		reviewer_watchdog_sleep="${reviewer_idle_timeout}"
+		echo "::warning::rate_limit_audit_fallback key=REVIEW_PR_STATE_POLL_INTERVAL_SECS capped=${reviewer_pr_poll_interval} idle_timeout=${reviewer_idle_timeout} effective_sleep=${reviewer_watchdog_sleep}" >&2
+	fi
 
   : > "${log_file}"
 
@@ -749,10 +780,10 @@ run_reviewer() {
     wd_reason_file="$(mktemp /tmp/reviewer_wd_reason.XXXXXX)"
 
     # Background watchdog for this reviewer attempt
-    (
-      wd_iter=$(( RANDOM % 9 ))  # jitter: stagger PR state checks across reviewers
-      while true; do
-        sleep 10
+	(
+		wd_iter=$(( RANDOM % 9 ))  # jitter: stagger PR state checks across reviewers
+		while true; do
+			sleep "${reviewer_watchdog_sleep}"
 
         # Fast path: if another reviewer (or the pre-flight check) already
         # detected PR closure, short-circuit immediately instead of waiting
@@ -791,7 +822,7 @@ run_reviewer() {
           exit 143
         fi
 
-        # PR state check — abort if PR was merged/closed (~every 90s)
+			# PR state check — abort if PR was merged/closed (~every 9 polls; default ~90s)
         wd_iter=$((wd_iter + 1))
         if [ $((wd_iter % 9)) -eq 0 ]; then
           # Pipe through grep to reject error JSON that gh api dumps to
