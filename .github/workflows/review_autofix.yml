@@ -2144,6 +2144,24 @@ jobs:
             fi
 
             if [ "${has_real_changes}" = "true" ]; then
+              # Defense-in-depth: before firing the warning and blocking
+              # auto-merge, re-check the working-tree state and the
+              # narrative "Changes made:" block via the shared shim. If
+              # both indicate no real edits, downgrade to an
+              # informational log line and do not block auto-merge.
+              # Keeps the hard failure only when there is real evidence
+              # of lost edits. See: fun-token-multi-chain PR #117.
+              recheck_script="${GITHUB_WORKSPACE}/scripts/detect_editor_changes_lost.sh"
+              if [ -x "${recheck_script}" ]; then
+                recheck_result="$(bash "${recheck_script}" "${EDITOR_SUMMARY_FILE}" 2>/dev/null || echo "true")"
+                if [ "${recheck_result}" = "false" ]; then
+                  echo "Notice: Change status: reported edited but working tree is clean and narrative claims no concrete changes; treating as false positive (no warning, auto-merge not blocked)."
+                  has_real_changes="false"
+                fi
+              fi
+            fi
+
+            if [ "${has_real_changes}" = "true" ]; then
               if [ "${CAN_PUSH:-}" = "true" ]; then
                 echo "::error::Editor claimed changes but no commit was produced. This indicates a mismatch between the editor summary and final git state (changes may have failed to persist, or may have been discarded during commit validation)."
               else
