@@ -1094,8 +1094,8 @@ _linked_prs_by_branch_name()
 }
 
 # _linked_prs_by_body_reference — Return open PR numbers whose body
-# contains a GitHub closing keyword ("Closes #N" / "Fixes #N" / "Resolves
-# #N", case-insensitive) targeting this issue.  Used as a second fallback
+# contains a GitHub closing keyword ("Closes #N" / "Fixes #N" /
+# "Resolves #N", case-insensitive) targeting this issue.  Used as a second fallback
 # for `close_linked_pr` because relying solely on the timeline
 # cross-reference event is brittle (edits, Actions-bot-authored PRs, and
 # certain merge-queue interactions have all been observed to suppress the
@@ -1113,7 +1113,7 @@ _linked_prs_by_body_reference()
 	printf '%s' "${candidates_json}" | jq -r --arg n "${issue_num}" '
 		(. // [])
 		| .[]
-		| select((.body // "") | test("(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#" + $n + "(?![0-9])"))
+		| select((.body // "") | test("(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#" + $n + "\\b"))
 		| .number
 	' 2>/dev/null || true
 }
