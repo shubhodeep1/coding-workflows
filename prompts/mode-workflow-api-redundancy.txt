@@ -34,9 +34,9 @@ Conservative safety bias (NON-NEGOTIABLE):
 - `NEEDS_VERIFICATION` is the right tag whenever you cannot fully prove the `SAFE_TO_MERGE` preconditions from static reading alone.
 
 Every finding MUST include:
-- **ID** — stable identifier. Allowed prefixes:
+- **ID** — stable identifier. Use zero-padded 3-digit sequence numbers per prefix. Allowed prefixes:
   - `MERGE-###` — two or more calls can be consolidated into one.
-  - `DEAD-###` — call result is never consumed.
+  - `DEAD-API-###` — dead API call result is never consumed.
   - `REUSE-###` — data already available in a variable/file from an earlier step but re-fetched via API.
 - **Safety tag** — `SAFE_TO_MERGE` / `NEEDS_VERIFICATION` / `RISKY_SKIP`.
 - **File path and line ranges** for every call involved (e.g. `scripts/foo.sh:120-145` and `scripts/foo.sh:210-225`).
@@ -69,7 +69,7 @@ Findings where two or more calls can be merged.
 ### Redundant Re-Fetch (REUSE-###)
 Findings where data already present in a variable/file is re-fetched.
 
-### Dead Calls (DEAD-###)
+### Dead Calls (DEAD-API-###)
 Findings where a call's result is never consumed.
 
 ### Cross-References to Deep Audit Section
