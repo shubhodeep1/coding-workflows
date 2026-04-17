@@ -726,8 +726,8 @@ fi
 
 # Bounded retry budget for the post-validation final integration→default
 # squash merge inside mark_validation_complete. Each poll tick that runs
-# mark_validation_complete and observes a budget-eligible failure from
-# finalize_integration_merge_if_needed increments .final_merge_attempt_count;
+# mark_validation_complete increments .final_merge_attempt_count when
+# finalize_integration_merge_if_needed returns a budget-eligible failure;
 # transient/budget-ineligible deferrals do not consume retry budget. On
 # success the counter is reset. After the budget is exhausted the project is
 # escalated to ai:blocked instead of being silently advanced to status=complete.
