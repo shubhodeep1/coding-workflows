@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 4\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/test-and-mark-stable.yml (line ~1030)\n      Problem: mktemp stderr redirected to /dev/null, hiding actual filesystem error messages; If /tmp has issues (full, permissions), the specific mktemp error is hidden, making debugging harder. Inconsistent with other mktemp calls in same file.; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: .github/workflows/test-and-mark-stable.yml\n      Problem: Location: Lines 1030, 1034; Issue: mktemp error output suppressed, reducing diagnostic value; Suggested minimal fix: Remove \"2>/dev/null\" from both mktemp calls to show actual error messages; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1; Actually, let me check one more thing. Are there any other issues in the code? Let me look at the error output logic again:; ```bash; echo \"::group::API response body (first 4KB of stdout)\"; head -c 4096 \"${POST_OUT}\" || true; echo \"\"; echo \"::endgroup::\"; The `echo \"\"` adds a newline after the head output. Good.; What about the cleanup? In error path, we clean up files then exit 1. In success path, we clean up files. Good.; The error message: `\"Failed to post orchestrator state comment (repo=${TEST_REPO} tracking_issue=${TRACKING_NUMBER})\"` includes the repo and issue number for context. Good.; Actually, I just noticed something. The error message in the workflow uses `tracking_issue` but the variable is `TRACKING_NUMBER`. That's just in the message text, not a bug.; Wait, let me check the actual line 1042:; ```bash; echo \"::error::Failed to post orchestrator state comment (repo=${TEST_REPO} tracking_issue=${TRACKING_NUMBER})\"; Yes, it says `tracking_issue=` in the message but uses `TRACKING_NUMBER` variable. That's fine - it's just the message text.; Actually, I should check if there's a missing space or something. No, looks fine.; Let me also check the comment about \"the API's errors[] payload instead of the opaque 'gh: Validation Failed (HTTP 422)'\". The code shows the API response body (first 4KB). That should include the errors[] payload.; One more thing: What if the API response is binary or very large? `head -c 4096` handles that. The `|| true` ensures it doesn't fail.; Actually, there's a potential issue. What if `${POST_OUT}` contains null bytes or other non-printable characters? `head -c` will still output them, which might look weird in logs. But that's okay for debugging.; Actually, GitHub Actions annotations might have issues with certain characters. But the `::error::` and `::group::` annotations are just plain text.; I think the implementation is correct. The mktemp `2>/dev/null` issue is a minor hardening improvement.; Let me write my final review.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: .github/workflows/test-and-mark-stable.yml (line ~1030)\n      Problem: mktemp stderr redirected to /dev/null, hiding actual filesystem error messages; If /tmp has issues (full, permissions), the specific mktemp error is hidden, making debugging harder. Inconsistent with other mktemp calls in same file.; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: .github/workflows/test-and-mark-stable.yml\n      Problem: Location: Lines 1030, 1034; Issue: mktemp error output suppressed, reducing diagnostic value; Suggested minimal fix: Remove \"2>/dev/null\" from both mktemp calls to show actual error messages; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1; The last run autofix correctly added shell quoting to mktemp command substitutions, fixing potential word-splitting issues. The error handling logic is robust with proper cleanup in both success and failure paths. The implementation aligns with the PR's goal of improving error diagnostics for orchestrator state comment posting.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/test-and-mark-stable.yml",
+  "fingerprint": "a83b82f5000a3a51ae0d28f53555d512a55528a20ef1659083cfc68309c468e3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1266,
+    "run_id": "24551749729",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24551749729",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260417065539_18cb1a5462",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1266,
+    "run_id": "24551749729"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-17T06:55:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
