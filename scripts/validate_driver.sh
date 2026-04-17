@@ -421,9 +421,9 @@ detect_eresolve()
 {
 	local log_file="$1"
 	[ -f "${log_file}" ] || return 1
-	if grep -Eq 'npm (ERR!|error)[[:space:]]+(code[[:space:]]+)?ERESOLVE' "${log_file}" \
-		|| grep -Eq 'npm (ERR!|error)[[:space:]]+Could not resolve dependency' "${log_file}" \
-		|| grep -Eq 'npm (ERR!|error)[[:space:]]+Conflicting peer dependency' "${log_file}"; then
+	if grep -Eaiq 'npm.*(ERR!|error).*ERESOLVE' "${log_file}" \
+		|| grep -Eaiq 'npm.*(ERR!|error).*Could not resolve dependency' "${log_file}" \
+		|| grep -Eaiq 'npm.*(ERR!|error).*Conflicting peer dependency' "${log_file}"; then
 		return 0
 	fi
 	return 1
@@ -446,8 +446,15 @@ import sys
 
 path = sys.argv[1]
 try:
-    with open(path, encoding="utf-8", errors="replace") as fh:
-        text = fh.read()
+    with open(path, "rb") as fh:
+        fh.seek(0, 2)
+        size = fh.tell()
+        tail_bytes = 1024 * 1024
+        if size > tail_bytes:
+            fh.seek(-tail_bytes, 2)
+        else:
+            fh.seek(0)
+        text = fh.read().decode("utf-8", errors="replace")
 except OSError:
     print("npm ERESOLVE dependency conflict (build log unreadable)")
     sys.exit(0)
@@ -462,7 +469,7 @@ conflicting = first(r'npm (?:ERR!|error)\s+Conflicting peer dependency:\s*(.+)')
 
 artifacts = sorted({
     m for m in re.findall(
-        r'/[A-Za-z0-9_./-]+\.npm/_logs/[A-Za-z0-9_.:-]+-(?:eresolve-report\.txt|debug-\d+\.log)',
+        r'[^ \n]*\.npm/_logs/[^ \n]+-(?:eresolve-report\.txt|debug-\d+\.log)',
         text,
     )
 })
