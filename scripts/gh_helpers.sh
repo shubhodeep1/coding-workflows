@@ -1051,3 +1051,106 @@ gh_issue_timeline_with_cross_refs()
 
 	printf '%s\n' "${transformed_json}"
 }
+
+# ---------------------------------------------------------------
+# autofix_retrigger_has_inflight_peer — detect an already-queued or
+# already-running peer review/autofix run on the same PR head branch,
+# so the caller can skip an otherwise-redundant workflow_dispatch.
+#
+# Motivation:
+#   review_autofix.yml finishes a commit-and-push cycle and then
+#   issues `gh workflow run review_autofix.yml` as a fallback in
+#   case the merge-ref for the synchronize event is unbuildable.
+#   In the common case the push already fires pull_request.synchronize
+#   → internal-review.yml → review_autofix.yml, so both runs land in
+#   the same `pr-autofix-${PR}` concurrency group with
+#   cancel-in-progress: true and one kills the other.  The killed
+#   run has already spent runner minutes and possibly LLM setup
+#   tokens.  This helper lets the retrigger step skip its dispatch
+#   when a peer run is already in flight.
+#
+# Input:
+#   $1 pr_number      — PR number (informational, used in log lines)
+#   $2 head_branch    — PR head branch name (required for filtering)
+#   $3 current_run_id — github.run_id of the CURRENT run, so we can
+#                       exclude ourselves from the peer check.
+#
+# Output (stdout):
+#   AUTOFIX_PEER_CHECK pr=<n> branch=<b> current_run=<r> \
+#     peer_count=<n> peer_run=<id|-> peer_path=<path|->
+#   An AUTOFIX_PEER_QUERY_FAILED line is emitted on API error
+#   (stderr) so callers can distinguish a true no-peer result from a
+#   probe failure when grepping logs.
+#
+# Return:
+#   0 — at least one in-flight peer found; caller SHOULD skip dispatch
+#   1 — no peer found, or the check failed; caller SHOULD proceed
+#       (fail-open: never block dispatch on a detection failure)
+#
+# API calls:
+#   Exactly 1 `gh api GET /repos/{repo}/actions/runs` call per
+#   invocation, wrapped in gh_retry (rate-limit aware).  Results are
+#   not cached — the two retrigger blocks fire at most twice per run
+#   and the set of in-flight runs is mutable between those calls.
+#
+# CLAUDE.md §15 audit:
+#   The prior retrigger path dispatched unconditionally, so there is
+#   no existing gh call here to extend.  A single list-runs call
+#   replaces the wasted dispatch on the collision path, so net API
+#   cost is negative when a peer is found and neutral otherwise.
+# ---------------------------------------------------------------
+autofix_retrigger_has_inflight_peer()
+{
+	local pr_number="${1:-}"
+	local head_branch="${2:-}"
+	local current_run_id="${3:-}"
+
+	if [ -z "${head_branch}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch:-?} reason=missing_inputs" >&2
+		return 1
+	fi
+
+	local response
+	if ! response=$(gh_retry gh api \
+		-H "Accept: application/vnd.github+json" \
+		"/repos/${GITHUB_REPOSITORY}/actions/runs?branch=${head_branch}&per_page=30" \
+		2>/dev/null); then
+		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=api_error" >&2
+		return 1
+	fi
+
+	if [ -z "${response}" ]; then
+		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=empty_response" >&2
+		return 1
+	fi
+
+	# Filter: in-flight (queued or in_progress), not ourselves, and
+	# running one of the review/autofix workflow files.  Match by
+	# workflow file path so renamed jobs in consumer repos still
+	# count as peers.  Prefer queued peers over in_progress peers so
+	# we surface a waiting dispatch even if the current sync run is
+	# also in_progress.
+	local peer_info
+	peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" '
+		[
+			.workflow_runs[]?
+			| select(.status == "queued" or .status == "in_progress")
+			| select((.id | tostring) != $current)
+			| select(.path | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
+		]
+		| {count: length, first_id: (.[0].id // "-"), first_path: (.[0].path // "-")}
+		| "\(.count) \(.first_id) \(.first_path)"
+	' 2>/dev/null || echo "0 - -")
+
+	local peer_count peer_run peer_path
+	peer_count=$(printf '%s' "${peer_info}" | awk '{print $1}')
+	peer_run=$(printf '%s' "${peer_info}" | awk '{print $2}')
+	peer_path=$(printf '%s' "${peer_info}" | awk '{print $3}')
+
+	echo "AUTOFIX_PEER_CHECK pr=${pr_number:-?} branch=${head_branch} current_run=${current_run_id:-?} peer_count=${peer_count:-0} peer_run=${peer_run:--} peer_path=${peer_path:--}"
+
+	if [ "${peer_count:-0}" -gt 0 ] 2>/dev/null; then
+		return 0
+	fi
+	return 1
+}

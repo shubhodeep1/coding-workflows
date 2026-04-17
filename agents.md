@@ -432,6 +432,26 @@ Operational rules:
 
 ---
 
+## 20. Autofix Retrigger Dedup
+
+`review_autofix.yml` has two `workflow_dispatch` retrigger steps that fire after a push — the post-commit/merge-resolve retrigger and the editor-changes-lost retrigger. Both used to dispatch unconditionally, which collided with the `pull_request.synchronize` event produced by the same push (both land in `pr-autofix-${PR}` with `cancel-in-progress: true`) and the loser was killed 4–10 s after start, burning runner minutes and any already-spent LLM setup tokens.
+
+Contract:
+
+- Each retrigger step waits `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` (default `8`, clamped to `0..60`) for the synchronize run to materialise, then calls `autofix_retrigger_has_inflight_peer "${PR_NUMBER}" "${TARGET_BRANCH}" "${GITHUB_RUN_ID}"` in `scripts/gh_helpers.sh`.
+- The helper issues exactly **1** `gh api GET /repos/{repo}/actions/runs?branch=...&per_page=30` call (wrapped in `gh_retry`) per invocation and filters in `jq` for queued/in_progress runs on the review-workflow paths (`review_autofix.yml`, `internal-review.yml`, `ai-review.yml`) excluding the current run ID. Returns 0 on peer found, 1 otherwise.
+- The helper **fails open**: any API or empty-response error returns 1 so the caller falls through to the original unconditional dispatch. A missing `autofix_retrigger_has_inflight_peer` symbol (old bootstrap) also falls through.
+- When a peer is found the retrigger emits `AUTOFIX_DISPATCH_SKIPPED reason=<reason> pr=<n> current_run=<r> source=<post_commit|editor_changes_lost>_retrigger` and exits 0 without dispatching. When no peer is found it emits `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected ...` and proceeds with the existing dispatch chain (direct `review_autofix.yml` → `ai-review.yml` / `internal-review.yml` fallback).
+- Every probe emits `AUTOFIX_PEER_CHECK pr=... branch=... current_run=... peer_count=... peer_run=... peer_path=...` so Actions log analysis can measure collision rates over time. Probe failures emit `AUTOFIX_PEER_QUERY_FAILED pr=... branch=... reason=<missing_inputs|api_error|empty_response>` on stderr.
+
+Operational rules:
+
+- Renames of `AUTOFIX_RETRIGGER_PEER_WAIT_SECS`, the helper, or the log prefixes (`AUTOFIX_PEER_CHECK`, `AUTOFIX_DISPATCH_SKIPPED`, `AUTOFIX_DISPATCH_ISSUED`, `AUTOFIX_PEER_QUERY_FAILED`) are breaking changes per CLAUDE.md §6 — downstream log analysis (`scripts/analyze_workflow_logs.py`) and any consumer dashboards pivot on those literal prefixes.
+- Per CLAUDE.md §15 audit: the prior retrigger path issued no `gh` call, so there was no existing invocation to extend. The single added list-runs call replaces a guaranteed-wasted `gh workflow run` dispatch on the collision path; net API cost is negative when a peer is found and neutral otherwise. The helper is **not** a candidate for cycle-local caching because it is called at most twice per run and the in-flight run set is mutable between calls.
+- The helper is bootstrap-safe: `gh_helpers.sh` is already in `REQUIRED_BOOTSTRAP_SCRIPTS`, so the symbol is available from the first step after bootstrap. Do not move `gh_helpers.sh` to the optional list.
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**
