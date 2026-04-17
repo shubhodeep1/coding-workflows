@@ -634,6 +634,30 @@ jobs:
             exit 1
           fi
 
+          required_headings=(
+            "### Section 1: Bug & Correctness Sweep"
+            "### Section 2: GitHub API Call Redundancy Audit"
+            "### Section 3: Code Duplication & Modularization Opportunities"
+            "### Section 4: Expression Size Limit Risk Assessment"
+            "### Section 5: Cross-Cutting Concerns"
+            "### Section 6: Summary & Severity Matrix"
+            "#### 6A. Findings Summary Table"
+            "#### 6B. Estimated Remediation Scope"
+          )
+          previous_heading_line=0
+          for heading in "${required_headings[@]}"; do
+            heading_line="$(grep -nFx "${heading}" "${SECTION_FILE}" | head -n1 | cut -d: -f1 || true)"
+            if [ -z "${heading_line}" ]; then
+              echo "::error::Deep audit Codex output is missing required heading: ${heading}"
+              exit 1
+            fi
+            if [ "${heading_line}" -le "${previous_heading_line}" ]; then
+              echo "::error::Deep audit Codex output has headings out of order at: ${heading}"
+              exit 1
+            fi
+            previous_heading_line="${heading_line}"
+          done
+
           printf '\n' >> "${REPORT_FILE}"
           cat "${SECTION_FILE}" >> "${REPORT_FILE}"
 
@@ -688,12 +712,14 @@ jobs:
           STAGE_STATUS="${{ steps.audit.outputs.audit_status || 'failed' }}"
           if [ "${STAGE_STATUS}" = "completed" ]; then
             MSG="Deep audit pass completed for ${{ github.repository }}"
+            ALERT_LEVEL="DEBUG"
           else
             MSG="Deep audit pass FAILED for ${{ github.repository }}"
+            ALERT_LEVEL="CRITICAL"
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_msg "${MSG}" "DEBUG" >/dev/null
+          tg_send_msg "${MSG}" "${ALERT_LEVEL}" >/dev/null
 
   api-redundancy:
     needs: [analyze-commit-notify, deep-audit]
@@ -843,6 +869,29 @@ jobs:
             exit 1
           fi
 
+          required_headings=(
+            "### Safety Tag Legend"
+            "### Consolidation Candidates (MERGE-###)"
+            "### Redundant Re-Fetch (REUSE-###)"
+            "### Dead Calls (DEAD-API-###)"
+            "### Cross-References to Deep Audit Section"
+            "### Summary Counts"
+            "### Implement-Stage Handoff"
+          )
+          previous_heading_line=0
+          for heading in "${required_headings[@]}"; do
+            heading_line="$(grep -nFx "${heading}" "${SECTION_FILE}" | head -n1 | cut -d: -f1 || true)"
+            if [ -z "${heading_line}" ]; then
+              echo "::error::API redundancy Codex output is missing required heading: ${heading}"
+              exit 1
+            fi
+            if [ "${heading_line}" -le "${previous_heading_line}" ]; then
+              echo "::error::API redundancy Codex output has headings out of order at: ${heading}"
+              exit 1
+            fi
+            previous_heading_line="${heading_line}"
+          done
+
           printf '\n' >> "${REPORT_FILE}"
           cat "${SECTION_FILE}" >> "${REPORT_FILE}"
 
@@ -897,9 +946,11 @@ jobs:
           STAGE_STATUS="${{ steps.api_redundancy.outputs.api_redundancy_status || 'failed' }}"
           if [ "${STAGE_STATUS}" = "completed" ]; then
             MSG="API redundancy pass completed for ${{ github.repository }}"
+            ALERT_LEVEL="DEBUG"
           else
             MSG="API redundancy pass FAILED for ${{ github.repository }}"
+            ALERT_LEVEL="CRITICAL"
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_msg "${MSG}" "DEBUG" >/dev/null
+          tg_send_msg "${MSG}" "${ALERT_LEVEL}" >/dev/null
