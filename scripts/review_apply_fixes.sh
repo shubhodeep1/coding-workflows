@@ -696,7 +696,7 @@ while [ "${attempt}" -le 3 ]; do
           # edits present here (attempt 1, 9+/9-), absent ~5s later at
           # commit-prep with no visible git command in between.
           echo "::group::Working tree state (checkpoint=editor_exit)"
-          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           _cp_status="$(git status --porcelain 2>/dev/null || true)"
           if [ -n "${_cp_status}" ]; then
             printf '%s\n' "${_cp_status}" | head -40

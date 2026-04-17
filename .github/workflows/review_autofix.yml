@@ -1606,7 +1606,7 @@ jobs:
           # at the step boundary (Serena shutdown / runner transition)
           # and no logic inside this step can recover.  See PR #1255.
           echo "::group::Working tree state (checkpoint=commit_step_start)"
-          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           _cp_status="$(git status --porcelain 2>/dev/null || true)"
           if [ -n "${_cp_status}" ]; then
             printf '%s\n' "${_cp_status}" | head -40
@@ -1680,7 +1680,7 @@ jobs:
           # happens inside this step (untracked cleanup, protected-path
           # reset, artifact rm, or similar).  See PR #1255.
           echo "::group::Working tree state (checkpoint=pre_touched_loop)"
-          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           _cp_status="$(git status --porcelain 2>/dev/null || true)"
           if [ -n "${_cp_status}" ]; then
             printf '%s\n' "${_cp_status}" | head -40
