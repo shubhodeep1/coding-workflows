@@ -176,6 +176,8 @@ sanitize_flagged_by()
 	if [ "${#kept[@]}" -gt 0 ]; then
 		SANITIZED_FLAGGED_BY="$(printf '%s, ' "${kept[@]}")"
 		SANITIZED_FLAGGED_BY="${SANITIZED_FLAGGED_BY%, }"
+	elif [ "${had_any}" -eq 1 ]; then
+		SANITIZED_FLAGGED_BY="unknown"
 	else
 		SANITIZED_FLAGGED_BY=""
 	fi
@@ -249,10 +251,10 @@ function emit_anchor(file, line, excerpt, key) {
 }
 {
 	line = $0
-	if (match(line, /^[[:space:]]*([A-Za-z0-9_./-]+\.[A-Za-z0-9_.-]+):([0-9]+)/, hit)) {
-		emit_anchor(hit[1], hit[2], line)
+	if (match(line, /^[[:space:]]*([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*):([0-9]+)/, hit)) {
+		emit_anchor(hit[1], hit[3], line)
 	}
-	if (match(line, /^[[:space:]]*[Ff][Ii][Ll][Ee]:[[:space:]]*([A-Za-z0-9_./-]+\.[A-Za-z0-9_.-]+)[[:space:]]*$/, f)) {
+	if (match(line, /^[[:space:]]*[Ff][Ii][Ll][Ee]:[[:space:]]*([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*)[[:space:]]*$/, f)) {
 		pending_file = f[1]
 		next
 	}
