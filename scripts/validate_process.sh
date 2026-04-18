@@ -22,6 +22,7 @@ set -euo pipefail
 [[ "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]] || { echo "GITHUB_REPOSITORY must be in owner/repo format" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "jq is required but not installed" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required but not installed" >&2; exit 1; }
+command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required but not installed" >&2; exit 1; }
 
 TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
 TRACKING_ISSUE_NUM=0
