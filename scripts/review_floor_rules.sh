@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-export LC_ALL=C
 
 BUNDLE_FILE="${1:-reviewer_bundle.txt}"
 OUT_FILE="${2:-floor_tags.txt}"
@@ -210,6 +209,7 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 		if (match(p, /:[0-9]+$/)) {
 			p = substr(p, 1, RSTART - 1)
 		}
+		sub(/:[0-9]+[^0-9]*$/, "", p)
 		sub(/[,:;]+$/, "", p)
 		return trim(p)
 	}
