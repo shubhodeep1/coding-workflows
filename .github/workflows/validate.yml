@@ -426,6 +426,8 @@ jobs:
           VALIDATION_TIMEOUT: ${{ inputs.validation_timeout }}
           VALIDATION_COMPOSE_FILE: ${{ inputs.compose_file }}
           TOOL_CALL_BUDGET_VALIDATE: ${{ vars.TOOL_CALL_BUDGET_VALIDATE || '60' }}
+          MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
+          CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           MODEL_EDITOR: ${{ env.MODEL_EDITOR }}
           MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
           MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
@@ -456,7 +458,7 @@ jobs:
           if [ ! -f "${STATUS_FILE_PATH}" ]; then
             jq -n \
               --arg status "error" \
-              --arg raw_status "harness_error" \
+              --arg raw_status "codex_failure" \
               --arg summary "Validation process did not produce validation_status.json." \
               --arg failure_summary "Missing status artifact. Check validate_process.sh output and uploaded artifacts." \
               '{
