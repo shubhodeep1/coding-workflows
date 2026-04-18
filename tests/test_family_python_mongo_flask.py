@@ -75,7 +75,7 @@ def _fixture_files() -> list[str]:
 	return sorted(
 		path.relative_to(FIXTURES_ROOT).as_posix()
 		for path in FIXTURES_ROOT.rglob("*")
-		if path.is_file() and "__pycache__" not in path.parts and not path.name.endswith(".pyc")
+		if path.is_file() and "__pycache__" not in path.parts and not path.name.endswith((".pyc", ".pyo", ".pyd"))
 	)
 
 

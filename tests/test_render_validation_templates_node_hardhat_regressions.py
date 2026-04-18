@@ -103,7 +103,21 @@ def test_log9_validate_env_values_are_double_quoted() -> None:
                 continue
             assert '="' in line and line.endswith('"'), f"unquoted validate.env line: {line}"
 
+        assert 'ANVIL_PORT="8545"' in env_text
+        assert 'CANARY_TOOLS="curl jq node npx forge cast"' in env_text
+
+        custom_manifest = _manifest_payload()
+        custom_manifest["port"] = 9555
+        custom_manifest["slots"]["canary_tools"] = ["curl", "jq", "node"]
+        _write_yaml(manifest_path, custom_manifest)
+
+        custom_result = _run_renderer(manifest_path, output_root)
+        assert custom_result.returncode == 0, custom_result.stderr
+        custom_env_text = (output_root / "validate.env").read_text(encoding="utf-8")
+        assert 'ANVIL_PORT="9555"' in custom_env_text
+        assert 'CANARY_TOOLS="curl jq node"' in custom_env_text
         assert 'RPC_URL=""' in env_text
+        assert 'RPC_URL=""' in custom_env_text
 
 
 def test_shutdown_helper_is_rendered_and_invoked() -> None:
