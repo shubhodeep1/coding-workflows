@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 6\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/review_autofix.yml\n      Problem: The new logic for \"Preserving newly created files in workflow source repo\" lacks an exclusion for node_modules.; When IS_WORKFLOW_SOURCE_REPO=true, the workflow logs all untracked files via git ls-files --others --exclude-standard. If an editor action or a step like npm install (run by a developer or automated tool) creates a nested node_modules directory that isn't yet in .gitignore, thousands of files will be logged to stdout. More importantly, these files will then be processed by the SHA-based snapshotting logic in lines 1740-1803, which calls git hash-object on every file. This can lead to significant performance degradation or \"Argument list too long\" errors when attempting to generate the touched-file list, as seen in previous similar regressions.\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: .github/workflows/review_autofix.yml\n      Problem: The added pattern node_modules|node_modules/*|*/node_modules|*/node_modules/* in the conflict-resolver index staging loop is redundant.; This isn't a runtime failure, but shell case patterns allow simpler globbing. The pattern *node_modules|*node_modules/* covers all four cases (top-level, files in top-level, nested, and files in nested) more concisely.; HARDENING_SUGGESTIONS:\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [3] File: .github/workflows/review_autofix.yml\n      Problem: Location: Line 1529-1550 (Snapshotting loop); Issue: The loop executes git hash-object for every tracked file in a sub-process.; Suggested minimal fix: Use git ls-files -s | awk '{print \"T\\t\"$2\"\\t\"$3\"\\t\"$4}' to extract SHAs and modes from the index in a single pass, drastically reducing processes for large repositories.; Estimated lines changed: 4; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: .github/workflows/review_autofix.yml\n      Problem: Location: Line 1661-1667; Issue: Logging all untracked files without a count guard or exclusion.; Suggested minimal fix: Add a head -n 50 restriction to the logging loop or a total count check before logging individual files.; Estimated lines changed: 5; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: .github/workflows/review_autofix.yml\n      Problem: Change: Extended node_modules exclusion pattern from `node_modules|node_modules/*` to `node_modules|node_modules/*|*/node_modules|*/node__modules/*`; **Analysis:**; The change correctly addresses an inconsistency between:; 1. The **main commit staging loop** (line 18822) - already had nested node_modules exclusion; 2. The **conflict-resolver staging loop** (line 3178) - only had shallow exclusion before this fix; The modified code now excludes:; - `node_modules` - top-level directory; - `node_modules/*` - contents of top-level directory; - `*/node_modules` - nested directories (e.g., `foo/node_modules`); - `*/node_modules/*` - contents of nested directories; **Verification:**; - YAML validation: PASSED; - Pattern correctness: PASSED (shell case patterns work correctly); - Consistency: Both loops now have identical exclusion patterns; - No runtime issues identified - the change aligns two code paths that should behave the same way; **Issues Found:** None; The modification is correct and necessary. Without this change, nested node_modules directories created during conflict resolution would have been incorrectly staged in the resolver path while correctly excluded in the commit path.; **HARDENING_SUGGESTIONS:** None - the change is minimal and correct.; **RECOMMENDATION:** APPROVED - No changes required.\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\n  [6] File: .github/workflows/review_autofix.yml\n      Problem: Location: Line 3178 (resolver loop) and Line 1822 (commit loop); Issue: The pattern `node_modules|node_modules/*|*/node_modules|*/node_modules/*` has overlapping matches that could be simplified to `*node_modules|*node_modules/*)`; Suggested minimal fix: Optional - simplify to single pattern covering all cases; Estimated lines changed: 2; HARDENING_RISK_SCORE: 0 (current pattern works correctly, simplification is cosmetic only); **STATUS: APPROVED** - The last AI autofix correctly addressed a pattern inconsistency between the commit loop and conflict-resolver loop. No changes needed.\n      Confidence: avg n/a\n      Flagged by: moonshotai_kimi-k2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml",
+  "fingerprint": "dacc8a296402e2c380eb479ef45b5670d09e1ccd95e36dfdd115d1e929cc6349",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1342,
+    "run_id": "24616209705",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24616209705",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418233604_c7225e8df2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1342,
+    "run_id": "24616209705"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T23:36:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
