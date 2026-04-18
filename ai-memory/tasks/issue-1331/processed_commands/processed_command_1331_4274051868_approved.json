@@ -5,13 +5,24 @@
   "entry_id": "processed_command_1331_4274051868_approved",
   "issue_number": 1331,
   "metadata": {
+    "branch": "ai/issue-1331",
+    "changed_files": [
+      "prompts/mode-judge-stall-recovery.txt",
+      "scripts/label_helpers.sh",
+      "scripts/orchestrate_lib.py"
+    ],
+    "issue_number": 1331,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1331",
+    "pr_number": 1334,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1334",
+    "run_attempt": "1",
+    "run_id": "24608395954",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24608395954"
   },
   "run_attempt": 1,
   "run_id": "24608395954",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-18T15:59:22Z",
+  "status": "completed",
+  "timestamp": "2026-04-18T17:11:08Z",
   "workflow": "implement"
 }
