@@ -37,6 +37,42 @@
       "color": "e3a21a",
       "description": "Validation failed — judge re-evaluating before retry"
     },
+    "ai:clarify-failed": {
+      "color": "e11d48",
+      "description": "Clarify workflow failed before producing a valid response"
+    },
+    "ai:clarify-respond-failed": {
+      "color": "e11d48",
+      "description": "Orchestrator clarify-respond workflow failed before posting an answer"
+    },
+    "ai:plan-failed": {
+      "color": "e11d48",
+      "description": "Plan workflow failed before producing an approved implementation plan"
+    },
+    "ai:implement-diagnose-failed": {
+      "color": "e11d48",
+      "description": "Implement diagnose workflow failed while generating fix-up guidance"
+    },
+    "ai:review-autofix-failed": {
+      "color": "e11d48",
+      "description": "Review/autofix workflow failed before completing the review pass"
+    },
+    "ai:validate-failed": {
+      "color": "e11d48",
+      "description": "Validate workflow failed before runtime validation could complete"
+    },
+    "ai:integration-judge-failed": {
+      "color": "e11d48",
+      "description": "Integration judge workflow failed before returning a verdict"
+    },
+    "ai:log-analysis-failed": {
+      "color": "e11d48",
+      "description": "Workflow log analysis failed before producing an analysis report"
+    },
+    "ai:memory-maintenance-failed": {
+      "color": "e11d48",
+      "description": "AI memory maintenance workflow failed before completing maintenance"
+    },
     "ai:done": {
       "color": "0e8a16",
       "description": "Implementation PR created"
@@ -88,6 +124,14 @@
     "ai:orchestrator-validate-required": {
       "color": "c5def5",
       "description": "Orchestrator issue requires validate phase before completion"
+    },
+    "ai:comprehensive-test-pending": {
+      "color": "1d76db",
+      "description": "Pending comprehensive release callback dispatch."
+    },
+    "ai:needs-prompt-review": {
+      "color": "fbca04",
+      "description": "Validation prompt self-heal PR awaiting manual review"
     }
   },
   "phase_groups": [
@@ -112,6 +156,20 @@
         "ai:implementation-failed",
         "ai:merged",
         "ai:closed"
+      ]
+    },
+    {
+      "name": "failure_phase",
+      "members": [
+        "ai:clarify-failed",
+        "ai:clarify-respond-failed",
+        "ai:plan-failed",
+        "ai:implement-diagnose-failed",
+        "ai:review-autofix-failed",
+        "ai:validate-failed",
+        "ai:integration-judge-failed",
+        "ai:log-analysis-failed",
+        "ai:memory-maintenance-failed"
       ]
     }
   ]

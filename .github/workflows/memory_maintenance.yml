@@ -49,6 +49,10 @@ jobs:
           echo "Running memory compaction for month: ${ARCHIVE_MONTH}"
 
           echo "INFO: {\"event\":\"batch_noop\",\"workflow\":\"memory_maintenance\",\"reason\":\"no_llm_path\",\"batch_api_disabled\":\"${BATCH_API_DISABLED}\",\"provider_hint\":\"${BATCH_API_PROVIDER}\",\"poll_timeout_hours\":\"${BATCH_API_POLL_TIMEOUT_HOURS}\"}"
+          # Contract guard: this workflow currently has no Codex execution path.
+          # AI_PHASE_FAILURE_V1 markers and ai:memory-maintenance-failed labels
+          # are therefore intentionally no-op unless Codex execution is added.
+          echo "INFO: {\"event\":\"codex_contract_noop\",\"workflow\":\"memory_maintenance\",\"reason\":\"no_codex_execution_path\"}"
 
           python3 scripts/ai_memory.py compact \
             --month "${ARCHIVE_MONTH}" \

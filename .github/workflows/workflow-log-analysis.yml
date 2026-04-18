@@ -28,6 +28,11 @@ on:
         required: false
         default: ""
         type: string
+      tracking_issue:
+        description: Optional tracking issue number for failure marker and label handling
+        required: false
+        default: "0"
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -35,6 +40,7 @@ env:
 permissions:
   contents: write
   actions: read
+  issues: write
 
 concurrency:
   group: workflow-log-analysis-${{ github.repository }}-${{ github.ref_name }}
@@ -244,6 +250,9 @@ jobs:
           BATCH_API_DISABLED: ${{ vars.BATCH_API_DISABLED || 'false' }}
           BATCH_API_PROVIDER: ${{ vars.BATCH_API_PROVIDER || 'auto' }}
           BATCH_API_POLL_TIMEOUT_HOURS: ${{ vars.BATCH_API_POLL_TIMEOUT_HOURS || '24' }}
+          MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
+          CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
+          TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -253,6 +262,103 @@ jobs:
           BATCH_API_DISABLED_INPUT="${{ github.event.inputs.batch_api_disabled || '' }}"
           BATCH_ARTIFACT_NAME="workflow-log-analysis-batch-state"
           BATCH_STATE_FILE="workflow_log_analysis_batch_state.json"
+          TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
+          TRACKING_ISSUE_NUM=""
+          if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
+            TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
+          fi
+
+          if ! [[ "${MAX_CODEX_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_CODEX_ATTEMPTS}" -lt 1 ]; then
+            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${MAX_CODEX_ATTEMPTS}); defaulting to 3."
+            MAX_CODEX_ATTEMPTS=3
+          fi
+          if ! [[ "${CODEX_RETRY_BACKOFF_BASE_SECS}" =~ ^[0-9]+$ ]] || [ "${CODEX_RETRY_BACKOFF_BASE_SECS}" -lt 1 ]; then
+            echo "::warning::CODEX_RETRY_BACKOFF_BASE_SECS must be a positive integer (got: ${CODEX_RETRY_BACKOFF_BASE_SECS}); defaulting to 10."
+            CODEX_RETRY_BACKOFF_BASE_SECS=10
+          fi
+
+          emit_log_analysis_phase_failure() {
+            local failed_step_name="$1"
+            local failure_mode="$2"
+            local attempt_count="$3"
+            local failure_summary="$4"
+
+            if [ -z "${TRACKING_ISSUE_NUM}" ]; then
+              echo "::warning::AI_PHASE_FAILURE_V1 skipped for log-analysis: no tracking issue context (step=${failed_step_name}, mode=${failure_mode})."
+              return 0
+            fi
+
+            local timestamp
+            timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            local run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            local payload
+            payload="$(jq -cn \
+              --arg phase "workflow_log_analysis" \
+              --arg failure_mode "${failure_mode}" \
+              --arg failed_step_name "${failed_step_name}" \
+              --arg workflow_run_id "${{ github.run_id }}" \
+              --arg workflow_run_attempt "${{ github.run_attempt }}" \
+              --arg workflow_name "${{ github.workflow }}" \
+              --arg workflow_file "workflow-log-analysis.yml" \
+              --arg workflow_run_url "${run_url}" \
+              --arg repository "${GITHUB_REPOSITORY}" \
+              --arg tracking_issue "${TRACKING_ISSUE_NUM}" \
+              --arg attempt_count "${attempt_count}" \
+              --arg recommended_resume_action "retrigger_log_analysis" \
+              --arg timestamp "${timestamp}" \
+              '{
+                schema_version: 1,
+                phase: $phase,
+                failure_mode: $failure_mode,
+                failed_step_name: $failed_step_name,
+                workflow_run_id: $workflow_run_id,
+                workflow_run_attempt: $workflow_run_attempt,
+                workflow_name: $workflow_name,
+                workflow_file: $workflow_file,
+                workflow_run_url: $workflow_run_url,
+                repository: $repository,
+                tracking_issue: $tracking_issue,
+                attempt_count: $attempt_count,
+                recommended_resume_action: $recommended_resume_action,
+                timestamp: $timestamp
+              }')"
+
+            local comment_body
+            comment_body="<!-- AI_PHASE_FAILURE_V1"$'\n'"${payload}"$'\n'"AI_PHASE_FAILURE_V1 -->"$'\n'"## ❌ Workflow log analysis failure"$'\n\n'"${failure_summary}"$'\n\n'"Run: ${run_url}"
+
+            gh issue comment "${TRACKING_ISSUE_NUM}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --body "${comment_body}" >/dev/null 2>&1 || \
+              echo "::warning::Failed to post AI_PHASE_FAILURE_V1 comment for tracking issue #${TRACKING_ISSUE_NUM}."
+
+            gh label create "ai:log-analysis-failed" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --color "e11d48" \
+              --description "Workflow log analysis failed" >/dev/null 2>&1 || true
+
+            gh issue edit "${TRACKING_ISSUE_NUM}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || \
+              echo "::warning::Failed to apply ai:log-analysis-failed to #${TRACKING_ISSUE_NUM}."
+          }
+
+          handle_log_analysis_codex_failure() {
+            local failed_step_name="$1"
+            local failure_mode="$2"
+            local attempt_count="$3"
+            local codex_exit="$4"
+            local failure_summary="$5"
+
+            emit_log_analysis_phase_failure "${failed_step_name}" "${failure_mode}" "${attempt_count}" "${failure_summary}"
+            if [ -z "${TRACKING_ISSUE_NUM}" ]; then
+              echo "::warning::Workflow log analysis failure occurred without tracking issue context; skipping ai:log-analysis-failed label and marker comment."
+            fi
+
+            if [ "${codex_exit}" -eq 0 ]; then
+              exit 1
+            fi
+            exit "${codex_exit}"
+          }
 
           if [ "${CODEX_MODE_INPUT}" != "true" ]; then
             if ARTIFACTS_JSON="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" 2>/dev/null)"; then
@@ -309,12 +415,14 @@ jobs:
             set -e
 
             if [ "${ANALYZE_EXIT}" -ne 0 ]; then
-              echo "::error::Analyzer failed to prepare Codex context with exit code ${ANALYZE_EXIT}."
-              exit "${ANALYZE_EXIT}"
+              failure_summary="Analyzer failed to prepare Codex context with exit code ${ANALYZE_EXIT}."
+              echo "::error::${failure_summary}"
+              handle_log_analysis_codex_failure "analysis_prepare_context" "analyzer_failed" "1" "${ANALYZE_EXIT}" "${failure_summary}"
             fi
             if [ -z "${ANALYSIS_CONTEXT_FILE}" ] || [ ! -f "${ANALYSIS_CONTEXT_FILE}" ]; then
-              echo "::error::Analyzer did not produce a valid Codex context file path."
-              exit 1
+              failure_summary="Analyzer did not produce a valid Codex context file path."
+              echo "::error::${failure_summary}"
+              handle_log_analysis_codex_failure "analysis_prepare_context" "missing_context_artifact" "1" 1 "${failure_summary}"
             fi
 
             CODEX_PROMPT_FILE="$(mktemp)"
@@ -325,25 +433,40 @@ jobs:
               cat "${ANALYSIS_CONTEXT_FILE}"
             } > "${CODEX_PROMPT_FILE}"
 
-            max_attempts=3
+            max_attempts="${MAX_CODEX_ATTEMPTS}"
+            if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
+              echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
+              max_attempts="3"
+            fi
+            codex_failure_mode=""
+            analyze_attempts_used=0
             for attempt in $(seq 1 "${max_attempts}"); do
+              analyze_attempts_used="${attempt}"
               set +e
               codex exec --model "${WORKFLOW_EDITOR_MODEL}" --full-auto < "${CODEX_PROMPT_FILE}" > "${REPORT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
               ANALYZE_EXIT=$?
               set -e
               if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
+                codex_failure_mode=""
                 break
               fi
+              if [ "${ANALYZE_EXIT}" -ne 0 ]; then
+                codex_failure_mode="codex_rc_nonzero"
+              else
+                codex_failure_mode="codex_empty_output"
+              fi
               if [ "${attempt}" -lt "${max_attempts}" ]; then
-                sleep_secs=$((10 * (2 ** (attempt - 1))))
+                sleep_secs=$((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
                 sleep "${sleep_secs}"
               else
-                if [ "${ANALYZE_EXIT}" -eq 0 ]; then
-                  echo "::error::Codex returned empty output after ${max_attempts} attempts."
-                  exit 1
+                if [ "${codex_failure_mode}" = "codex_empty_output" ]; then
+                  failure_summary="Workflow log analysis Codex pass returned empty output after ${max_attempts} attempts."
+                  echo "::error::${failure_summary}"
+                  handle_log_analysis_codex_failure "analysis_codex_pass" "codex_empty_output" "${analyze_attempts_used}" 0 "${failure_summary}"
                 fi
-                echo "::error::Codex failed after ${max_attempts} attempts with exit code ${ANALYZE_EXIT}."
-                exit "${ANALYZE_EXIT}"
+                failure_summary="Workflow log analysis Codex pass failed after ${max_attempts} attempts with exit code ${ANALYZE_EXIT}."
+                echo "::error::${failure_summary}"
+                handle_log_analysis_codex_failure "analysis_codex_pass" "codex_rc_nonzero" "${analyze_attempts_used}" "${ANALYZE_EXIT}" "${failure_summary}"
               fi
             done
 
@@ -395,7 +518,21 @@ jobs:
             exit 0
           fi
 
-          echo "::error::Analyzer failed with exit code ${ANALYZE_EXIT}."
+          failure_summary="Workflow log analyzer failed with exit code ${ANALYZE_EXIT}."
+          echo "::error::${failure_summary}"
+          if [ -n "${TRACKING_ISSUE_NUM}" ]; then
+            emit_log_analysis_phase_failure "analysis_prepare" "analyzer_failed" "1" "${failure_summary}"
+            gh label create "ai:log-analysis-failed" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --color "e11d48" \
+              --description "Workflow log analysis failed" >/dev/null 2>&1 || true
+            gh issue edit "${TRACKING_ISSUE_NUM}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || \
+              echo "::warning::Failed to apply ai:log-analysis-failed to #${TRACKING_ISSUE_NUM}."
+          else
+            echo "::warning::Workflow log analyzer failed without tracking issue context; skipping ai:log-analysis-failed label and AI_PHASE_FAILURE_V1 marker."
+          fi
           exit "${ANALYZE_EXIT}"
 
       - name: Upload batch state artifact
@@ -591,10 +728,68 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
+          MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
+          CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
+          TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+
+          TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
+          TRACKING_ISSUE_NUM=""
+          if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
+            TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
+          fi
+
+          emit_deep_audit_failure() {
+            local failure_mode="$1"
+            local attempt_count="$2"
+            local failure_summary="$3"
+            if [ -z "${TRACKING_ISSUE_NUM}" ]; then
+              echo "::warning::Deep audit failure without tracking issue context; skipping ai:log-analysis-failed label and AI_PHASE_FAILURE_V1 marker."
+              return 0
+            fi
+            local timestamp
+            timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            local run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            local payload
+            payload="$(jq -cn \
+              --arg phase "workflow_log_analysis" \
+              --arg failure_mode "${failure_mode}" \
+              --arg failed_step_name "deep_audit_codex_pass" \
+              --arg workflow_run_id "${{ github.run_id }}" \
+              --arg workflow_run_attempt "${{ github.run_attempt }}" \
+              --arg workflow_name "${{ github.workflow }}" \
+              --arg workflow_file "workflow-log-analysis.yml" \
+              --arg workflow_run_url "${run_url}" \
+              --arg repository "${GITHUB_REPOSITORY}" \
+              --arg tracking_issue "${TRACKING_ISSUE_NUM}" \
+              --arg attempt_count "${attempt_count}" \
+              --arg recommended_resume_action "retrigger_log_analysis" \
+              --arg timestamp "${timestamp}" \
+              '{
+                schema_version: 1,
+                phase: $phase,
+                failure_mode: $failure_mode,
+                failed_step_name: $failed_step_name,
+                workflow_run_id: $workflow_run_id,
+                workflow_run_attempt: $workflow_run_attempt,
+                workflow_name: $workflow_name,
+                workflow_file: $workflow_file,
+                workflow_run_url: $workflow_run_url,
+                repository: $repository,
+                tracking_issue: $tracking_issue,
+                attempt_count: $attempt_count,
+                recommended_resume_action: $recommended_resume_action,
+                timestamp: $timestamp
+              }')"
+            comment_body="<!-- AI_PHASE_FAILURE_V1"$'\n'"${payload}"$'\n'"AI_PHASE_FAILURE_V1 -->"$'\n'"## ❌ Workflow log analysis deep audit failure"$'\n\n'"${failure_summary}"$'\n\n'"Run: ${run_url}"
+            gh issue comment "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --body "${comment_body}" >/dev/null 2>&1 || true
+            gh label create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
+            gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
+          }
 
           if [ -z "${REPORT_FILE}" ]; then
             echo "::error::Upstream job did not provide report_file."
@@ -621,7 +816,18 @@ jobs:
             echo "--- End current report contents ---"
           } > "${CODEX_PROMPT_FILE}"
 
-          max_attempts=3
+          max_attempts="${MAX_CODEX_ATTEMPTS}"
+          if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
+            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
+            max_attempts="3"
+          fi
+
+          backoff_base="${CODEX_RETRY_BACKOFF_BASE_SECS}"
+          if ! [[ "${backoff_base}" =~ ^[0-9]+$ ]] || [ "${backoff_base}" -lt 1 ]; then
+            echo "::warning::CODEX_RETRY_BACKOFF_BASE_SECS must be a positive integer (got: ${backoff_base}); defaulting to 10."
+            backoff_base=10
+          fi
+
           AUDIT_EXIT=0
           for attempt in $(seq 1 "${max_attempts}"); do
             set +e
@@ -632,14 +838,18 @@ jobs:
               break
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
-              sleep_secs=$((10 * (2 ** (attempt - 1))))
+              sleep_secs=$((backoff_base * (2 ** (attempt - 1))))
               sleep "${sleep_secs}"
             else
               if [ "${AUDIT_EXIT}" -eq 0 ]; then
-                echo "::error::Deep audit Codex returned empty output after ${max_attempts} attempts."
+                failure_summary="Deep audit Codex returned empty output after ${max_attempts} attempts."
+                echo "::error::${failure_summary}"
+                emit_deep_audit_failure "codex_empty_output" "${max_attempts}" "${failure_summary}"
                 exit 1
               fi
-              echo "::error::Deep audit Codex failed after ${max_attempts} attempts with exit code ${AUDIT_EXIT}."
+              failure_summary="Deep audit Codex failed after ${max_attempts} attempts with exit code ${AUDIT_EXIT}."
+              echo "::error::${failure_summary}"
+              emit_deep_audit_failure "codex_rc_nonzero" "${max_attempts}" "${failure_summary}"
               exit "${AUDIT_EXIT}"
             fi
           done
@@ -835,10 +1045,68 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.3-codex' }}
+          MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
+          CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
+          TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+
+          TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
+          TRACKING_ISSUE_NUM=""
+          if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
+            TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
+          fi
+
+          emit_api_redundancy_failure() {
+            local failure_mode="$1"
+            local attempt_count="$2"
+            local failure_summary="$3"
+            if [ -z "${TRACKING_ISSUE_NUM}" ]; then
+              echo "::warning::API redundancy failure without tracking issue context; skipping ai:log-analysis-failed label and AI_PHASE_FAILURE_V1 marker."
+              return 0
+            fi
+            local timestamp
+            timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            local run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            local payload
+            payload="$(jq -cn \
+              --arg phase "workflow_log_analysis" \
+              --arg failure_mode "${failure_mode}" \
+              --arg failed_step_name "api_redundancy_codex_pass" \
+              --arg workflow_run_id "${{ github.run_id }}" \
+              --arg workflow_run_attempt "${{ github.run_attempt }}" \
+              --arg workflow_name "${{ github.workflow }}" \
+              --arg workflow_file "workflow-log-analysis.yml" \
+              --arg workflow_run_url "${run_url}" \
+              --arg repository "${GITHUB_REPOSITORY}" \
+              --arg tracking_issue "${TRACKING_ISSUE_NUM}" \
+              --arg attempt_count "${attempt_count}" \
+              --arg recommended_resume_action "retrigger_log_analysis" \
+              --arg timestamp "${timestamp}" \
+              '{
+                schema_version: 1,
+                phase: $phase,
+                failure_mode: $failure_mode,
+                failed_step_name: $failed_step_name,
+                workflow_run_id: $workflow_run_id,
+                workflow_run_attempt: $workflow_run_attempt,
+                workflow_name: $workflow_name,
+                workflow_file: $workflow_file,
+                workflow_run_url: $workflow_run_url,
+                repository: $repository,
+                tracking_issue: $tracking_issue,
+                attempt_count: $attempt_count,
+                recommended_resume_action: $recommended_resume_action,
+                timestamp: $timestamp
+              }')"
+            comment_body="<!-- AI_PHASE_FAILURE_V1"$'\n'"${payload}"$'\n'"AI_PHASE_FAILURE_V1 -->"$'\n'"## ❌ Workflow log analysis API redundancy failure"$'\n\n'"${failure_summary}"$'\n\n'"Run: ${run_url}"
+            gh issue comment "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --body "${comment_body}" >/dev/null 2>&1 || true
+            gh label create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
+            gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
+          }
 
           if [ -z "${REPORT_FILE}" ]; then
             echo "::error::Upstream job did not provide report_file."
@@ -865,7 +1133,17 @@ jobs:
             echo "--- End current report contents ---"
           } > "${CODEX_PROMPT_FILE}"
 
-          max_attempts=3
+          max_attempts="${MAX_CODEX_ATTEMPTS}"
+          if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
+            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
+            max_attempts="3"
+          fi
+          backoff_base="${CODEX_RETRY_BACKOFF_BASE_SECS}"
+          if ! [[ "${backoff_base}" =~ ^[0-9]+$ ]] || [ "${backoff_base}" -lt 1 ]; then
+            echo "::warning::CODEX_RETRY_BACKOFF_BASE_SECS must be a positive integer (got: ${backoff_base}); defaulting to 10."
+            backoff_base=10
+          fi
+
           API_EXIT=0
           for attempt in $(seq 1 "${max_attempts}"); do
             set +e
@@ -876,14 +1154,18 @@ jobs:
               break
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
-              sleep_secs=$((10 * (2 ** (attempt - 1))))
+              sleep_secs=$((backoff_base * (2 ** (attempt - 1))))
               sleep "${sleep_secs}"
             else
               if [ "${API_EXIT}" -eq 0 ]; then
-                echo "::error::API redundancy Codex returned empty output after ${max_attempts} attempts."
+                failure_summary="API redundancy Codex returned empty output after ${max_attempts} attempts."
+                echo "::error::${failure_summary}"
+                emit_api_redundancy_failure "codex_empty_output" "${max_attempts}" "${failure_summary}"
                 exit 1
               fi
-              echo "::error::API redundancy Codex failed after ${max_attempts} attempts with exit code ${API_EXIT}."
+              failure_summary="API redundancy Codex failed after ${max_attempts} attempts with exit code ${API_EXIT}."
+              echo "::error::${failure_summary}"
+              emit_api_redundancy_failure "codex_rc_nonzero" "${max_attempts}" "${failure_summary}"
               exit "${API_EXIT}"
             fi
           done
