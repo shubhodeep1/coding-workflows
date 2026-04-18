@@ -1794,7 +1794,7 @@ jobs:
               # (e.g. support-script overlay mode-bit flips) so this union
               # cannot stage workflow bootstrap side-effects as editor output.
               if [ -f "${PRE_EDITOR_DIFF_BASELINE_FILE:-/nonexistent}" ]; then
-                CURRENT_DIFF_LIST="$(mktemp)"
+                CURRENT_DIFF_LIST="$(mktemp "${RUNTIME_DIR}/current_diff.XXXXXX" 2>/dev/null || echo "${RUNTIME_DIR}/current_diff.$$")"
                 git diff --name-only HEAD | sort -u > "${CURRENT_DIFF_LIST}" || true
                 comm -13 "${PRE_EDITOR_DIFF_BASELINE_FILE}" "${CURRENT_DIFF_LIST}" >> "${CODEX_TOUCHED_FILE}" || true
                 rm -f "${CURRENT_DIFF_LIST}"
