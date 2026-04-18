@@ -23,6 +23,7 @@ set -euo pipefail
 [[ "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]] || { echo "GITHUB_REPOSITORY must be in owner/repo format" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "jq is required but not installed" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required but not installed" >&2; exit 1; }
+command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required but not installed" >&2; exit 1; }
 
 TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
 TRACKING_ISSUE_NUM=0
@@ -2394,9 +2395,69 @@ DIAG_TEXT="$(jq -r '.diagnosis // "Validation failed."' "${DIAGNOSE_RESULT_FILE}
 # eligible. The helper short-circuits on an empty-patch proposal.
 attempt_self_heal_and_reexec "diagnose"
 
+# -----------------------------------------------------------------
+# Cross-cycle escalation (Q5=A, Q6=A, Q7=B):
+#
+# The diagnose prompt has been inverted to prefer `needs_fixes` over
+# `harness_error` when in doubt, so that the clarify -> plan -> implement
+# pipeline gets a chance to fix the failure inside the consumer repo
+# without human involvement. This is only safe if we auto-escalate when
+# the same fix-up proposal keeps failing across cycles, otherwise a
+# genuinely harness-side defect could loop indefinitely burning cycles.
+#
+# Mechanism:
+#   1. Compute a stable fingerprint of the current needs_fixes proposal
+#      (Q5=A: sha256 of sorted fix_issues[].title, 16-char hex prefix).
+#   2. Embed the fingerprint as an HTML-comment marker in the tracking
+#      issue comment posted by the `needs_fixes` branch below (Q6=A).
+#   3. On each cycle with VALIDATION_CYCLE >= 3, scan PRIOR_COMMENTS
+#      (already fetched at the top of this script for the LLM's
+#      cycle-N context) for prior markers. If the same fingerprint
+#      appears in at least 2 prior cycles' comments, the editor has
+#      failed to land the fix twice — promote this cycle to
+#      `harness_error` so the human/alert path takes over (Q7=B).
+#   4. The promoted `harness_error` uses the LLM-provided
+#      `harness_fixes` text (Q9=B schema allows it alongside
+#      `fix_issues`) if present; otherwise a templated fallback.
+# -----------------------------------------------------------------
+FAILURE_FINGERPRINT=""
+PRIOR_FINGERPRINT_HITS=0
+ESCALATED_FROM_NEEDS_FIXES=false
+
+if [ "${DIAG_STATUS}" = "needs_fixes" ]; then
+	FP_FIX_COUNT="$(jq -r 'if (.fix_issues | type) == "array" then (.fix_issues | length) else 0 end' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || echo 0)"
+	if [ "${FP_FIX_COUNT:-0}" -gt 0 ]; then
+		if FINGERPRINT_TITLES="$(jq -r '.fix_issues | sort_by(.title // "") | map(.title // "") | join("\n")' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null)"; then
+			FAILURE_FINGERPRINT="$(printf '%s' "${FINGERPRINT_TITLES}" | sha256sum | cut -c1-16)"
+		fi
+	fi
+fi
+
+if [ "${DIAG_STATUS}" = "needs_fixes" ] \
+	&& [ -n "${FAILURE_FINGERPRINT}" ] \
+	&& [ "${VALIDATION_CYCLE}" -ge 3 ] \
+	&& [ -n "${PRIOR_COMMENTS:-}" ]; then
+	PREV_CYCLE_1="$((VALIDATION_CYCLE - 1))"
+	PREV_CYCLE_2="$((VALIDATION_CYCLE - 2))"
+	HIT_PREV_CYCLE_1=0
+	HIT_PREV_CYCLE_2=0
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_1} -->" <<< "${PRIOR_COMMENTS:-}" 2>/dev/null; then
+		HIT_PREV_CYCLE_1=1
+	fi
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_2} -->" <<< "${PRIOR_COMMENTS:-}" 2>/dev/null; then
+		HIT_PREV_CYCLE_2=1
+	fi
+	PRIOR_FINGERPRINT_HITS="$((HIT_PREV_CYCLE_1 + HIT_PREV_CYCLE_2))"
+	if [ "${PRIOR_FINGERPRINT_HITS}" -ge 2 ]; then
+		ESCALATED_FROM_NEEDS_FIXES=true
+		DIAG_STATUS="harness_error"
+		echo "Cross-cycle escalation: needs_fixes fingerprint ${FAILURE_FINGERPRINT} seen in consecutive prior cycles (${PREV_CYCLE_2}, ${PREV_CYCLE_1}); promoting to harness_error (cycle ${VALIDATION_CYCLE})."
+	fi
+fi
+
 case "${DIAG_STATUS}" in
   needs_fixes)
-    FIX_COUNT="$(jq -r '.fix_issues | length' "${DIAGNOSE_RESULT_FILE}")"
+    FIX_COUNT="$(jq -r 'if (.fix_issues | type) == "array" then (.fix_issues | length) else 0 end' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || echo 0)"
     if [ "${FIX_COUNT}" -le 0 ]; then
       failure_summary="Diagnosis returned needs_fixes with empty fix_issues."
       post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
@@ -2484,7 +2545,20 @@ case "${DIAG_STATUS}" in
       issue_list_md='- (no issue numbers captured)'
     fi
 
-    post_tracking_comment "## 🧪 Runtime validation found fixable issues\n\n${DIAG_TEXT}\n\nConsolidated ${FIX_COUNT} root cause(s) into a single fix-up issue:\n${issue_list_md}"
+    # Embed the cross-cycle fingerprint marker so future cycles can
+    # detect the same-proposal-repeated case and escalate (Q6=A). The
+    # HTML comment is invisible in GitHub's rendered view but readable
+    # by the PRIOR_COMMENTS fetch at the top of this script. The
+    # `:-` defaults let this branch be exercised in isolation by
+    # tests/test_validate_process_fixup_labels.py, which does not
+    # populate FAILURE_FINGERPRINT / VALIDATION_CYCLE.
+    FINGERPRINT_MARKER=""
+    if [ -n "${FAILURE_FINGERPRINT:-}" ]; then
+      FINGERPRINT_MARKER="$(printf '\n<!-- validation-failure-fingerprint: %s cycle: %s -->' \
+        "${FAILURE_FINGERPRINT}" "${VALIDATION_CYCLE:-1}")"
+    fi
+
+    post_tracking_comment "## 🧪 Runtime validation found fixable issues\n\n${DIAG_TEXT}\n\nConsolidated ${FIX_COUNT} root cause(s) into a single fix-up issue:\n${issue_list_md}${FINGERPRINT_MARKER}"
     set_tracking_phase_label "ai:validation-fixing"
 
     failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). A single consolidated fix-up issue was created for ${FIX_COUNT} root cause(s)."
@@ -2493,13 +2567,34 @@ case "${DIAG_STATUS}" in
     ;;
 
   harness_error)
-    HARNESS_FIXES="$(jq -r '.harness_fixes // "Validation harness needs correction."' "${DIAGNOSE_RESULT_FILE}")"
-    failure_summary="Validation harness error: ${HARNESS_FIXES}"
+    if [ "${ESCALATED_FROM_NEEDS_FIXES}" = "true" ]; then
+      # Cross-cycle escalation path: the diagnose LLM classified this
+      # as needs_fixes, but the same fix-up proposal has failed in
+      # PRIOR_FINGERPRINT_HITS prior cycles. Prefer the LLM-provided
+      # harness_fixes hint (Q9=B schema permits it alongside
+      # fix_issues); fall back to a templated explanation.
+      HARNESS_FIXES_FROM_LLM="$(jq -r '.harness_fixes // ""' "${DIAGNOSE_RESULT_FILE}" \
+        | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
+      if [ -n "${HARNESS_FIXES_FROM_LLM}" ]; then
+        HARNESS_FIXES="Cross-cycle escalation: the same fix-up proposal (fingerprint ${FAILURE_FINGERPRINT}) failed in ${PRIOR_FINGERPRINT_HITS} prior cycle(s). LLM fallback guidance: ${HARNESS_FIXES_FROM_LLM}"
+      else
+        HARNESS_FIXES="Cross-cycle escalation: the same fix-up proposal (fingerprint ${FAILURE_FINGERPRINT}) failed in ${PRIOR_FINGERPRINT_HITS} prior cycle(s). The repeated failure suggests the root cause is in harness-owned files (under \`validation/\`, in workflow wrappers referencing \`shubhodeep1/coding-workflows\`, or in scripts fetched from \`coding-workflows\` at runtime) rather than in consumer-repo application code. A human needs to inspect the diagnosis and determine whether to patch the harness or update the consumer repo manually."
+      fi
+      failure_summary="Validation harness error (cross-cycle escalation): ${HARNESS_FIXES}"
 
-    post_tracking_comment "## ❌ Runtime validation harness error\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}"
-    set_tracking_phase_label "ai:validation-failed"
-    write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
-    tg_notify "Validation harness error for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+      post_tracking_comment "## ❌ Runtime validation harness error (cross-cycle escalation)\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}"
+      set_tracking_phase_label "ai:validation-failed"
+      write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
+      tg_notify "Validation cross-cycle escalation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: same fix-up proposal failed $((PRIOR_FINGERPRINT_HITS + 1)) times." "ERROR"
+    else
+      HARNESS_FIXES="$(jq -r '.harness_fixes // "Validation harness needs correction."' "${DIAGNOSE_RESULT_FILE}")"
+      failure_summary="Validation harness error: ${HARNESS_FIXES}"
+
+      post_tracking_comment "## ❌ Runtime validation harness error\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}"
+      set_tracking_phase_label "ai:validation-failed"
+      write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
+      tg_notify "Validation harness error for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    fi
     ;;
 
   infeasible)

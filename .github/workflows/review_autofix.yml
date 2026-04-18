@@ -201,8 +201,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:
+      # cancel-in-progress: false → new runs queue behind the running peer
+      # instead of cancelling it. If another run is already pending in this
+      # group, GitHub replaces that older pending run with the newest one.
+      # This keeps bursts near "current run + newest queued run" while
+      # avoiding the long trail of cancelled in-progress runs that
+      # cancel-in-progress: true caused. Hung runs are still bounded by the
+      # timeout-minutes above.
       group: pr-autofix-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
-      cancel-in-progress: true
+      cancel-in-progress: false
     if: ${{ needs.gate.outputs.should_run == 'true' }}
 
     env:
@@ -1747,6 +1754,20 @@ jobs:
               sort -o "${POST_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
               comm -13 "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}" >> "${CODEX_TOUCHED_FILE}"
               rm -f "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
+              # Safety union: never silently drop a file that is genuinely
+              # modified vs HEAD on disk at commit time.  The SHA-based
+              # loop above can miss such files when the pre-editor snapshot
+              # SHA happens to equal the post-editor SHA (e.g. the file was
+              # already in its edited state at snapshot time, or the
+              # workflow-support overlay perturbed pre-SHAs for unrelated
+              # files).  Missing a real edit surfaces as EDITOR_CHANGES_LOST
+              # even though the edit is on disk (see run 24604441953:
+              # scripts/review_floor_rules.sh was modified but dropped).
+              # Adding a file whose on-disk content already matches HEAD is
+              # harmless — the subsequent `git add` is a no-op for unchanged
+              # content and the `git diff --cached --quiet` guard still
+              # short-circuits when nothing truly changed.
+              git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
             else
               echo "::warning::pre-editor snapshot missing; falling back to git diff HEAD."
               git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
@@ -3718,12 +3739,13 @@ jobs:
           # Preflight dedup: the push above fires a pull_request.synchronize
           # event that produces its own review_autofix run via the caller
           # workflow.  Both runs land in the `pr-autofix-${PR}` concurrency
-          # group with cancel-in-progress: true, so the loser burns runner
-          # minutes (and possibly LLM setup tokens) before being killed.
-          # Give the synchronize event a few seconds to show up in the Actions
-          # API, then skip our dispatch if a peer run is already queued or
-          # running.  Fails open — any detection failure falls through to the
-          # original dispatch logic so we never silently break the cycle.
+          # group with cancel-in-progress: false, so a redundant dispatch can
+          # still queue, appear in the Actions UI, and consume a
+          # workflow_dispatch API call.  Give the synchronize event a few
+          # seconds to show up in the Actions API, then skip our dispatch if a
+          # peer run is already queued or running.  Fails open — any detection
+          # failure falls through to the original dispatch logic so we never
+          # silently break the cycle.
           #
           # Tunable via AUTOFIX_RETRIGGER_PEER_WAIT_SECS (default 8s).
           peer_wait="${AUTOFIX_RETRIGGER_PEER_WAIT_SECS:-8}"

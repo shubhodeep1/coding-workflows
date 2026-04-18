@@ -42,6 +42,41 @@ orchestrator issues that may be editing adjacent code):
 - When your change intersects an anchor, make the minimal edit required and
   leave untouched prose intact byte-for-byte.
 
+Dependency / lockfile discipline (MANDATORY when touching dependency manifests):
+
+If your patch edits a dependency manifest — adding, removing, bumping, or
+changing the specifier of any dependency — you MUST update the corresponding
+lockfile in the same patch so that `npm ci` / `uv sync --frozen` / `go mod
+download` / `cargo build --locked` will succeed without drift. Lockfile drift
+causes `npm ci` to exit with `EUSAGE` / `Missing: <pkg> from lock file`, `uv
+sync --frozen` to fail resolution, `go mod verify` to report `sum mismatch`,
+and `cargo build --locked` to fail with `the lock file ... needs to be
+updated` — all of which break Docker builds and CI.
+
+Manifest ↔ lockfile pairs to keep in sync:
+- Node.js: `package.json` ↔ `package-lock.json` (npm), `yarn.lock` (yarn),
+  `pnpm-lock.yaml` (pnpm). Regenerate via `npm install` (NOT `npm ci`),
+  `yarn install`, or `pnpm install` in the project root.
+- Python: `pyproject.toml` / `requirements*.in` ↔ `uv.lock` (uv),
+  `poetry.lock` (poetry), `requirements*.txt` compiled via `pip-compile`.
+  Regenerate via `uv lock`, `poetry lock --no-update`, or
+  `pip-compile requirements.in` respectively.
+- Go: `go.mod` ↔ `go.sum`. Regenerate via `go mod tidy` followed by
+  `go mod download`.
+- Rust: `Cargo.toml` ↔ `Cargo.lock`. Regenerate via `cargo update -p <pkg>`
+  for a single bump or `cargo generate-lockfile` for a full resync.
+
+Rules:
+- Commit the regenerated lockfile alongside the manifest change in the same
+  patch. Never split them across commits, and never leave a lockfile stale
+  "to be regenerated later".
+- If the environment lacks the tool required to regenerate the lockfile,
+  STOP and record this as a blocker in your summary instead of committing a
+  partial change.
+- If your patch does NOT touch any dependency manifest, do not regenerate
+  lockfiles as an unrelated side effect — that violates the minimal-change
+  rule.
+
 If clarification context is incomplete, apply the safest minimal interpretation and explicitly record assumptions in your output/log summary without asking interactive questions.
 
 {{SERENA_EFFICIENCY_BLOCK_READ_WRITE}}
