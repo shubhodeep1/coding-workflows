@@ -132,7 +132,7 @@ jobs:
 
           MEMORY_HELPERS_READY=1
           _fetched_scripts=()
-          for f in gh_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py memory_helpers.sh; do
+          for f in gh_helpers.sh label_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py memory_helpers.sh; do
             if ! fetch_from_ref_or_local "scripts/${f}" "scripts/${f}"; then
               MEMORY_HELPERS_READY=0
             fi
@@ -219,20 +219,8 @@ jobs:
             exit 0
           fi
 
-          # Ensure the target label exists in the repo (create if missing)
-          if ! gh_retry gh api "repos/${REPOSITORY}/labels/$(printf '%s' "${FINAL_LABEL}" | jq -sRr @uri)" --silent 2>/dev/null; then
-            echo "Label '${FINAL_LABEL}' not found in repo, creating it..."
-            if [ "${FINAL_LABEL}" = "ai:merged" ]; then
-              LABEL_COLOR="5319e7"; LABEL_DESC="Linked PR merged"
-            else
-              LABEL_COLOR="6a737d"; LABEL_DESC="Linked PR closed without merge"
-            fi
-            gh_retry gh api "repos/${REPOSITORY}/labels" \
-              -f name="${FINAL_LABEL}" \
-              -f color="${LABEL_COLOR}" \
-              -f description="${LABEL_DESC}" \
-              --silent 2>/dev/null || echo "::warning::Could not create label '${FINAL_LABEL}' (may already exist or lack permissions)."
-          fi
+          source scripts/label_helpers.sh
+          ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"
 
           # Phase labels that are mutually exclusive — at most one should
           # be present.  Defined as a jq-parseable array for the PUT swap.

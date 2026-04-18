@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Static contract: workflows must ensure ai:* labels before mutation."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+WORKFLOW_CONTRACT = {
+	".github/workflows/orchestrate.yml": {
+		"must_contain": [
+			'ensure_label_exists "ai:orchestrator-tracking" "${{ github.repository }}"',
+			'ensure_label_exists "ai:clarification" "${{ github.repository }}"',
+			'ensure_label_exists "ai:orchestrator-managed" "${{ github.repository }}"',
+			'ensure_label_exists "ai:orchestrator-validate-required" "${{ github.repository }}"',
+		],
+		"must_not_contain": [
+			'gh label create "ai:orchestrator-tracking"',
+			'gh label create "ai:clarification"',
+			'gh label create "ai:orchestrator-managed"',
+			'gh label create "ai:orchestrator-validate-required"',
+		],
+	},
+	".github/workflows/comprehensive-test-and-release.yml": {
+		"must_contain": [
+			'source scripts/label_helpers.sh',
+			'ensure_label_exists "${PENDING_LABEL}" "${GITHUB_REPOSITORY}"',
+		],
+		"must_not_contain": [
+			re.compile(r'gh\s+api\s+"repos/\$\{GITHUB_REPOSITORY\}/labels"\s+--method\s+POST'),
+		],
+	},
+	".github/workflows/validation-improvements-intake.yml": {
+		"must_contain": [
+			'for f in gh_helpers.sh label_helpers.sh tg_helpers.sh; do',
+			'source scripts/label_helpers.sh',
+			'ensure_label_exists "ai:needs-prompt-review" "${GITHUB_REPOSITORY}"',
+		],
+		"must_not_contain": [
+			re.compile(r'gh\s+label\s+list\s+--limit\s+500'),
+			re.compile(r'gh\s+label\s+create\s+"ai:needs-prompt-review"'),
+		],
+	},
+	".github/workflows/issue_pr_status.yml": {
+		"must_contain": [
+			'for f in gh_helpers.sh label_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py memory_helpers.sh; do',
+			'source scripts/label_helpers.sh',
+			'ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"',
+		],
+		"must_not_contain": [
+			re.compile(r'repos/\$\{REPOSITORY\}/labels/\$\(printf\s+\'%s\'\s+"\$\{FINAL_LABEL\}"'),
+		],
+	},
+}
+
+
+def _workflow_text(rel_path: str) -> str:
+	path = REPO_ROOT / rel_path
+	return path.read_text(encoding="utf-8")
+
+
+def _contains(text: str, pattern: object) -> bool:
+	if isinstance(pattern, re.Pattern):
+		return bool(pattern.search(text))
+	return str(pattern) in text
+
+
+def test_ai_label_precreation_contract() -> None:
+	for rel_path, contract in WORKFLOW_CONTRACT.items():
+		text = _workflow_text(rel_path)
+
+		for expected in contract["must_contain"]:
+			assert _contains(text, expected), f"{rel_path} missing required pattern: {expected}"
+
+		for forbidden in contract["must_not_contain"]:
+			assert not _contains(text, forbidden), f"{rel_path} contains forbidden legacy probe/mutation: {forbidden}"
+
+
+if __name__ == "__main__":
+	test_ai_label_precreation_contract()
+	print("PASS")

@@ -451,6 +451,12 @@ jobs:
     outputs:
       tracking_issue: ${{ steps.phase3.outputs.tracking_issue }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT || github.token }}
+
       - name: Dispatch orchestrator and mark tracking issue
         id: phase3
         env:
@@ -467,6 +473,7 @@ jobs:
           POLL_INTERVAL=20
           RATE_LIMIT_BACKOFF=0
           PENDING_LABEL="ai:comprehensive-test-pending"
+          source scripts/label_helpers.sh
 
           sanitize_single_line()
           {
@@ -651,10 +658,7 @@ jobs:
             sleep "${POLL_INTERVAL}"
           done
 
-          gh api "repos/${GITHUB_REPOSITORY}/labels" --method POST \
-            -f "name=${PENDING_LABEL}" \
-            -f "color=1D76DB" \
-            -f "description=Pending comprehensive release callback dispatch." >/dev/null 2>&1 || true
+          ensure_label_exists "${PENDING_LABEL}" "${GITHUB_REPOSITORY}"
 
           gh issue edit "${TRACKING_ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "${PENDING_LABEL}" >/dev/null
 
