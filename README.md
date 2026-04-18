@@ -679,12 +679,14 @@ Triggers:
 | `codex_mode` | `true` | Codex-first analysis mode. When `true`, workflow runs analyzer preprocessing (`--codex-mode`) and then `codex exec` in the same run. When `false`, workflow uses the legacy analyzer inference/batch path (including deferred polling via batch-state artifact). |
 | `batch_api_disabled` | `""` | Optional `true`/`false` override for analyzer batch API behavior in non-codex mode only. Non-empty values are validated in all runs; invalid values fail the workflow before mode branching. Empty keeps `BATCH_API_DISABLED` env default. |
 | `repos_override` | `""` | Optional comma-separated `owner/repo` list. Each item is validated with `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`; invalid values fail the run. |
+| `tracking_issue` | `"0"` | Optional tracking issue number used for terminal Codex/analyzer failure labeling (`ai:log-analysis-failed`) and `AI_PHASE_FAILURE_V1` marker comments. `0`/empty keeps fail-open warning behavior without issue mutation. |
 
 Mode behavior:
 
-- `codex_mode=true` (default): analyzer writes `analysis_context.json` (`--codex-mode`) and Codex generates the markdown report directly.
+- `codex_mode=true` (default): analyzer writes `analysis_context.json` (`--codex-mode`) and Codex generates the markdown report directly. Codex attempts are bounded by `MAX_CODEX_ATTEMPTS` (default `3`) with exponential backoff base `CODEX_RETRY_BACKOFF_BASE_SECS` (default `10`).
 - `codex_mode=false`: workflow restores latest non-expired `workflow-log-analysis-batch-state` artifact when available, runs analyzer in legacy mode, and may return pending (`exit 3`) until a later manual rerun completes polling.
 - `batch_api_disabled` input is validated whenever a non-empty value is provided, but only affects analyzer behavior in `codex_mode=false` runs.
+- Terminal Codex/analyzer failures are issue-context aware: when `tracking_issue` is set to a positive integer the workflow emits `AI_PHASE_FAILURE_V1` and applies `ai:log-analysis-failed`; otherwise it emits a fail-open warning and exits without issue mutation.
 
 Repository selection behavior:
 
@@ -1238,7 +1240,7 @@ This phase starts only after the orchestrator judge returns `complete`.
 - Terminal success: `ai:validated`.
 - Non-terminal failure: `needs_fixes` diagnosis with fix-up issues (enters the fix/revalidate loop).
 - Terminal failure: validation dispatch failure, harness error, infeasible diagnosis, unknown diagnosis payload, closed fix-up issues, or cycle limit exceeded.
-- Terminal failure label: `ai:validation-failed`.
+- Terminal failure labels are split by failure class: runtime semantic failures continue to use `ai:validation-failed`, while validate-workflow Codex/terminal execution failures use `ai:validate-failed` with `raw_status=codex_failure` and `AI_PHASE_FAILURE_V1` marker comments when tracking issue context exists.
 - Managed artifact contract: startup checks now enforce only managed artifacts (`scripts/validate_process.sh`, optional `scripts/validate_driver.sh`) and the transient `validation/validate.sh` rule. Repos may keep unrelated consumer scripts such as `scripts/validate_local.sh` without failing validation.
 
 ### Manual Reset: `/revalidate`
@@ -1274,6 +1276,13 @@ Use this after manual intervention (e.g. fixing a problematic issue, merging a s
 | `ENABLE_VALIDATION` | `true` | Truthy values (`1/true/yes/on`, case-insensitive) enable the validation gate. Any other value disables it, so judge `complete` closes immediately without runtime validation. |
 | `MAX_VALIDATE_CYCLES` | `3` | Maximum cycles across initial validation plus fix/revalidate loops. Must be a positive integer; invalid values are coerced to `3`. Exceeding the limit forces `ai:validation-failed`. |
 | `MAX_SELF_HEAL_ATTEMPTS` | `2` | Maximum in-process self-heal attempts per validate_process.sh invocation. Self-heal attempts patch one of the four validation prompts locally and re-exec the validation pipeline; they do NOT increment `MAX_VALIDATE_CYCLES`. Set to `0` to disable self-healing entirely. See [Validation self-healing](#validation-self-healing). |
+| `MAX_CODEX_ATTEMPTS` | `3` | Codex retry cap for validate and workflow-log-analysis Codex execution paths. Must be a positive integer; invalid values fail open to `3` with a warning. |
+| `CODEX_RETRY_BACKOFF_BASE_SECS` | `10` | Exponential retry backoff base (seconds) used with `MAX_CODEX_ATTEMPTS` (`base * 2^(attempt-1)`) for validate and workflow-log-analysis Codex execution paths. Must be a positive integer; invalid values fail open to `10` with a warning. |
+
+Validate/workflow-log-analysis failure marker contract:
+
+- `scripts/validate_process.sh` emits terminal `AI_PHASE_FAILURE_V1` only for validate-workflow Codex/execution failures and sets `ai:validate-failed` when tracking issue context exists; runtime semantic failures keep existing `ai:validation-failed` behavior.
+- `workflow-log-analysis.yml` emits `AI_PHASE_FAILURE_V1` + `ai:log-analysis-failed` on terminal Codex/analyzer failures only when `tracking_issue > 0`; otherwise it logs explicit fail-open warnings and exits without issue mutation.
 
 ### Validation self-healing
 

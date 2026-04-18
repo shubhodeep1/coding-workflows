@@ -43,6 +43,22 @@ def _extract_ensure_label_exists_function() -> str:
 	return match.group(1)
 
 
+def test_validate_process_contains_codex_failure_marker_and_label_split() -> None:
+	text = _validate_process_text()
+	assert "emit_phase_failure_marker()" in text
+	assert "fail_validate_codex_phase()" in text
+	assert "AI_PHASE_FAILURE_V1" in text
+	assert 'set_tracking_phase_label "ai:validate-failed"' in text
+
+	# Runtime semantics must remain on ai:validation-failed paths.
+	assert 'set_tracking_phase_label "ai:validation-failed"' in text
+
+	# Codex retry controls must be env-driven and not hard-coded to 2 attempts.
+	assert 'for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do' in text
+	assert 'sleep $((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))' in text
+	assert 'for attempt in 1 2; do' not in text
+
+
 def _install_mock_gh(bin_dir: Path, state_file: Path) -> None:
 	gh_script = r'''#!/usr/bin/env python3
 import json
