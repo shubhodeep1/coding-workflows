@@ -66,21 +66,32 @@ input_bytes="$(wc -c < "${CONSOLIDATOR_PROMPT_FILE}" | tr -d '[:space:]')"
 start_epoch="$(date +%s)"
 tmp_out="$(mktemp)"
 tmp_err="$(mktemp)"
-trap 'rm -f "${tmp_out}" "${tmp_err}"' EXIT
+tmp_cap="$(mktemp)"
+trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"' EXIT INT TERM
 cmd_rc=0
 
-if ! timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" codex exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --full-auto < "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
+if ! timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" codex exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --full-auto --reasoning "${REVIEW_CONSOLIDATOR_REASONING}" < "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
 	cmd_rc=$?
 fi
 
-raw_bytes="$(wc -c < "${tmp_out}" | tr -d '[:space:]')"
+raw_bytes="$(wc -c < "${tmp_out}" | tr -d "[:space:]")"
 max_bytes="${REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT}"
 if ! [[ "${max_bytes}" =~ ^[0-9]+$ ]]; then
 	max_bytes=16000
 fi
-if [ "${raw_bytes}" -gt "${max_bytes}" ]; then
-	head -c "${max_bytes}" "${tmp_out}" > "${CONSOLIDATOR_RAW_FILE}"
-	printf '\nTRUNCATED_BY_OUTPUT_CAP\n' >> "${CONSOLIDATOR_RAW_FILE}"
+# Conversion: tokens -> bytes (approx 4 bytes per token for safety)
+max_bytes_actual=$((max_bytes * 4))
+
+if [ "${raw_bytes}" -gt "${max_bytes_actual}" ]; then
+	# Truncate to byte cap while preserving leading complete lines.
+	head -c "${max_bytes_actual}" "${tmp_out}" > "${tmp_cap}"
+	last_byte_hex="$(tail -c 1 "${tmp_cap}" | od -An -tx1 | tr -d '[:space:]' || true)"
+	if [ "${last_byte_hex}" = "0a" ]; then
+		cp "${tmp_cap}" "${CONSOLIDATOR_RAW_FILE}"
+	else
+		sed '$d' "${tmp_cap}" > "${CONSOLIDATOR_RAW_FILE}"
+	fi
+	printf '\n... [TRUNCATED_BY_OUTPUT_CAP] ...\n' >> "${CONSOLIDATOR_RAW_FILE}"
 	capped=1
 else
 	cp "${tmp_out}" "${CONSOLIDATOR_RAW_FILE}"
@@ -104,5 +115,5 @@ if [ -s "${tmp_err}" ]; then
 	sed 's/^/stage=consolidator stderr=/g' "${tmp_err}" >&2 || true
 fi
 
-rm -f "${tmp_out}" "${tmp_err}"
+rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"
 exit 0
