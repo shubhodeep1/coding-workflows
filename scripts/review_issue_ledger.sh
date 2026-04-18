@@ -72,6 +72,10 @@ read_anchor_context()
 		printf '%s\n' ""
 		return
 	fi
+	if [[ "${file_path}" == .git ]] || [[ "${file_path}" == .git/* ]] || [[ "${file_path}" == */.git ]] || [[ "${file_path}" == */.git/* ]]; then
+		printf '%s\n' ""
+		return
+	fi
 	if [[ "${line_spec}" =~ ^([0-9]+)(-([0-9]+))?$ ]]; then
 		line_start="${BASH_REMATCH[1]}"
 		if [ -n "${BASH_REMATCH[3]:-}" ]; then
@@ -98,7 +102,7 @@ read_anchor_context()
 	range_end=$((anchor_line + 2))
 	ext="$(lower_file_ext "${file_path}")"
 	if [ -f "${file_path}" ]; then
-		sed -n "${range_start},${range_end}p" "${file_path}" | normalize_stream_lines "${ext}"
+		sed -n "${range_start},${range_end}p" -- "${file_path}" | normalize_stream_lines "${ext}"
 		return
 	fi
 	if git cat-file -e "HEAD:${file_path}" >/dev/null 2>&1; then
