@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `88ecad5ff6ddd6eba1d9d30389fc58eecd44cbaa`\n- Checked-out branch: `orchestrator/project-1292`\n- Integration branch metadata: `orchestrator/project-1292` (no mismatch)\n- Clarification status: no Q1/Q2 were needed; `/answer [auto-answered-by-orchestrator]` means proceed.\n\nConflict detection:\n- `docs/validation-templates-plan.md` M4 describes wiring lint failures into `attempt_self_heal_and_reexec \"render\"` and modifying `scripts/validate_process.sh`.\n- This issue explicitly says **do not wire linter into self-heal yet**.\n- Plan below keeps lint implementation/testing scoped to standalone lint + tests only.\n\n1. Files likely to change\n- `scripts/validation_lint.py` (new)\n- `tests/test_validate_lint_service_tool_scope.py` (new)\n- `tests/test_validate_lint_shell_parity.py` (new)\n- `tests/test_validate_lint_init_true.py` (new)\n- `tests/test_validate_lint_graceful_shutdown_hooks.py` (new)\n- `tests/test_validate_lint_bounded_tail_capture.py` (new)\n- `tests/test_validate_lint_external_tool_dependencies.py` (new)\n- `tests/test_validate_lint_import_audit_safety.py` (new)\n- `tests/test_validate_lint_escape_hatch.py` (new, or merged into per-rule tests)\n- Optional only if needed for canary regression parity: `tests/test_validate_preflight_canary_tools_scope.py`\n\n2. Functions/modules to implement\n- In `scripts/validation_lint.py`:\n- `build_parser()` and `main()` CLI entrypoint.\n- Rule registry (rule id, description, checker, allow-escape flag).\n- Shared scanners/helpers:\n- file loading and normalization\n- structured finding emitter (`path`, `line`, `rule_id`, `message`, `hint`)\n- escape-hatch parser for `# validation-lint: allow <rule> <reason>`\n- Rule checkers for:\n- service-tool scope (`CANARY_TOOLS` denylist + Dockerfile install evidence/aliases)\n- shell parity (`/bin/sh -c` expected, reject `-lc`/mismatched forms where rule applies)\n- `init: true` requirements on long-running services\n- graceful shutdown hook presence/usage\n- bounded-tail capture hook presence on failure paths\n- external-tool dependency checks (custom tests/tool usage vs installed tools)\n- import-audit safety (subprocess-isolated import checks; reject unsafe dynamic loading patterns)\n- Deterministic diagnostics + non-zero exit on any violation.\n\nRepresentative pattern to follow:\n- Existing embedded lint logic in `scripts/validate_process.sh` (`run_preflight_checks`, CANARY_TOOLS block).\n- Existing focused rule test style in `tests/test_validate_preflight_canary_tools_scope.py` (tmpdir fixtures, subprocess execution, explicit pass/fail assertions).\n\n3. Data structures affected\n- New in-script rule metadata registry (e.g., `RULES` list/dict keyed by `rule_id`).\n- Finding model (dataclass/dict) for machine-readable per-violation diagnostics.\n- Service CLI denylist + package alias map (e.g., `psql`\u2192`postgresql-client`, `redis-cli`\u2192`redis-tools`, mysql aliases).\n- Escape-hatch tracking map from source locations to allowed rule IDs.\n\n4. API/interface changes\n- New CLI interface:\n- `python3 scripts/validation_lint.py <validation_root>`\n- optional flags for repo root / output format if needed (`text` default)\n- Exit behavior:\n- `0` = no violations\n- non-zero = one or more violations or fatal lint error\n- New source-level escape hatch syntax (where rule allows):\n- `# validation-lint: allow <rule-id> <reason>`\n- No workflow YAML changes and no `validate_process.sh` self-heal wiring in this issue.\n\n5. Potential risks / edge cases\n- False positives from shell parsing (`CANARY_TOOLS` quoting, inline comments, line continuations).\n- Dockerfile alias detection gaps for package/tool mapping.\n- YAML shape variants (anchors/merges) affecting `init: true` detection.\n- Over-broad escape hatch behavior masking real regressions; enforce reason text and rule-id specificity.\n- Divergence risk between existing preflight canary logic and new lint rule behavior.\n\n6. Testing considerations\n- One test module per rule class (pass + fail + escape-hatch cases).\n- Reuse temp workspace fixtures and subprocess invocation pattern from existing tests.\n- Ensure actionable diagnostics are asserted (include `rule_id`, file path, and remediation hint).\n- Add regression coverage that existing canary-scope protections still fail on known offenders and pass on alias installs/comment-handling edge cases.\n- Keep tests focused and local (no workflow-level integration in this issue).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "40364c0e8c731a0729e6bc6f16faad3b7db017f2c3d356ad49c69c11914d3f90",
+  "lineage": {
+    "issue_number": 1351,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24615594700",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24615594700",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1351"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418225207_8bd7108a53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1351,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24615594700"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1351",
+  "timestamps": {
+    "created_at": "2026-04-18T22:52:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
