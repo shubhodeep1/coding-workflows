@@ -1820,8 +1820,8 @@ jobs:
           # threw away reviewer+editor work on what is usually a recoverable
           # condition.
           PROTECTED_LEAKED=false
-          if printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
-            echo "::warning::.github/prompts or .github/scripts was staged; unstaging protected paths and continuing."
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
+            echo "::warning::.github/prompts or .github/scripts was staged in consumer repo; unstaging protected paths and continuing."
             git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
@@ -3175,8 +3175,8 @@ jobs:
             # hard `exit 1` here silently threw away reviewer+editor work on
             # what is usually a recoverable condition.
             PROTECTED_LEAKED=false
-            if printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
-              echo "::warning::.github/prompts or .github/scripts was staged; unstaging protected paths and continuing."
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
+              echo "::warning::.github/prompts or .github/scripts was staged in consumer repo; unstaging protected paths and continuing."
               git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
