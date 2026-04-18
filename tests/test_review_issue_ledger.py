@@ -298,6 +298,65 @@ def test_ledger_status_schema_and_sorting() -> None:
 			assert ":" in row[3]
 
 
+def test_multiline_current_code_round_trip() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		_seed_repo(
+			workspace,
+			[
+				"def sample(a, b):",
+				"    total = a + b",
+				"    return total",
+			],
+		)
+
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		(runtime_dir / "review_issues.txt").write_text(
+			"\n".join(
+				[
+					"=== ISSUE 001 ===",
+					"FILE: src/module.py",
+					"LINES: 2",
+					"LENS: SECURITY",
+					"SEVERITY: high",
+					"CLASSIFICATION: actionable",
+					"CURRENT_CODE:",
+					"  if user_input == \\\"\\\":",
+					"      return \\\"skip\\\"",
+					"=== END ISSUE 001 ===",
+				]
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		env = os.environ.copy()
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env["RUNTIME_DIR"] = str(runtime_dir)
+		env["PR_NUMBER"] = "4242"
+		env["AUTOFIX_ITERATION"] = "1"
+		env["REVIEW_LEDGER_PERSIST_LIMIT"] = "5"
+		env["REVIEW_LEDGER_PATH"] = ".ai/review_issue_ledger.txt"
+		env["REVIEW_LEDGER_ENABLED"] = "1"
+		env["REVIEW_ISSUES_FILE"] = str(runtime_dir / "review_issues.txt")
+		env["LEDGER_STATUS_FILE"] = str(runtime_dir / "ledger_status.txt")
+		env["FLOOR_TAGS_FILE"] = str(runtime_dir / "floor_tags.txt")
+
+		result = subprocess.run(
+			["bash", str(LEDGER_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "accepted_residual_added=0" in result.stderr
+		status_rows = _parse_status_rows(runtime_dir / "ledger_status.txt")
+		assert len(status_rows) == 1
+		assert status_rows[0][1] == "NEW"
+
+
 
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

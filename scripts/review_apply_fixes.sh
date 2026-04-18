@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
+
 # Source rate-limit-aware GH API helpers (provides gh_retry and the
 # Telegram admin alert on GH API rate-limit events).
 if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
@@ -77,6 +80,10 @@ AUTOFIX_ITERATION="${AUTOFIX_ITERATION:-}"
 if [ -z "${AUTOFIX_ITERATION}" ]; then
   autofix_count=0
   while true; do
+    if [ "${autofix_count}" -ge 1000 ]; then
+      echo "::warning::autofix iteration scan capped at 1000 commits"
+      break
+    fi
     msg="$(git log -1 --format='%s' "HEAD~${autofix_count}" 2>/dev/null || true)"
     if echo "${msg}" | grep -q '^\[ai-autofix\]'; then
       autofix_count=$((autofix_count + 1))

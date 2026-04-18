@@ -199,6 +199,9 @@ parse_review_issues()
 			}
 			code = current_code
 			gsub(/\r/, "", code)
+			gsub(/\\/, "\\\\", code)
+			gsub(/\t/, "\\t", code)
+			gsub(/\n/, "\\n", code)
 			print block_id "\t" file "\t" lines "\t" lens "\t" severity "\t" classification "\t" code >> out_file
 		}
 		BEGIN {
@@ -733,6 +736,10 @@ auto_collision_count=0
 if [ -s "${current_with_ids_file}" ]; then
 	while IFS=$'\t' read -r block_id file_path lines lens severity floor_cat classification current_code || [ -n "${block_id}${file_path}" ]; do
 		[ -n "${file_path}" ] || continue
+		current_code="${current_code//\\\\/$'\x1f'}"
+		current_code="${current_code//\\n/$'\n'}"
+		current_code="${current_code//\\t/$'\t'}"
+		current_code="${current_code//$'\x1f'/\\}"
 		canonical_path="${file_path}"
 		if [ -n "${OSTYPE:-}" ] && [[ "${OSTYPE}" =~ (msys|cygwin|win32) ]]; then
 			canonical_path="$(printf '%s' "${canonical_path}" | tr '[:upper:]' '[:lower:]')"
