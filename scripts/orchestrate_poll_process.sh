@@ -1400,7 +1400,7 @@ reconcile_managed_issue_labels() {
   repair_json="$(python3 scripts/ai_labels.py repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
 
   local plan_json
-  plan_json="$(python3 - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" <<'PY'
+  plan_json="$(python3 - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" "${contract_file}" <<'PY'
 import json
 import sys
 
@@ -1408,6 +1408,7 @@ current = set(json.loads(sys.argv[1]))
 repair = json.loads(sys.argv[2])
 issue_state = (sys.argv[3] or "").strip().lower()
 pr_merged = (sys.argv[4] or "").strip().lower() == "true"
+contract_file = sys.argv[5] if len(sys.argv) > 5 else ""
 
 final = set(current)
 for label in repair.get("remove", []):
@@ -1415,11 +1416,35 @@ for label in repair.get("remove", []):
 for label in repair.get("add", []):
     final.add(label)
 
+forced = ""
 if pr_merged:
     final.discard("ai:closed")
     final.add("ai:merged")
+    forced = "ai:merged"
 elif issue_state == "closed" and "ai:closed" not in final and "ai:merged" not in final:
     final.add("ai:closed")
+    forced = "ai:closed"
+
+# Phase-group repair above ran on the original `current` set, so if
+# `current` had only one phase-group member the repair was a no-op —
+# then we force ai:merged/ai:closed on top, producing a dual-phase
+# state (e.g. {ai:review-blocked, ai:merged}) that the wave-status
+# resolver treats as terminal via ai:merged priority and never
+# re-processes, stranding the non-terminal label forever. Re-apply
+# phase exclusivity so only the forced terminal member survives.
+if forced and contract_file:
+    try:
+        with open(contract_file, "r") as fh:
+            contract = json.load(fh)
+    except (OSError, ValueError):
+        contract = None
+    if isinstance(contract, dict):
+        for group in contract.get("phase_groups", []) or []:
+            members = [str(item) for item in (group.get("members") or [])]
+            if forced in members:
+                for label in members:
+                    if label != forced:
+                        final.discard(label)
 
 add = sorted(final - current)
 remove = sorted(current - final)
