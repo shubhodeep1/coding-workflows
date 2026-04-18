@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import inspect
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -141,6 +143,17 @@ def test_fail_open_for_missing_bundle_writes_valid_empty_output(tmp_path: Path) 
 	assert "event=bundle_missing_or_empty" in stderr
 
 
+def test_missing_bundle_with_unwritable_output_path_still_fails_open(tmp_path: Path) -> None:
+	blocked_parent = tmp_path / "occupied"
+	blocked_parent.write_text("not-a-directory", encoding="utf-8")
+	out_file = blocked_parent / "floor_tags.txt"
+
+	_, stderr = _run_floor_rules(tmp_path / "does-not-exist.txt", out_file)
+	assert "event=bundle_missing_or_empty" in stderr
+	assert "event=fail_open" in stderr
+	assert not out_file.exists()
+
+
 def test_malformed_partial_bundle_is_tolerated_and_skipped_safely(tmp_path: Path) -> None:
 	out_file = tmp_path / "floor_tags.txt"
 	_run_floor_rules(FIXTURES / "reviewer_bundle_malformed.txt", out_file)
@@ -179,3 +192,37 @@ def test_fail_open_unhandled_error_emits_empty_valid_output(tmp_path: Path) -> N
 	_, stderr = _run_floor_rules(bundle, out_file)
 	assert "event=fail_open" in stderr
 	assert "reason=unhandled_error" in stderr
+	assert not out_file.exists() or out_file.read_text(encoding="utf-8") == ""
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	passed = 0
+	failed = 0
+
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			params = list(inspect.signature(func).parameters)
+			if not params:
+				func()
+			elif params == ["tmp_path"]:
+				with tempfile.TemporaryDirectory(prefix="review-floor-rules-") as td:
+					func(Path(td))
+			else:
+				raise TypeError(f"unsupported test signature for {name}: {params}")
+			print(f"  PASS  {name}")
+			passed += 1
+		except AssertionError as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+		except Exception as e:
+			print(f"  ERROR {name}: {type(e).__name__}: {e}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 BUNDLE_FILE="${1:-reviewer_bundle.txt}"
 OUT_FILE="${2:-floor_tags.txt}"
