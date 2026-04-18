@@ -1224,8 +1224,11 @@ backfill_validation_fix_issue_merged_label() {
   # `get_issue_labels_json` round-trip.  When empty/omitted the helper
   # falls back to fetching itself, preserving the original contract.
   local cached_labels="${2:-}"
+  local contract_file=".github/ai/label_contract.v1.json"
   local fix_labels
+  local phase_changes
   local edit_args=()
+  local remove_label
   local _label_err_file
 
   ensure_label_exists "ai:merged"
@@ -1239,8 +1242,24 @@ backfill_validation_fix_issue_merged_label() {
     return 0
   fi
 
+  if [ -f "${contract_file}" ] && set_issue_phase_label "${issue_num}" "ai:merged"; then
+    return 0
+  fi
+
+  if [ -f "${contract_file}" ]; then
+    echo "::warning::set_issue_phase_label failed for #${issue_num}; falling back to manual ai:merged label edit." >&2
+  fi
+
   edit_args+=(--add-label "ai:merged")
-  if has_label "${fix_labels}" "ai:closed"; then
+  if [ -f "${contract_file}" ]; then
+    phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
+    while IFS= read -r remove_label; do
+      [ -n "${remove_label}" ] || continue
+      if has_label "${fix_labels}" "${remove_label}"; then
+        edit_args+=(--remove-label "${remove_label}")
+      fi
+    done < <(echo "${phase_changes}" | jq -r '.remove[]?' 2>/dev/null || true)
+  elif has_label "${fix_labels}" "ai:closed"; then
     edit_args+=(--remove-label "ai:closed")
   fi
 
@@ -1400,7 +1419,7 @@ reconcile_managed_issue_labels() {
   repair_json="$(python3 scripts/ai_labels.py repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
 
   local plan_json
-  plan_json="$(python3 - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" <<'PY'
+  plan_json="$(python3 - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" "${contract_file}" <<'PY'
 import json
 import sys
 
@@ -1408,6 +1427,7 @@ current = set(json.loads(sys.argv[1]))
 repair = json.loads(sys.argv[2])
 issue_state = (sys.argv[3] or "").strip().lower()
 pr_merged = (sys.argv[4] or "").strip().lower() == "true"
+contract_file = sys.argv[5] if len(sys.argv) > 5 else ""
 
 final = set(current)
 for label in repair.get("remove", []):
@@ -1415,11 +1435,41 @@ for label in repair.get("remove", []):
 for label in repair.get("add", []):
     final.add(label)
 
+forced = ""
 if pr_merged:
     final.discard("ai:closed")
     final.add("ai:merged")
+    forced = "ai:merged"
 elif issue_state == "closed" and "ai:closed" not in final and "ai:merged" not in final:
     final.add("ai:closed")
+    forced = "ai:closed"
+
+# Phase-group repair above ran on the original `current` set, so if
+# `current` had only one phase-group member the repair was a no-op —
+# then we force ai:merged/ai:closed on top, producing a dual-phase
+# state (e.g. {ai:review-blocked, ai:merged}) that the wave-status
+# resolver treats as terminal via ai:merged priority and never
+# re-processes, stranding the non-terminal label forever. Re-apply
+# phase exclusivity so only the forced terminal member survives.
+if forced and contract_file:
+    try:
+        with open(contract_file, "r") as fh:
+            contract = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(f"::warning::reconcile_managed_issue_labels: failed to load contract file {contract_file}: {exc}", file=sys.stderr)
+        contract = None
+    if isinstance(contract, dict):
+        for group in contract.get("phase_groups", []) or []:
+            if not isinstance(group, dict):
+                continue
+            raw_members = group.get("members")
+            if not isinstance(raw_members, list):
+                continue
+            members = [str(item) for item in raw_members]
+            if forced in members:
+                for label in members:
+                    if label != forced:
+                        final.discard(label)
 
 add = sorted(final - current)
 remove = sorted(current - final)
@@ -4676,8 +4726,13 @@ _fetch_standalone_marker_issues_graphql() {
 # calls.  Returns a JSON object keyed by stringified issue number:
 #   { "123": {"labels": ["ai:clarification"],
 #             "comments": [{"id":N,"body":"...","created_at":"..."},...],
-#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool} | null },
+#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"headPushedAt":"ISO8601"|null} | null },
 #     ... }
+# `headPushedAt` is the linked PR's head commit pushedDate (coalesced
+# to committedDate when pushedDate is null, e.g. for squashed commits).
+# Consumed by the fresh-push stall-recovery guard (see
+# _check_fresh_push_guard) to suppress recovery dispatches while
+# autofix-driven activity is still landing on the PR.
 # Comment shape mirrors the REST response (.id / .body / .created_at)
 # so existing parsers (e.g. _extract_standalone_state_comment_id_from_comments)
 # keep working unchanged.
@@ -4740,7 +4795,10 @@ _fetch_candidate_issue_details_graphql() {
               ... on CrossReferencedEvent {
                 source {
                   __typename
-                  ... on PullRequest { number state merged }
+                  ... on PullRequest {
+                    number state merged
+                    commits(last: 1) { nodes { commit { pushedDate committedDate } } }
+                  }
                 }
               }
             }
@@ -4782,7 +4840,16 @@ _fetch_candidate_issue_details_graphql() {
                 (.value.timelineItems.nodes // [])[]?
                 | (.source // null)
                 | select(. != null and .__typename == "PullRequest")
-                | {number: .number, state: .state, merged: (.merged // false)}
+                | {
+                    number: .number,
+                    state: .state,
+                    merged: (.merged // false),
+                    headPushedAt: (
+                      ((.commits.nodes // [])[0].commit.pushedDate)
+                      // ((.commits.nodes // [])[0].commit.committedDate)
+                      // null
+                    )
+                  }
               ] | last // null
             )
           }
@@ -4807,8 +4874,11 @@ _fetch_candidate_issue_details_graphql() {
 #
 # Input: JSON array of issue numbers, e.g. "[123, 456]"
 # Output: JSON object keyed by stringified issue number:
-#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool},
+#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"headPushedAt":"ISO8601"|null},
 #     "456": null, ... }
+# `headPushedAt` is the linked PR's head commit pushedDate (coalesced
+# to committedDate when pushedDate is null).  Consumed by
+# _check_fresh_push_guard alongside the merged-PR guard.
 # A value of `null` means the issue has no cross-referenced PR (or the
 # batch call failed for that batch and the issue fell out of the cache).
 # Callers must treat missing/null entries as "no merged PR known" and
@@ -4850,7 +4920,10 @@ _fetch_linked_pr_status_graphql() {
               ... on CrossReferencedEvent {
                 source {
                   __typename
-                  ... on PullRequest { number state merged }
+                  ... on PullRequest {
+                    number state merged
+                    commits(last: 1) { nodes { commit { pushedDate committedDate } } }
+                  }
                 }
               }
             }
@@ -4884,7 +4957,16 @@ _fetch_linked_pr_status_graphql() {
               (.value.timelineItems.nodes // [])[]?
               | (.source // null)
               | select(. != null and .__typename == "PullRequest")
-              | {number: .number, state: .state, merged: (.merged // false)}
+              | {
+                  number: .number,
+                  state: .state,
+                  merged: (.merged // false),
+                  headPushedAt: (
+                    ((.commits.nodes // [])[0].commit.pushedDate)
+                    // ((.commits.nodes // [])[0].commit.committedDate)
+                    // null
+                  )
+                }
             ] | last // null
           )
         }
@@ -4944,6 +5026,82 @@ _check_merged_pr_guard() {
 
   STALL_MERGED_PR_NUM="${pr_num}"
   return 0
+}
+
+# _check_fresh_push_guard — Shared guard used by both stall recovery
+# paths.  Returns 0 when the linked PR's head commit was pushed within
+# the last _FRESH_PUSH_SUPPRESS_SECS (30 minutes, hardcoded) AND the
+# phase is one where autofix-driven commits are expected
+# (ai:done, ai:ready-to-merge).  Returns 1 otherwise.
+#
+# Rationale: the existing `issue_has_active_workflow` guard only
+# catches cycles where a queued/in_progress workflow run is currently
+# visible on the PR branch.  It misses the race where autofix just
+# pushed a commit but the new `pull_request.synchronize` run hasn't
+# materialised yet (or was cancelled by the autofix-retrigger dedup
+# and the follow-on dispatch is still in-flight).  A fresh pushedDate
+# is a more reliable "work landed recently" signal.
+#
+# The 30-minute window is deliberately not configurable (per project
+# decision Q2=B on issue investigate-stall-recovery-dx7zm).  A
+# longer window would risk hiding genuinely hung autofix loops.
+#
+# Fails open (returns 1 — guard does NOT fire) when:
+#   - phase is outside {ai:done, ai:ready-to-merge}
+#   - linked_json is empty / "null" / "{}"
+#   - headPushedAt is missing or unparseable
+#   - computed age is negative (clock skew)
+# i.e. the guard NEVER causes a stall recovery to fire when it
+# otherwise would not have; it only suppresses dispatches that would
+# have fired within the fresh-push window.
+#
+# On a hit, exports FRESH_PUSH_PR_NUM and FRESH_PUSH_AGE_SECS so the
+# caller can emit a stable `STALL_SKIP reason=fresh_push` log line.
+#
+# Args:
+#   $1 — issue number (for logging only)
+#   $2 — linked_pr JSON entry ({number,state,merged,headPushedAt} or "null"/empty)
+#   $3 — phase label (e.g. "ai:done")
+_FRESH_PUSH_SUPPRESS_SECS=1800
+_check_fresh_push_guard() {
+  local issue_num="$1"
+  local linked_json="$2"
+  local phase="$3"
+  FRESH_PUSH_PR_NUM=""
+  FRESH_PUSH_AGE_SECS=""
+
+  case "${phase}" in
+    "ai:done"|"ai:ready-to-merge") ;;
+    *) return 1 ;;
+  esac
+
+  if [ -z "${linked_json}" ] || [ "${linked_json}" = "null" ] || [ "${linked_json}" = "{}" ]; then
+    return 1
+  fi
+
+  local pushed_at_iso
+  pushed_at_iso="$(printf '%s' "${linked_json}" | jq -r '.headPushedAt // empty' 2>/dev/null || echo "")"
+  [ -n "${pushed_at_iso}" ] || return 1
+
+  local pushed_at_epoch
+  pushed_at_epoch="$(date -d "${pushed_at_iso}" +%s 2>/dev/null || echo "")"
+  [[ "${pushed_at_epoch}" =~ ^[0-9]+$ ]] || return 1
+
+  local now_epoch
+  now_epoch="$(date +%s)"
+  local age_secs=$(( now_epoch - pushed_at_epoch ))
+  [ "${age_secs}" -lt 0 ] && return 1
+
+  if [ "${age_secs}" -lt "${_FRESH_PUSH_SUPPRESS_SECS}" ]; then
+    local pr_num
+    pr_num="$(printf '%s' "${linked_json}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+    [[ "${pr_num}" =~ ^[0-9]+$ ]] || return 1
+    FRESH_PUSH_PR_NUM="${pr_num}"
+    FRESH_PUSH_AGE_SECS="${age_secs}"
+    return 0
+  fi
+
+  return 1
 }
 
 # _reconcile_merged_pr_issue — Tag an issue whose linked PR is merged
@@ -5159,6 +5317,32 @@ PY
       continue
     fi
 
+    # ---- Merged-PR + fresh-push guards ----
+    # Check merged first so recently merged PRs are reconciled (ai:merged)
+    # before fresh-push suppression can short-circuit this issue for the cycle.
+    local _std_linked_json
+    _std_linked_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // null' 2>/dev/null || echo "null")"
+    if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
+      echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
+      _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
+      continue
+    fi
+
+    # Fresh-push guard complements issue_has_active_workflow above; see
+    # _check_fresh_push_guard for rationale. Consumes linked_pr already
+    # populated in _candidate_details_json (0 additional API calls).
+    if _check_fresh_push_guard "${issue_num}" "${_std_linked_json}" "${phase}"; then
+      echo "  [standalone-stall] Issue #${issue_num} linked PR #${FRESH_PUSH_PR_NUM} was pushed ${FRESH_PUSH_AGE_SECS}s ago — skipping recovery (fresh push)."
+      echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
+      continue
+    fi
+
     # ---- Merged-PR guard: don't fire early-phase actions on issues whose
     # linked PR is already merged.  Primary path consumes the linked_pr
     # payload the batched GraphQL prefetch already put in
@@ -5172,8 +5356,6 @@ PY
     # are empty — the stall action then runs as before.
     case "${action}" in
       retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement)
-        local _std_linked_json
-        _std_linked_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // null' 2>/dev/null || echo "null")"
         # Cache miss — REST fallback (timeline → PR payload → merged_at).
         # Two extra API calls per cache-miss issue, bounded by the
         # rarity of prefetch failures.  Gated on the guard flag so
@@ -5632,6 +5814,32 @@ recover_stalled_issue() {
   # ---- Guard: skip recovery if a *fresh* workflow is actively processing this issue ----
   if issue_has_active_workflow "${issue_num}"; then
     echo "STALL_SKIP issue=${issue_num} reason=active_workflow phase=${phase} action=${action}"
+    return 1  # Signal: no action taken (caller should not increment counter)
+  fi
+
+  # ---- Guards: merged PR first, then fresh push suppression ----
+  # Covers the race where autofix just pushed a commit but the next
+  # pull_request.synchronize workflow run hasn't materialised yet, so
+  # issue_has_active_workflow momentarily returns false.  Scope is
+  # limited to ai:done / ai:ready-to-merge phases (PR exists and may
+  # still be receiving commits) — all other phases short-circuit
+  # inside _check_fresh_push_guard.  Consumes the linked-PR entry the
+  # outer recovery loop already populated in
+  # STALL_MANAGED_LINKED_PR_CACHE via _fetch_linked_pr_status_graphql
+  # (0 additional API calls).  Fails open when the cache is missing or
+  # headPushedAt is unavailable.
+  local _fresh_lpr_entry="null"
+  if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
+    _fresh_lpr_entry="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null")"
+  fi
+  if _check_merged_pr_guard "${issue_num}" "${_fresh_lpr_entry}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
+    _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+    STALL_HEALING_CHANGED=true
+    return 1  # Signal: no action taken (caller should not increment counter)
+  fi
+  if _check_fresh_push_guard "${issue_num}" "${_fresh_lpr_entry}" "${phase}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}"
     return 1  # Signal: no action taken (caller should not increment counter)
   fi
 

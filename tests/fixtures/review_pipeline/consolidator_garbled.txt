@@ -1,0 +1,3 @@
+this output has no valid marker block
+FILE: src/module.py
+LINES: 2

@@ -1,0 +1,11 @@
+=== ISSUE 003 ===
+LINES: 4
+LENS: ERROR PATHS & EDGE CASES
+SEVERITY: med
+FLAGGED_BY: reviewer_alpha
+CLASSIFICATION: must-fix
+EVIDENCE:
+  reviewer_alpha> "missing file header"
+SUGGESTED_APPROACH:
+  Add required field.
+=== END ISSUE 003 ===
