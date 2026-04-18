@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 11\nIssues with multi-reviewer agreement: 1\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: scripts/orchestrate_poll_process.sh\n      Problem: Location: line 1422-1423; Issue: Silent contract parse failures; Suggested minimal fix: Add `import sys` at top and `print(f\"WARNING: Failed to load contract from {contract_file}: {e}\", file=sys.stderr)` in except block; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1; **Suggestion 2: Fix backfill_validation_fix_issue_merged_label**\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [2] File: scripts/orchestrate_poll_process.sh\n      Problem: When `contract_file` exists but contains malformed JSON, the code silently sets `contract = None` without any warning. While fail-open behavior is correct, lack of logging makes debugging difficult if contract file issues occur.; If the contract file becomes corrupted or contains syntax errors, the phase-group cleanup logic will be silently skipped, potentially leaving invalid dual-phase label states undetected.; **Issue 2: Incomplete handling of backfill_validation_fix_issue_merged_label**\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: scripts/orchestrate_poll_process.sh\n      Problem: This separate function adds `ai:merged` to validation fix-up issues but only removes `ai:closed` if present, not other phase-group labels like `ai:validation-fixing`. This creates a window where issues have invalid dual-phase states `{ai:validation-fixing, ai:merged}`.; When a validation fix-up issue has its PR merged, this function adds `ai:merged` but doesn't clean up the `ai:validation-fixing` label. The issue will have invalid dual-phase labels until `reconcile_managed_issue_labels` runs later.; **Issue 3: Missing logging for forced transitions**\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: scripts/orchestrate_poll_process.sh\n      Problem: When labels are removed as part of the forced terminal transition, there's no logging to indicate why labels were removed. This makes audit trails incomplete.; Debugging label state issues becomes harder without visibility into which labels were removed due to forced terminal transitions.; ### HARDENING_SUGGESTIONS:; **Suggestion 1: Add contract parse error logging**\n      Confidence: avg 2.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [5] File: scripts/orchestrate_poll_process.sh\n      Problem: Location: line 1238-1242; Issue: Incomplete phase-group cleanup; Suggested minimal fix: After adding `ai:merged`, also remove `ai:validation-fixing` and other phase-group labels; Estimated lines changed: 5-10; HARDENING_RISK_SCORE: 3; **Suggestion 3: Add forced transition logging**\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [6] File: scripts/orchestrate_poll_process.sh\n      Problem: Location: line 1448; Issue: Missing audit trail for forced transitions; Suggested minimal fix: Add `print(f\"FORCED_TRANSITION: {forced} removed={members_to_remove}\", file=sys.stderr)`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1; ### Overall Assessment; The core fix is **correct and necessary**. It properly addresses the dual-phase label bug described in the PR. The implementation handles edge cases appropriately with fail-open error handling. However, there are minor improvements that could enhance robustness and debuggability.; **PR INTENT PRESERVATION**: The changes maintain original intent while fixing the specific bug. No architectural changes or scope expansion observed.; **RUNTIME CORRECTNESS**: The fix will prevent the invalid dual-phase states that were causing issues to be stranded with non-terminal labels after PR merges/closures.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [7] File: scripts/orchestrate_poll_process.sh\n      Problem: The code attempts to load the contract file using `json.load(fh)`, but `.github/ai/label_contract.v1.json` is formatted as a JSON-like object with **unquoted keys** (essentially a YAML/HCL-like structure allowed by some parsers but strictly illegal in standard JSON).; `json.load(fh)` will raise `json.JSONDecodeError` because of the unquoted keys. The `except (OSError, ValueError)` block catches this (as `JSONDecodeError` is a subclass of `ValueError`), sets `contract = None`, and silently skips the phase-group cleanup. The dual-phase label bug (e.g., `{ai:review-blocked, ai:merged}`) thus remains unfixed because the cleanup logic never executes in production.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [8] File: scripts/orchestrate_poll_process.sh\n      Problem: The script relies on positional arguments in the Python heredoc but does not provide a fallback or diagnostic if the contract file path is missing or incorrectly passed from the shell.; If `contract_file` is empty or the shell variable is unset, `open(\"\", \"r\")` will raise `FileNotFoundError` (caught by `OSError`), and the labels will not be reconciled. While fail-open, the lack of a `sys.stderr` warning makes this failure invisible during orchestrator runs.; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [9] File: scripts/orchestrate_poll_process.sh\n      Problem: Location: 1435; Issue: No audit trail for forced removals.; Suggested minimal fix: `print(f\"DEBUG: Forced {forced}, removing members: {members}\", file=sys.stderr)`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [10] File: scripts/orchestrate_poll_process.sh\n      Problem: This discard is redundant since the later phase-group cleanup (lines 1438-1447) also removes `ai:closed` (both are in the same phase group). Not a correctness issue, but unnecessary code.; None - redundant operation on a set; **Issue 2 (Minor - Logging):**\n      Confidence: avg 2.0\n      Flagged by: moonshotai_kimi-k2_5\n\n  [11] File: scripts/orchestrate_poll_process.sh\n      Problem: When contract file fails to load, the error is silently swallowed. While fail-open is correct, a warning log would aid debugging contract file issues.; Silent failure to apply phase-group cleanup if contract is malformed or unreadable; **No critical issues found.** The fix is minimal, targeted, and correct. The cross-pollination claim that the contract file is \"YAML-like\" with unquoted keys is **incorrect** - the file is valid JSON.; HARDENING_SUGGESTIONS:\n      Confidence: avg 2.0\n      Flagged by: moonshotai_kimi-k2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\nscripts/orchestrate_poll_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "24075f4eaf4c1661d99752e558dcdfeba44cb16d3e84081e052d73065687daef",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1296,
+    "run_id": "24599248582",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24599248582",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418071240_b43ce08e26",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1296,
+    "run_id": "24599248582"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-18T07:12:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
