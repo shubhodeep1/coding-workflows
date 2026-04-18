@@ -1519,6 +1519,8 @@ jobs:
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
             PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
             : > "${PRE_EDITOR_STATE_FILE}"
+            PRE_EDITOR_DIFF_BASELINE_FILE="${RUNTIME_DIR}/pre_editor_head_diff_paths.txt"
+            git diff --name-only HEAD | sort -u > "${PRE_EDITOR_DIFF_BASELINE_FILE}" || true
             # `sort -zu` dedupes: in an active merge state, `git ls-files -z`
             # emits conflicted paths once per index stage (1/2/3).  The
             # autofix step should never run in merge state, but the guard is
@@ -1537,6 +1539,7 @@ jobs:
                 printf 'U\t%s\n' "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
             done < <(git ls-files --others --exclude-standard)
             echo "PRE_EDITOR_STATE_FILE=${PRE_EDITOR_STATE_FILE}" >> "$GITHUB_ENV"
+            echo "PRE_EDITOR_DIFF_BASELINE_FILE=${PRE_EDITOR_DIFF_BASELINE_FILE}" >> "$GITHUB_ENV"
             echo "Pre-editor snapshot captured: $(wc -l < "${PRE_EDITOR_STATE_FILE}") entries"
           fi
 
@@ -1787,11 +1790,17 @@ jobs:
               # files).  Missing a real edit surfaces as EDITOR_CHANGES_LOST
               # even though the edit is on disk (see run 24604441953 where
               # a script edit was modified but dropped).
-              # Adding a file whose on-disk content already matches HEAD is
-              # harmless — the subsequent `git add` is a no-op for unchanged
-              # content and the `git diff --cached --quiet` guard still
-              # short-circuits when nothing truly changed.
-              git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
+              # Exclude paths that were already dirty before the editor run
+              # (e.g. support-script overlay mode-bit flips) so this union
+              # cannot stage workflow bootstrap side-effects as editor output.
+              if [ -f "${PRE_EDITOR_DIFF_BASELINE_FILE:-/nonexistent}" ]; then
+                CURRENT_DIFF_LIST="$(mktemp)"
+                git diff --name-only HEAD | sort -u > "${CURRENT_DIFF_LIST}" || true
+                comm -13 "${PRE_EDITOR_DIFF_BASELINE_FILE}" "${CURRENT_DIFF_LIST}" >> "${CODEX_TOUCHED_FILE}" || true
+                rm -f "${CURRENT_DIFF_LIST}"
+              else
+                git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
+              fi
             else
               echo "::warning::pre-editor snapshot missing; falling back to git diff HEAD."
               git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
