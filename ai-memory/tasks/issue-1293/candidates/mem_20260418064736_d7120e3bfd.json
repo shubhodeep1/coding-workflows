@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":1293,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/1293\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/1295\",\"pr_number\":1295,\"branch\":\"ai/issue-1293\",\"run_id\":\"24598912377\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/24598912377\",\"changed_files\":[\"scripts/render_validation_templates.py\",\"scripts/templates/slot_manifest.schema.json\",\"tests/test_render_validation_templates.py\",\"workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2\",\"workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2\",\"workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2\",\"workflow-templates/validation-harness/node-hardhat-solidity/tests/10_family_marker.sh.j2\",\"workflow-templates/validation-harness/python-mongo-flask/tests/10_family_marker.sh.j2\"]}",
+  "fingerprint": "bc60215cd2ee12e602802001a3266f0f4ab4964e9a7a9848340603a3232b374b",
+  "lineage": {
+    "issue_number": 1293,
+    "parent_ids": [],
+    "pr_number": 1295,
+    "run_id": "24598912377",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24598912377",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/1295"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260418064736_d7120e3bfd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1293,
+    "level": "run",
+    "pr_number": 1295,
+    "run_id": "24598912377"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #1293: https://github.com/shubhodeep1/coding-workflows/pull/1295",
+  "timestamps": {
+    "created_at": "2026-04-18T06:47:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
