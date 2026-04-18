@@ -32,13 +32,13 @@ Mandatory rules:
 - Include only synthetic defaults for local validation; never reference production credentials.
 - Preserve env var names consumed by runtime (`VALIDATION_TEST_USERNAME`, `VALIDATION_TEST_PASSWORD`, `VALIDATION_TEST_API_KEY`).
 - Use simple `KEY=VALUE` lines compatible with Docker Compose `env_file`.
-- Fail-fast env vars (CRITICAL — most common cause of `harness_error`): the app is expected to crash during import/startup if a required secret is missing. Before finalising `validate.env`, scan the repository for every env var that is read during module import or service `__init__` in a way that raises when absent/empty. Representative patterns to grep for:
+- Fail-fast env vars (CRITICAL — most common cause of `harness_error`): the app is expected to crash during import/startup if a required secret is missing. Before finalising `validate.env`, read `.ai/validate.yml` hints first and treat `env_overrides` (including format hints captured during discover) as authoritative, then scan the repository for additional env vars read during module import or service `__init__` in a way that raises when absent/empty. Representative patterns to grep for:
     - `raise RuntimeError("<VAR> is not configured")`
-    - `raise .* if not .*os\.(getenv|environ)`
+    - `raise .* if not .*os\.(getenv|environ)` and multi-line `if not os\.(getenv|environ)(...)` checks that raise in subsequent lines
     - `os.environ["<VAR>"]` (bracket access with no default)
     - `os.getenv("<VAR>") or .*raise`
     - `assert os.getenv("<VAR>")`
-    - `Fernet(...)`, `jwt.encode/decode(..., key=...)`, `cryptography.*` constructors, `boto3.client(..., aws_*_key=...)` initialized from env at import time
+    - `Fernet(...)`, `jwt.encode/decode(..., key=...)`, `cryptography.*` constructors, `boto3.client(..., aws_access_key_id=..., aws_secret_access_key=..., aws_session_token=...)` initialized from env at import time (for example via `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`)
     - Django/Flask/FastAPI settings modules that dereference env vars at import
   Every such variable MUST appear in `validate.env` with a synthetic, format-valid placeholder. Format constraints matter because fail-fast code often validates the value, not just its presence:
     - Fernet / `cryptography.fernet.Fernet` keys: a urlsafe-base64-encoded EXACTLY-32-byte value (44-char string ending in `=`), for example `TFA_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=` (the base64 of the ASCII string `0123456789abcdef0123456789abcdef`). Fernet rejects keys whose decoded length is not exactly 32, so mentally (or programmatically) verify the example decodes to 32 bytes before emitting it. Never use a real production key.
