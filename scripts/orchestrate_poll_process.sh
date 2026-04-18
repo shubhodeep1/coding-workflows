@@ -4676,8 +4676,13 @@ _fetch_standalone_marker_issues_graphql() {
 # calls.  Returns a JSON object keyed by stringified issue number:
 #   { "123": {"labels": ["ai:clarification"],
 #             "comments": [{"id":N,"body":"...","created_at":"..."},...],
-#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool} | null },
+#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"headPushedAt":"ISO8601"|null} | null },
 #     ... }
+# `headPushedAt` is the linked PR's head commit pushedDate (coalesced
+# to committedDate when pushedDate is null, e.g. for squashed commits).
+# Consumed by the fresh-push stall-recovery guard (see
+# _check_fresh_push_guard) to suppress recovery dispatches while
+# autofix-driven activity is still landing on the PR.
 # Comment shape mirrors the REST response (.id / .body / .created_at)
 # so existing parsers (e.g. _extract_standalone_state_comment_id_from_comments)
 # keep working unchanged.
@@ -4740,7 +4745,10 @@ _fetch_candidate_issue_details_graphql() {
               ... on CrossReferencedEvent {
                 source {
                   __typename
-                  ... on PullRequest { number state merged }
+                  ... on PullRequest {
+                    number state merged
+                    commits(last: 1) { nodes { commit { pushedDate committedDate } } }
+                  }
                 }
               }
             }
@@ -4782,7 +4790,16 @@ _fetch_candidate_issue_details_graphql() {
                 (.value.timelineItems.nodes // [])[]?
                 | (.source // null)
                 | select(. != null and .__typename == "PullRequest")
-                | {number: .number, state: .state, merged: (.merged // false)}
+                | {
+                    number: .number,
+                    state: .state,
+                    merged: (.merged // false),
+                    headPushedAt: (
+                      ((.commits.nodes // [])[0].commit.pushedDate)
+                      // ((.commits.nodes // [])[0].commit.committedDate)
+                      // null
+                    )
+                  }
               ] | last // null
             )
           }
@@ -4807,8 +4824,11 @@ _fetch_candidate_issue_details_graphql() {
 #
 # Input: JSON array of issue numbers, e.g. "[123, 456]"
 # Output: JSON object keyed by stringified issue number:
-#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool},
+#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"headPushedAt":"ISO8601"|null},
 #     "456": null, ... }
+# `headPushedAt` is the linked PR's head commit pushedDate (coalesced
+# to committedDate when pushedDate is null).  Consumed by
+# _check_fresh_push_guard alongside the merged-PR guard.
 # A value of `null` means the issue has no cross-referenced PR (or the
 # batch call failed for that batch and the issue fell out of the cache).
 # Callers must treat missing/null entries as "no merged PR known" and
@@ -4850,7 +4870,10 @@ _fetch_linked_pr_status_graphql() {
               ... on CrossReferencedEvent {
                 source {
                   __typename
-                  ... on PullRequest { number state merged }
+                  ... on PullRequest {
+                    number state merged
+                    commits(last: 1) { nodes { commit { pushedDate committedDate } } }
+                  }
                 }
               }
             }
@@ -4884,7 +4907,16 @@ _fetch_linked_pr_status_graphql() {
               (.value.timelineItems.nodes // [])[]?
               | (.source // null)
               | select(. != null and .__typename == "PullRequest")
-              | {number: .number, state: .state, merged: (.merged // false)}
+              | {
+                  number: .number,
+                  state: .state,
+                  merged: (.merged // false),
+                  headPushedAt: (
+                    ((.commits.nodes // [])[0].commit.pushedDate)
+                    // ((.commits.nodes // [])[0].commit.committedDate)
+                    // null
+                  )
+                }
             ] | last // null
           )
         }
@@ -4944,6 +4976,81 @@ _check_merged_pr_guard() {
 
   STALL_MERGED_PR_NUM="${pr_num}"
   return 0
+}
+
+# _check_fresh_push_guard — Shared guard used by both stall recovery
+# paths.  Returns 0 when the linked PR's head commit was pushed within
+# the last _FRESH_PUSH_SUPPRESS_SECS (30 minutes, hardcoded) AND the
+# phase is one where autofix-driven commits are expected
+# (ai:done, ai:ready-to-merge).  Returns 1 otherwise.
+#
+# Rationale: the existing `issue_has_active_workflow` guard only
+# catches cycles where a queued/in_progress workflow run is currently
+# visible on the PR branch.  It misses the race where autofix just
+# pushed a commit but the new `pull_request.synchronize` run hasn't
+# materialised yet (or was cancelled by the autofix-retrigger dedup
+# and the follow-on dispatch is still in-flight).  A fresh pushedDate
+# is a more reliable "work landed recently" signal.
+#
+# The 30-minute window is deliberately not configurable (per project
+# decision Q2=B on issue investigate-stall-recovery-dx7zm).  A
+# longer window would risk hiding genuinely hung autofix loops.
+#
+# Fails open (returns 1 — guard does NOT fire) when:
+#   - phase is outside {ai:done, ai:ready-to-merge}
+#   - linked_json is empty / "null" / "{}"
+#   - headPushedAt is missing or unparseable
+#   - computed age is negative (clock skew)
+# i.e. the guard NEVER causes a stall recovery to fire when it
+# otherwise would not have; it only suppresses dispatches that would
+# have fired within the fresh-push window.
+#
+# On a hit, exports FRESH_PUSH_PR_NUM and FRESH_PUSH_AGE_SECS so the
+# caller can emit a stable `STALL_SKIP reason=fresh_push` log line.
+#
+# Args:
+#   $1 — issue number (for logging only)
+#   $2 — linked_pr JSON entry ({number,state,merged,headPushedAt} or "null"/empty)
+#   $3 — phase label (e.g. "ai:done")
+_FRESH_PUSH_SUPPRESS_SECS=1800
+_check_fresh_push_guard() {
+  local issue_num="$1"
+  local linked_json="$2"
+  local phase="$3"
+  FRESH_PUSH_PR_NUM=""
+  FRESH_PUSH_AGE_SECS=""
+
+  case "${phase}" in
+    "ai:done"|"ai:ready-to-merge") ;;
+    *) return 1 ;;
+  esac
+
+  if [ -z "${linked_json}" ] || [ "${linked_json}" = "null" ] || [ "${linked_json}" = "{}" ]; then
+    return 1
+  fi
+
+  local pushed_at_iso
+  pushed_at_iso="$(printf '%s' "${linked_json}" | jq -r '.headPushedAt // empty' 2>/dev/null || echo "")"
+  [ -n "${pushed_at_iso}" ] || return 1
+
+  local pushed_at_epoch
+  pushed_at_epoch="$(date -d "${pushed_at_iso}" +%s 2>/dev/null || echo "")"
+  [[ "${pushed_at_epoch}" =~ ^[0-9]+$ ]] || return 1
+
+  local now_epoch
+  now_epoch="$(date +%s)"
+  local age_secs=$(( now_epoch - pushed_at_epoch ))
+  [ "${age_secs}" -lt 0 ] && return 1
+
+  if [ "${age_secs}" -lt "${_FRESH_PUSH_SUPPRESS_SECS}" ]; then
+    local pr_num
+    pr_num="$(printf '%s' "${linked_json}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+    FRESH_PUSH_PR_NUM="${pr_num}"
+    FRESH_PUSH_AGE_SECS="${age_secs}"
+    return 0
+  fi
+
+  return 1
 }
 
 # _reconcile_merged_pr_issue — Tag an issue whose linked PR is merged
@@ -5153,6 +5260,22 @@ PY
 
     if issue_has_active_workflow "${issue_num}"; then
       echo "  [standalone-stall] Issue #${issue_num} has a recent active workflow run — skipping recovery."
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
+      continue
+    fi
+
+    # ---- Fresh-push guard: skip recovery when the linked PR was pushed within the last 30m ----
+    # Complements issue_has_active_workflow above; see _check_fresh_push_guard
+    # for rationale.  Consumes the linked_pr field already populated in
+    # _candidate_details_json (0 additional API calls).  Only fires for
+    # ai:done / ai:ready-to-merge phases; fails open otherwise.
+    local _std_fresh_lpr
+    _std_fresh_lpr="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // null' 2>/dev/null || echo "null")"
+    if _check_fresh_push_guard "${issue_num}" "${_std_fresh_lpr}" "${phase}"; then
+      echo "  [standalone-stall] Issue #${issue_num} linked PR #${FRESH_PUSH_PR_NUM} was pushed ${FRESH_PUSH_AGE_SECS}s ago — skipping recovery (fresh push)."
+      echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}"
       if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
         write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
       fi
@@ -5633,6 +5756,26 @@ recover_stalled_issue() {
   if issue_has_active_workflow "${issue_num}"; then
     echo "STALL_SKIP issue=${issue_num} reason=active_workflow phase=${phase} action=${action}"
     return 1  # Signal: no action taken (caller should not increment counter)
+  fi
+
+  # ---- Guard: skip recovery when the linked PR was pushed within the last 30m ----
+  # Covers the race where autofix just pushed a commit but the next
+  # pull_request.synchronize workflow run hasn't materialised yet, so
+  # issue_has_active_workflow momentarily returns false.  Scope is
+  # limited to ai:done / ai:ready-to-merge phases (PR exists and may
+  # still be receiving commits) — all other phases short-circuit
+  # inside _check_fresh_push_guard.  Consumes the linked-PR entry the
+  # outer recovery loop already populated in
+  # STALL_MANAGED_LINKED_PR_CACHE via _fetch_linked_pr_status_graphql
+  # (0 additional API calls).  Fails open when the cache is missing or
+  # headPushedAt is unavailable.
+  if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
+    local _fresh_lpr_entry
+    _fresh_lpr_entry="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null")"
+    if _check_fresh_push_guard "${issue_num}" "${_fresh_lpr_entry}" "${phase}"; then
+      echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}"
+      return 1  # Signal: no action taken (caller should not increment counter)
+    fi
   fi
 
   # ---- Guard: skip pre-implementation recovery when a linked PR already exists ----

@@ -1086,6 +1086,18 @@ The label contract (`/.github/ai/label_contract.v1.json`) is the single source o
 
 The poller’s managed-wave reconciliation pass repairs labels against this contract each cycle before wave-status and stall logic.
 
+### Stall recovery: fresh-push suppression
+
+When the orchestrator-managed loop (`recover_stalled_issue`) and the standalone loop (`run_standalone_stall_recovery`) both detect a stall, they consult `_check_fresh_push_guard` immediately after the existing `issue_has_active_workflow` check. If the stalled issue's phase is `ai:done` or `ai:ready-to-merge` **and** the linked PR's head commit was pushed within the last **30 minutes** (hardcoded, not tunable), the recovery dispatch is suppressed for that cycle and a stable `STALL_SKIP issue=<n> reason=fresh_push pr=<p> pushed_age_secs=<s> phase=<phase> action=<action>` line is emitted. The stall counter is not incremented; the next poll tick re-evaluates.
+
+Rationale: `issue_has_active_workflow` only matches the moment a queued/in-progress workflow run is visible on the PR branch. Between an autofix push and the `pull_request.synchronize`-driven next run materialising (or while the autofix-retrigger dedup is swapping runs per §20 of `CLAUDE.md`), no run is briefly visible to the regex in `build_active_issue_set`, so the phase-age stall timer can fire even though fresh work has landed. The `pushedDate` signal is a more reliable "work landed recently" guard for the short gap.
+
+Data source: both stall paths already fetch the linked PR via batched GraphQL — `_fetch_linked_pr_status_graphql` (orchestrator-managed, reused via `STALL_MANAGED_LINKED_PR_CACHE`) and `_fetch_candidate_issue_details_graphql` (standalone, via `_candidate_details_json`). Both helpers were extended to request `commits(last: 1) { commit { pushedDate committedDate } }` on the cross-referenced PullRequest, adding a `headPushedAt` field to each `linked_pr` entry (coalesced: `pushedDate` first, `committedDate` as fallback when push metadata is null — e.g. squashed commits). Zero additional API calls in the steady-state path.
+
+Fail-open: `_check_fresh_push_guard` returns "not fresh" (i.e. lets the existing stall flow proceed) when the phase is outside `{ai:done, ai:ready-to-merge}`, when the linked-PR cache entry is missing or `null`, when `headPushedAt` is missing or unparseable, or when the computed push-age is negative (clock skew). The guard can never cause a stall recovery to fire that otherwise would not have fired; it only suppresses dispatches within the 30-minute fresh-push window.
+
+Log prefix `STALL_SKIP issue=... reason=fresh_push pr=... pushed_age_secs=... phase=... action=...` is a public contract (CLAUDE.md §6 Naming Immutability) — downstream log analysis and dashboards pivot on it; renames require the alongside-old-name shim documented in §6.
+
 ### Stall recovery: linked-PR closure and re-issue Gap-2 surfacing
 
 When stall recovery closes a stuck issue and opens a replacement, two contracts are enforced by `scripts/orchestrate_poll_process.sh`:
