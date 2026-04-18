@@ -1645,22 +1645,36 @@ jobs:
           NEW_FILES_BEFORE_COMMIT_FILE="$(mktemp)"
           git ls-files --others --exclude-standard -z > "${NEW_FILES_BEFORE_COMMIT_FILE}"
           if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
-            echo "Removing newly created files before commit (editor may not create new files):"
-            while IFS= read -r -d '' created_file; do
-              [ -n "${created_file}" ] || continue
-              # Preserve infrastructure dirs needed by the conflict resolver step.
-              # They are cleaned up after conflict resolution (or are harmless
-              # untracked files if no conflicts exist).
-              case "${created_file}" in
-                .serena/*|scripts/*|prompts/*) continue ;;
-              esac
-              echo "- ${created_file}"
-              if ! rm -rf -- "${created_file}"; then
-                echo "Failed to remove newly created path: ${created_file}"
-                rm -f "${NEW_FILES_BEFORE_COMMIT_FILE}"
-                exit 1
-              fi
-            done < "${NEW_FILES_BEFORE_COMMIT_FILE}"
+            # In the workflow source repo, trust editor-created files: the editor
+            # can legitimately add new templates/scripts/tests here, and deleting
+            # them causes false-positive EDITOR_CHANGES_LOST errors (PR #1330 job
+            # wiped newly-added workflow-templates/validation-harness/_shared
+            # templates, leaving a clean tree the validator then flagged as lost
+            # changes). Consumer repos keep the stricter behavior.
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+              echo "Preserving newly created files in workflow source repo:"
+              while IFS= read -r -d '' created_file; do
+                [ -n "${created_file}" ] || continue
+                echo "- ${created_file}"
+              done < "${NEW_FILES_BEFORE_COMMIT_FILE}"
+            else
+              echo "Removing newly created files before commit (editor may not create new files):"
+              while IFS= read -r -d '' created_file; do
+                [ -n "${created_file}" ] || continue
+                # Preserve infrastructure dirs needed by the conflict resolver step.
+                # They are cleaned up after conflict resolution (or are harmless
+                # untracked files if no conflicts exist).
+                case "${created_file}" in
+                  .serena/*|scripts/*|prompts/*) continue ;;
+                esac
+                echo "- ${created_file}"
+                if ! rm -rf -- "${created_file}"; then
+                  echo "Failed to remove newly created path: ${created_file}"
+                  rm -f "${NEW_FILES_BEFORE_COMMIT_FILE}"
+                  exit 1
+                fi
+              done < "${NEW_FILES_BEFORE_COMMIT_FILE}"
+            fi
           fi
           rm -f "${NEW_FILES_BEFORE_COMMIT_FILE}"
 
