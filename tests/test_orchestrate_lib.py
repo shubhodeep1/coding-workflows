@@ -1123,6 +1123,7 @@ def test_label_contract_matches_helper_catalog_and_phase_priority():
 	phase_labels = {
 		member
 		for group in contract.get("phase_groups", [])
+		if group.get("name") == "issue_phase"
 		for member in group.get("members", [])
 	}
 	priority_labels = set(orchestrate_lib.PHASE_LABELS_PRIORITY)
