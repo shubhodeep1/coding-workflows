@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Implement resilient Codex failure handling and orchestrator label-repair recovery plan\",\"issues\":[{\"id\":\"failure-label-contract-foundation\",\"title\":\"Add phase-failure labels to contract, label helpers, and label-repair tooling\",\"priority\":1},{\"id\":\"harden-codex-failures-clarify-plan-respond\",\"title\":\"Harden clarify, plan, and orchestrate_clarify_respond Codex steps with retries and phase-failure markers\",\"priority\":2},{\"id\":\"harden-codex-failures-implement-review\",\"title\":\"Harden implement and review_autofix Codex paths, including implement diagnose-failure labeling\",\"priority\":2},{\"id\":\"harden-codex-failures-validate-and-log-analysis\",\"title\":\"Harden validate and workflow-log-analysis Codex paths with distinct validate-failed semantics\",\"priority\":2},{\"id\":\"enforce-universal-label-precreation\",\"title\":\"Enforce ensure_label_exists before every ai-label mutation across remaining workflows\",\"priority\":3},{\"id\":\"poller-phase-failure-resume-and-label-repair\",\"title\":\"Implement poller AI_PHASE_FAILURE parsing, evidence-based resume gating, label-repair sweep, and API-call consolidations\",\"priority\":1},{\"id\":\"docs-sync-resilient-codex-failure-plan\",\"title\":\"Update README and agents docs for new failure labels, env vars, poller sweep, and operations runbook\",\"priority\":4}],\"dependency_edges\":[{\"from\":\"failure-label-contract-foundation\",\"to\":\"harden-codex-failures-clarify-plan-respond\"},{\"from\":\"failure-label-contract-foundation\",\"to\":\"harden-codex-failures-implement-review\"},{\"from\":\"failure-label-contract-foundation\",\"to\":\"harden-codex-failures-validate-and-log-analysis\"},{\"from\":\"failure-label-contract-foundation\",\"to\":\"enforce-universal-label-precreation\"},{\"from\":\"failure-label-contract-foundation\",\"to\":\"poller-phase-failure-resume-and-label-repair\"},{\"from\":\"harden-codex-failures-clarify-plan-respond\",\"to\":\"poller-phase-failure-resume-and-label-repair\"},{\"from\":\"harden-codex-failures-implement-review\",\"to\":\"poller-phase-failure-resume-and-label-repair\"},{\"from\":\"harden-codex-failures-validate-and-log-analysis\",\"to\":\"poller-phase-failure-resume-and-label-repair\"},{\"from\":\"harden-codex-failures-clarify-plan-respond\",\"to\":\"docs-sync-resilient-codex-failure-plan\"},{\"from\":\"harden-codex-failures-implement-review\",\"to\":\"docs-sync-resilient-codex-failure-plan\"},{\"from\":\"harden-codex-failures-validate-and-log-analysis\",\"to\":\"docs-sync-resilient-codex-failure-plan\"},{\"from\":\"enforce-universal-label-precreation\",\"to\":\"docs-sync-resilient-codex-failure-plan\"},{\"from\":\"poller-phase-failure-resume-and-label-repair\",\"to\":\"docs-sync-resilient-codex-failure-plan\"}]}",
+  "fingerprint": "f271c3f69d5710e63eedc606244fcfa1538fbfa2551378308ca518ab94923dc5",
+  "lineage": {
+    "issue_number": 1303,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24599503525",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24599503525",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260418072033_406c703bcc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1303,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24599503525"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Implement resilient Codex failure handling and orchestrator label-repair recovery plan' into 7 issues (tracking #1303)",
+  "timestamps": {
+    "created_at": "2026-04-18T07:20:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
