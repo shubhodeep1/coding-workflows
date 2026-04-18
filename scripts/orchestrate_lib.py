@@ -1025,6 +1025,8 @@ def reconcile_wave_issue_status(
 		return "ready-to-merge", "label_ai_ready_to_merge"
 	if "ai:done" in labels:
 		return "done", "label_ai_done"
+	if determine_phase(labels) in TERMINAL_PHASES:
+		return "closed", "label_terminal_phase"
 	return "in_progress", "default_in_progress"
 
 
