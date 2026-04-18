@@ -241,6 +241,9 @@ def test_renderer_family_dispatch_routing() -> None:
 		assert 'type == "object"' in rpc_probe_text
 		assert 'has("result") and (.result != null) and (.result | type == "string") and (.result | length > 0)' in rpc_probe_text
 
+		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+		assert "dockerfile: out/Dockerfile.app" in compose_text
+
 		hardhat_test_text = (output_root / "tests" / "30_hardhat_test.sh").read_text(encoding="utf-8")
 		assert '. "${ROOT_DIR}/_lib/graceful_shutdown.sh"' in hardhat_test_text
 		assert "npx hardhat test --network localhost" in hardhat_test_text

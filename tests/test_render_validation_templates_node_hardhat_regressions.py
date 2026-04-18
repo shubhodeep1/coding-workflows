@@ -103,6 +103,8 @@ def test_log9_validate_env_values_are_double_quoted() -> None:
                 continue
             assert '="' in line and line.endswith('"'), f"unquoted validate.env line: {line}"
 
+        assert 'RPC_URL=""' in env_text
+
 
 def test_shutdown_helper_is_rendered_and_invoked() -> None:
     with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
@@ -127,3 +129,38 @@ def test_shutdown_helper_is_rendered_and_invoked() -> None:
         assert '. "${ROOT_DIR}/_lib/graceful_shutdown.sh"' in test_text
         assert "graceful_shutdown" in test_text
         assert "npx hardhat test --network localhost" in test_text
+
+
+def test_compose_dockerfile_path_tracks_output_root_name() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "custom-output"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        assert "dockerfile: custom-output/Dockerfile.app" in compose_text
+
+
+def main() -> int:
+    tests = [func for name, func in sorted(globals().items()) if name.startswith("test_")]
+    failures = 0
+    for func in tests:
+        name = func.__name__
+        try:
+            func()
+            print(f"PASS {name}")
+        except AssertionError as exc:
+            failures += 1
+            print(f"FAIL {name}: {exc}")
+        except Exception as exc:  # pragma: no cover
+            failures += 1
+            print(f"ERROR {name}: {type(exc).__name__}: {exc}")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

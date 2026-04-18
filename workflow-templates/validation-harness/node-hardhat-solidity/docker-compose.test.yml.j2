@@ -17,7 +17,7 @@ services:
   app:
     build:
       context: ..
-      dockerfile: validation/Dockerfile.app
+      dockerfile: {{ output_root_name }}/Dockerfile.app
     init: true
     working_dir: /workspace
     env_file:

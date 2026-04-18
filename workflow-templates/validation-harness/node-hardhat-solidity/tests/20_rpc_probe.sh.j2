@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
+APP_SERVICE="${APP_SERVICE:-app}"
 RPC_URL="${RPC_URL:-http://anvil:${ANVIL_PORT:-8545}}"
+RPC_PAYLOAD='{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 
 echo "1..1"
 
-RESP="$(curl -fsS --max-time 10 -H 'Content-Type: application/json' \
-	--data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-	"${RPC_URL}" 2>/dev/null || true)"
+RESP="$(docker compose -f "${COMPOSE_FILE}" exec -T \
+	-e RPC_URL="${RPC_URL}" \
+	-e RPC_PAYLOAD="${RPC_PAYLOAD}" \
+	"${APP_SERVICE}" /bin/sh -c 'curl -fsS --max-time 10 -H "Content-Type: application/json" --data "${RPC_PAYLOAD}" "${RPC_URL}" 2>/dev/null' || true)"
 
 if [ -z "${RESP}" ]; then
 	echo "not ok 1 - rpc probe eth_blockNumber returns non-empty string .result"
