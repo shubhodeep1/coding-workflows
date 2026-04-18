@@ -332,7 +332,7 @@ def _check_service_tool_scope(context: LintContext) -> list[Finding]:
 	seen: set[str] = set()
 
 	for tool in canary_tools:
-		normalized = tool.strip()
+		normalized = tool.strip().lower()
 		if normalized not in SERVICE_TOOL_DENYLIST:
 			continue
 		if normalized in seen:
@@ -586,7 +586,7 @@ def _check_graceful_shutdown_hooks(context: LintContext) -> list[Finding]:
 					line=1,
 					rule_id="graceful-shutdown-hooks",
 					message=f"tests/30_hardhat_test.sh is missing required token '{token}'.",
-					hint="Source validation/_lib/graceful_shutdown.sh and call graceful_shutdown in watchdog paths.",
+					hint="Source _lib/graceful_shutdown.sh and call graceful_shutdown in watchdog paths.",
 				)
 			)
 
@@ -596,7 +596,7 @@ def _check_graceful_shutdown_hooks(context: LintContext) -> list[Finding]:
 					path=node_helper,
 					line=1,
 					rule_id="graceful-shutdown-hooks",
-					message="Graceful shutdown helper validation/_lib/graceful_shutdown.sh is missing.",
+					message="Graceful shutdown helper _lib/graceful_shutdown.sh is missing.",
 					hint="Add _lib/graceful_shutdown.sh and source it from tests/30_hardhat_test.sh.",
 				)
 			)
@@ -684,8 +684,10 @@ def _check_external_tool_dependencies(context: LintContext) -> list[Finding]:
 
 	if canary_line is not None:
 		for tool in canary_tools:
-			if tool in EXTERNAL_APP_TOOLS and tool != "hardhat":
-				required_tools.append((tool, canary_path, canary_line))
+			tool_norm = tool.strip().lower()
+			if tool_norm not in EXTERNAL_APP_TOOLS or tool_norm == "hardhat":
+				continue
+			required_tools.append((tool, canary_path, canary_line))
 
 	hardhat_test = context.resolve("tests/30_hardhat_test.sh")
 	hardhat_lines = context.read_lines(hardhat_test)
@@ -693,7 +695,7 @@ def _check_external_tool_dependencies(context: LintContext) -> list[Finding]:
 		for idx, line in enumerate(hardhat_lines, start=1):
 			if line.lstrip().startswith("#"):
 				continue
-			if re.search(r"(?<![A-Za-z0-9._+-])hardhat(?![A-Za-z0-9._+-])", line):
+			if re.search(r"(?<![A-Za-z0-9._+-])hardhat(?![A-Za-z0-9._+-])", line, re.IGNORECASE):
 				required_tools.append(("hardhat", hardhat_test, idx))
 				break
 
@@ -707,7 +709,7 @@ def _check_external_tool_dependencies(context: LintContext) -> list[Finding]:
 		deduped.append((tool, path, line_no))
 
 	for tool, path, line_no in deduped:
-		if _dockerfile_has_tool(context, tool):
+		if _dockerfile_has_tool(context, tool.strip().lower()):
 			continue
 		findings.append(
 			Finding(
