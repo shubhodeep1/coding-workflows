@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":1300,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/1300\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/1308\",\"pr_number\":1308,\"branch\":\"ai/issue-1300\",\"run_id\":\"24599785445\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/24599785445\",\"changed_files\":[\"scripts/review_floor_rules.sh\",\"tests/fixtures/review_pipeline/floor_keywords_override.txt\",\"tests/fixtures/review_pipeline/floor_tags_mixed_expected.txt\",\"tests/fixtures/review_pipeline/reviewer_bundle_long_excerpt.txt\",\"tests/fixtures/review_pipeline/reviewer_bundle_malformed.txt\",\"tests/fixtures/review_pipeline/reviewer_bundle_mixed.txt\",\"tests/fixtures/review_pipeline/reviewer_bundle_override.txt\",\"tests/fixtures/review_pipeline/reviewer_bundle_tolerance.txt\",\"tests/test_review_floor_rules.py\"]}",
+  "fingerprint": "53e1593b5f0ff0c9f4062087b3a9f1d6fdf5b7fb12569211b679bfac80e3abba",
+  "lineage": {
+    "issue_number": 1300,
+    "parent_ids": [],
+    "pr_number": 1308,
+    "run_id": "24599785445",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24599785445",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/1308"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260418074258_4a9fc37361",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1300,
+    "level": "run",
+    "pr_number": 1308,
+    "run_id": "24599785445"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #1300: https://github.com/shubhodeep1/coding-workflows/pull/1308",
+  "timestamps": {
+    "created_at": "2026-04-18T07:42:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
