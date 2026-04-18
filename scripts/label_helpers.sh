@@ -29,6 +29,15 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:validation-failed"]="e11d48"
 	["ai:validation-fixing"]="d93f0b"
 	["ai:validation-recovery"]="e3a21a"
+	["ai:clarify-failed"]="e11d48"
+	["ai:clarify-respond-failed"]="e11d48"
+	["ai:plan-failed"]="e11d48"
+	["ai:implement-diagnose-failed"]="e11d48"
+	["ai:review-autofix-failed"]="e11d48"
+	["ai:validate-failed"]="e11d48"
+	["ai:integration-judge-failed"]="e11d48"
+	["ai:log-analysis-failed"]="e11d48"
+	["ai:memory-maintenance-failed"]="e11d48"
 	["ai:done"]="0e8a16"
 	["ai:ready-to-merge"]="0e8a16"
 	["ai:needs-human"]="e11d48"
@@ -42,6 +51,8 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:orchestrator-tracking"]="a2eeef"
 	["ai:orchestrator-managed"]="bfdadc"
 	["ai:orchestrator-validate-required"]="c5def5"
+	["ai:comprehensive-test-pending"]="1d76db"
+	["ai:needs-prompt-review"]="fbca04"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -54,6 +65,15 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:validation-failed"]="Runtime validation failed - manual review needed"
 	["ai:validation-fixing"]="Validation fix-up issues in pipeline"
 	["ai:validation-recovery"]="Validation failed — judge re-evaluating before retry"
+	["ai:clarify-failed"]="Clarify workflow failed before producing a valid response"
+	["ai:clarify-respond-failed"]="Orchestrator clarify-respond workflow failed before posting an answer"
+	["ai:plan-failed"]="Plan workflow failed before producing an approved implementation plan"
+	["ai:implement-diagnose-failed"]="Implement diagnose workflow failed while generating fix-up guidance"
+	["ai:review-autofix-failed"]="Review/autofix workflow failed before completing the review pass"
+	["ai:validate-failed"]="Validate workflow failed before runtime validation could complete"
+	["ai:integration-judge-failed"]="Integration judge workflow failed before returning a verdict"
+	["ai:log-analysis-failed"]="Workflow log analysis failed before producing an analysis report"
+	["ai:memory-maintenance-failed"]="AI memory maintenance workflow failed before completing maintenance"
 	["ai:done"]="Implementation PR created"
 	["ai:ready-to-merge"]="PR review complete and ready to merge"
 	["ai:needs-human"]="Escalated for human intervention; autonomous stall recovery is paused"
@@ -67,6 +87,8 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:orchestrator-tracking"]="Orchestrator project tracking issue"
 	["ai:orchestrator-managed"]="Issue is managed by the AI orchestrator"
 	["ai:orchestrator-validate-required"]="Orchestrator issue requires validate phase before completion"
+	["ai:comprehensive-test-pending"]="Pending comprehensive release callback dispatch."
+	["ai:needs-prompt-review"]="Validation prompt self-heal PR awaiting manual review"
 )
 
 # ensure_label_exists <label_name> [repo]
@@ -110,5 +132,5 @@ ensure_label_exists() {
 	fi
 
 	echo "::warning::ensure_label_exists: failed to create label '${label_name}' in repo '${repo}': ${_label_err}" >&2
-	return 0
+	return 1
 }
