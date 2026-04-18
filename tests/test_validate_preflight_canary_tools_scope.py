@@ -49,6 +49,7 @@ _LINT_SNIPPET = textwrap.dedent(r"""
 
     _canary_tools_raw="$(printf '%s\n' "${_canary_tools_line}" \
         | sed -E 's/^[[:space:]]*CANARY_TOOLS=//' \
+        | sed -E 's/[[:space:]]+#.*$//' \
         | sed -E 's/^"\$\{CANARY_TOOLS:-//; s/\}"[[:space:]]*$//' \
         | sed -E "s/^'\\\$\\{CANARY_TOOLS:-//; s/\\}'[[:space:]]*$//" \
         | sed -E 's/^\$\{CANARY_TOOLS:-//; s/\}[[:space:]]*$//' \
@@ -63,7 +64,7 @@ _LINT_SNIPPET = textwrap.dedent(r"""
                 case "${_tool}" in
                     psql) _tool_pattern='psql|postgresql-client' ;;
                     redis-cli) _tool_pattern='redis-cli|redis-tools' ;;
-                    mysql|mysqladmin) _tool_pattern="${_tool}|mysql-client" ;;
+                    mysql|mysqladmin) _tool_pattern="${_tool}|mysql-client|default-mysql-client|mariadb-client" ;;
                     *) _tool_pattern="${_tool}" ;;
                 esac
                 if [ -f validation/Dockerfile.app ] && \
@@ -257,6 +258,21 @@ class CanaryToolsScopeLintTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("OK", result.stdout)
 
+    def test_mysql_alias_install_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                os.path.join(tmp, "validation/tests/00_canary.sh"),
+                'CANARY_TOOLS="${CANARY_TOOLS:-curl jq mysql mysqladmin}"\n',
+            )
+            _write(
+                os.path.join(tmp, "validation/Dockerfile.app"),
+                "FROM python:3.12-slim\n"
+                "RUN apt-get install -y curl jq default-mysql-client mariadb-client\n",
+            )
+            result = _run(tmp)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("OK", result.stdout)
+
     def test_tool_match_handles_shell_punctuation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             _write(
@@ -298,6 +314,20 @@ class CanaryToolsScopeLintTests(unittest.TestCase):
                 "FROM python:3.12-slim\nRUN apt-get install -y curl jq\n",
             )
             _write(os.path.join(tmp, "mongosh"), "sentinel\n")
+            result = _run(tmp)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("OK", result.stdout)
+
+    def test_canary_tools_line_trailing_comment_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                os.path.join(tmp, "validation/tests/00_canary.sh"),
+                'CANARY_TOOLS="${CANARY_TOOLS:-curl jq python3}" # mongosh\n',
+            )
+            _write(
+                os.path.join(tmp, "validation/Dockerfile.app"),
+                "FROM python:3.12-slim\nRUN apt-get install -y curl jq\n",
+            )
             result = _run(tmp)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("OK", result.stdout)

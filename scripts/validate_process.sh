@@ -1249,6 +1249,7 @@ PY2
 			#   CANARY_TOOLS=curl jq python3         (unquoted — sol3 bug; still scannable)
 			_canary_tools_raw="$(printf '%s\n' "${_canary_tools_line}" \
 				| sed -E 's/^[[:space:]]*CANARY_TOOLS=//' \
+				| sed -E 's/[[:space:]]+#.*$//' \
 				| sed -E 's/^"\$\{CANARY_TOOLS:-//; s/\}"[[:space:]]*$//' \
 				| sed -E "s/^'\\\$\\{CANARY_TOOLS:-//; s/\\}'[[:space:]]*$//" \
 				| sed -E 's/^\$\{CANARY_TOOLS:-//; s/\}[[:space:]]*$//' \
@@ -1259,12 +1260,12 @@ PY2
 			for _tool in ${_canary_tools_raw}; do
 				case " ${_denylist} " in
 					*" ${_tool} "*)
-						case "${_tool}" in
-							psql) _tool_pattern='psql|postgresql-client' ;;
-							redis-cli) _tool_pattern='redis-cli|redis-tools' ;;
-							mysql|mysqladmin) _tool_pattern="${_tool}|mysql-client" ;;
-							*) _tool_pattern="${_tool}" ;;
-						esac
+					case "${_tool}" in
+						psql) _tool_pattern='psql|postgresql-client' ;;
+						redis-cli) _tool_pattern='redis-cli|redis-tools' ;;
+						mysql|mysqladmin) _tool_pattern="${_tool}|mysql-client|default-mysql-client|mariadb-client" ;;
+						*) _tool_pattern="${_tool}" ;;
+					esac
 						# Tool is service-side. Accept it only if the app
 						# image explicitly installs it (apt/pip/custom RUN).
 						# The token-boundary regex avoids matching the tool
