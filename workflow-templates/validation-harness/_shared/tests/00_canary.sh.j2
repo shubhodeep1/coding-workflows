@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CANARY_TOOLS="{{ slots.canary_tools | join(' ') }}"
-for tool in ${CANARY_TOOLS}; do
+CANARY_TOOLS=(
+{% for tool in slots.canary_tools %}
+	'{{ tool | replace("'", "'\"'\"'") }}'
+{% endfor %}
+)
+for tool in "${CANARY_TOOLS[@]}"; do
 	if ! command -v "${tool}" >/dev/null 2>&1; then
 		echo "missing required canary tool: ${tool}" >&2
 		exit 1

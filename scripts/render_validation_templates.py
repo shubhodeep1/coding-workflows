@@ -151,7 +151,8 @@ def _json_pointer_from_path(path_parts: list[Any]) -> str:
 		if isinstance(segment, int):
 			pointer += f"[{segment}]"
 		else:
-			pointer += f".{segment}"
+			escaped = str(segment).replace("~", "~0").replace("/", "~1")
+			pointer += f".{escaped}"
 	return pointer
 
 
@@ -340,14 +341,22 @@ def _ensure_path_within_root(output_root: Path, candidate: Path) -> None:
 
 
 def write_outputs(output_root: Path, rendered_files: list[RenderedFile]) -> list[Path]:
-	output_root.mkdir(parents=True, exist_ok=True)
+	try:
+		output_root.mkdir(parents=True, exist_ok=True)
+	except OSError as exc:
+		raise OutputWriteError(f"Failed creating output root '{output_root}': {exc}") from exc
 	resolved_root = output_root.resolve()
 	written_paths: list[Path] = []
 
 	for rendered_file in sorted(rendered_files, key=lambda item: item.output_rel_path.as_posix()):
 		target = (output_root / rendered_file.output_rel_path).resolve()
 		_ensure_path_within_root(resolved_root, target)
-		target.parent.mkdir(parents=True, exist_ok=True)
+		try:
+			target.parent.mkdir(parents=True, exist_ok=True)
+		except OSError as exc:
+			raise OutputWriteError(
+				f"Failed creating parent directory for '{target}': {exc}"
+			) from exc
 		try:
 			target.write_text(rendered_file.content, encoding="utf-8", newline="\n")
 		except OSError as exc:

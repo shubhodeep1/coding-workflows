@@ -89,9 +89,90 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 		assert family_marker.exists(), f"missing rendered file: {family_marker}"
 
 		canary_text = shared_canary.read_text(encoding="utf-8")
-		assert 'CANARY_TOOLS="curl jq python3"' in canary_text
+		assert "CANARY_TOOLS=(" in canary_text
+		assert "'curl'" in canary_text
+		assert "'jq'" in canary_text
+		assert "'python3'" in canary_text
+		assert 'for tool in "${CANARY_TOOLS[@]}"; do' in canary_text
 		family_text = family_marker.read_text(encoding="utf-8")
 		assert "python-mongo-flask family for demo-project" in family_text
+
+
+def test_renderer_canary_tools_escaped_for_shell_safety() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		payload = _manifest_payload("python-mongo-flask")
+		payload["slots"]["canary_tools"] = ["tool$(echo pwn)", "tool'quote"]
+		_write_yaml(manifest_path, payload)
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode == 0, result.stderr
+		canary_text = (output_root / "tests" / "00_canary.sh").read_text(encoding="utf-8")
+		assert "'tool$(echo pwn)'" in canary_text
+		assert "'tool'\"'\"'quote'" in canary_text
+
+
+def test_renderer_rejects_invalid_string_port() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		payload = _manifest_payload("python-mongo-flask")
+		payload["port"] = "99999"
+		_write_yaml(manifest_path, payload)
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode != 0
+		assert "Manifest validation failed" in result.stderr
+		assert "port" in result.stderr
+
+
+def test_renderer_reports_output_root_creation_error_cleanly() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		_write_yaml(manifest_path, _manifest_payload("python-mongo-flask"))
+		output_root.write_text("not-a-directory", encoding="utf-8")
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode != 0
+		assert "ERROR: Failed creating output root" in result.stderr
+
+
+def test_renderer_reports_parent_dir_creation_error_cleanly() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		_write_yaml(manifest_path, _manifest_payload("python-mongo-flask"))
+		(output_root / "tests").parent.mkdir(parents=True, exist_ok=True)
+		(output_root / "tests").write_text("not-a-directory", encoding="utf-8")
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode != 0
+		assert "ERROR: Failed creating parent directory" in result.stderr
+
+
+def test_renderer_json_pointer_escapes_special_characters() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		payload = _manifest_payload("python-mongo-flask")
+		payload["slots"] = {
+			"project_name": "demo-project",
+			"canary_tools": ["curl"],
+			"bad/key~name": {},
+		}
+		_write_yaml(manifest_path, payload)
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode != 0
+		assert "Manifest validation failed" in result.stderr
+		assert "bad~1key~0name" in result.stderr
 
 
 def test_renderer_fails_invalid_schema_with_actionable_error() -> None:
