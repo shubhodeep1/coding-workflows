@@ -138,7 +138,7 @@ the classification tree):
   project's dependency manifest is out of sync with its committed lockfile —
   for example any of the following signatures, whether the command runs
   directly on the runner or inside a Docker build layer:
-    - npm: `EUSAGE` with `package.json and package-lock.json ... are in sync`
+    - npm: `EUSAGE` with `package.json and package-lock.json ... are not in sync`
       or `Missing: <pkg> from lock file` or `Invalid: lock file's <pkg>`
     - yarn: `Your lockfile needs to be updated` / `YN0028`
     - pnpm: `ERR_PNPM_OUTDATED_LOCKFILE` / `Cannot install with "frozen-lockfile"`

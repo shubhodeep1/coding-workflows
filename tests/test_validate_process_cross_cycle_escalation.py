@@ -174,3 +174,17 @@ def test_diagnose_prompt_schema_allows_harness_fixes_alongside_fix_issues() -> N
 	assert '"harness_fixes": "string"' in text, (
 		"harness_fixes must remain in the schema"
 	)
+
+
+def main() -> int:
+	failed = 0
+	for name in sorted(n for n in globals() if n.startswith("test_")):
+		try: globals()[name]()
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+	return 1 if failed else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

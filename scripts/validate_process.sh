@@ -2381,7 +2381,7 @@ case "${DIAG_STATUS}" in
       post_tracking_comment "## ❌ Runtime validation harness error (cross-cycle escalation)\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}"
       set_tracking_phase_label "ai:validation-failed"
       write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
-      tg_notify "Validation cross-cycle escalation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: same fix-up proposal failed ${PRIOR_FINGERPRINT_HITS}+1 times." "ERROR"
+      tg_notify "Validation cross-cycle escalation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: same fix-up proposal failed $((PRIOR_FINGERPRINT_HITS + 1)) times." "ERROR"
     else
       HARNESS_FIXES="$(jq -r '.harness_fixes // "Validation harness needs correction."' "${DIAGNOSE_RESULT_FILE}")"
       failure_summary="Validation harness error: ${HARNESS_FIXES}"
