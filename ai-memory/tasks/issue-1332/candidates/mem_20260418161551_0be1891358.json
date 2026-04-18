@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `225e273f147438338ee10766292e86c987921863`\n- Checked-out ref: `orchestrator/project-1299`\n- Integration metadata ref: `orchestrator/project-1299`\n- Integration mismatch: `false`\n\nClarification mapping:\n- No clarification QIDs were issued in this thread.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as: proceed with the issue scope as written.\n\nRepresentative implementation pattern to follow:\n- Shell-stage style and fail-open behavior from [review_parse_consolidator.sh](scripts/review_parse_consolidator.sh).\n- Fixture-driven test harness style from [test_review_parse_consolidator.py](tests/test_review_parse_consolidator.py).\n\nImplementation plan:\n\n1. Files likely to change\n- New: [review_issue_ledger.sh](scripts/review_issue_ledger.sh)\n- Update: [review_autofix.yml](.github/workflows/review_autofix.yml)\n- Update: [review_apply_fixes.sh](scripts/review_apply_fixes.sh)\n- Update: [.gitignore](.gitignore)\n- New: [test_review_issue_ledger.py](tests/test_review_issue_ledger.py)\n- New fixtures under: `tests/fixtures/review_pipeline/` for ledger transition cases and malformed-ledger input\n- If workflow-exposed envs are introduced here, also update: [README.md](README.md) and [agents.md](agents.md)\n\n2. Functions/modules to implement\n- In `review_issue_ledger.sh` implement:\n- Parse current `review_issues.txt` issue blocks.\n- Parse prior ledger file at `REVIEW_LEDGER_PATH` (default `.ai/review_issue_ledger.txt`).\n- Compute stable `issue_id` per spec hash basis (`file path`, `anchor fingerprint`, `lens`, floor-severity classification).\n- Reconcile lifecycle states: `NEW`, `PERSISTING`, `FIXED`, `RESURGENT`.\n- Increment/reset `PERSIST_COUNT` per transition rules.\n- Apply `REVIEW_LEDGER_PERSIST_LIMIT` and classify exhausted issues as `accepted-residual`.\n- Emit `ledger_status.txt` with documented tab-separated schema.\n- Rewrite ledger file in full each iteration.\n- Fail-open malformed prior ledger by resetting state and logging `ledger_reset=1`.\n- Detect/disambiguate hash collisions via suffix and log `hash_collision=1`.\n- In `review_autofix.yml`:\n- Bootstrap/install `review_issue_ledger.sh`.\n- Insert ledger stage in per-iteration flow before editor invocation.\n- Pass required env/context (`RUNTIME_DIR`, iteration info, PR number, optional paths).\n- In `review_apply_fixes.sh`:\n- Include `ledger_status.txt` as optional editor input when present (fail-open when absent).\n\n3. Data structures affected\n- Ledger file at `.ai/review_issue_ledger.txt`:\n- Header block (`LEDGER v1`, `PR_NUMBER`, `FIRST_SEEN_ITERATION`, `LAST_UPDATED_ITERATION`).\n- Entry block keyed by `issue_id` with fields like `FILE`, `LENS`, `SEVERITY`, `STATUS`, `FIRST_SEEN_ITERATION`, `LAST_SEEN_ITERATION`, `PERSIST_COUNT`, `EDITOR_OUTCOMES`.\n- `ledger_status.txt` rows:\n- `<issue_id>\\t<STATUS>\\t<PERSIST_COUNT>\\t<FILE>:<LINES>\\t<LENS>\\t<prior editor outcomes csv>`\n\n4. API/interface changes\n- New env vars consumed by ledger stage:\n- `REVIEW_LEDGER_ENABLED` default `1`\n- `REVIEW_LEDGER_PERSIST_LIMIT` default `2`\n- `REVIEW_LEDGER_PATH` default `.ai/review_issue_ledger.txt`\n- New runtime artifacts:\n- `ledger_status.txt` (for editor/reviewer context)\n- `.ai/review_issue_ledger.txt` (per-PR ledger, runtime-only)\n- Structured logs:\n- `ledger_reset=1` for malformed ledger reset\n- `hash_collision=1` for collision disambiguation events\n\n5. Potential risks/edge cases\n- Off-by-one errors at persist-limit threshold.\n- Hash drift if normalization/comment-stripping differs across file types.\n- Missing source file/line context for fingerprint generation; must fall back safely.\n- Malformed ledger parse must not fail pipeline.\n- Collision handling must preserve both findings, not overwrite.\n- `accepted-residual` classification must remain additive and not alter review-blocked judge behavior.\n\n6. Testing considerations\n- Add `tests/test_review_issue_ledger.py` with fixture-driven subprocess tests (same style as parser/floor tests).\n- Cover lifecycle transitions:\n- `NEW -> PERSISTING -> accepted-residual` (limit enforcement)\n- `present -> absent` => `FIXED`\n- `FIXED -> present` => `RESURGENT`\n- Cover hash behavior:\n- Stability across whitespace/comment-only churn.\n- Divergence on meaningful identity changes (for example lens change).\n- Cover malformed prior ledger:\n- Reset semantics, `ledger_reset=1`, all current issues treated as `NEW`.\n- Cover collision path:\n- Deterministic `:<n>` suffix behavior and collision log signal.\n- Cover `ledger_status.txt` schema correctness and deterministic ordering.\n\nFactual conflicts / repo-state notes:\n- `docs/review-pipeline-improvements.md` defines the ledger stage and schema, but current workflow wiring does not yet include the full `floor_rules -> consolidate -> parse -> ledger` chain in `review_autofix.yml`; this issue should implement ledger wiring in a fail-open way compatible with current runtime.\n- `.gitignore` currently has no `.ai/` protection, so adding runtime ledger persistence without updating ignore rules risks accidental commits.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d04cab16e7de662dc00ed4decd2a808bd53039bbc73a0336c76a448c9b7f0893",
+  "lineage": {
+    "issue_number": 1332,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24608582486",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24608582486",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1332"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418161551_0be1891358",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1332,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24608582486"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1332",
+  "timestamps": {
+    "created_at": "2026-04-18T16:15:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
