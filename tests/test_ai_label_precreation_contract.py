@@ -12,16 +12,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_CONTRACT = {
 	".github/workflows/orchestrate.yml": {
 		"must_contain": [
+			'source scripts/label_helpers.sh',
 			'ensure_label_exists "ai:orchestrator-tracking" "${{ github.repository }}"',
 			'ensure_label_exists "ai:clarification" "${{ github.repository }}"',
 			'ensure_label_exists "ai:orchestrator-managed" "${{ github.repository }}"',
 			'ensure_label_exists "ai:orchestrator-validate-required" "${{ github.repository }}"',
 		],
 		"must_not_contain": [
-			re.compile(r"gh\s+label\s+create\s+['\"]ai:orchestrator-tracking['\"]"),
-			re.compile(r"gh\s+label\s+create\s+['\"]ai:clarification['\"]"),
-			re.compile(r"gh\s+label\s+create\s+['\"]ai:orchestrator-managed['\"]"),
-			re.compile(r"gh\s+label\s+create\s+['\"]ai:orchestrator-validate-required['\"]"),
+			re.compile(r"gh\s+label\s+create\s+['\"]?ai:orchestrator-tracking['\"]?"),
+			re.compile(r"gh\s+label\s+create\s+['\"]?ai:clarification['\"]?"),
+			re.compile(r"gh\s+label\s+create\s+['\"]?ai:orchestrator-managed['\"]?"),
+			re.compile(r"gh\s+label\s+create\s+['\"]?ai:orchestrator-validate-required['\"]?"),
 		],
 	},
 	".github/workflows/comprehensive-test-and-release.yml": {
@@ -30,12 +31,12 @@ WORKFLOW_CONTRACT = {
 			'ensure_label_exists "${PENDING_LABEL}" "${GITHUB_REPOSITORY}"',
 		],
 		"must_not_contain": [
-			re.compile(r'gh\s+api\s+"repos/\$\{GITHUB_REPOSITORY\}/labels"\s+--method\s+POST'),
+			re.compile(r'gh\s+api\s+[\'\"]?repos/\$\{GITHUB_REPOSITORY\}/labels[\'\"]?\s+--method\s+POST'),
 		],
 	},
 	".github/workflows/validation-improvements-intake.yml": {
 		"must_contain": [
-			re.compile(r'for\s+f\s+in\s+.*label_helpers\.sh.*do'),
+			re.compile(r'for\s+f\s+in\s+[^;\n]*label_helpers\.sh[^;\n]*;\s*do\b'),
 			'source scripts/label_helpers.sh',
 			'ensure_label_exists "ai:needs-prompt-review" "${GITHUB_REPOSITORY}"',
 		],
@@ -46,12 +47,12 @@ WORKFLOW_CONTRACT = {
 	},
 	".github/workflows/issue_pr_status.yml": {
 		"must_contain": [
-			re.compile(r'for\s+f\s+in\s+.*label_helpers\.sh.*do'),
+			re.compile(r'for\s+f\s+in\s+[^;\n]*label_helpers\.sh[^;\n]*;\s*do\b'),
 			'source scripts/label_helpers.sh',
 			'ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"',
 		],
 		"must_not_contain": [
-			re.compile(r'repos/\$\{REPOSITORY\}/labels/\$\(printf\s+\'%s\'\s+"\$\{FINAL_LABEL\}"'),
+			re.compile(r'repos/\$\{REPOSITORY\}/labels/\$\(printf\s+[\'\"]?%s[\'\"]?\s+[\'\"]?\$\{FINAL_LABEL\}[\'\"]?\)'),
 		],
 	},
 }
