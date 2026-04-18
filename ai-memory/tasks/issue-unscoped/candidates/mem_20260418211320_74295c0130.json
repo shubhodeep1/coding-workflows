@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 7\nIssues with multi-reviewer agreement: 2\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: .github/workflows/test-and-mark-stable.yml (line ~1181)\n      Problem: The success condition allows the test to pass if `ai:review-blocked` is cleared (`$REVIEW_BLOCKED_PRESENT -eq 0`), regardless of whether a terminal state was reached.; If the poller begins recovery by pushing a fix commit or issuing a re-implement command, it may clear the `ai:review-blocked` label and move the issue back to an earlier phase (e.g., `ai:implementing` or `ai:done`). Under the new logic, the test would immediately report success as soon as the label is cleared, even if the recovery process hasn't reached a terminal state (merged, ready-to-merge, or closed). This allows the smoke test to pass prematurely without verifying that the recovery actually completed.\n      Confidence: avg 3.5\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\n  [2] File: .github/workflows/test-and-mark-stable.yml\n      Problem: Location: Lines 1181-1184; Issue: Test may pass prematurely when review-blocked cleared without terminal label.; Suggested minimal fix: Change success condition to require either: (1) terminal label present (`ai:merged|ai:closed|ai:validated`), OR (2) `ai:review-blocked` cleared AND issue is closed (`ai:closed` added by poller). Remove `ai:ready-to-merge` from terminal regex as it's a transient state.; Estimated lines changed: 3-5; HARDENING_RISK_SCORE: 2; The changes in the last run (adding `ai:closed` to regex, improving redirect patterns, adding retry logic) are correct improvements. The grep retry logic is properly bounded and fails fast on non-retryable errors.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [3] File: .github/workflows/test-and-mark-stable.yml (line ~1181)\n      Problem: The terminal label regex includes `ai:ready-to-merge` which is not in the orchestrator's `TERMINAL_PHASES` set. It also misses `ai:validated` which is in `TERMINAL_PHASES`.; Inconsistent definition of \"terminal\" between test and orchestrator logic could cause confusion or missed edge cases.; **Note on grep logic (lines 1061-1062)**: After analysis, the grep logic appears correct. Each grep searches both `POST_ERR` and `POST_OUT` files, and the `&&` requires both strings to appear somewhere across the combined output. This properly handles the case where error messages might be split across stdout/stderr.; **HARDENING_SUGGESTIONS:**\n      Confidence: avg 2.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: .github/workflows/test-and-mark-stable.yml (line ~1060)\n      Problem: The logic uses `grep` on both files independently within an `&&` condition.; If the `gh api` command fails, it typically writes the HTTP status/error to `stderr` (`POST_ERR`). The `stdout` file (`POST_OUT`) may be empty or contain invalid JSON. Because the check requires the strings to be present in BOTH files (implied by `grep pattern file1 file2` returning 0 only if found in all/any depending on grep version, but usually `grep` returns 0 if found in *any* of the files, however the use of `&&` between two grep calls means both grep commands must succeed). If the error message \"Could not resolve to a node\" is only in `stderr` and \"HTTP 422\" is also only in `stderr`, the commands `grep ... \"${POST_ERR}\" \"${POST_OUT}\"` will succeed *if* grep finds it in either. However, if one grep finds it in `POST_ERR` and the other grep (targeting a different string) also finds it in `POST_ERR`, the logic holds. The risk is more about the `&&` join between identical file lists; if for some reason \"HTTP 422\" is reported by the shell/wrapper but the specific node error is in the API response body (or vice versa), the logic is fine. The actual risk is that `grep` on an empty file (like `POST_OUT` on a hard 422) might behave unexpectedly in some environments or simply be redundant. A safer approach for a retry loop is to concatenate the outputs or check them as a single stream.; HARDENING_SUGGESTIONS:\n      Confidence: avg 2.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: .github/workflows/test-and-mark-stable.yml\n      Problem: Location: Line 1060; Issue: Robustness of error string matching across stdout/stderr.; Suggested minimal fix: Combine `POST_OUT` and `POST_ERR` into a single temporary diagnostic file before grepping to ensure all captured output is searched uniformly.; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [6] File: `.github/workflows/test-and-mark-stable.yml` (line ~1172)\n      Problem: Issue: The comment states \"terminal label (ai:merged or ai:ready-to-merge)\" but the regex at line 1181 also includes `ai:closed`. The comment doesn't fully enumerate all terminal labels recognized by the code.; It doesn't \u2014 purely cosmetic.; **HARDENING_SUGGESTIONS:**\n      Confidence: avg 1.0\n      Flagged by: moonshotai_kimi-k2_5\n\n  [7] File: `.github/workflows/test-and-mark-stable.yml`\n      Problem: Location: Line ~1173 comment; Issue: Comment omits `ai:closed` when describing terminal labels; Suggested minimal fix: Update comment to include `ai:closed` or use generic phrasing like \"a terminal label (ai:merged, ai:ready-to-merge, or ai:closed)\"; Estimated lines changed: 1; HARDENING_RISK_SCORE: 0; **Classification:** Changes correct and complete. The fix addresses the review-blocked simulation edge case where `ai:closed` was not recognized as a terminal label alongside `ai:review-blocked`.\n      Confidence: avg n/a\n      Flagged by: moonshotai_kimi-k2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n.github/workflows/test-and-mark-stable.yml\n\nLow confidence files (mentioned by 1 reviewer):\n`.github/workflows/test-and-mark-stable.yml`",
+  "fingerprint": "3fa621844b16e2231eac0b5009f50c3d9aab61fcc7df6c45a70d872a4eeaa6a4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1347,
+    "run_id": "24613411368",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24613411368",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418211320_74295c0130",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1347,
+    "run_id": "24613411368"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-18T21:13:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
