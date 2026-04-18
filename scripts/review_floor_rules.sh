@@ -337,7 +337,7 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 		if (lowered == "") {
 			return 0
 		}
-		if (lowered ~ /(^|[^0-9.])5([[:space:]]*\/[[:space:]]*5)?([^0-9]|$)/) {
+		if (lowered ~ /(^|[^0-9.])5([[:space:]]*\/[[:space:]]*5)?([^0-9.]|$)/) {
 			return 1
 		}
 		if (lowered ~ /(^|[^[:alpha:]])max[[:space:]]*confidence([^[:alpha:]]|$)/) {
@@ -361,6 +361,9 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 		return csv "," tag
 	}
 	function keyword_matches(text, keyword, pattern) {
+		if (keyword == "deserializ") {
+			return (index(text, keyword) > 0)
+		}
 		if (keyword ~ /^[[:alnum:]_]+$/) {
 			pattern = "(^|[^[:alnum:]_])" keyword "([^[:alnum:]_]|$)"
 			return (text ~ pattern)
