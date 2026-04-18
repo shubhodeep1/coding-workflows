@@ -1259,6 +1259,12 @@ PY2
 						*) PATH="${_pf_user_bin}:${PATH}" ;;
 					esac
 				fi
+				if ! command -v "${_pf_tool}" >/dev/null 2>&1; then
+					case " ${_pf_missing} " in
+						*" ${_pf_tool} "*) ;;
+						*) _pf_missing="${_pf_missing:+${_pf_missing} }${_pf_tool}" ;;
+					esac
+				fi
 			fi
 		done
 		if [ -n "${_pf_missing}" ]; then
