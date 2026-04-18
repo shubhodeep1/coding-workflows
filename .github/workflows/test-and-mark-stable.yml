@@ -1046,7 +1046,7 @@ jobs:
           COMMENT_POST_OK=0
           COMMENT_POST_MAX_ATTEMPTS=5
           COMMENT_POST_SLEEP=2
-          for attempt in $(seq 1 "${COMMENT_POST_MAX_ATTEMPTS}"); do
+          for ((attempt = 1; attempt <= COMMENT_POST_MAX_ATTEMPTS; attempt++)); do
             : >"${POST_OUT}"
             : >"${POST_ERR}"
             if jq -n --arg body "${STATE_COMMENT}" '{"body": $body}' | \
@@ -1058,7 +1058,8 @@ jobs:
             # Retry only on the eventual-consistency 422 ("Could not resolve to
             # a node") — every other failure (auth, validation, 5xx, etc.) is
             # surfaced immediately so we don't mask real bugs.
-            if grep -qi "Could not resolve to a node" "${POST_ERR}" "${POST_OUT}" 2>/dev/null; then
+            if grep -qi "Could not resolve to a node" "${POST_ERR}" "${POST_OUT}" 2>/dev/null && \
+               grep -qi "HTTP 422" "${POST_ERR}" "${POST_OUT}" 2>/dev/null; then
               if [ "${attempt}" -lt "${COMMENT_POST_MAX_ATTEMPTS}" ]; then
                 echo "  ⏳ Comment POST hit eventual-consistency 422 (attempt ${attempt}/${COMMENT_POST_MAX_ATTEMPTS}) — retrying in ${COMMENT_POST_SLEEP}s"
                 sleep "${COMMENT_POST_SLEEP}"
