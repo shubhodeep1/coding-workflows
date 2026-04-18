@@ -202,12 +202,12 @@ jobs:
     timeout-minutes: 180
     concurrency:
       # cancel-in-progress: false → new runs queue behind the running peer
-      # instead of cancelling it. GitHub keeps only the most recent queued
-      # run in the group; older queued runs are auto-cancelled while pending,
-      # so a burst of pushes still collapses to "current run + newest queued"
-      # without producing the long trail of cancelled in-progress runs that
+      # instead of cancelling it. If another run is already pending in this
+      # group, GitHub replaces that older pending run with the newest one.
+      # This keeps bursts near "current run + newest queued run" while
+      # avoiding the long trail of cancelled in-progress runs that
       # cancel-in-progress: true caused. Hung runs are still bounded by the
-      # 180-min timeout-minutes above.
+      # timeout-minutes above.
       group: pr-autofix-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
       cancel-in-progress: false
     if: ${{ needs.gate.outputs.should_run == 'true' }}
@@ -3725,13 +3725,13 @@ jobs:
           # Preflight dedup: the push above fires a pull_request.synchronize
           # event that produces its own review_autofix run via the caller
           # workflow.  Both runs land in the `pr-autofix-${PR}` concurrency
-          # group with cancel-in-progress: false, so the loser is cancelled
-          # while pending — but the redundant queued run still appears in the
-          # Actions UI and consumes a workflow_dispatch API call.  Give the
-          # synchronize event a few seconds to show up in the Actions API,
-          # then skip our dispatch if a peer run is already queued or
-          # running.  Fails open — any detection failure falls through to the
-          # original dispatch logic so we never silently break the cycle.
+          # group with cancel-in-progress: false, so a redundant dispatch can
+          # still queue, appear in the Actions UI, and consume a
+          # workflow_dispatch API call.  Give the synchronize event a few
+          # seconds to show up in the Actions API, then skip our dispatch if a
+          # peer run is already queued or running.  Fails open — any detection
+          # failure falls through to the original dispatch logic so we never
+          # silently break the cycle.
           #
           # Tunable via AUTOFIX_RETRIGGER_PEER_WAIT_SECS (default 8s).
           peer_wait="${AUTOFIX_RETRIGGER_PEER_WAIT_SECS:-8}"

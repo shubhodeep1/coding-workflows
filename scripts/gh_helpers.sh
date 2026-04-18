@@ -1064,9 +1064,9 @@ gh_issue_timeline_with_cross_refs()
 #   In the common case the push already fires pull_request.synchronize
 #   → internal-review.yml → review_autofix.yml, so both runs land in
 #   the same `pr-autofix-${PR}` concurrency group with
-#   cancel-in-progress: false: the loser is cancelled while pending,
-#   but the redundant queued run still surfaces in the Actions UI and
-#   consumes a workflow_dispatch API call.  This helper lets the
+#   cancel-in-progress: false. A redundant dispatch can still queue,
+#   surface in the Actions UI, and consume a workflow_dispatch API
+#   call. This helper lets the
 #   retrigger step skip its dispatch when a peer run is already
 #   in flight.
 #
