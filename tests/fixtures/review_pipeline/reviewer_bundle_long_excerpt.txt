@@ -1,0 +1,9 @@
+FILE_PATH: /tmp/review_excerpt.txt
+BYTES: 100
+SHA256: excerpt
+CONTENT_START
+File: src/long_excerpt.py
+Line or code reference: 11
+Problem: This is an intentionally long excerpt to verify truncation behavior in floor tags output and it keeps growing with additional detail until it clearly exceeds two hundred and forty characters while still representing a single reviewer finding that should be emitted as a floor tag entry for stability testing.
+ISSUE_CONFIDENCE: 5/5
+CONTENT_END
