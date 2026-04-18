@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 6\nIssues with multi-reviewer agreement: 3\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: scripts/label_helpers.sh (line ~29)\n      Problem: The label `ai:validate-ailed` is used in scripts/validate_process.sh (line 1003) via `set_tracking_phase_label \"ai:validate-ailed\"`, but it is NOT defined in either _AI_LABEL_COLORS or _AI_LABEL_DESCS associative arrays.; When ensure_label_exists() is called for this label, it falls back to default color `1d76db` (blue) and generic description \"AI workflow label\" instead of the correct failure red `e11d48`. This creates visual inconsistency in GitHub UI and violates the failure label contract.; Evidence from code:; - validate_process.sh line 1003: `set_tracking_phase_label \"ai:validate-ailed\" || true`; - label_helpers.sh _AI_LABEL_COLORS: contains `ai:validation-ailed` but NOT `ai:validate-ailed`; - The only validation failure label defined is `ai:validation-ailed` with color `e11d48`; ### Issue 2: CRITICAL - Orchestrator doesn't recognize `ai:validate-ailed` label\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5\n\n  [2] File: scripts/orchestrate_poll_process.sh (line ~6181)\n      Problem: The orchestrator's validation failure handling only checks for `ai:validation-ailed` label. When validation fails due to a Codex error, validate_process.sh applies `ai:validate-ailed` (the new label for Codex/workflow failures), but the poller does not detect this as a terminal validation failure. It remains in \"validating\" state and repeatedly re-dispatches validation.; Infinite validation retry loop for Codex errors. Projects never reach terminal failed state and continuously waste compute resources. The split semantics (`ai:validate-ailed` for Codex vs `ai:validation-ailed` for runtime) are broken end-to-end.; Evidence from code:; - Line 6181: `if has_label \"${TRACKING_LABELS}\" \"ai:validation-ailed\"; then`; - Line 6378: `if [ \"${PROJECT_STATUS}\" = \"failed\" ] && has_label \"${TRACKING_LABELS}\" \"ai:validation-ailed\"; then`; - Line 6419: `if [ \"${PROJECT_STATUS}\" = \"failed\" ] && ! has_label \"${TRACKING_LABELS}\" \"ai:validation-ailed\"; then`; - No occurrence of `ai:validate-ailed` in orchestrate_poll_process.sh; ### Issue 3: Standalone stall recovery skip list missing new label\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5\n\n  [3] File: scripts/orchestrate_poll_process.sh (line ~5141)\n      Problem: The skip list for standalone stall recovery includes `ai:validation-ailed` but NOT `ai:validate-ailed`. While less critical than Issue 2, standalone validation Codex failures will be processed by generic stall recovery instead of being treated as terminal validation failures.; Misclassification of standalone validation failures as stalls; potentially incorrect recovery actions applied to issues that are actually in terminal Codex failure state.; Evidence from code:; - Line 5141: Contains `ai:validation-ailed` in skip list but not `ai:validate-ailed`; ### Issue 4: Missing label definition for `ai:log-analysis-ailed`\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [4] File: scripts/label_helpers.sh (line ~21)\n      Problem: The label `ai:log-analysis-ailed` is not in the catalog. However, workflow-log-analysis. yml creates it inline with hardcoded color `e11d48` (correct red), so this is lower priority than Issues 1-3.; Inconsistent with centralized label management pattern. If the workflow ever switches to using ensure_label_exists() for this label, it would be created with wrong color.; Evidence from code:; - workflow-log-analysis. yml creates label inline with correct color; - label_helpers.sh does not contain `ai:log-analysis-ailed`; ## ALREADY SATISFIED; The following items from pass 1 findings are correct and don't require changes:; 1. **Shared Codex retry controls** - Properly implemented with MAX_CODEX_ATTEMPTS and CODEX_RETRY_BACKOFF_BASE_SECS validation in both validate and workflow-log-analysis; 2. **Failure mode tracking** - codex_rc_nonzero, codex_empty_output properly tracked; 3. **AI_PHASE_FAILURE_V1 markers** - Properly emitted with JSON contract; 4. **Memory maintenance contract** - No-op markers added correctly; 5. **Self-heal integration** - attempt_self_heal_and_reexec() called before failures; 6. **Test coverage** - New contract tests added; ## HARDENING_ none; No hardening suggestions - the core issues are missing functionality, not safety gaps.\n      Confidence: avg 3.0\n      Flagged by: minimax_minimax-m2_5\n\n  [5] File: scripts/validate_process.sh\n      Problem: Location: fail_validate_codex_phase function (lines 992-1010); Issue: The function calls exit 1, which represents a hard failure, but does not explicitly ensure cleanup_runtime_containers is called in all Codex failure paths; Suggested minimal fix: Add a call to cleanup_runtime_containers before exit 1 in fail_validate_codex_phase if containers were started; Estimated lines changed: 2-3; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [6] File: .github/workflows/workflow-log-analysis.yml\n      Problem: Location: handle_log_analysis_codex_failure (lines 335-350); Issue: The function checks if codex_exit is 0 and exits 1, but doesn't handle cases where TRACKING_ISSUE_NUM might be invalid or improperly parsed beyond the basic regex check; Suggested minimal fix: Add a check to verify TRACKING_ISSUE_NUM corresponds to an existing issue before attempting gh calls; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1; **Summary:**; The PR implements hardening of Codex failure handling with shared retry controls and split validation semantics. However, two critical bugs must be fixed: 1) Missing failure labels in the label catalog causing wrong colors, and 2) Orchestrator not recognizing the new ai:validate-failed label. The fixes should restore the failure labels to the catalog with red color and update the orchestrator to handle both ai:validate-failed and ai:validation-failed labels appropriately.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\nscripts/label_helpers.sh\nscripts/orchestrate_poll_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/workflow-log-analysis.yml\nscripts/validate_process.sh",
+  "fingerprint": "29f14cfbb5ab6bb57061d0c64bcafc0b4b01a0ef675fb8294c5cf6f0e36384e4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1321,
+    "run_id": "24602886642",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24602886642",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418110036_08e291ee4f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1321,
+    "run_id": "24602886642"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-18T11:00:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
