@@ -285,6 +285,8 @@ jobs:
             copy_from_ref_or_local "${template_path}" "${template_path}" "false" "true" || true
           done <<'EOF_TEMPLATE_FILES'
           workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2
+          workflow-templates/validation-harness/_shared/docker-compose.test.yml.j2
+          workflow-templates/validation-harness/_shared/validate.env.j2
           workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2
           workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2
           workflow-templates/validation-harness/python-mongo-flask/tests/10_family_marker.sh.j2
@@ -451,6 +453,27 @@ jobs:
             --issue-number "${issue_number}" \
             --actor "${{ github.actor }}" \
             --metadata-json "${metadata_json}"
+
+      - name: Install Python dependencies for template mode
+        continue-on-error: true
+        env:
+          VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'false' }}
+        run: |
+          set -euo pipefail
+
+          template_mode_enabled="$(printf '%s' "${VALIDATION_USE_TEMPLATES}" | tr '[:upper:]' '[:lower:]')"
+          case "${template_mode_enabled}" in
+            1|true|yes|on)
+              if [ -f "scripts/render_validation_templates.py" ]; then
+                python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
+              else
+                echo "::warning::VALIDATION_USE_TEMPLATES is enabled but scripts/render_validation_templates.py is unavailable; skipping template dependency installation."
+              fi
+              ;;
+            *)
+              echo "Template mode not enabled; skipping template dependency installation."
+              ;;
+          esac
 
       - name: Run validation process
         id: validate_run
