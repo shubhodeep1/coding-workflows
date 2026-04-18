@@ -66,6 +66,7 @@ input_bytes="$(wc -c < "${CONSOLIDATOR_PROMPT_FILE}" | tr -d '[:space:]')"
 start_epoch="$(date +%s)"
 tmp_out="$(mktemp)"
 tmp_err="$(mktemp)"
+trap 'rm -f "${tmp_out}" "${tmp_err}"' EXIT
 cmd_rc=0
 
 if ! timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" codex exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --full-auto < "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then

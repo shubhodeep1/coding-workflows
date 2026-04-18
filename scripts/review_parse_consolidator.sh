@@ -3,7 +3,7 @@ set -euo pipefail
 
 review_log()
 {
-	printf 'stage=consolidator_parser %s\n' "$*" >&2
+	printf 'stage=parser %s\n' "$*" >&2
 }
 
 trim()
@@ -36,6 +36,7 @@ evidence_unverified=${evidence_unverified}
 dropped_invalid_file=${dropped_invalid_file}
 dropped_unknown_reason=${dropped_unknown_reason}
 parse_failed=${parse_failed}
+parse_error=${parse_error}
 anchors_total=${anchors_total}
 anchors_covered=${anchors_covered}
 STATS
@@ -46,6 +47,7 @@ finish_parse_failure()
 	local reason="$1"
 	local rc="${2:-1}"
 	parse_failed=1
+	parse_error="${reason}"
 	: > "${REVIEW_ISSUES_FILE}"
 	write_stats
 	review_log "parse_failed=1 reason=${reason} failopen=${REVIEW_PARSER_FAILOPEN}"
@@ -193,6 +195,7 @@ evidence_unverified=0
 dropped_invalid_file=0
 dropped_unknown_reason=0
 parse_failed=0
+parse_error=""
 anchors_total=0
 anchors_covered=0
 on_parser_error()
@@ -216,6 +219,7 @@ fi
 load_known_reviewers
 
 tmp_dir="$(mktemp -d)"
+trap 'rm -rf "${tmp_dir}"' EXIT
 parsed_blocks_file="${tmp_dir}/parsed_blocks.txt"
 covered_ranges_file="${tmp_dir}/covered_ranges.tsv"
 anchors_file="${tmp_dir}/anchors.tsv"
@@ -243,12 +247,11 @@ function emit_anchor(file, line, excerpt, key) {
 	if (match(line, /^[[:space:]]*([A-Za-z0-9_./-]+\.(py|js|ts|sh|yml|yaml|md|go|rs|tsx|jsx)):([0-9]+)/, hit)) {
 		emit_anchor(hit[1], hit[3], line)
 	}
-	lower = tolower(line)
-	if (match(lower, /^[[:space:]]*file:[[:space:]]*([A-Za-z0-9_./-]+\.(py|js|ts|sh|yml|yaml|md|go|rs|tsx|jsx))[[:space:]]*$/, f)) {
+	if (match(line, /^[[:space:]]*[Ff][Ii][Ll][Ee]:[[:space:]]*([A-Za-z0-9_./-]+\.(py|js|ts|sh|yml|yaml|md|go|rs|tsx|jsx))[[:space:]]*$/, f)) {
 		pending_file = f[1]
 		next
 	}
-	if (pending_file != "" && match(lower, /^[[:space:]]*line:[[:space:]]*([0-9]+)/, l)) {
+	if (pending_file != "" && match(line, /^[[:space:]]*[Ll][Ii][Nn][Ee]:[[:space:]]*([0-9]+)/, l)) {
 		emit_anchor(pending_file, l[1], line)
 		pending_file = ""
 		next
@@ -329,7 +332,9 @@ process_block()
 	suggested="${block_suggested_approach}"
 
 	if ! validate_file_path "${file_path}"; then
+		local safe_file_path="${file_path//[^A-Za-z0-9_./-]/_}"
 		dropped_invalid_file=$((dropped_invalid_file + 1))
+		review_log "dropped_invalid_file path=${safe_file_path:0:160} reason=invalid_file_path"
 		return
 	fi
 
@@ -431,7 +436,7 @@ while IFS= read -r line || [ -n "${line}" ]; do
 		continue
 	fi
 
-	if [[ "${line}" =~ ^([A-Z_]+):[[:space:]]*(.*)$ ]]; then
+	if [[ "${line}" =~ ^(FILE|LINES|LENS|SEVERITY|FLAGGED_BY|CLASSIFICATION|MERGED_FROM|EVIDENCE|CURRENT_CODE|SUGGESTED_APPROACH|NOTES):[[:space:]]*(.*)$ ]]; then
 		header="${BASH_REMATCH[1]}"
 		value="${BASH_REMATCH[2]}"
 		case "${header}" in
