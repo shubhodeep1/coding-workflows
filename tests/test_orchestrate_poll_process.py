@@ -4139,6 +4139,32 @@ def test_stale_pending_terminal_truth_from_merged_pr_is_auto_corrected():
 	assert "ai:merged" in result["issues"]["10"]["labels"]
 
 
+def test_forced_terminal_merged_phase_repair_removes_single_existing_phase_label():
+	"""Regression: forcing ai:merged must evict an existing single phase label."""
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 900},
+		prs=[
+			{
+				"number": 900,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-04-12T08:00:00Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+				"mergeable": None,
+				"mergeable_state": "unknown",
+			},
+		],
+	)
+	final_labels = result["issues"]["10"]["labels"]
+	assert final_labels == ["ai:merged"]
+
+
 def test_conflicting_phase_labels_are_repaired_to_single_phase():
 	state = _base_state(status="in_progress")
 	result = _run_poller(
