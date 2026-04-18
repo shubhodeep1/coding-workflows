@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_CONTRACT = {
 	".github/workflows/orchestrate.yml": {
 		"must_contain": [
-			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?scripts/label_helpers\.sh["\']?(?=[\s;#]|$)'),
+			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?(?:\./)?scripts/label_helpers\.sh["\']?(?=[\s;#]|$)'),
 			'ensure_label_exists "ai:orchestrator-tracking" "${{ github.repository }}"',
 			'ensure_label_exists "ai:clarification" "${{ github.repository }}"',
 			'ensure_label_exists "ai:orchestrator-managed" "${{ github.repository }}"',
@@ -27,7 +27,7 @@ WORKFLOW_CONTRACT = {
 	},
 	".github/workflows/comprehensive-test-and-release.yml": {
 		"must_contain": [
-			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?scripts/label_helpers\.sh["\']?(?=[\s;#]|$)'),
+			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?(?:\./)?scripts/label_helpers\.sh["\']?(?=[\s;#]|$)'),
 			'ensure_label_exists "${PENDING_LABEL}" "${GITHUB_REPOSITORY}"',
 		],
 		"must_not_contain": [
@@ -37,7 +37,7 @@ WORKFLOW_CONTRACT = {
 	".github/workflows/validation-improvements-intake.yml": {
 		"must_contain": [
 			re.compile(r'for\s+f\s+in\s+[^;\n]*label_helpers\.sh[^;\n]*;\s*do\b'),
-			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?scripts/label_helpers\.sh["\']?(?=[\s;#]|$)'),
+			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?(?:\./)?scripts/label_helpers\.sh["\']?(?=[\s;#]|$)'),
 			'ensure_label_exists "ai:needs-prompt-review" "${GITHUB_REPOSITORY}"',
 		],
 		"must_not_contain": [
@@ -48,7 +48,7 @@ WORKFLOW_CONTRACT = {
 	".github/workflows/issue_pr_status.yml": {
 		"must_contain": [
 			re.compile(r'for\s+f\s+in\s+[^;\n]*label_helpers\.sh[^;\n]*;\s*do\b'),
-			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?scripts/label_helpers\.sh["\']?(?=[\s;#]|$)'),
+			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?(?:\./)?scripts/label_helpers\.sh["\']?(?=[\s;#]|$)'),
 			'ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"',
 		],
 		"must_not_contain": [
