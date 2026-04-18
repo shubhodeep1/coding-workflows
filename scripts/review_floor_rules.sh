@@ -25,7 +25,7 @@ write_empty_output() {
 fail_open() {
 	local reason="${1:-unhandled_error}"
 	trap - ERR
-	warn "fail_open" "reason=${reason} bundle=${BUNDLE_FILE} output=${OUT_FILE}"
+	warn "fail_open" "reason=${reason} floor_rules_failed=1 bundle=${BUNDLE_FILE} output=${OUT_FILE}"
 	mkdir -p "$(dirname "${OUT_FILE}")" >/dev/null 2>&1 || true
 	: > "${OUT_FILE}" 2>/dev/null || true
 	exit 0
@@ -169,10 +169,10 @@ if [ -n "${REVIEW_FLOOR_KEYWORDS_FILE:-}" ]; then
 		if [ -s "${override_keywords_file}" ]; then
 			keyword_catalog_file="${override_keywords_file}"
 		else
-			warn "keyword_file_invalid" "keyword_file=${REVIEW_FLOOR_KEYWORDS_FILE} fallback=builtin"
+			warn "keyword_file_invalid" "keyword_file_invalid=1 keyword_file=${REVIEW_FLOOR_KEYWORDS_FILE} fallback=builtin"
 		fi
 	else
-		warn "keyword_file_missing" "keyword_file=${REVIEW_FLOOR_KEYWORDS_FILE} fallback=builtin"
+		warn "keyword_file_missing" "keyword_file_missing=1 keyword_file=${REVIEW_FLOOR_KEYWORDS_FILE} fallback=builtin"
 	fi
 fi
 
@@ -299,7 +299,6 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 			out = trim(issue_text)
 		}
 		gsub(/\t/, " ", out)
-		gsub(/[[:space:]]+/, " ", out)
 		if (length(out) > 240) {
 			out = substr(out, 1, 240)
 		}
@@ -381,6 +380,7 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 		return (index(text, keyword) > 0)
 	}
 	BEGIN {
+		active_reviewer = "unknown_reviewer"
 		record_count = 0; tagged_record_count = 0; multi_reviewer_hit_count = 0; keyword_hit_count = 0; high_confidence_hit_count = 0;
 		OFS = "\t"
 	}
@@ -586,7 +586,7 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 
 mkdir -p "$(dirname "${OUT_FILE}")"
 if [ -s "${raw_rows_file}" ]; then
-	LC_ALL=C sort -s -t '	' -k1,1 -k2,2n -k3,3 -k4,4 -k5,5 "${raw_rows_file}" \
+	LC_ALL=C sort -t "$(printf "\t")" -s -k1,1 -k2,2n -k3,3 -k4,4 -k5,5 "${raw_rows_file}" \
 		| awk -F '\t' 'BEGIN { OFS = "\t" } { print $1 ":" $2, $3, $4, $5 }' > "${OUT_FILE}"
 else
 	: > "${OUT_FILE}"
