@@ -17,6 +17,7 @@ trim()
 emit_indented()
 {
 	local text="$1"
+	local line
 	if [ -z "${text}" ]; then
 		printf '  \n'
 		return
@@ -63,13 +64,16 @@ validate_file_path()
 	if [ -z "${file_path}" ]; then
 		return 1
 	fi
+	if [[ "${file_path}" == /* ]]; then
+		return 1
+	fi
 	if [[ "${file_path}" == *".."* ]]; then
 		return 1
 	fi
 	if [[ ! "${file_path}" =~ ^[A-Za-z0-9_./-]+$ ]]; then
 		return 1
 	fi
-	if ! git ls-files --error-unmatch -- "${file_path}" >/dev/null 2>&1; then
+	if ! git cat-file -e "HEAD:${file_path}" >/dev/null 2>&1; then
 		return 1
 	fi
 	return 0
@@ -84,7 +88,7 @@ get_file_line_count()
 		return
 	fi
 	local count
-	count="$(git show "HEAD:${file_path}" | wc -l | tr -d '[:space:]' || true)"
+	count="$(git show "HEAD:${file_path}" | awk 'END { print NR }' | tr -d '[:space:]' || true)"
 	if [[ ! "${count}" =~ ^[0-9]+$ ]]; then
 		count=0
 	fi
@@ -245,10 +249,10 @@ function emit_anchor(file, line, excerpt, key) {
 }
 {
 	line = $0
-	if (match(line, /^[[:space:]]*([A-Za-z0-9_./-]+\.(py|js|ts|sh|yml|yaml|md|go|rs|tsx|jsx)):([0-9]+)/, hit)) {
-		emit_anchor(hit[1], hit[3], line)
+	if (match(line, /^[[:space:]]*([A-Za-z0-9_./-]+\.[A-Za-z0-9_.-]+):([0-9]+)/, hit)) {
+		emit_anchor(hit[1], hit[2], line)
 	}
-	if (match(line, /^[[:space:]]*[Ff][Ii][Ll][Ee]:[[:space:]]*([A-Za-z0-9_./-]+\.(py|js|ts|sh|yml|yaml|md|go|rs|tsx|jsx))[[:space:]]*$/, f)) {
+	if (match(line, /^[[:space:]]*[Ff][Ii][Ll][Ee]:[[:space:]]*([A-Za-z0-9_./-]+\.[A-Za-z0-9_.-]+)[[:space:]]*$/, f)) {
 		pending_file = f[1]
 		next
 	}
