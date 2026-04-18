@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; raw_status=harness_error; summary=Validation failed due to harness error; failure_summary=Validation harness error: Root cause is in coding-workflows-owned validation harness logic for generated tests, not in consumer application code. Evidence: - `validation/logs/07_env_var_validation.sh`: first 3 env assertions pass, then `grep: /tmp/env_check.out: No such file or directory`. - `validation/logs/08_dependency_auditing.sh`: `grep: /tmp/import_audit.out: No such file or directory`. - App/container health and custom tests pass (service running, endpoint healthy, Python test suite pa",
+  "fingerprint": "be0459241c13b5fed9771036c23c546922ae10c5e28fba8122c6194d3f98b1f1",
+  "lineage": {
+    "issue_number": 1303,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24613875191",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24613875191",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20260418212122_b81b2bd139",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1303,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24613875191"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-04-18T21:21:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
