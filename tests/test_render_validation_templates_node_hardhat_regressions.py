@@ -68,7 +68,7 @@ def test_log7_foundry_path_persists_in_non_login_shells() -> None:
         assert result.returncode == 0, result.stderr
 
         dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
-        assert "ENV PATH=/root/.foundry/bin:$PATH" in dockerfile_text
+        assert "ENV PATH=/root/.foundry/bin:${PATH}" in dockerfile_text
 
 
 def test_log8_rpc_probe_requires_object_result() -> None:
@@ -83,7 +83,7 @@ def test_log8_rpc_probe_requires_object_result() -> None:
 
         rpc_probe = (output_root / "tests" / "20_rpc_probe.sh").read_text(encoding="utf-8")
         assert 'type == "object"' in rpc_probe
-        assert 'has("result") and (.result != null)' in rpc_probe
+        assert 'has("result") and (.result != null) and (.result | type == "string") and (.result | length > 0)' in rpc_probe
         assert "jq -e '.'" not in rpc_probe
 
 

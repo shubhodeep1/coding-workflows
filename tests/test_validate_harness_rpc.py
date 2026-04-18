@@ -233,7 +233,7 @@ class TestHardhatRpcProbe(unittest.TestCase):
         content = template_file.read_text(encoding="utf-8")
 
         self.assertIn('type == "object"', content)
-        self.assertIn('has("result")', content)
+        self.assertIn('has("result") and (.result != null) and (.result | type == "string") and (.result | length > 0)', content)
         self.assertNotIn("jq -e '.'", content)
 
 

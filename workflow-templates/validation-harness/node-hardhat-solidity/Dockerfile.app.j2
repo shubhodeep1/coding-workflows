@@ -7,7 +7,7 @@ RUN apt-get update \
 RUN curl -L https://foundry.paradigm.xyz | bash \
 	&& /root/.foundry/bin/foundryup
 
-ENV PATH=/root/.foundry/bin:$PATH
+ENV PATH=/root/.foundry/bin:${PATH}
 
 WORKDIR /workspace
 

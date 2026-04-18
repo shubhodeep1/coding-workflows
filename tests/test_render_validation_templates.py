@@ -229,7 +229,7 @@ def test_renderer_family_dispatch_routing() -> None:
 			assert expected.exists(), f"missing rendered file: {expected}"
 
 		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
-		assert "ENV PATH=/root/.foundry/bin:$PATH" in dockerfile_text
+		assert "ENV PATH=/root/.foundry/bin:${PATH}" in dockerfile_text
 
 		env_text = (output_root / "validate.env").read_text(encoding="utf-8")
 		for line in env_text.splitlines():
@@ -239,7 +239,7 @@ def test_renderer_family_dispatch_routing() -> None:
 
 		rpc_probe_text = (output_root / "tests" / "20_rpc_probe.sh").read_text(encoding="utf-8")
 		assert 'type == "object"' in rpc_probe_text
-		assert 'has("result")' in rpc_probe_text
+		assert 'has("result") and (.result != null) and (.result | type == "string") and (.result | length > 0)' in rpc_probe_text
 
 		hardhat_test_text = (output_root / "tests" / "30_hardhat_test.sh").read_text(encoding="utf-8")
 		assert '. "${ROOT_DIR}/_lib/graceful_shutdown.sh"' in hardhat_test_text

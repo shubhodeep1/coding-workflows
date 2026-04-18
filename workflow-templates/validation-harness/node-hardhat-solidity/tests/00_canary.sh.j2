@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CANARY_TOOLS="${CANARY_TOOLS:-curl jq node npx forge cast}"
-read -r -a TOOL_LIST <<< "${CANARY_TOOLS}"
-
-tool_count=0
-for _tool in "${TOOL_LIST[@]}"; do
-	tool_count=$((tool_count + 1))
-done
-
-echo "1..${tool_count}"
+CANARY_TOOLS=(
+{% for tool in slots.canary_tools %}
+	'{{ tool | replace("'", "'\"'\"'") }}'
+{% endfor %}
+)
+echo "1..{{ slots.canary_tools | length }}"
 
 test_id=1
-for tool in "${TOOL_LIST[@]}"; do
+for tool in "${CANARY_TOOLS[@]}"; do
 	if ! command -v "${tool}" >/dev/null 2>&1; then
 		echo "not ok ${test_id} - canary tool available: ${tool}"
 		echo "# missing required canary tool: ${tool}"
