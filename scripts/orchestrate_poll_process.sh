@@ -1224,8 +1224,11 @@ backfill_validation_fix_issue_merged_label() {
   # `get_issue_labels_json` round-trip.  When empty/omitted the helper
   # falls back to fetching itself, preserving the original contract.
   local cached_labels="${2:-}"
+  local contract_file=".github/ai/label_contract.v1.json"
   local fix_labels
+  local phase_changes
   local edit_args=()
+  local remove_label
   local _label_err_file
 
   ensure_label_exists "ai:merged"
@@ -1239,8 +1242,24 @@ backfill_validation_fix_issue_merged_label() {
     return 0
   fi
 
+  if [ -f "${contract_file}" ] && set_issue_phase_label "${issue_num}" "ai:merged"; then
+    return 0
+  fi
+
+  if [ -f "${contract_file}" ]; then
+    echo "::warning::set_issue_phase_label failed for #${issue_num}; falling back to manual ai:merged label edit." >&2
+  fi
+
   edit_args+=(--add-label "ai:merged")
-  if has_label "${fix_labels}" "ai:closed"; then
+  if [ -f "${contract_file}" ]; then
+    phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
+    while IFS= read -r remove_label; do
+      [ -n "${remove_label}" ] || continue
+      if has_label "${fix_labels}" "${remove_label}"; then
+        edit_args+=(--remove-label "${remove_label}")
+      fi
+    done < <(echo "${phase_changes}" | jq -r '.remove[]?' 2>/dev/null || true)
+  elif has_label "${fix_labels}" "ai:closed"; then
     edit_args+=(--remove-label "ai:closed")
   fi
 
@@ -1400,7 +1419,7 @@ reconcile_managed_issue_labels() {
   repair_json="$(python3 scripts/ai_labels.py repair-labels --contract-file "${contract_file}" --issue-labels "${labels_csv}" 2>/dev/null || echo '{"add":[],"remove":[]}')"
 
   local plan_json
-  plan_json="$(python3 - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" <<'PY'
+  plan_json="$(python3 - "${labels_json}" "${repair_json}" "${issue_state}" "${pr_merged}" "${contract_file}" <<'PY'
 import json
 import sys
 
@@ -1408,6 +1427,7 @@ current = set(json.loads(sys.argv[1]))
 repair = json.loads(sys.argv[2])
 issue_state = (sys.argv[3] or "").strip().lower()
 pr_merged = (sys.argv[4] or "").strip().lower() == "true"
+contract_file = sys.argv[5] if len(sys.argv) > 5 else ""
 
 final = set(current)
 for label in repair.get("remove", []):
@@ -1415,11 +1435,41 @@ for label in repair.get("remove", []):
 for label in repair.get("add", []):
     final.add(label)
 
+forced = ""
 if pr_merged:
     final.discard("ai:closed")
     final.add("ai:merged")
+    forced = "ai:merged"
 elif issue_state == "closed" and "ai:closed" not in final and "ai:merged" not in final:
     final.add("ai:closed")
+    forced = "ai:closed"
+
+# Phase-group repair above ran on the original `current` set, so if
+# `current` had only one phase-group member the repair was a no-op —
+# then we force ai:merged/ai:closed on top, producing a dual-phase
+# state (e.g. {ai:review-blocked, ai:merged}) that the wave-status
+# resolver treats as terminal via ai:merged priority and never
+# re-processes, stranding the non-terminal label forever. Re-apply
+# phase exclusivity so only the forced terminal member survives.
+if forced and contract_file:
+    try:
+        with open(contract_file, "r") as fh:
+            contract = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(f"::warning::reconcile_managed_issue_labels: failed to load contract file {contract_file}: {exc}", file=sys.stderr)
+        contract = None
+    if isinstance(contract, dict):
+        for group in contract.get("phase_groups", []) or []:
+            if not isinstance(group, dict):
+                continue
+            raw_members = group.get("members")
+            if not isinstance(raw_members, list):
+                continue
+            members = [str(item) for item in raw_members]
+            if forced in members:
+                for label in members:
+                    if label != forced:
+                        final.discard(label)
 
 add = sorted(final - current)
 remove = sorted(current - final)
