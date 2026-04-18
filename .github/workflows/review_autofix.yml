@@ -1750,6 +1750,13 @@ jobs:
                 esac
               done < "${PRE_EDITOR_STATE_FILE}"
               git ls-files --others --exclude-standard > "${POST_UNTRACKED_LIST}" || true
+              # Also capture new files the editor already staged (status `A `):
+              # `git ls-files --others` excludes cached/staged paths, so without
+              # this second source, newly-created-but-staged files are invisible
+              # to the touched-file detector and get wiped by `git read-tree HEAD`
+              # below, producing a no-op commit and a false "Editor changes lost"
+              # alert (see run 24608448620 / PR #1330).
+              git diff --cached --diff-filter=A --name-only HEAD >> "${POST_UNTRACKED_LIST}" 2>/dev/null || true
               sort -o "${PRE_UNTRACKED_LIST}" "${PRE_UNTRACKED_LIST}"
               sort -o "${POST_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
               comm -13 "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}" >> "${CODEX_TOUCHED_FILE}"
