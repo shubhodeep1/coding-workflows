@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 7\nIssues with multi-reviewer agreement: 2\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: .github/workflows/implement.yml (line ~17)\n      Problem: These environment variables and the PHASE_FAILURE_FILE export are required by the resilient Codex failure handling feature (issue #1316, docs/resilient-codex-failure-plan.md). They were added as configuration hooks but later removed as \"dead\" because they were not yet referenced. Their removal blocks completion of the resilience implementation. The workflow must (a) restore these configuration points and (b) wire them into the retry loop and terminal-failure handler to replace hardcoded values (max_attempts=5 \u2192 MAX_CODEX_ATTEMPTS default 3; backoff base 10 \u2192 CODEX_RETRY_BACKOFF_BASE_SECS) and to emit AI_PHASE_FAILURE_V1 when ENABLE_PHASE_FAILURE_COMMENTS is true.; Without these, the implement workflow cannot support configurable retry/backoff nor emit standardized machine-readable failure markers, defeating the PR's stated purpose to \"Strengthen Codex resilience\" and preventing the orchestrator from resuming quickly from failures. The current hardcoded retry count 5 also violates the plan's default 3.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview, stepfun_step-3_5-flash\n\n  [2] File: .github/workflows/implement.yml\n      Problem: Location: env section (lines 17-22) and runtime environment setup (line 103-106); Issue: Dead configuration removal blocks planned resilience feature implementation; Suggested minimal fix: Restore the removed env vars: MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}, CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}, ENABLE_PHASE_FAILURE_COMMENTS: ${{ vars.ENABLE_PHASE_FAILURE_COMMENTS || 'true' }}, and echo \"PHASE_FAILURE_FILE=${RUNTIME_DIR}/ai_phase_failure.json\" to runtime exports. Then wire MAX_CODEX_ATTEMPTS into the retry loop (replacing hardcoded max_attempts=5) in a subsequent pass.; Estimated lines changed: 4; HARDENING_RISK_SCORE: 3\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview, moonshotai_kimi-k2_5\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [3] File: .github/workflows/review_autofix.yml (line ~2915)\n      Problem: The retry logic doesn't use the resilience environment variables MAX_CODEX_ATTEMPTS and CODEX_RETRY_BACKOFF_BASE_SECS that were added to the workflow; The resilience configuration is ignored, defeating the purpose of having configurable retry behavior. The hardcoded sleep 2 uses constant backoff instead of exponential backoff, and attempts are capped at 3 regardless of MAX_CODEX_ATTEMPTS setting.\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: .github/workflows/review_autofix.yml\n      Problem: Location: Conflict resolver retry loop (lines 2915-2925); Issue: Hardcoded retry values instead of using resilience env vars; Suggested minimal fix: Replace while [ \"${attempt}\" -le 3 ] with while [ \"${attempt}\" -le \"${MAX_CODEX_ATTEMPTS:-3}\" ] and replace sleep 2 with proper exponential backoff using CODEX_RETRY_BACKOFF_BASE_SECS; Estimated lines changed: 3; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [5] File: .github/workflows/clarify.yml\n      Problem: According to resilience plan \u00a74, all workflows with Codex calls need these env vars for consistent retry configuration; clarify.yml has a retry loop with hardcoded max_attempts=3 and base backoff of 10 seconds. Users can't configure retry behavior globally through vars.MAX_CODEX_ATTEMPTS and vars.CODEX_RETRY_BACKOFF_BASE_SECS as intended by the resilience plan.; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [6] File: .github/workflows/clarify.yml\n      Problem: Location: Top-level env section and retry loop; Issue: Missing resilience configuration env vars; Suggested minimal fix: Add MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}, CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}, ENABLE_PHASE_FAILURE_COMMENTS: ${{ vars.ENABLE_PHASE_FAILURE_COMMENTS || 'true' }} to env section. Update retry loop to use these variables.; Estimated lines changed: 5; HARDENING_RISK_SCORE: 3; Note: The restoration of resilience env vars to implement.yml and review_autofix.yml correctly addresses the critical issue identified in cross-pollination summary (env vars were incorrectly removed). The above issues represent incomplete wiring of the resilience features.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [7] File: .github/workflows/implement.yml\n      Problem: These environment variables are required configuration points for the Codex resilience implementation specified in issue #1316 and documented in docs/resilient-codex-failure-plan.md. Removing them blocks completion of the resilience feature. The current hardcoded retry values (max_attempts=5) don't match the planned defaults (3). The variables should be retained and wired into the retry logic, not removed.; The PR cannot fulfill its stated purpose of strengthening Codex resilience without these configuration points. Removing them now means they must be re-added later to implement the feature, creating unnecessary churn.; **HARDENING_SUGGESTIONS:**\n      Confidence: avg 4.0\n      Flagged by: moonshotai_kimi-k2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n.github/workflows/implement.yml\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/clarify.yml\n.github/workflows/review_autofix.yml",
+  "fingerprint": "650ebfc855982459511d089f1b345271e5386ff418b62b02acfa2d38487a462e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1320,
+    "run_id": "24603775494",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24603775494",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418121134_3043ae2e6f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1320,
+    "run_id": "24603775494"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-18T12:11:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
