@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `f549f88c21e21c1155839e1e76e08dbe2d450093`\n- Checked-out branch: `orchestrator/project-1299`\n- Integration metadata branch: `orchestrator/project-1299`\n- Mismatch: `false`\n\nClarification mapping:\n- No `Q<ID>` decisions were requested in clarify phase.\n- `/answer [auto-answered-by-orchestrator]` confirms continuation with the issue scope unchanged.\n\nFactual conflicts to surface:\n- `docs/review-pipeline-improvements.md` describes broader PR2 changes (workflow insertion and editor prompt changes), but this issue explicitly says \u201cNo workflow wiring in this issue\u201d and \u201cstay inside files_touched\u201d.\n- The same doc references adjacent stages/scripts (`review_floor_rules.sh`, `review_issue_ledger.sh`) that are not present on this branch; this issue\u2019s scope should implement consolidator/parser as standalone artifacts only.\n\nImplementation plan:\n\n1. Files likely to change\n- `prompts/review-consolidator.txt` (new)\n- `scripts/review_consolidate.sh` (new)\n- `scripts/review_parse_consolidator.sh` (new)\n- `tests/test_review_parse_consolidator.py` (new)\n- `tests/fixtures/review_pipeline/*` (new parser fixtures: well-formed, malformed, traversal, anchor mismatch, fail-open)\n\n2. Functions/modules to implement\n- `scripts/review_consolidate.sh`\n- Load reviewer bundle + PR metadata inputs from runtime paths.\n- Build consolidator prompt using `prompts/review-consolidator.txt` and required context blocks.\n- Run `codex exec` with env-driven model/reasoning/timeout defaults.\n- Enforce advisory fail-open behavior: on timeout/non-zero/empty output, still write `consolidator_raw.txt` (empty or marker-less) and exit success.\n- Apply output cap behavior (`TRUNCATED_BY_OUTPUT_CAP` marker when capped), but never hard-fail stage progression.\n- Emit structured logs (`stage=consolidator ... failopen=<0|1>`).\n\n- `scripts/review_parse_consolidator.sh`\n- Parse marker blocks `=== ISSUE NNN ===` / `=== END ISSUE NNN ===` with matched IDs.\n- Extract known headers and multiline fields (`EVIDENCE`, `CURRENT_CODE`, `SUGGESTED_APPROACH`, `NOTES`).\n- Validate mandatory and preflight fields:\n- `FILE` whitelist + no traversal + exists at `HEAD` via `git ls-files`.\n- `LINES` format + head line-range verification via `git show HEAD:<file>`.\n- Drop invalid/path-escape blocks and account in stats.\n- Tag recoverable anomalies (`LINE_UNVERIFIED`, `EVIDENCE_UNVERIFIED`) per contract.\n- Cross-check reviewer anchors from `reviewer_bundle.txt`; emit passthrough issue blocks for uncovered anchors.\n- Emit deterministic `review_issues.txt` plus `parser_stats.txt` key/value schema.\n- Implement global fail-open branch controlled by `REVIEW_PARSER_FAILOPEN` defaulting to `1`.\n\n- `prompts/review-consolidator.txt`\n- Include role framing, seven lens headings, conservative merge rule, exact output template markers, allowed value contract, and evidence/suggested-approach constraints from the design guidance.\n\n3. Data structures/artifacts affected\n- New artifact: `consolidator_raw.txt` (best-effort consolidator output, may be empty/marker-less in fail-open cases).\n- New artifact: `review_issues.txt` containing parsed issue blocks and passthrough blocks.\n- New artifact: `parser_stats.txt` with deterministic keys:\n- `parsed_blocks`\n- `passthrough_blocks`\n- `line_unverified`\n- `evidence_unverified`\n- `dropped_invalid_file`\n- `dropped_unknown_reason`\n- `parse_failed`\n- `anchors_total`\n- `anchors_covered`\n\n4. API/interface changes\n- New script interfaces (shell entrypoints) only; no workflow wiring in this issue.\n- Env vars consumed with in-script defaults:\n- `REVIEW_CONSOLIDATOR_MODEL` (default `openai/gpt-5.4-mini`)\n- `REVIEW_CONSOLIDATOR_REASONING` (default `medium`)\n- `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` (default `300`)\n- `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` (default `16000`)\n- `REVIEW_PARSER_FAILOPEN` (default `1`)\n- Input/output file contracts should be explicit in script headers and stderr logs.\n\n5. Potential risks and edge cases\n- Marker mismatch or unmatched block delimiters causing partial parse.\n- Path traversal attempts (`..`, disallowed characters) in `FILE`.\n- Stale or invalid `LINES` anchors against current `HEAD`.\n- Missing/garbled consolidator output must still produce valid empty artifacts and stats.\n- Anchor extraction heuristics from reviewer prose can miss non-standard formats; passthrough coverage logic must remain conservative.\n- Determinism risk from map/set iteration ordering; enforce stable ordering in emitted passthroughs/stats.\n\n6. Testing considerations\n- Add parser-focused fixture-driven tests in `tests/test_review_parse_consolidator.py` using current shell-script test style (temp git repo + script invocation).\n- Required fixture cases:\n- Well-formed blocks parse correctly.\n- Malformed blocks (missing required fields) degrade to passthrough.\n- Path traversal block is dropped.\n- Anchor mismatch / out-of-range lines produce expected tags or drop behavior.\n- Fail-open parse path writes empty `review_issues.txt` + `parse_failed=1` stats and exits success when enabled.\n- Add determinism assertion: same inputs produce byte-identical `review_issues.txt` and `parser_stats.txt` across repeated runs.\n\nRepresentative implementation pattern to follow:\n- Shell-script fail-open + structured logging style in `scripts/review_run_reviewers.sh`.\n- Shell-invocation test harness pattern in `tests/test_merge_probe.py` / `tests/test_detect_editor_changes_lost.py`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fc5eb5cb3103345fb8428bc6904225ca2931d77b8d258f4adac351ff85c978a5",
+  "lineage": {
+    "issue_number": 1301,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24599616286",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24599616286",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1301"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418072253_7a2580017a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1301,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24599616286"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1301",
+  "timestamps": {
+    "created_at": "2026-04-18T07:22:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
