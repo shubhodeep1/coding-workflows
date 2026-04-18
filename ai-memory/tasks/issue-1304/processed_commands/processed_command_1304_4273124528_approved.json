@@ -5,13 +5,26 @@
   "entry_id": "processed_command_1304_4273124528_approved",
   "issue_number": 1304,
   "metadata": {
+    "branch": "ai/issue-1304",
+    "changed_files": [
+      ".github/ai/label_contract.v1.json",
+      "scripts/ai_labels.py",
+      "scripts/label_helpers.sh",
+      "tests/test_ai_labels.py",
+      "tests/test_orchestrate_lib.py"
+    ],
+    "issue_number": 1304,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1304",
+    "pr_number": 1306,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1306",
+    "run_attempt": "1",
+    "run_id": "24599820255",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24599820255"
   },
   "run_attempt": 1,
   "run_id": "24599820255",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-18T07:28:41Z",
+  "status": "completed",
+  "timestamp": "2026-04-18T07:38:23Z",
   "workflow": "implement"
 }
