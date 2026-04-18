@@ -5,13 +5,31 @@
   "entry_id": "processed_command_1326_4273573949_approved",
   "issue_number": 1326,
   "metadata": {
+    "branch": "ai/issue-1326",
+    "changed_files": [
+      "tests/test_render_validation_templates.py",
+      "tests/test_render_validation_templates_node_hardhat_regressions.py",
+      "tests/test_validate_harness_rpc.py",
+      "workflow-templates/validation-harness/node-hardhat-solidity/Dockerfile.app.j2",
+      "workflow-templates/validation-harness/node-hardhat-solidity/_lib/graceful_shutdown.sh.j2",
+      "workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2",
+      "workflow-templates/validation-harness/node-hardhat-solidity/tests/00_canary.sh.j2",
+      "workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2",
+      "workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2",
+      "workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2"
+    ],
+    "issue_number": 1326,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1326",
+    "pr_number": 1328,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1328",
+    "run_attempt": "1",
+    "run_id": "24604026492",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24604026492"
   },
   "run_attempt": 1,
   "run_id": "24604026492",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-18T11:49:52Z",
+  "status": "completed",
+  "timestamp": "2026-04-18T12:01:36Z",
   "workflow": "implement"
 }
