@@ -1164,12 +1164,29 @@ jobs:
             # Still track full state for debug logging
             PREV_STATE="$CUR_STATE"
 
-            # Success: label changed from ai:review-blocked to something else
-            if ! echo "$LABELS" | grep -q 'ai:review-blocked'; then
+            # Success: poller has driven the review-blocked issue to a
+            # terminal state. Two shapes are accepted:
+            #   1. ai:review-blocked has been cleared entirely (judge fixed
+            #      or closed-and-reissued the issue), OR
+            #   2. ai:review-blocked is still present alongside a terminal
+            #      label (ai:merged or ai:ready-to-merge) — the judge-merge
+            #      path legitimately leaves the original review-blocked label
+            #      on the issue while merging the PR.
+            REVIEW_BLOCKED_PRESENT=0
+            TERMINAL_LABEL_PRESENT=0
+            if echo "$LABELS" | grep -q 'ai:review-blocked'; then
+              REVIEW_BLOCKED_PRESENT=1
+            fi
+            if echo "$LABELS" | grep -qE 'ai:merged|ai:ready-to-merge'; then
+              TERMINAL_LABEL_PRESENT=1
+            fi
+            if [ "$REVIEW_BLOCKED_PRESENT" -eq 0 ] || [ "$TERMINAL_LABEL_PRESENT" -eq 1 ]; then
               echo "✓ Review-blocked simulation passed — poller handled the issue"
               echo "  Current labels: ${LABELS}"
 
-              if echo "$LABELS" | grep -q 'ai:ready-to-merge'; then
+              if echo "$LABELS" | grep -q 'ai:merged'; then
+                echo "  Action: merge (judge merged the PR; ai:review-blocked retained on issue)"
+              elif echo "$LABELS" | grep -q 'ai:ready-to-merge'; then
                 echo "  Action: merge (judge decided to merge as-is)"
               elif echo "$LABELS" | grep -q 'ai:closed'; then
                 echo "  Action: close_and_reissue (judge closed the PR)"
