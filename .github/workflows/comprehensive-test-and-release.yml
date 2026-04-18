@@ -473,6 +473,10 @@ jobs:
           POLL_INTERVAL=20
           RATE_LIMIT_BACKOFF=0
           PENDING_LABEL="ai:comprehensive-test-pending"
+          if [ ! -f "scripts/label_helpers.sh" ]; then
+            echo "::error::Missing required support script scripts/label_helpers.sh" >&2
+            exit 1
+          fi
           source scripts/label_helpers.sh
 
           sanitize_single_line()

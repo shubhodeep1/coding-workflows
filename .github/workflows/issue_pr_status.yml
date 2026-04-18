@@ -219,6 +219,10 @@ jobs:
             exit 0
           fi
 
+          if [ ! -f "scripts/label_helpers.sh" ]; then
+            echo "::error::Missing required support script scripts/label_helpers.sh" >&2
+            exit 1
+          fi
           source scripts/label_helpers.sh
           ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"
 
