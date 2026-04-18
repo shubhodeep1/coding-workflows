@@ -3197,6 +3197,7 @@ mark_validation_failed() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment
     set_tracking_phase_label "ai:validation-recovery"
+    gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
     post_tracking_comment "## 🔄 Validation failed — recovery attempt $((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}
 
 ${reason}
@@ -3213,6 +3214,7 @@ Transitioning back to judge for re-evaluation."
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validation-failed"
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
   post_tracking_comment "## ❌ Runtime validation failed
 
 ${reason}
@@ -5138,7 +5140,7 @@ print(determine_phase(labels))
 PY
 )"
 
-    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:review-blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [ "${phase}" = "ai:validation-failed" ] || [ "${phase}" = "ai:validate-failed" ]; then
+    if [ "${phase}" = "ai:needs-human" ] || [ "${phase}" = "ai:blocked" ] || [ "${phase}" = "ai:review-blocked" ] || [ "${phase}" = "ai:implementation-failed" ] || [ "${phase}" = "ai:validating" ] || [ "${phase}" = "ai:validation-fixing" ] || [ "${phase}" = "ai:merged" ] || [ "${phase}" = "ai:closed" ] || [ "${phase}" = "ai:validated" ] || [[ "${phase}" == ai:*-failed ]]; then
       continue
     fi
 
@@ -6182,9 +6184,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       # Extract the detailed failure diagnosis from the most recent validation
       # comment posted by validate_process.sh (matches headings like
       # "Runtime validation failed", "Runtime validation harness error",
-      # "Runtime validation infeasible", or "Runtime validation found fixable issues").
+      # "Runtime validation infeasible", "Runtime validation found fixable issues",
+      # or "Validate workflow failure").
       VALIDATION_FAIL_BODY="$(echo "${COMMENTS}" | jq -r '
-        [.[] | select((.body // "") | test("## [❌🧪⚠️]+ Runtime validation"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) | .body // ""
+        [.[] | select((.body // "") | test("## [❌🧪⚠️]+ (Runtime validation|Validate workflow failure)"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) | .body // ""
       ')"
       if [ -n "${VALIDATION_FAIL_BODY}" ] && [ "${VALIDATION_FAIL_BODY}" != "" ]; then
         mark_validation_failed "${VALIDATION_FAIL_BODY}"
@@ -6200,7 +6203,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     fi
 
     # Fallback: if the last validation workflow run completed successfully
-    # and no ai:validation-failed label exists, treat as validated.
+    # and no ai:validation-failed/ai:validate-failed label exists, treat as validated.
     # This handles the case where validate_process.sh completed but the
     # ai:validated label was lost or never persisted (silent gh API failure).
     if [ "${PROJECT_STATUS}" = "validating" ]; then
