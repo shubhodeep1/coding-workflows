@@ -5045,6 +5045,7 @@ _check_fresh_push_guard() {
   if [ "${age_secs}" -lt "${_FRESH_PUSH_SUPPRESS_SECS}" ]; then
     local pr_num
     pr_num="$(printf '%s' "${linked_json}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+    [[ "${pr_num}" =~ ^[0-9]+$ ]] || return 1
     FRESH_PUSH_PR_NUM="${pr_num}"
     FRESH_PUSH_AGE_SECS="${age_secs}"
     return 0
