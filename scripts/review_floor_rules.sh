@@ -160,7 +160,7 @@ keyword_catalog_file="${tmp_dir}/keywords.txt"
 write_builtin_keywords > "${keyword_catalog_file}"
 
 if [ -n "${REVIEW_FLOOR_KEYWORDS_FILE:-}" ]; then
-	if [ -r "${REVIEW_FLOOR_KEYWORDS_FILE}" ]; then
+	if [ -f "${REVIEW_FLOOR_KEYWORDS_FILE}" ] && [ -r "${REVIEW_FLOOR_KEYWORDS_FILE}" ]; then
 		override_keywords_file="${tmp_dir}/keywords_override.txt"
 		normalize_override_keywords "${REVIEW_FLOOR_KEYWORDS_FILE}" "${override_keywords_file}"
 		if [ -s "${override_keywords_file}" ]; then
@@ -576,7 +576,7 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 
 mkdir -p "$(dirname "${OUT_FILE}")"
 if [ -s "${raw_rows_file}" ]; then
-	LC_ALL=C sort -t '	' -k1,1 -k2,2n -k4,4 -k5,5 "${raw_rows_file}" \
+	LC_ALL=C sort -s -t '	' -k1,1 -k2,2n -k3,3 -k4,4 -k5,5 "${raw_rows_file}" \
 		| awk -F '\t' 'BEGIN { OFS = "\t" } { print $1 ":" $2, $3, $4, $5 }' > "${OUT_FILE}"
 else
 	: > "${OUT_FILE}"
