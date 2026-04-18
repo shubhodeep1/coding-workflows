@@ -155,8 +155,8 @@ def cmd_repair_labels(args: argparse.Namespace) -> int:
         "ok": True,
         "known_labels": sorted(known_labels),
         "issue_labels": issue_labels,
-        "add": sorted(set(desired) - set(issue_labels)),
-        "remove": sorted(remove),
+        "add": sorted(set(desired) - issue_labels_set),
+        "remove": sorted(remove - set(desired)),
     }
     _print_json(output)
     return 0
