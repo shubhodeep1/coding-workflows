@@ -1497,41 +1497,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # On the workflow source repo, snapshot the working-tree state before
-          # the editor runs.  The "Commit changes" step below uses this snapshot
-          # to stage ONLY files the editor actually wrote to (computed by
-          # hashing each file pre/post plus executable-bit changes), instead of
-          # relying on hardcoded
-          # ':!scripts/<helper>' pathspec excludes that cannot unstage files
-          # already in the index.  This lets any script — including former
-          # "canonical helpers" like review_apply_fixes.sh — be legitimately
-          # modified, while still blocking files the editor never touched from
-          # riding along in the commit.
-          # Consumer repos use per-file exclusions from scripts/.gitignore
-          # so consumer-owned scripts (e.g. scripts/security/*.js) are staged.
-          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-            PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
-            : > "${PRE_EDITOR_STATE_FILE}"
-            # `sort -zu` dedupes: in an active merge state, `git ls-files -z`
-            # emits conflicted paths once per index stage (1/2/3).  The
-            # autofix step should never run in merge state, but the guard is
-            # cheap and makes the snapshot reusable from the resolver step.
-            while IFS= read -r -d '' snap_path; do
-              [ -f "${snap_path}" ] || continue
-              snap_exec=0
-              [ -x "${snap_path}" ] && snap_exec=1
-              printf 'T\t%s\t%s\t%s\n' \
-                "$(git hash-object -- "${snap_path}")" \
-                "${snap_exec}" \
-                "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
-            done < <(git ls-files -z | sort -zu)
-            while IFS= read -r snap_path; do
-              [ -n "${snap_path}" ] && \
-                printf 'U\t%s\n' "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
-            done < <(git ls-files --others --exclude-standard)
-            echo "PRE_EDITOR_STATE_FILE=${PRE_EDITOR_STATE_FILE}" >> "$GITHUB_ENV"
-            echo "Pre-editor snapshot captured: $(wc -l < "${PRE_EDITOR_STATE_FILE}") entries"
-          fi
+          # Commit-time touched-file detection now derives from live
+          # git diff HEAD state (plus untracked files) in the
+          # "Commit changes" step below.
 
           bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"
       - name: Log token usage and Serena stats
