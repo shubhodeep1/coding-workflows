@@ -1279,7 +1279,12 @@ def resolve_label_repair_evidence(
 	current_phase = determine_phase(labels)
 	if current_phase != "no_labels":
 		phase_ladder = STALL_RECOVERY_ACTIONS.get(current_phase, [])
-		phase_action = phase_ladder[0] if phase_ladder else "retrigger_pipeline"
+		if current_phase in TERMINAL_PHASES:
+			phase_action = "escalate_human"
+		elif phase_ladder:
+			phase_action = phase_ladder[0]
+		else:
+			phase_action = "retrigger_pipeline"
 		evidence.append(
 			{
 				"action": phase_action,
@@ -1323,6 +1328,8 @@ def resolve_label_repair_evidence(
 			phase_raw = selected.get("phase", "")
 			if isinstance(phase_raw, str) and phase_raw:
 				authoritative_phase = phase_raw
+		if selected_source == "phase_failure_marker" and current_phase in TERMINAL_PHASES:
+			authoritative_phase = current_phase
 
 	return {
 		"authoritative_phase": authoritative_phase,
@@ -1378,7 +1385,7 @@ def choose_most_advanced_conclusive_evidence(
 		discarded,
 		key=lambda item: (
 			str(item.get("timestamp", "") or ""),
-			int(item.get("comment_id", 0) or 0),
+			_stable_int(item.get("comment_id"), 0),
 		),
 		reverse=True,
 	)
