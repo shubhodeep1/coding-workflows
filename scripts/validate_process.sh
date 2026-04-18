@@ -11,7 +11,8 @@
 #   VALIDATION_COMPOSE_FILE,
 #   VALIDATION_TEST_USERNAME, VALIDATION_TEST_PASSWORD, VALIDATION_TEST_API_KEY,
 #   SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS,
-#   CONTEXT7_DISABLED, GIT_MCP_DISABLED
+#   CONTEXT7_DISABLED, GIT_MCP_DISABLED,
+#   VALIDATE_PREFLIGHT_PYFLAKES_ENABLED, VALIDATE_PREFLIGHT_PYFLAKES_RULES
 
 set -euo pipefail
 
@@ -51,6 +52,27 @@ if ! [[ "${VALIDATION_CYCLE}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_CYCLE}" -lt 1 ];
   echo "::warning::VALIDATION_CYCLE must be a positive integer (got: ${VALIDATION_CYCLE}); defaulting to 1."
   VALIDATION_CYCLE="1"
 fi
+
+# Preflight pyflakes/ruff lint gate for embedded Python heredocs in
+# validation/**/*.sh. Catches undefined-name (F821) / other F-code bugs
+# that ast.parse cannot see and that runtime tests miss when the bug
+# lives in an unexercised conditional branch (observed as
+# `unknown_error:NameError` in consumer-repo autobet flows). See
+# run_preflight_checks() for the implementation.
+VALIDATE_PREFLIGHT_PYFLAKES_ENABLED="${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED:-true}"
+case "${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED}" in
+  true|false) ;;
+  *)
+    echo "::warning::VALIDATE_PREFLIGHT_PYFLAKES_ENABLED must be 'true' or 'false' (got: ${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED}); defaulting to 'true'."
+    VALIDATE_PREFLIGHT_PYFLAKES_ENABLED="true"
+    ;;
+esac
+VALIDATE_PREFLIGHT_PYFLAKES_RULES="${VALIDATE_PREFLIGHT_PYFLAKES_RULES:-F}"
+if ! [[ "${VALIDATE_PREFLIGHT_PYFLAKES_RULES}" =~ ^[A-Z0-9,]+$ ]]; then
+  echo "::warning::VALIDATE_PREFLIGHT_PYFLAKES_RULES must match ^[A-Z0-9,]+\$ (got: ${VALIDATE_PREFLIGHT_PYFLAKES_RULES}); defaulting to 'F'."
+  VALIDATE_PREFLIGHT_PYFLAKES_RULES="F"
+fi
+export VALIDATE_PREFLIGHT_PYFLAKES_ENABLED VALIDATE_PREFLIGHT_PYFLAKES_RULES
 
 PROJECT_SPEC_FILE="${RUNTIME_DIR}/project_spec.txt"
 STATIC_CONTEXT_FILE="${RUNTIME_DIR}/validate_static.txt"
@@ -1197,6 +1219,182 @@ PY2
 		PRE_FLIGHT_STATUS="fail"
 		_emit_preflight_tail "embedded Python syntax check failed in validation/**/*.sh"
 		return 1
+	fi
+
+	# Embedded-Python F-code lint for generated harness scripts.
+	#
+	# ast.parse above detects SyntaxError only — it does not resolve
+	# names. A `NameError` (F821 undefined-name) in a conditional branch
+	# that the runtime test suite does not exercise will therefore reach
+	# production. Observed in a consumer-repo autobet flow:
+	# `autobet_finalize ... reason=unknown_error:NameError attempt=0`
+	# fired on every finalize call because the failing branch was never
+	# tripped by a `tests/NN_*.sh` case. Running pyflakes + ruff (both,
+	# per ask-first decision Q1=C) against each quoted python3 heredoc
+	# body flags these statically so the preflight self-heal loop can
+	# intercept before a validation cycle burns.
+	#
+	# Env vars (defaults in header): VALIDATE_PREFLIGHT_PYFLAKES_ENABLED,
+	# VALIDATE_PREFLIGHT_PYFLAKES_RULES. On missing tools the preflight
+	# attempts `python3 -m pip install --user --quiet` (Q4=C); if that
+	# fails (PEP 668, offline runner, etc.) the check fails open with a
+	# ::warning:: — matches the fail-open convention used by
+	# verify_integration_fingerprints.py (see agents.md §18).
+	if [ "${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED}" = "true" ]; then
+		local _pf_tool _pf_missing=""
+		for _pf_tool in pyflakes ruff; do
+			if ! command -v "${_pf_tool}" >/dev/null 2>&1; then
+				if ! python3 -m pip install --user --quiet "${_pf_tool}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+					if ! python3 -m pip install --user --quiet --break-system-packages "${_pf_tool}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+						_pf_missing="${_pf_missing:+${_pf_missing} }${_pf_tool}"
+					fi
+				fi
+				# Refresh PATH for --user site-packages bin dir.
+				local _pf_user_bin
+				_pf_user_bin="$(python3 -c 'import site,os; print(os.path.join(site.getuserbase(), "bin"))' 2>/dev/null || true)"
+				if [ -n "${_pf_user_bin}" ] && [ -d "${_pf_user_bin}" ]; then
+					case ":${PATH}:" in
+						*":${_pf_user_bin}:"*) ;;
+						*) PATH="${_pf_user_bin}:${PATH}" ;;
+					esac
+				fi
+			fi
+		done
+		if [ -n "${_pf_missing}" ]; then
+			echo "::warning::Preflight F-code lint fail-open: could not install ${_pf_missing}; skipping embedded-Python pyflakes/ruff lint." >&2
+		elif ! python3 - >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY3'
+import ast
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+
+RULES = os.environ.get("VALIDATE_PREFLIGHT_PYFLAKES_RULES", "F").strip() or "F"
+
+HEREDOC_PATTERN = re.compile(
+    r'^(?![ \t]*#).*\bpython3\b[^\n<]*<<\s*(-)?\s*[\'"](\w+)[\'"][^\n]*$',
+    re.MULTILINE,
+)
+
+def iter_bodies(path):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        yield None, None, None, f"{path}: cannot read: {exc}"
+        return
+    for match in HEREDOC_PATTERN.finditer(text):
+        strip_tabs = bool(match.group(1))
+        delim = match.group(2)
+        rest = text[match.end():]
+        close_re = re.compile(
+            r'^' + (r'\t*' if strip_tabs else r'') + re.escape(delim) + r'\s*$',
+            re.MULTILINE,
+        )
+        close_match = close_re.search(rest)
+        if close_match is None:
+            continue
+        body = rest[: close_match.start()]
+        if body.startswith('\n'):
+            body = body[1:]
+        if strip_tabs:
+            body = '\n'.join(line.lstrip('\t') for line in body.splitlines())
+        opener_line = text[: match.start()].count('\n') + 1
+        yield opener_line, delim, body, None
+
+def run_tool(cmd, tmp_path):
+    try:
+        proc = subprocess.run(
+            cmd + [tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 2, "", f"tool invocation failed: {exc}"
+    return proc.returncode, proc.stdout, proc.stderr
+
+LINE_RE = re.compile(r'^[^:]+:(\d+):(?:(\d+):)?\s*(.+)$')
+
+def absolutise(raw, opener_line, path, delim, tool_label):
+    m = LINE_RE.match(raw)
+    if m:
+        rel_line = int(m.group(1))
+        absolute_line = opener_line + rel_line
+        return (
+            f"{path}:{absolute_line}: embedded Python heredoc <<{delim}>>: "
+            f"{tool_label}: {m.group(3)}"
+        )
+    return f"{path}: {tool_label}: {raw}"
+
+errors = []
+root = pathlib.Path("validation")
+if not root.is_dir():
+    print("validation/ directory missing; embedded Python lint skipped.")
+    sys.exit(0)
+
+for path in sorted(root.rglob("*.sh")):
+    if "logs" in path.parts:
+        continue
+    for opener_line, delim, body, read_err in iter_bodies(path):
+        if read_err:
+            errors.append(read_err)
+            continue
+        try:
+            ast.parse(body)
+        except SyntaxError:
+            # ast.parse block above already reports SyntaxError; avoid
+            # double-flagging the same body here.
+            continue
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(body)
+            tmp_path = f.name
+        try:
+            pf_rc, pf_out, pf_err = run_tool(["pyflakes"], tmp_path)
+            if pf_rc != 0:
+                for raw in (pf_out + pf_err).splitlines():
+                    if raw.strip():
+                        errors.append(absolutise(raw, opener_line, path, delim, "pyflakes"))
+            rf_rc, rf_out, rf_err = run_tool(
+                ["ruff", "check", "--select", RULES, "--no-cache", "--output-format=concise", "--quiet"],
+                tmp_path,
+            )
+            if rf_rc != 0:
+                for raw in (rf_out + rf_err).splitlines():
+                    stripped = raw.strip()
+                    if not stripped:
+                        continue
+                    if stripped.startswith("Found ") or stripped.startswith("All checks"):
+                        continue
+                    errors.append(absolutise(raw, opener_line, path, delim, f"ruff[{RULES}]"))
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+if errors:
+    print("Embedded Python F-code lint violations in generated harness scripts:")
+    for err in errors:
+        print(f"  {err}")
+    print(
+        "These are undefined-name / unused-binding class bugs that would "
+        "produce a runtime NameError in any branch reached at runtime. "
+        "Ensure every identifier used in the heredoc body is imported or "
+        "defined. Disable gate via VALIDATE_PREFLIGHT_PYFLAKES_ENABLED=false "
+        "only as a temporary break-glass — the bug class is the same one "
+        "that produced `unknown_error:NameError` in consumer autobet logs."
+    )
+    sys.exit(1)
+
+print("Embedded Python F-code lint (pyflakes + ruff) passed.")
+PY3
+		then
+			PRE_FLIGHT_STATUS="fail"
+			_emit_preflight_tail "embedded Python F-code lint failed in validation/**/*.sh (pyflakes/ruff)"
+			return 1
+		fi
 	fi
 
 	# Preflight: scan generated validation Dockerfiles for apt package names that
