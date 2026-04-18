@@ -1226,7 +1226,9 @@ backfill_validation_fix_issue_merged_label() {
   local cached_labels="${2:-}"
   local contract_file=".github/ai/label_contract.v1.json"
   local fix_labels
+  local phase_changes
   local edit_args=()
+  local remove_label
   local _label_err_file
 
   ensure_label_exists "ai:merged"
@@ -1244,8 +1246,20 @@ backfill_validation_fix_issue_merged_label() {
     return 0
   fi
 
+  if [ -f "${contract_file}" ]; then
+    echo "::warning::set_issue_phase_label failed for #${issue_num}; falling back to manual ai:merged label edit." >&2
+  fi
+
   edit_args+=(--add-label "ai:merged")
-  if has_label "${fix_labels}" "ai:closed"; then
+  if [ -f "${contract_file}" ]; then
+    phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
+    while IFS= read -r remove_label; do
+      [ -n "${remove_label}" ] || continue
+      if has_label "${fix_labels}" "${remove_label}"; then
+        edit_args+=(--remove-label "${remove_label}")
+      fi
+    done < <(echo "${phase_changes}" | jq -r '.remove[]?' 2>/dev/null || true)
+  elif has_label "${fix_labels}" "ai:closed"; then
     edit_args+=(--remove-label "ai:closed")
   fi
 
@@ -1445,7 +1459,12 @@ if forced and contract_file:
         contract = None
     if isinstance(contract, dict):
         for group in contract.get("phase_groups", []) or []:
-            members = [str(item) for item in (group.get("members") or [])]
+            if not isinstance(group, dict):
+                continue
+            raw_members = group.get("members")
+            if not isinstance(raw_members, list):
+                continue
+            members = [str(item) for item in raw_members]
             if forced in members:
                 for label in members:
                     if label != forced:
