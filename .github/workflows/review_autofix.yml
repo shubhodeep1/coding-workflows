@@ -1504,41 +1504,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # On the workflow source repo, snapshot the working-tree state before
-          # the editor runs.  The "Commit changes" step below uses this snapshot
-          # to stage ONLY files the editor actually wrote to (computed by
-          # hashing each file pre/post plus executable-bit changes), instead of
-          # relying on hardcoded
-          # ':!scripts/<helper>' pathspec excludes that cannot unstage files
-          # already in the index.  This lets any script — including former
-          # "canonical helpers" like review_apply_fixes.sh — be legitimately
-          # modified, while still blocking files the editor never touched from
-          # riding along in the commit.
-          # Consumer repos use per-file exclusions from scripts/.gitignore
-          # so consumer-owned scripts (e.g. scripts/security/*.js) are staged.
-          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-            PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
-            : > "${PRE_EDITOR_STATE_FILE}"
-            # `sort -zu` dedupes: in an active merge state, `git ls-files -z`
-            # emits conflicted paths once per index stage (1/2/3).  The
-            # autofix step should never run in merge state, but the guard is
-            # cheap and makes the snapshot reusable from the resolver step.
-            while IFS= read -r -d '' snap_path; do
-              [ -f "${snap_path}" ] || continue
-              snap_exec=0
-              [ -x "${snap_path}" ] && snap_exec=1
-              printf 'T\t%s\t%s\t%s\n' \
-                "$(git hash-object -- "${snap_path}")" \
-                "${snap_exec}" \
-                "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
-            done < <(git ls-files -z | sort -zu)
-            while IFS= read -r snap_path; do
-              [ -n "${snap_path}" ] && \
-                printf 'U\t%s\n' "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
-            done < <(git ls-files --others --exclude-standard)
-            echo "PRE_EDITOR_STATE_FILE=${PRE_EDITOR_STATE_FILE}" >> "$GITHUB_ENV"
-            echo "Pre-editor snapshot captured: $(wc -l < "${PRE_EDITOR_STATE_FILE}") entries"
-          fi
+          # Commit-time touched-file detection now derives from:
+          #   - git diff --name-only HEAD (tracked paths changed vs HEAD)
+          #   - git diff --cached --diff-filter=A --name-only HEAD (staged additions)
+          #   - git ls-files --others --exclude-standard (untracked paths)
+          # in the "Commit changes" step below.
 
           bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"
       - name: Log token usage and Serena stats
@@ -1732,66 +1702,9 @@ jobs:
             # with content the editor never touched.
             CODEX_TOUCHED_FILE="${RUNTIME_DIR}/codex_touched_autofix.txt"
             : > "${CODEX_TOUCHED_FILE}"
-            if [ -f "${PRE_EDITOR_STATE_FILE:-/nonexistent}" ]; then
-              PRE_UNTRACKED_LIST="$(mktemp)"
-              POST_UNTRACKED_LIST="$(mktemp)"
-              while IFS=$'\t' read -r diff_kind diff_a diff_b diff_c; do
-                case "${diff_kind}" in
-                  T)
-                    old_sha="${diff_a}"
-                    old_exec="${diff_b}"
-                    diff_path="${diff_c}"
-                    [ -z "${diff_path}" ] && continue
-                    if [ ! -e "${diff_path}" ]; then
-                      printf '%s\n' "${diff_path}" >> "${CODEX_TOUCHED_FILE}"
-                      continue
-                    fi
-                    new_sha="$(git hash-object -- "${diff_path}" 2>/dev/null || true)"
-                    if [ -x "${diff_path}" ]; then
-                      new_exec=1
-                    else
-                      new_exec=0
-                    fi
-                    if { [ -n "${new_sha}" ] && [ "${new_sha}" != "${old_sha}" ]; } || [ "${new_exec}" != "${old_exec}" ]; then
-                      printf '%s\n' "${diff_path}" >> "${CODEX_TOUCHED_FILE}"
-                    fi
-                    ;;
-                  U)
-                    printf '%s\n' "${diff_a}" >> "${PRE_UNTRACKED_LIST}"
-                    ;;
-                esac
-              done < "${PRE_EDITOR_STATE_FILE}"
-              git ls-files --others --exclude-standard > "${POST_UNTRACKED_LIST}" || true
-              # Also capture new files the editor already staged (status `A `):
-              # `git ls-files --others` excludes cached/staged paths, so without
-              # this second source, newly-created-but-staged files are invisible
-              # to the touched-file detector and get wiped by `git read-tree HEAD`
-              # below, producing a no-op commit and a false "Editor changes lost"
-              # alert (see run 24608448620 / PR #1330).
-              git diff --cached --diff-filter=A --name-only HEAD >> "${POST_UNTRACKED_LIST}" 2>/dev/null || true
-              sort -o "${PRE_UNTRACKED_LIST}" "${PRE_UNTRACKED_LIST}"
-              sort -o "${POST_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
-              comm -13 "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}" >> "${CODEX_TOUCHED_FILE}"
-              rm -f "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
-              # Safety union: never silently drop a file that is genuinely
-              # modified vs HEAD on disk at commit time.  The SHA-based
-              # loop above can miss such files when the pre-editor snapshot
-              # SHA happens to equal the post-editor SHA (e.g. the file was
-              # already in its edited state at snapshot time, or the
-              # workflow-support overlay perturbed pre-SHAs for unrelated
-              # files).  Missing a real edit surfaces as EDITOR_CHANGES_LOST
-              # even though the edit is on disk (see run 24604441953:
-              # scripts/review_floor_rules.sh was modified but dropped).
-              # Adding a file whose on-disk content already matches HEAD is
-              # harmless — the subsequent `git add` is a no-op for unchanged
-              # content and the `git diff --cached --quiet` guard still
-              # short-circuits when nothing truly changed.
-              git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
-            else
-              echo "::warning::pre-editor snapshot missing; falling back to git diff HEAD."
-              git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
-              git ls-files --others --exclude-standard >> "${CODEX_TOUCHED_FILE}" || true
-            fi
+            git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
+            git diff --cached --diff-filter=A --name-only HEAD >> "${CODEX_TOUCHED_FILE}" 2>/dev/null || true
+            git ls-files --others --exclude-standard -- ':!node_modules' >> "${CODEX_TOUCHED_FILE}" || true
             sort -u -o "${CODEX_TOUCHED_FILE}" "${CODEX_TOUCHED_FILE}"
             touched_count="$(wc -l < "${CODEX_TOUCHED_FILE}" | tr -d '[:space:]')"
             echo "Editor-touched files (${touched_count}):"
@@ -1805,7 +1718,7 @@ jobs:
             while IFS= read -r touched_path; do
               [ -z "${touched_path}" ] && continue
               case "${touched_path}" in
-                node_modules|node_modules/*) continue ;;
+                node_modules|node_modules/*|*/node_modules|*/node_modules/*) continue ;;
               esac
               if [ -e "${touched_path}" ]; then
                 git add -- "${touched_path}" 2>/dev/null || true
