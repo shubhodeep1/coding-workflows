@@ -72,7 +72,11 @@ def _snapshot_directory(root: Path) -> tuple[list[str], str]:
 
 
 def _fixture_files() -> list[str]:
-	return sorted(path.relative_to(FIXTURES_ROOT).as_posix() for path in FIXTURES_ROOT.rglob("*") if path.is_file())
+	return sorted(
+		path.relative_to(FIXTURES_ROOT).as_posix()
+		for path in FIXTURES_ROOT.rglob("*")
+		if path.is_file() and "__pycache__" not in path.parts and not path.name.endswith(".pyc")
+	)
 
 
 def _assert_fixture_match(render_root: Path) -> None:
