@@ -49,7 +49,7 @@ _LINT_SNIPPET = textwrap.dedent(r"""
 
     _canary_tools_raw="$(printf '%s\n' "${_canary_tools_line}" \
         | sed -E 's/^[[:space:]]*CANARY_TOOLS=//' \
-        | sed -E 's/[[:space:]]+#.*$//' \
+        | sed -E 's/[[:space:]]*#.*$//' \
         | sed -E 's/^"\$\{CANARY_TOOLS:-//; s/\}"[[:space:]]*$//' \
         | sed -E "s/^'\\\$\\{CANARY_TOOLS:-//; s/\\}'[[:space:]]*$//" \
         | sed -E 's/^\$\{CANARY_TOOLS:-//; s/\}[[:space:]]*$//' \
@@ -65,6 +65,7 @@ _LINT_SNIPPET = textwrap.dedent(r"""
                     psql) _tool_pattern='psql|postgresql-client' ;;
                     redis-cli) _tool_pattern='redis-cli|redis-tools' ;;
                     mysql|mysqladmin) _tool_pattern="${_tool}|mysql-client|default-mysql-client|mariadb-client" ;;
+                    kcat|kafkacat) _tool_pattern='kcat|kafkacat' ;;
                     *) _tool_pattern="${_tool}" ;;
                 esac
                 if [ -f validation/Dockerfile.app ] && \
