@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 3\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/workflow-log-analysis.yml (line ~345)\n      Problem: if [ -z \"${TRACKING_ISSUE_NUM}\" ]; then; echo \"::warning::Workflow log analysis failure occurred without tracking issue context; skipping ai:log-analysis-failed label and marker comment.\"; Duplicate warning when TRACKING_ISSUE_NUM is empty. The callee emit_log_analysis_phase_failure (lines 280-344) already prints a warning and returns early for this condition (lines 287-290). The caller's additional warning creates redundant log noise without adding new information.; None (harmless log duplication), but reduces signal-to-noise ratio in CI logs.\n      Confidence: avg 4.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [2] File: scripts/label_helpers.sh (line ~130)\n      Problem: if printf '%s' \"${_label_err}\" | grep -Eiq 'already[ _-]*exists|already_exists'; then; The regex may not match all GitHub API \"already exists\" message variants (e.g., \"Label already exists on this repository\" or \"resource already exists\"). Could cause false negative detection when label exists, leading to a warning and non-zero return instead of idempotent success.; Spurious CI warnings or unnecessary label-repair attempts when the label already exists but error message wording differs.; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [3] File: scripts/label_helpers.sh, line 130 (line ~130)\n      Problem: Issue: Strengthen regex to cover more error patterns.; Suggested minimal fix: Change pattern to:; grep -Eiq 'already[ _-]*(exists|exists on this repository)|resource.*already.*exists'; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1; VERIFICATION:; - All relevant tests pass: test_ai_label_precreation_contract, test_ai_labels, test_orchestrate_lib (78 tests), test_validate_process_fixup_labels, test_workflow_log_analysis_failure_contract.; - Critical gitlink fix verified: commit 16ffcc69cefbfe2c14b8a05ba4d52677d8cc6e86 exists on remote (git ls-remote origin shows it under HEAD and refs/heads/main) and parent gitlink now points to it. Nested submodule gitlinks within .codex-workflow-src are present but not used by workflows; they do not affect runtime.; ASSUMPTIONS:; - Nested gitlinks inside the `.codex-workflow-src` repository (commit 092f23a8b) are ignored by the integration workflows which perform direct `actions/checkout` of the support repository; therefore they do not cause runtime failures. If recursive submodule initialization is ever introduced, those references would need correction.; MISSING CONTEXT:; - No linked issue number found in PR artifacts; PR description references orchestrator project #1303.\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/workflow-log-analysis.yml\nscripts/label_helpers.sh\nscripts/label_helpers.sh, line 130",
+  "fingerprint": "7d02b659140eb9a9c82271fea6ec3757ff6bb420dbdba5259558d3fe8d687955",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1347,
+    "run_id": "24615024417",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24615024417",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418223101_f68fba5bf3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1347,
+    "run_id": "24615024417"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T22:31:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
