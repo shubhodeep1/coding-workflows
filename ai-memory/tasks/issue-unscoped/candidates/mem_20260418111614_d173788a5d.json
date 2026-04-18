@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 2\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: tests/test_ai_label_precreation_contract.py\n      Problem: Location: WORKFLOW_CONTRACT definition (lines 14-66); Issue: Hardcoded list of 4 workflow files instead of glob discovery; Suggested minimal fix: Consider using `pathlib.Path(\".github/workflows\").glob(\"*.yml\")` for automatic coverage of future workflows; Estimated lines changed: ~5; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: moonshotai_kimi-k2_5\n\n  [2] File: tests/test_ai_label_precreation_contract.py\n      Problem: Location: `_contains()` function (line 67); Issue: Literal string matching for `must_contain` patterns could be brittle to whitespace changes; Suggested minimal fix: Consider allowing regex patterns for all `must_contain` entries, not just `must_not_contain`; Estimated lines changed: ~3; HARDENING_RISK_SCORE: 1; **Conclusion**: No runtime correctness issues. Changes are additive/defensive and align with the PR intent of centralized label management.\n      Confidence: avg n/a\n      Flagged by: moonshotai_kimi-k2_5\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\ntests/test_ai_label_precreation_contract.py",
+  "fingerprint": "2a3282bea04844f19b65a13b3b002605fc26616c8e05efc4ad8a7577780a21e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1319,
+    "run_id": "24603129927",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24603129927",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418111614_d173788a5d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1319,
+    "run_id": "24603129927"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T11:16:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
