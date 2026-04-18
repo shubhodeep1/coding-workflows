@@ -12,18 +12,18 @@ from typing import Any
 
 try:
 	import yaml
-except Exception:  # pragma: no cover - exercised via runtime dependency checks
+except ImportError:  # pragma: no cover - exercised via runtime dependency checks
 	yaml = None
 
 try:
 	from jsonschema import Draft202012Validator
-except Exception:  # pragma: no cover - exercised via runtime dependency checks
+except ImportError:  # pragma: no cover - exercised via runtime dependency checks
 	Draft202012Validator = None
 
 try:
 	from jinja2 import Environment, FileSystemLoader, StrictUndefined
 	from jinja2.exceptions import TemplateError
-except Exception:  # pragma: no cover - exercised via runtime dependency checks
+except ImportError:  # pragma: no cover - exercised via runtime dependency checks
 	Environment = None
 	FileSystemLoader = None
 	StrictUndefined = None
@@ -204,7 +204,11 @@ def load_schema(schema_path: Path) -> dict[str, Any]:
 def validate_manifest(manifest: dict[str, Any], schema: dict[str, Any]) -> None:
 	if Draft202012Validator is None:
 		raise _missing_dependency_error("jsonschema")
-	validator = Draft202012Validator(schema)
+	try:
+		Draft202012Validator.check_schema(schema)
+		validator = Draft202012Validator(schema)
+	except Exception as exc:
+		raise SchemaLoadError(f"Invalid schema definition: {exc}") from exc
 	errors = sorted(
 		validator.iter_errors(manifest),
 		key=lambda err: [str(part) for part in err.absolute_path],
