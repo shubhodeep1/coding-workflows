@@ -2228,9 +2228,9 @@ ESCALATED_FROM_NEEDS_FIXES=false
 if [ "${DIAG_STATUS}" = "needs_fixes" ]; then
 	FP_FIX_COUNT="$(jq -r 'if (.fix_issues | type) == "array" then (.fix_issues | length) else 0 end' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || echo 0)"
 	if [ "${FP_FIX_COUNT:-0}" -gt 0 ]; then
-		FAILURE_FINGERPRINT="$(jq -r '.fix_issues | sort_by(.title // "") | map(.title // "") | join("\n")' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null \
-			| sha256sum \
-			| cut -c1-16)"
+		if FINGERPRINT_TITLES="$(jq -r '.fix_issues | sort_by(.title // "") | map(.title // "") | join("\n")' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null)"; then
+			FAILURE_FINGERPRINT="$(printf '%s' "${FINGERPRINT_TITLES}" | sha256sum | cut -c1-16)"
+		fi
 	fi
 fi
 
@@ -2242,10 +2242,10 @@ if [ "${DIAG_STATUS}" = "needs_fixes" ] \
 	PREV_CYCLE_2="$((VALIDATION_CYCLE - 2))"
 	HIT_PREV_CYCLE_1=0
 	HIT_PREV_CYCLE_2=0
-	if printf '%s' "${PRIOR_COMMENTS}" | grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_1} -->" 2>/dev/null; then
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_1} -->" <<< "${PRIOR_COMMENTS:-}" 2>/dev/null; then
 		HIT_PREV_CYCLE_1=1
 	fi
-	if printf '%s' "${PRIOR_COMMENTS}" | grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_2} -->" 2>/dev/null; then
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_2} -->" <<< "${PRIOR_COMMENTS:-}" 2>/dev/null; then
 		HIT_PREV_CYCLE_2=1
 	fi
 	PRIOR_FINGERPRINT_HITS="$((HIT_PREV_CYCLE_1 + HIT_PREV_CYCLE_2))"
@@ -2258,7 +2258,7 @@ fi
 
 case "${DIAG_STATUS}" in
   needs_fixes)
-    FIX_COUNT="$(jq -r '.fix_issues | length' "${DIAGNOSE_RESULT_FILE}")"
+    FIX_COUNT="$(jq -r 'if (.fix_issues | type) == "array" then (.fix_issues | length) else 0 end' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || echo 0)"
     if [ "${FIX_COUNT}" -le 0 ]; then
       failure_summary="Diagnosis returned needs_fixes with empty fix_issues."
       post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
