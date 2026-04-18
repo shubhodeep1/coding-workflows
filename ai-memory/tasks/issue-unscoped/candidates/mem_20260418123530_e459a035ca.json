@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 10\nIssues with multi-reviewer agreement: 5\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: scripts/validate_process.sh (line ~2242)\n      Problem: Fingerprint detection is broken due to a formatting mismatch. The detection regex looks for `cycle:` immediately followed by the cycle number, while the marker is embedded with a space after the colon: `cycle: %s`.; The `grep` command will fail to find any existing markers in `PRIOR_COMMENTS` because of the missing space in its search pattern. Consequently, `PRIOR_FINGERPRINT_HITS` will always be 0, and the cross-cycle escalation will never trigger, allowing the system to loop indefinitely on the same failing proposal.\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\n  [2] File: scripts/validate_process.sh (line ~2229)\n      Problem: The fingerprint is computed exclusively from `fix_issues[].title`, ignoring the `body` and `depends_on` fields.; If the LLM generates the same generic title (e.g., \"Fix test failure\" or \"Update dependencies\") for two different failure modes with different suggested fixes in the body, they will share the same fingerprint. This leads to \"fingerprint collisions\" where distinct issues are incorrectly treated as repetitions of the same failure, causing premature escalation to `harness_error` for issues that are actually making progress or are unrelated.\n      Confidence: avg 3.5\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\n  [3] File: scripts/validate_process.sh (line ~2241)\n      Problem: The escalation logic could count the current cycle's comment as a prior hit.; If the `PRIOR_COMMENTS` fetch (done at the start of the script, as referenced in line 2239) happens to include a comment posted during the current run (e.g., if a previous step in the same workflow run posted a comment or if the script was re-executed), the `grep` will count the current run's fingerprint. This inflates the hit count and could cause escalation at `VALIDATION_CYCLE=3` with only one actual prior failure instead of the intended two.; HARDENING_SUGGESTIONS:\n      Confidence: avg 2.5\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\n  [4] File: scripts/validate_process.sh\n      Problem: Location: Line 2241; Issue: Potential \"unbound variable\" error if `set -u` is enabled.; Suggested minimal fix: Use `${PRIOR_COMMENTS:-}` instead of `${PRIOR_COMMENTS}` in the `printf` command.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\n  [5] File: scripts/validate_process.sh\n      Problem: Location: Line 2231; Issue: `jq` failure during fingerprint generation is not explicitly handled.; Suggested minimal fix: Append `|| echo \"error\"` to the `jq` command to ensure `sha256sum` doesn't hash an empty string or error message silently.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 2\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, google_gemini-3-flash-preview\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [6] File: scripts/validate_process.sh (line ~2229)\n      Problem: FP_FIX_COUNT uses `if (.fix_issues | type) == \"array\" then (.fix_issues | length) else 0 end` while FIX_COUNT uses `.fix_issues | length`. These could produce different results for non-array fix_issues.; Inconsistency between fingerprint generation and fix_issues validation.\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [7] File: scripts/validate_process.sh (line ~2229)\n      Problem: Fingerprint is SHA256 of sorted `fix_issues[].title`. Two different issues with same title but different bodies would have same fingerprint.; Could cause false escalation for different issues with same title.\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [8] File: scripts/validate_process.sh\n      Problem: If current cycle's comment is posted and then fetched in same script run (unlikely but possible), it could be counted as a prior hit causing premature escalation.; Race condition could cause incorrect escalation counts.; HARDENING_SUGGESTIONS:\n      Confidence: avg 2.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [9] File: scripts/validate_process.sh\n      Problem: Location: Line 2242; Issue: grep pattern mismatch and line counting limitation; Suggested minimal fix: Change to `grep -oF \"<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: \" | wc -l` to count occurrences and match space after colon.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 5\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [10] File: scripts/validate_process.sh\n      Problem: Location: Lines 2229-2233; Issue: Fingerprint should include more than just titles; Suggested minimal fix: Include fix_issues[].body or full fix_issues array in fingerprint; Estimated lines changed: 2-3; HARDENING_RISK_SCORE: 3; The most critical issue is the grep pattern mismatch (Issue Confidence: 5). This would completely break the cross-cycle escalation mechanism as markers wouldn't be detected.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\nscripts/validate_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "e24313e1ca4b1727d6e14aac5a9ea76ceabc5927aed5e6bb6aa2c835488df14b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1324,
+    "run_id": "24604379617",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24604379617",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418123530_e459a035ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1324,
+    "run_id": "24604379617"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-18T12:35:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
