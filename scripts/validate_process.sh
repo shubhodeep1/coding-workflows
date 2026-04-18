@@ -8,7 +8,7 @@
 #   TRACKING_ISSUE, VALIDATION_TIMEOUT, TOOL_CALL_BUDGET_VALIDATE,
 #   MODEL_EDITOR, MODEL_REASONING_EFFORT,
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID,
-#   VALIDATION_COMPOSE_FILE,
+#   VALIDATION_COMPOSE_FILE, VALIDATION_USE_TEMPLATES,
 #   VALIDATION_TEST_USERNAME, VALIDATION_TEST_PASSWORD, VALIDATION_TEST_API_KEY,
 #   SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS,
 #   CONTEXT7_DISABLED, GIT_MCP_DISABLED
@@ -47,6 +47,13 @@ VALIDATION_COMPOSE_FILE="${VALIDATION_COMPOSE_FILE:-docker-compose.yml}"
 VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-test-user}"
 VALIDATION_TEST_PASSWORD="${VALIDATION_TEST_PASSWORD:-test-password}"
 VALIDATION_TEST_API_KEY="${VALIDATION_TEST_API_KEY:-test-api-key}"
+VALIDATION_USE_TEMPLATES="${VALIDATION_USE_TEMPLATES:-false}"
+VALIDATION_USE_TEMPLATES_ENABLED="false"
+case "$(printf '%s' "${VALIDATION_USE_TEMPLATES}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    VALIDATION_USE_TEMPLATES_ENABLED="true"
+    ;;
+esac
 VALIDATION_CYCLE="${VALIDATION_CYCLE:-1}"
 if ! [[ "${VALIDATION_CYCLE}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_CYCLE}" -lt 1 ]; then
   echo "::warning::VALIDATION_CYCLE must be a positive integer (got: ${VALIDATION_CYCLE}); defaulting to 1."
@@ -82,6 +89,7 @@ VALIDATION_RUNNER_FILE="${RUNTIME_DIR}/validation_runtime_driver.sh"
 
 HINTS_SOURCE="none"
 HARNESS_MODE="generate"
+HARNESS_GENERATOR_MODE="freehand"
 PRE_FLIGHT_STATUS="not_run"
 GENERATED_VALIDATE_SCRIPT_PATH=""
 CANONICAL_VALIDATE_DRIVER_REL="scripts/validate_process.sh"
@@ -860,6 +868,7 @@ write_metadata_file()
     --arg failure_summary "${failure_summary}" \
     --arg hints_source "${HINTS_SOURCE}" \
     --arg harness_mode "${HARNESS_MODE}" \
+    --arg harness_generator_mode "${HARNESS_GENERATOR_MODE}" \
     --arg pre_flight_status "${PRE_FLIGHT_STATUS}" \
     --arg repository "${GITHUB_REPOSITORY}" \
     --arg tracking_issue "${TRACKING_ISSUE_RAW}" \
@@ -880,6 +889,7 @@ write_metadata_file()
       failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
       hints_source: $hints_source,
       harness_mode: $harness_mode,
+      harness_generator_mode: $harness_generator_mode,
       pre_flight_status: $pre_flight_status,
       repository: $repository,
       tracking_issue: $tracking_issue,
@@ -941,6 +951,54 @@ set -euo pipefail
 exec bash scripts/validate_driver.sh "$@"
 EOF
 	chmod +x validation/validate.sh
+}
+
+run_template_validation_harness_renderer()
+{
+	local manifest_path=".ai/validate.yml"
+	local renderer_script="scripts/render_validation_templates.py"
+	local schema_path="scripts/templates/slot_manifest.schema.json"
+	local templates_root="workflow-templates/validation-harness"
+	local renderer_summary=""
+
+	HARNESS_GENERATOR_MODE="templates"
+
+	if [ ! -f "${manifest_path}" ]; then
+		return 10
+	fi
+	if [ ! -f "${renderer_script}" ]; then
+		return 11
+	fi
+	if [ ! -f "${schema_path}" ]; then
+		return 12
+	fi
+	if [ ! -d "${templates_root}" ]; then
+		return 13
+	fi
+	if [ ! -f "${templates_root}/_shared/docker-compose.test.yml.j2" ] \
+		|| [ ! -f "${templates_root}/_shared/validate.env.j2" ] \
+		|| [ ! -f "${templates_root}/_shared/tests/00_canary.sh.j2" ]; then
+		return 13
+	fi
+
+	if ! renderer_summary="$(python3 "${renderer_script}" \
+		--manifest "${manifest_path}" \
+		--schema "${schema_path}" \
+		--templates-root "${templates_root}" \
+		--output-root validation 2>&1)"; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+
+	if [ -n "${renderer_summary}" ]; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+	fi
+
+	if [ -d validation/tests ]; then
+		find validation/tests -type f -name '*.sh' -exec chmod +x {} +
+	fi
+
+	return 0
 }
 
 run_preflight_checks()
@@ -1641,15 +1699,27 @@ if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then
 	exit 1
 fi
 
-if [ "${VALIDATION_CYCLE}" -gt 1 ] \
+if [ "${VALIDATION_USE_TEMPLATES_ENABLED}" = "true" ]; then
+	HARNESS_MODE="template_generate"
+	HARNESS_GENERATOR_MODE="templates"
+	if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
+		echo "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." >&2
+		exit 1
+	fi
+	rm -rf validation
+	mkdir -p validation/logs
+	touch validation/.ai-validation-owned
+elif [ "${VALIDATION_CYCLE}" -gt 1 ] \
 	&& [ -d validation ] \
 	&& [ -f validation/.ai-validation-owned ] \
 	&& is_validation_harness_runnable; then
 	HARNESS_MODE="fix"
+	HARNESS_GENERATOR_MODE="freehand"
 	mkdir -p validation/logs
 	find validation/logs -mindepth 1 -delete 2>/dev/null || true
 else
 	HARNESS_MODE="generate"
+	HARNESS_GENERATOR_MODE="freehand"
 	if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
 		echo "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." >&2
 		exit 1
@@ -1694,102 +1764,163 @@ if [ "${VALIDATION_CYCLE}" -gt 1 ] && is_tracking_run; then
   fi
 fi
 
-HARNESS_PROMPT_SOURCE="prompts/mode-validate-generate.txt"
-if [ "${HARNESS_MODE}" = "fix" ]; then
-	HARNESS_PROMPT_SOURCE="prompts/mode-validate-fix-harness.txt"
-fi
+if [ "${HARNESS_MODE}" = "template_generate" ]; then
+	echo "Validation harness template render mode is enabled (VALIDATION_USE_TEMPLATES=${VALIDATION_USE_TEMPLATES})."
+	if run_template_validation_harness_renderer; then
+		renderer_exit=0
+	else
+		renderer_exit=$?
+	fi
+	case "${renderer_exit}" in
+		0)
+			if ! is_validation_harness_runnable; then
+				local_failure_summary="Template renderer completed but produced non-runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum)."
+				post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for renderer logs."
+				set_tracking_phase_label "ai:validation-failed"
+				write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+				tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+				exit 1
+			fi
+			;;
+		10)
+			local_failure_summary="Template mode requires ${PWD}/.ai/validate.yml but it is missing. Add manifest config or disable VALIDATION_USE_TEMPLATES."
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+			;;
+		11)
+			local_failure_summary="Template mode requires scripts/render_validation_templates.py but it is missing. Ensure workflow bootstrap fetched renderer assets."
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+			;;
+		12)
+			local_failure_summary="Template mode requires scripts/templates/slot_manifest.schema.json but it is missing. Ensure workflow bootstrap fetched schema assets."
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+			;;
+		13)
+			local_failure_summary="Template mode requires workflow-templates/validation-harness/_shared/{docker-compose.test.yml.j2,validate.env.j2,tests/00_canary.sh.j2}; one or more required templates are missing. Ensure workflow bootstrap fetched template assets."
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+			;;
+		*)
+			local_failure_summary="Template renderer failed while generating validation assets. Check validate_generate.log for dependency or manifest errors from scripts/render_validation_templates.py."
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+			;;
+	esac
+else
+	HARNESS_PROMPT_SOURCE="prompts/mode-validate-generate.txt"
+	if [ "${HARNESS_MODE}" = "fix" ]; then
+		HARNESS_PROMPT_SOURCE="prompts/mode-validate-fix-harness.txt"
+	fi
 
-{
-  cat "${STATIC_CONTEXT_FILE}"
-  echo
-  echo "=== IMPLEMENTATION TASK ==="
-  echo
-  bash scripts/render_prompt.sh "${HARNESS_PROMPT_SOURCE}"
-  echo
-  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
-  echo
-  if [ -s "${PRIOR_FAILURE_CONTEXT_FILE}" ]; then
-    echo "=== PRIOR VALIDATION FAILURES (DO NOT REPEAT) ==="
-    cat "${PRIOR_FAILURE_CONTEXT_FILE}"
-    echo
-  fi
-  if [ -s "${PRIOR_RESULT_JSON_FILE}" ]; then
-    echo "=== PRIOR STRUCTURED VALIDATION FAILURE JSON ==="
-    cat "${PRIOR_RESULT_JSON_FILE}"
-    echo
-  fi
-  if [ -s "${PRIOR_CONTAINER_LOGS_FILE}" ]; then
-    echo "=== PRIOR CONTAINER LOG TAILS ==="
-    cat "${PRIOR_CONTAINER_LOGS_FILE}"
-    echo
-  fi
-  if [ "${HARNESS_MODE}" = "fix" ]; then
-    echo "=== EXISTING HARNESS FILES ==="
-    while IFS= read -r harness_file; do
-      harness_size_bytes="$(wc -c < "${harness_file}" | tr -d ' ')"
-      if [ "${harness_size_bytes}" -gt 200000 ]; then
-        echo "----- ${harness_file} (skipped: file too large for prompt context) -----"
-        echo
-        continue
-      fi
-      if [ -s "${harness_file}" ] && ! grep -Iq . "${harness_file}"; then
-        echo "----- ${harness_file} (skipped: non-text file) -----"
-        echo
-        continue
-      fi
-      echo "----- ${harness_file} -----"
-      cat "${harness_file}"
-      echo
-    done < <(find validation -type f -not -path 'validation/logs/*' | sort)
-  fi
-  echo "=== PROJECT SPEC ==="
-  cat "${PROJECT_SPEC_FILE}"
-  echo
-  echo "=== VALIDATION HINTS ==="
-  cat "${VALIDATE_HINTS_FILE}"
-  echo
-  echo "=== RUNNER VALIDATION CONFIG ==="
-  echo "TRACKING_ISSUE: ${TRACKING_ISSUE_RAW}"
-  echo "VALIDATION_TIMEOUT_MINUTES: ${VALIDATION_TIMEOUT}"
-  echo "PREFERRED_COMPOSE_FILE: ${VALIDATION_COMPOSE_FILE}"
-  echo "VALIDATION_CYCLE: ${VALIDATION_CYCLE}"
-  echo "HARNESS_MODE: ${HARNESS_MODE}"
-  echo "SYNTHETIC_TEST_USERNAME_ENV_VAR: VALIDATION_TEST_USERNAME"
-  echo "SYNTHETIC_TEST_PASSWORD_ENV_VAR: VALIDATION_TEST_PASSWORD"
-  echo "SYNTHETIC_TEST_API_KEY_ENV_VAR: VALIDATION_TEST_API_KEY"
-  echo
-  if [ "${HARNESS_MODE}" = "fix" ]; then
-    echo "Fix the existing harness directly in the repository workspace. Keep passing tests/config unchanged."
-  else
-    echo "Generate the harness directly in the repository workspace for immediate execution."
-  fi
-} > "${GENERATE_PROMPT_FILE}"
+	{
+	  cat "${STATIC_CONTEXT_FILE}"
+	  echo
+	  echo "=== IMPLEMENTATION TASK ==="
+	  echo
+	  bash scripts/render_prompt.sh "${HARNESS_PROMPT_SOURCE}"
+	  echo
+	  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
+	  echo
+	  if [ -s "${PRIOR_FAILURE_CONTEXT_FILE}" ]; then
+	    echo "=== PRIOR VALIDATION FAILURES (DO NOT REPEAT) ==="
+	    cat "${PRIOR_FAILURE_CONTEXT_FILE}"
+	    echo
+	  fi
+	  if [ -s "${PRIOR_RESULT_JSON_FILE}" ]; then
+	    echo "=== PRIOR STRUCTURED VALIDATION FAILURE JSON ==="
+	    cat "${PRIOR_RESULT_JSON_FILE}"
+	    echo
+	  fi
+	  if [ -s "${PRIOR_CONTAINER_LOGS_FILE}" ]; then
+	    echo "=== PRIOR CONTAINER LOG TAILS ==="
+	    cat "${PRIOR_CONTAINER_LOGS_FILE}"
+	    echo
+	  fi
+	  if [ "${HARNESS_MODE}" = "fix" ]; then
+	    echo "=== EXISTING HARNESS FILES ==="
+	    while IFS= read -r harness_file; do
+	      harness_size_bytes="$(wc -c < "${harness_file}" | tr -d ' ')"
+	      if [ "${harness_size_bytes}" -gt 200000 ]; then
+	        echo "----- ${harness_file} (skipped: file too large for prompt context) -----"
+	        echo
+	        continue
+	      fi
+	      if [ -s "${harness_file}" ] && ! grep -Iq . "${harness_file}"; then
+	        echo "----- ${harness_file} (skipped: non-text file) -----"
+	        echo
+	        continue
+	      fi
+	      echo "----- ${harness_file} -----"
+	      cat "${harness_file}"
+	      echo
+	    done < <(find validation -type f -not -path 'validation/logs/*' | sort)
+	  fi
+	  echo "=== PROJECT SPEC ==="
+	  cat "${PROJECT_SPEC_FILE}"
+	  echo
+	  echo "=== VALIDATION HINTS ==="
+	  cat "${VALIDATE_HINTS_FILE}"
+	  echo
+	  echo "=== RUNNER VALIDATION CONFIG ==="
+	  echo "TRACKING_ISSUE: ${TRACKING_ISSUE_RAW}"
+	  echo "VALIDATION_TIMEOUT_MINUTES: ${VALIDATION_TIMEOUT}"
+	  echo "PREFERRED_COMPOSE_FILE: ${VALIDATION_COMPOSE_FILE}"
+	  echo "VALIDATION_CYCLE: ${VALIDATION_CYCLE}"
+	  echo "HARNESS_MODE: ${HARNESS_MODE}"
+	  echo "SYNTHETIC_TEST_USERNAME_ENV_VAR: VALIDATION_TEST_USERNAME"
+	  echo "SYNTHETIC_TEST_PASSWORD_ENV_VAR: VALIDATION_TEST_PASSWORD"
+	  echo "SYNTHETIC_TEST_API_KEY_ENV_VAR: VALIDATION_TEST_API_KEY"
+	  echo
+	  if [ "${HARNESS_MODE}" = "fix" ]; then
+	    echo "Fix the existing harness directly in the repository workspace. Keep passing tests/config unchanged."
+	  else
+	    echo "Generate the harness directly in the repository workspace for immediate execution."
+	  fi
+	} > "${GENERATE_PROMPT_FILE}"
 
-GENERATE_SUCCESS=false
-for attempt in 1 2; do
-  echo "Validation harness ${HARNESS_MODE} attempt ${attempt}/2"
-  if cat "${GENERATE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${GENERATE_OUTPUT_FILE}" 2> >(tee -a "${GENERATE_LOG_FILE}" >&2); then
-    ensure_validate_wrapper
-    if is_validation_harness_runnable; then
-      GENERATE_SUCCESS=true
-      break
-    fi
-  fi
-  if [ "${attempt}" -lt 2 ]; then
-    sleep $((attempt * 10))
-  fi
-done
+	GENERATE_SUCCESS=false
+	for attempt in 1 2; do
+	  echo "Validation harness ${HARNESS_MODE} attempt ${attempt}/2"
+	  if cat "${GENERATE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${GENERATE_OUTPUT_FILE}" 2> >(tee -a "${GENERATE_LOG_FILE}" >&2); then
+	    ensure_validate_wrapper
+	    if is_validation_harness_runnable; then
+	      GENERATE_SUCCESS=true
+	      break
+	    fi
+	  fi
+	  if [ "${attempt}" -lt 2 ]; then
+	    sleep $((attempt * 10))
+	  fi
+	done
 
-if [ "${GENERATE_SUCCESS}" != "true" ]; then
-  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum)."
-  # Self-heal interception: if the generate/fix-harness prompt is at fault,
-  # patch it and re-exec before burning a validation cycle.
-  attempt_self_heal_and_reexec "generate"
-  post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for generation logs."
-  set_tracking_phase_label "ai:validation-failed"
-  write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
-  tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
-  exit 1
+	if [ "${GENERATE_SUCCESS}" != "true" ]; then
+	  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum)."
+	  # Self-heal interception: if the generate/fix-harness prompt is at fault,
+	  # patch it and re-exec before burning a validation cycle.
+	  attempt_self_heal_and_reexec "generate"
+	  post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for generation logs."
+	  set_tracking_phase_label "ai:validation-failed"
+	  write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+	  tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+	  exit 1
+	fi
 fi
 
 if command -v git >/dev/null 2>&1; then

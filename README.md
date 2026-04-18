@@ -1274,6 +1274,7 @@ Use this after manual intervention (e.g. fixing a problematic issue, merging a s
 | `ENABLE_VALIDATION` | `true` | Truthy values (`1/true/yes/on`, case-insensitive) enable the validation gate. Any other value disables it, so judge `complete` closes immediately without runtime validation. |
 | `MAX_VALIDATE_CYCLES` | `3` | Maximum cycles across initial validation plus fix/revalidate loops. Must be a positive integer; invalid values are coerced to `3`. Exceeding the limit forces `ai:validation-failed`. |
 | `MAX_SELF_HEAL_ATTEMPTS` | `2` | Maximum in-process self-heal attempts per validate_process.sh invocation. Self-heal attempts patch one of the four validation prompts locally and re-exec the validation pipeline; they do NOT increment `MAX_VALIDATE_CYCLES`. Set to `0` to disable self-healing entirely. See [Validation self-healing](#validation-self-healing). |
+| `VALIDATION_USE_TEMPLATES` | `false` | Truthy values (`1/true/yes/on`, case-insensitive) switch `scripts/validate_process.sh` Phase 1 to template renderer mode (`scripts/render_validation_templates.py`) instead of freehand Codex harness generation. Missing manifest/renderer/schema/template assets fail with `raw_status=harness_error`; there is no silent fallback when opt-in is enabled. |
 
 ### Validation self-healing
 
@@ -1395,6 +1396,7 @@ self-heal patches cannot be merged without explicit human action.
 
 - Cycle 1 generates a new harness under `validation/`.
 - Cycle 2+ reuses and targeted-fixes the existing owned harness when `validation/` is present (for example, restored from artifacts); otherwise it safely falls back to full regeneration.
+- Optional template mode (`VALIDATION_USE_TEMPLATES=true`) renders harness assets from `.ai/validate.yml` via `scripts/render_validation_templates.py` + `workflow-templates/validation-harness/` and skips freehand generation.
 - `validation/validate.sh` is generated as a thin wrapper that delegates to checked-in `scripts/validate_driver.sh`.
 - Canonical runtime harness behavior now lives in `scripts/validate_driver.sh` (pre-flight, compose startup/logging, health polling, canary gating, TAP-safe counting, result emission/finalization).
 - `scripts/validate_driver.sh` loads optional `validation/validate.env` and applies conservative defaults for supported knobs (including `APP_SERVICE`, `APP_URL`, `HEALTH_TIMEOUT`, `PHASE`). `APP_URL` is opt-in: the host-side HTTP probe is only performed when the consumer explicitly sets `APP_URL` (via environment or `validation/validate.env`). When unset, the health gate relies solely on Docker container state (Running + Health in {healthy, none}), so library-type consumers with no real HTTP service do not time out on a stale default probe URL. The fallback default (`http://localhost:8080/health`) is retained for documentation/inspection only.
