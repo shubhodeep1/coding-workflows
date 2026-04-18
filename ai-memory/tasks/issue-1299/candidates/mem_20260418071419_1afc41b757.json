@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Implement review pipeline improvements from docs/review-pipeline-improvements.md\",\"issues\":[{\"id\":\"review-floor-rules-foundation\",\"title\":\"Add deterministic review floor-rules stage (script + tests + fixtures)\",\"priority\":1},{\"id\":\"review-consolidator-and-parser\",\"title\":\"Add consolidator prompt + consolidator wrapper + parser with passthrough safety\",\"priority\":1},{\"id\":\"review-issue-ledger-lifecycle\",\"title\":\"Implement per-PR issue ledger lifecycle with stable issue hashing\",\"priority\":2},{\"id\":\"reviewer-checklist-and-iteration-scoping\",\"title\":\"Add reviewer checklist prompt and N>1 reviewer iteration scoping\",\"priority\":3},{\"id\":\"editor-input-contract-and-override-signaling\",\"title\":\"Update editor prompt contract to consume new artifacts and emit override signals\",\"priority\":3},{\"id\":\"review-autofix-workflow-glue-and-metrics\",\"title\":\"Wire new review stages into review_autofix workflow and add iteration metrics summary\",\"priority\":2},{\"id\":\"review-pipeline-integration-replay-tests\",\"title\":\"Add end-to-end replay test coverage for floor->consolidate->parse->ledger chain\",\"priority\":4},{\"id\":\"review-pipeline-docs-and-changelog\",\"title\":\"Document review pipeline consolidator/ledger/floor-rules contract in README, agents, and changelog\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"review-consolidator-and-parser\",\"to\":\"review-issue-ledger-lifecycle\"},{\"from\":\"review-issue-ledger-lifecycle\",\"to\":\"reviewer-checklist-and-iteration-scoping\"},{\"from\":\"review-floor-rules-foundation\",\"to\":\"editor-input-contract-and-override-signaling\"},{\"from\":\"review-consolidator-and-parser\",\"to\":\"editor-input-contract-and-override-signaling\"},{\"from\":\"review-issue-ledger-lifecycle\",\"to\":\"editor-input-contract-and-override-signaling\"},{\"from\":\"review-floor-rules-foundation\",\"to\":\"review-autofix-workflow-glue-and-metrics\"},{\"from\":\"review-consolidator-and-parser\",\"to\":\"review-autofix-workflow-glue-and-metrics\"},{\"from\":\"review-issue-ledger-lifecycle\",\"to\":\"review-autofix-workflow-glue-and-metrics\"},{\"from\":\"reviewer-checklist-and-iteration-scoping\",\"to\":\"review-autofix-workflow-glue-and-metrics\"},{\"from\":\"editor-input-contract-and-override-signaling\",\"to\":\"review-autofix-workflow-glue-and-metrics\"},{\"from\":\"review-floor-rules-foundation\",\"to\":\"review-pipeline-integration-replay-tests\"},{\"from\":\"review-consolidator-and-parser\",\"to\":\"review-pipeline-integration-replay-tests\"},{\"from\":\"review-issue-ledger-lifecycle\",\"to\":\"review-pipeline-integration-replay-tests\"},{\"from\":\"review-autofix-workflow-glue-and-metrics\",\"to\":\"review-pipeline-docs-and-changelog\"},{\"from\":\"review-pipeline-integration-replay-tests\",\"to\":\"review-pipeline-docs-and-changelog\"}]}",
+  "fingerprint": "bfec878f3912f1f39ce1249a579c48f81d167193971cd0884a849cf715d09077",
+  "lineage": {
+    "issue_number": 1299,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24599480313",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24599480313",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260418071419_1afc41b757",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1299,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24599480313"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Implement review pipeline improvements from docs/review-pipeline-improvements.md' into 8 issues (tracking #1299)",
+  "timestamps": {
+    "created_at": "2026-04-18T07:14:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
