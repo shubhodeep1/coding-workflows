@@ -1224,6 +1224,7 @@ backfill_validation_fix_issue_merged_label() {
   # `get_issue_labels_json` round-trip.  When empty/omitted the helper
   # falls back to fetching itself, preserving the original contract.
   local cached_labels="${2:-}"
+  local contract_file=".github/ai/label_contract.v1.json"
   local fix_labels
   local edit_args=()
   local _label_err_file
@@ -1236,6 +1237,10 @@ backfill_validation_fix_issue_merged_label() {
     fix_labels="$(get_issue_labels_json "${issue_num}")"
   fi
   if has_label "${fix_labels}" "ai:merged"; then
+    return 0
+  fi
+
+  if [ -f "${contract_file}" ] && set_issue_phase_label "${issue_num}" "ai:merged"; then
     return 0
   fi
 
