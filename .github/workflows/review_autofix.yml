@@ -1713,45 +1713,17 @@ jobs:
             # with content the editor never touched.
             CODEX_TOUCHED_FILE="${RUNTIME_DIR}/codex_touched_autofix.txt"
             : > "${CODEX_TOUCHED_FILE}"
-            if [ -f "${PRE_EDITOR_STATE_FILE:-/nonexistent}" ]; then
-              PRE_UNTRACKED_LIST="$(mktemp)"
-              POST_UNTRACKED_LIST="$(mktemp)"
-              while IFS=$'\t' read -r diff_kind diff_a diff_b diff_c; do
-                case "${diff_kind}" in
-                  T)
-                    old_sha="${diff_a}"
-                    old_exec="${diff_b}"
-                    diff_path="${diff_c}"
-                    [ -z "${diff_path}" ] && continue
-                    if [ ! -e "${diff_path}" ]; then
-                      printf '%s\n' "${diff_path}" >> "${CODEX_TOUCHED_FILE}"
-                      continue
-                    fi
-                    new_sha="$(git hash-object -- "${diff_path}" 2>/dev/null || true)"
-                    if [ -x "${diff_path}" ]; then
-                      new_exec=1
-                    else
-                      new_exec=0
-                    fi
-                    if { [ -n "${new_sha}" ] && [ "${new_sha}" != "${old_sha}" ]; } || [ "${new_exec}" != "${old_exec}" ]; then
-                      printf '%s\n' "${diff_path}" >> "${CODEX_TOUCHED_FILE}"
-                    fi
-                    ;;
-                  U)
-                    printf '%s\n' "${diff_a}" >> "${PRE_UNTRACKED_LIST}"
-                    ;;
-                esac
-              done < "${PRE_EDITOR_STATE_FILE}"
-              git ls-files --others --exclude-standard > "${POST_UNTRACKED_LIST}" || true
-              sort -o "${PRE_UNTRACKED_LIST}" "${PRE_UNTRACKED_LIST}"
-              sort -o "${POST_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
-              comm -13 "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}" >> "${CODEX_TOUCHED_FILE}"
-              rm -f "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
-            else
-              echo "::warning::pre-editor snapshot missing; falling back to git diff HEAD."
-              git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
-              git ls-files --others --exclude-standard >> "${CODEX_TOUCHED_FILE}" || true
-            fi
+            # Touched files = anything whose working-tree content or
+            # exec-bit differs from HEAD (git diff --name-only HEAD
+            # includes mode-only changes), plus current untracked files.
+            # The prior snapshot-based detector treated the pre-editor
+            # working tree as the baseline; any file already dirty at
+            # snapshot time was mis-classified as "unchanged" because
+            # its pre-hash already matched the editor's post-hash. See
+            # PR #1322 post-mortem (README.md / agents.md dropped from
+            # the commit despite real edits being present vs HEAD).
+            git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
+            git ls-files --others --exclude-standard >> "${CODEX_TOUCHED_FILE}" || true
             sort -u -o "${CODEX_TOUCHED_FILE}" "${CODEX_TOUCHED_FILE}"
             touched_count="$(wc -l < "${CODEX_TOUCHED_FILE}" | tr -d '[:space:]')"
             echo "Editor-touched files (${touched_count}):"
