@@ -81,20 +81,40 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 		assert result.returncode == 0, f"renderer failed: {result.stderr}"
 		assert "Rendered" in result.stdout
 
-		shared_canary = output_root / "tests" / "00_canary.sh"
-		shared_tap = output_root / "tests" / "90_tap_report.sh"
-		family_marker = output_root / "tests" / "10_family_marker.sh"
-		assert shared_canary.exists(), f"missing rendered file: {shared_canary}"
-		assert shared_tap.exists(), f"missing rendered file: {shared_tap}"
-		assert family_marker.exists(), f"missing rendered file: {family_marker}"
+		expected_files = [
+			"Dockerfile.app",
+			"_lib/tap_helpers.sh",
+			"docker-compose.test.yml",
+			"tests/00_canary.sh",
+			"tests/10_family_marker.sh",
+			"tests/10_http_smoke.sh",
+			"tests/20_import_audit.sh",
+			"tests/30_graceful_shutdown.sh",
+			"tests/90_tap_report.sh",
+			"tests/_lib/graceful_shutdown.py",
+			"tests/_lib/http_smoke.py",
+			"tests/_lib/import_audit.py",
+		]
+		files, _ = _snapshot_directory(output_root)
+		assert files == expected_files
 
-		canary_text = shared_canary.read_text(encoding="utf-8")
+		canary_text = (output_root / "tests" / "00_canary.sh").read_text(encoding="utf-8")
 		assert "CANARY_TOOLS=(" in canary_text
 		assert "'curl'" in canary_text
 		assert "'jq'" in canary_text
 		assert "'python3'" in canary_text
-		assert 'for tool in "${CANARY_TOOLS[@]}"; do' in canary_text
-		family_text = family_marker.read_text(encoding="utf-8")
+		assert "tap_not_ok" in canary_text
+
+		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+		assert compose_text.count("init: true") == 2
+		assert "/bin/sh -c" in compose_text
+		assert "TEST_HOST_HEADER" in compose_text
+
+		http_smoke_text = (output_root / "tests" / "10_http_smoke.sh").read_text(encoding="utf-8")
+		assert "--host-header" in http_smoke_text
+		assert "TEST_HOST_HEADER" in http_smoke_text
+
+		family_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "python-mongo-flask family for demo-project" in family_text
 
 
@@ -250,6 +270,7 @@ def test_renderer_family_dispatch_routing() -> None:
 
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "node-hardhat-solidity family for demo-project" in family_marker_text
+		assert not (output_root / "tests" / "10_http_smoke.sh").exists()
 
 
 def test_renderer_deterministic_output_for_same_manifest() -> None:
