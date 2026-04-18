@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 2\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: tests/e2e_smoke_canary.txt\n      Problem: Analysis: The implementation satisfies all constraints from issue #1284. The file content consists of exactly the three required lines with the correct `run_id` (24596262819). The change is minimal, atomic, and contains no extra whitespace or content.; No issues found.; HARDENING_SUGGESTIONS:\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: tests/e2e_smoke_canary.txt\n      Problem: Lines: 1-3; The current content is:; status: ok; run_id: 24596262819; updated-by: ai-pipeline; **Verification against issue requirements:**; 1. \u2713 File content exactly matches the required three-line format; 2. \u2713 run_id is correctly set to 24596262819; 3. \u2713 No extra content, comments, or formatting issues; 4. \u2713 Only the specified file was modified (per pr_changed_files.txt and last_run_changed_files.txt); 5. \u2713 Change is atomic and minimal (only the run_id value updated from 24584887481); 6. \u2713 The implementation adheres to all constraints in the original issue; **Cross-pollination confirmation:** Two prior reviewer models independently verified this implementation with no issues found.; **Runtime behavior:** The file is a static canary file used for smoke testing. The change correctly updates the run identifier as requested. No execution logic is involved.; **Conclusion:** The PR successfully implements the fully-specified task with the minimal required change. No correctness, security, or compatibility concerns exist.; ISSUES FOUND: 0; HARDENING_SUGGESTIONS: none\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\ntests/e2e_smoke_canary.txt",
+  "fingerprint": "7d11b1860f9d2c7e87c87e202f6b04a99f8aa81c8a4b2620fccea4d5dba553d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1285,
+    "run_id": "24596345577",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24596345577",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418035901_f99aa11534",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1285,
+    "run_id": "24596345577"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T03:59:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
