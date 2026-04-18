@@ -887,6 +887,9 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ORCHESTRATOR_HOT_FILE_WINDOW_DAYS` | `90` | Lookback window for the auto-learned hot-file set computed at plan time from `ai-memory/orchestrator/merge_conflicts.jsonl`. A path is promoted to "hot" when it appears in at least `ORCHESTRATOR_HOT_FILE_MIN_EVENTS` distinct conflict events across at least `ORCHESTRATOR_HOT_FILE_MIN_PROJECTS` distinct orchestrator projects within this window. Older events drop out automatically — no persistent "demotion" state is kept. |
 | `ORCHESTRATOR_HOT_FILE_MIN_EVENTS` | `3` | Minimum distinct conflict events required to promote a path to the learned hot-file set. Lower for faster reaction, higher for less noise. |
 | `ORCHESTRATOR_HOT_FILE_MIN_PROJECTS` | `2` | Minimum distinct orchestrator projects required to promote a path. Prevents a single runaway project from skewing the set. |
+| `REVIEW_LEDGER_ENABLED` | `1` | Enable (`1`) or disable (`0`) review-issue ledger lifecycle tracking in `scripts/review_issue_ledger.sh`; when disabled, `ledger_status.txt` is emitted empty and no ledger file is updated. |
+| `REVIEW_LEDGER_PERSIST_LIMIT` | `2` | Persist-count threshold for transitioning a still-present issue to `accepted-residual` after increment (>= threshold). |
+| `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger.txt` | Runtime ledger file path used by `scripts/review_issue_ledger.sh`; malformed prior ledgers fail-open with `ledger_reset=1` and state reset semantics. |
 
 ## Semantic Cache (Clarification Only)
 

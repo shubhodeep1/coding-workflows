@@ -14,3 +14,5 @@ validation/*
 validation/tests/*
 !validation/tests/*.sh
 validation/
+# Review pipeline runtime artifacts
+.ai/review_issue_ledger.txt
