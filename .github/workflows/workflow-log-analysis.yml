@@ -350,9 +350,6 @@ jobs:
             local failure_summary="$5"
 
             emit_log_analysis_phase_failure "${failed_step_name}" "${failure_mode}" "${attempt_count}" "${failure_summary}"
-            if [ -z "${TRACKING_ISSUE_NUM}" ]; then
-              echo "::warning::Workflow log analysis failure occurred without tracking issue context; skipping ai:log-analysis-failed label and marker comment."
-            fi
 
             if [ "${codex_exit}" -eq 0 ]; then
               exit 1
