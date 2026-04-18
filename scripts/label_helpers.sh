@@ -51,6 +51,8 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:orchestrator-tracking"]="a2eeef"
 	["ai:orchestrator-managed"]="bfdadc"
 	["ai:orchestrator-validate-required"]="c5def5"
+	["ai:comprehensive-test-pending"]="1d76db"
+	["ai:needs-prompt-review"]="fbca04"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -85,6 +87,8 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:orchestrator-tracking"]="Orchestrator project tracking issue"
 	["ai:orchestrator-managed"]="Issue is managed by the AI orchestrator"
 	["ai:orchestrator-validate-required"]="Orchestrator issue requires validate phase before completion"
+	["ai:comprehensive-test-pending"]="Pending comprehensive release callback dispatch."
+	["ai:needs-prompt-review"]="Validation prompt self-heal PR awaiting manual review"
 )
 
 # ensure_label_exists <label_name> [repo]
@@ -128,5 +132,5 @@ ensure_label_exists() {
 	fi
 
 	echo "::warning::ensure_label_exists: failed to create label '${label_name}' in repo '${repo}': ${_label_err}" >&2
-	return 0
+	return 1
 }

@@ -124,6 +124,14 @@
     "ai:orchestrator-validate-required": {
       "color": "c5def5",
       "description": "Orchestrator issue requires validate phase before completion"
+    },
+    "ai:comprehensive-test-pending": {
+      "color": "1d76db",
+      "description": "Pending comprehensive release callback dispatch."
+    },
+    "ai:needs-prompt-review": {
+      "color": "fbca04",
+      "description": "Validation prompt self-heal PR awaiting manual review"
     }
   },
   "phase_groups": [
