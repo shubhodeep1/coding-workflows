@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- HEAD: `a8c916a265fa25d8366c7dcfbbf2f69025d5f39e`\n- Checked-out branch: `orchestrator/project-1303`\n- Integration branch metadata: `orchestrator/project-1303`\n- Integration branch mismatch: `false`\n\nClarification mapping\n- No clarification QIDs were asked in this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpretable as: proceed with the issue requirements exactly as written, with no extra scope.\n\nFactual conflict detected\n- `tests/test_orchestrate_lib.py::test_label_contract_matches_helper_catalog_and_phase_priority` currently assumes all `phase_groups[*].members` must appear in `orchestrate_lib.PHASE_LABELS_PRIORITY`.\n- Adding a new `failure_phase` group will violate that assumption unless either:\n  1) the test is narrowed to `issue_phase`, or\n  2) `PHASE_LABELS_PRIORITY` is expanded with failure labels (behavioral side-effect risk).\n- Recommended for this foundation issue: adjust the test assertion scope (option 1) to avoid unintended runtime phase-selection changes.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/ai/label_contract.v1.json`\n- `scripts/label_helpers.sh`\n- `scripts/ai_labels.py`\n- `tests/test_ai_labels.py` (new)\n- `tests/test_orchestrate_lib.py` (small guard fix for the conflict above, if needed to keep CI green)\n\n2. Functions/modules to implement\n- `.github/ai/label_contract.v1.json`\n  - Add the 9 new labels:\n    - `ai:clarify-failed`\n    - `ai:clarify-respond-failed`\n    - `ai:plan-failed`\n    - `ai:implement-diagnose-failed`\n    - `ai:review-autofix-failed`\n    - `ai:validate-failed`\n    - `ai:integration-judge-failed`\n    - `ai:log-analysis-failed`\n    - `ai:memory-maintenance-failed`\n  - Add `phase_groups` entry `{ \"name\": \"failure_phase\", ... }` with mutually-exclusive members for those labels.\n  - Keep all existing labels unchanged.\n- `scripts/label_helpers.sh`\n  - Add each new label to `_AI_LABEL_COLORS`.\n  - Add each new label to `_AI_LABEL_DESCS`.\n  - Ensure helper can create all new labels without fallback defaults.\n- `scripts/ai_labels.py`\n  - Confirm/update `load_label_contract` validation so multi-group contracts remain valid and deterministic.\n  - Confirm/update `cmd_repair_labels` logic so exclusivity is enforced independently per group (`issue_phase` and `failure_phase`).\n  - Keep existing label semantics unchanged.\n- `tests/test_ai_labels.py` (new)\n  - Add schema/contract expectations tests.\n  - Add `failure_phase` exclusivity repair tests.\n  - Add parity tests between contract labels and helper catalogs (colors + descriptions).\n\n3. Data structures affected\n- Label contract JSON:\n  - `labels` map grows by 9 entries.\n  - `phase_groups` grows with `failure_phase`.\n- Helper catalogs:\n  - `_AI_LABEL_COLORS` map grows by 9 keys.\n  - `_AI_LABEL_DESCS` map grows by 9 keys.\n- Repair behavior output (`add`/`remove` sets) now covers a second exclusivity group when failure labels are present.\n\n4. API/interface changes\n- No CLI surface changes (`contract-validate`, `resolve-phase`, `repair-labels` commands remain the same).\n- Behavioral extension:\n  - `repair-labels` enforces exclusivity for both `issue_phase` and `failure_phase`.\n  - `contract-validate` succeeds with the expanded contract.\n- No renames/removals of existing labels or semantics.\n\n5. Risks and edge cases\n- Member order in `failure_phase.members` controls tie-break when multiple failure labels are present (current logic keeps last-present member by group order).\n- If any new label is missing from helper catalogs, `ensure_label_exists` would fall back to generic defaults, violating acceptance criteria.\n- If `failure_phase` mistakenly includes a fallback, repair could add a failure label when none is present.\n- Existing `PHASE_LABELS_PRIORITY` coupling test may fail unless explicitly handled (conflict noted above).\n\n6. Testing considerations\n- Unit tests to add in `tests/test_ai_labels.py`:\n  - Contract includes required new labels and `failure_phase`.\n  - `repair-labels` removes extra failure labels and keeps one deterministically.\n  - `repair-labels` does not auto-add a failure label when none exists.\n  - Contract/helper parity for both color and description catalogs.\n- Existing tests to run (targeted):\n  - `tests/test_orchestrate_lib.py` (especially label contract guard)\n  - `tests/test_orchestrate_poll_process.py::test_contract_helper_guard_in_poller_tests`\n- Command-level validation:\n  - `python3 scripts/ai_labels.py contract-validate --contract-file .github/ai/label_contract.v1.json`\n  - At least one `repair-labels` invocation with multiple failure labels to verify exclusivity output.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "23d3bd2a1cb005954ceafbf504daf8190e80d5c63375ce45ff1a5a2897b210b3",
+  "lineage": {
+    "issue_number": 1304,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24599716240",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24599716240",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1304"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418072742_7bc97f6a1a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1304,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24599716240"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1304",
+  "timestamps": {
+    "created_at": "2026-04-18T07:27:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
