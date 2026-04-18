@@ -17,6 +17,9 @@ env:
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
   MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '1' }}
+  MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
+  CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
+  ENABLE_PHASE_FAILURE_COMMENTS: ${{ vars.ENABLE_PHASE_FAILURE_COMMENTS || 'true' }}
 
 jobs:
   implement:
@@ -103,6 +106,7 @@ jobs:
             echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
             echo "CHANGED_FILES_FILE=${RUNTIME_DIR}/changed_files.txt"
             echo "PR_METADATA_FILE=${RUNTIME_DIR}/pr_metadata.json"
+            echo "PHASE_FAILURE_FILE=${RUNTIME_DIR}/ai_phase_failure.json"
             echo "TARGET_BRANCH=ai/issue-${ISSUE_NUMBER}"
           } >> "$GITHUB_ENV"
 
