@@ -974,6 +974,11 @@ run_template_validation_harness_renderer()
 	if [ ! -d "${templates_root}" ]; then
 		return 13
 	fi
+	if [ ! -f "${templates_root}/_shared/docker-compose.test.yml.j2" ] \
+		|| [ ! -f "${templates_root}/_shared/validate.env.j2" ] \
+		|| [ ! -f "${templates_root}/_shared/tests/00_canary.sh.j2" ]; then
+		return 13
+	fi
 
 	if ! renderer_summary="$(python3 "${renderer_script}" \
 		--manifest "${manifest_path}" \
@@ -1801,7 +1806,7 @@ if [ "${HARNESS_MODE}" = "template_generate" ]; then
 			exit 1
 			;;
 		13)
-			local_failure_summary="Template mode requires workflow-templates/validation-harness/ but it is missing. Ensure workflow bootstrap fetched template assets."
+			local_failure_summary="Template mode requires workflow-templates/validation-harness/_shared/{docker-compose.test.yml.j2,validate.env.j2,tests/00_canary.sh.j2}; one or more required templates are missing. Ensure workflow bootstrap fetched template assets."
 			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
 			set_tracking_phase_label "ai:validation-failed"
 			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
