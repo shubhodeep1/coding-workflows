@@ -236,28 +236,28 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 		}
 		if (match(lower, /line[[:space:]#:=-]*[0-9]+/)) {
 			token = substr(lower, RSTART, RLENGTH)
-			gsub(/[^0-9]/, "", token)
+			if (match(token, /[0-9]+/)) { token = substr(token, RSTART, RLENGTH) }
 			if (token != "") {
 				return token + 0
 			}
 		}
 		if (match(lower, /(^|[^[:alnum:]_])l[0-9]+([^[:alnum:]_]|$)/)) {
 			token = substr(lower, RSTART, RLENGTH)
-			gsub(/[^0-9]/, "", token)
+			if (match(token, /[0-9]+/)) { token = substr(token, RSTART, RLENGTH) }
 			if (token != "") {
 				return token + 0
 			}
 		}
 		if (match(lower, /:[[:space:]]*[0-9]+/)) {
 			token = substr(lower, RSTART, RLENGTH)
-			gsub(/[^0-9]/, "", token)
+			if (match(token, /[0-9]+/)) { token = substr(token, RSTART, RLENGTH) }
 			if (token != "") {
 				return token + 0
 			}
 		}
 		if (match(lower, /^[[:space:]]*[0-9]+([[:space:]]*-[[:space:]]*[0-9]+)?[[:space:]]*$/)) {
 			token = substr(lower, RSTART, RLENGTH)
-			gsub(/[^0-9]/, "", token)
+			if (match(token, /[0-9]+/)) { token = substr(token, RSTART, RLENGTH) }
 			if (token != "") {
 				return token + 0
 			}
@@ -266,7 +266,7 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 	}
 	function append_issue_text(line, clean) {
 		clean = line
-		if (index(clean, ":") > 0) {
+		if (is_field_label(clean) && index(clean, ":") > 0) {
 			clean = substr(clean, index(clean, ":") + 1)
 		}
 		gsub(/\t/, " ", clean)
@@ -337,7 +337,7 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 		if (lowered == "") {
 			return 0
 		}
-		if (lowered ~ /(^|[^0-9])5([[:space:]]*\/[[:space:]]*5)?([^0-9]|$)/) {
+		if (lowered ~ /(^|[^0-9.])5([[:space:]]*\/[[:space:]]*5)?([^0-9]|$)/) {
 			return 1
 		}
 		if (lowered ~ /(^|[^[:alpha:]])max[[:space:]]*confidence([^[:alpha:]]|$)/) {
@@ -360,7 +360,15 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 		}
 		return csv "," tag
 	}
+	function keyword_matches(text, keyword, pattern) {
+		if (keyword ~ /^[[:alnum:]_]+$/) {
+			pattern = "(^|[^[:alnum:]_])" keyword "([^[:alnum:]_]|$)"
+			return (text ~ pattern)
+		}
+		return (index(text, keyword) > 0)
+	}
 	BEGIN {
+		record_count = 0; tagged_record_count = 0; multi_reviewer_hit_count = 0; keyword_hit_count = 0; high_confidence_hit_count = 0;
 		OFS = "\t"
 	}
 	NR == FNR {
@@ -495,7 +503,7 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 		for (i = 1; i <= record_count; i++) {
 			has_keyword = 0
 			for (k = 1; k <= keyword_count; k++) {
-				if (index(rec_text[i], keyword_text[k]) > 0) {
+				if (keyword_matches(rec_text[i], keyword_text[k])) {
 					record_keyword[i SUBSEP keyword_cat[k]] = 1
 					has_keyword = 1
 				}
@@ -565,7 +573,7 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 
 mkdir -p "$(dirname "${OUT_FILE}")"
 if [ -s "${raw_rows_file}" ]; then
-	LC_ALL=C sort -t $'\t' -k1,1 -k2,2n -k4,4 -k5,5 "${raw_rows_file}" \
+	LC_ALL=C sort -t '	' -k1,1 -k2,2n -k4,4 -k5,5 "${raw_rows_file}" \
 		| awk -F '\t' 'BEGIN { OFS = "\t" } { print $1 ":" $2, $3, $4, $5 }' > "${OUT_FILE}"
 else
 	: > "${OUT_FILE}"
