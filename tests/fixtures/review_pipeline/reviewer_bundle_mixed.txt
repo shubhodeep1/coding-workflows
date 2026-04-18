@@ -1,0 +1,43 @@
+FILE_PATH: /tmp/review_alpha.txt
+BYTES: 100
+SHA256: alpha
+CONTENT_START
+File: src/service.py
+Line or code reference: line 100
+Problem: SQL injection in query builder.
+Why it fails at runtime: Unsanitised input reaches SQL string.
+ISSUE_CONFIDENCE: 5/5
+CONTENT_END
+
+FILE_PATH: /tmp/review_beta.txt
+BYTES: 100
+SHA256: beta
+CONTENT_START
+File: src/service.py
+Code: src/service.py:103
+Problem: Unsanitised payload allows SQL injection during lookup.
+Why it fails at runtime: Crafted input bypasses escaping.
+ISSUE_CONFIDENCE: 4
+CONTENT_END
+
+FILE_PATH: /tmp/review_gamma.txt
+BYTES: 100
+SHA256: gamma
+CONTENT_START
+File: src/db.py
+Line or code reference: 45
+Problem: This path can trigger E11000 because there is no idempotency key and missing index coverage.
+Why it fails at runtime: Duplicate writes are accepted.
+ISSUE_CONFIDENCE: 3
+CONTENT_END
+
+FILE_PATH: /tmp/review_delta.txt
+BYTES: 100
+SHA256: delta
+CONTENT_START
+File: src/cache.py
+Line or code reference: line 22
+Problem: Retry guard is weak and requests can stall.
+Why it fails at runtime: Queue pressure spikes under load.
+ISSUE_CONFIDENCE: highest confidence
+CONTENT_END
