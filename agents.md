@@ -438,7 +438,7 @@ Operational rules:
 
 ## 20. Autofix Retrigger Dedup
 
-`review_autofix.yml` has two `workflow_dispatch` retrigger steps that fire after a push — the post-commit/merge-resolve retrigger and the editor-changes-lost retrigger. Both used to dispatch unconditionally, which collided with the `pull_request.synchronize` event produced by the same push (both land in `pr-autofix-${PR}` with `cancel-in-progress: true`) and the loser was killed 4–10 s after start, burning runner minutes and any already-spent LLM setup tokens.
+`review_autofix.yml` has two `workflow_dispatch` retrigger steps that fire after a push — the post-commit/merge-resolve retrigger and the editor-changes-lost retrigger. Both used to dispatch unconditionally, which collided with the `pull_request.synchronize` event produced by the same push. With `cancel-in-progress: false` those redundant dispatches can still produce queued runs (and extra API/UI noise), so the retrigger dedup guard now probes for an in-flight peer first and skips dispatch when one already exists.
 
 Contract:
 
