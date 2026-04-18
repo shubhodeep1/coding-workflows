@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- `git rev-parse HEAD`: `56fd255fac8978f66e6a3885eaa21994a777793e`\n- Checked-out branch: `orchestrator/project-1303`\n- Integration branch metadata: `orchestrator/project-1303`\n- Integration mismatch: `false`\n\nClarification answer mapping\n- No `Q<ID>` clarification questions were asked in this issue.\n- Interpreted answer context: `/answer [auto-answered-by-orchestrator]` means proceed with planning.\n\nConflict notes (issue vs current code)\n- `AI_PHASE_FAILURE_V1` is documented but not emitted by `clarify.yml`, `plan.yml`, or `orchestrate_clarify_respond.yml`.\n- `MAX_CODEX_ATTEMPTS` and `CODEX_RETRY_BACKOFF_BASE_SECS` are not currently used in those three workflows (hardcoded retry values are still present).\n- `orchestrate_clarify_respond.yml` has multiple `codex exec` call sites (primary + self-critique + revised pass), so \u201call Codex invocations\u201d is broader than one step.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/clarify.yml`\n- `.github/workflows/plan.yml`\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `tests/test_plan_clarify_blocked_output.py` (extend static workflow-contract assertions)\n- `tests/test_implement_post_codex_recovery.py` (reuse harness pattern) or a new dedicated workflow-retry test file for clarify/plan/respond runtime-step behavior\n- `README.md` and `agents.md` (document new env vars and phase-failure marker behavior)\n- `scripts/label_helpers.sh` only if explicit label catalog parity is required for new failure labels in tests\n\n2. Functions/modules to implement\n- In each workflow, replace hardcoded retry config with env-backed values:\n- `MAX_CODEX_ATTEMPTS` default `3`\n- `CODEX_RETRY_BACKOFF_BASE_SECS` default `10`\n- Treat one attempt as failed when any of these occurs:\n- Codex non-zero RC\n- Codex stdout empty\n- Phase validator/parser rejects output\n- Fold phase validation into the retry loop so validator/parsing failure can trigger next attempt (instead of failing only after loop).\n- Add a terminal-failure handler path per workflow that:\n- Applies phase-specific failure label:\n- clarify: `ai:clarify-failed`\n- plan: `ai:plan-failed`\n- orchestrate clarify respond: `ai:clarify-respond-failed`\n- Emits exactly one machine-readable `AI_PHASE_FAILURE_V1` issue comment when `ENABLE_PHASE_FAILURE_COMMENTS` is true (default true)\n- Includes required `recommended_resume_action`:\n- clarify: `retrigger_pipeline`\n- plan: `retrigger_plan`\n- orchestrate clarify respond: `auto_respond_clarify`\n- For `orchestrate_clarify_respond.yml`, apply the same retry/backoff contract to all `codex exec` invocations that can run (primary, critic, revised pass).\n\n3. Data structures affected\n- New workflow env surface:\n- `MAX_CODEX_ATTEMPTS`\n- `CODEX_RETRY_BACKOFF_BASE_SECS`\n- `ENABLE_PHASE_FAILURE_COMMENTS`\n- New structured marker payload in issue comments (`AI_PHASE_FAILURE_V1`) with stable fields (phase, failure mode, attempts, run id/url, resume action, timestamp).\n- New per-step outputs/env flags to gate downstream steps and prevent partial transitions after terminal failure.\n\n4. API/interface changes\n- GitHub issue label transitions now include phase-failure labels in terminal Codex failure paths.\n- GitHub issue comment interface gains machine-readable marker comments, gated by `ENABLE_PHASE_FAILURE_COMMENTS`.\n- No external API contract change; this is workflow behavior and issue-comment contract change.\n\n5. Risks and edge cases\n- Duplicate marker risk if both terminal handler and generic failure-comment steps run; generic failure steps must be gated to avoid emitting an extra marker.\n- Parse/validator strictness risk: over-strict validation can increase retries/failures; keep validator scoped to truly invalid/unparseable output.\n- `orchestrate_clarify_respond` behavior change risk: critic/revision failures may now become phase-fatal when invoked.\n- Label helper catalog drift risk if new failure labels are used without catalog update and tests enforce contract/helper parity.\n- Must ensure no downstream phase transitions run after terminal failure (no posting normal clarify/plan outputs, no label promotion).\n\n6. Testing considerations\n- Static assertions:\n- Ensure all three workflows read `MAX_CODEX_ATTEMPTS`, `CODEX_RETRY_BACKOFF_BASE_SECS`, and `ENABLE_PHASE_FAILURE_COMMENTS`.\n- Ensure each workflow contains expected phase-failure label and resume action mapping.\n- Ensure marker signature `AI_PHASE_FAILURE_V1` appears exactly in terminal-failure comment template path.\n- Behavioral tests (recommended, using existing extracted-run-block + mock `gh`/mock `codex` pattern from `tests/test_implement_post_codex_recovery.py`):\n- Retry loop honors max attempts on RC failure.\n- Empty output is treated as attempt failure and retried.\n- Parser/validator rejection is treated as attempt failure and retried.\n- Final failure emits one marker comment when enabled.\n- Marker is suppressed when `ENABLE_PHASE_FAILURE_COMMENTS=false`.\n- Terminal failure path does not execute success-path transitions.\n- Run targeted pytest for changed tests and workflow contract tests.\n\nRepresentative pattern to follow\n- Retry/backoff behavior baseline: `.github/workflows/implement.yml` Codex loop.\n- Workflow-step runtime testing harness baseline: `tests/test_implement_post_codex_recovery.py` (step extraction + mocked `gh`/`codex`).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4780e0bdf6d09a71365f93c3910053f1d86c98ec0f5b3321bd730a4711ec51bd",
+  "lineage": {
+    "issue_number": 1314,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24601995584",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24601995584",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1314"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418100125_7eecc808f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1314,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24601995584"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1314",
+  "timestamps": {
+    "created_at": "2026-04-18T10:01:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
