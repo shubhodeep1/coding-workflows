@@ -87,6 +87,49 @@ Classification decision tree (apply before status selection):
   - Failure persists regardless of equivalent assertion style or harness expression
 - When in doubt, prefer `harness_error`. False `harness_error` is cheaper than false `needs_fixes`.
 
+Dependency-manifest / lockfile drift carve-out (applies BEFORE the generic
+"Docker Compose fails to build" rule above):
+
+- If the build/startup failure is a dependency-manager complaint that the
+  project's dependency manifest is out of sync with its committed lockfile —
+  for example any of the following signatures, whether the command runs
+  directly on the runner or inside a Docker build layer:
+    - npm: `EUSAGE` with `package.json and package-lock.json ... are in sync`
+      or `Missing: <pkg> from lock file` or `Invalid: lock file's <pkg>`
+    - yarn: `Your lockfile needs to be updated` / `YN0028`
+    - pnpm: `ERR_PNPM_OUTDATED_LOCKFILE` / `Cannot install with "frozen-lockfile"`
+    - pip-tools / uv: `Failed to solve` / `requirements.txt ... out of sync`
+      / `uv.lock` reported as stale / `No solution found when resolving
+      dependencies` pointing at a locked pin
+    - poetry: `Poetry could not find a solution` with `poetry.lock ... out of date`
+    - Go: `missing go.sum entry` / `go.sum: sum mismatch` / `updates to go.mod
+      needed, disabled by -mod=readonly`
+    - Cargo: `the lock file ... needs to be updated` / `unable to find a matching
+      version ... in the lockfile` (under `--locked`/`--frozen`)
+  then classify as `needs_fixes`, NOT `harness_error`. Emit a single
+  `fix_issues` entry that:
+    - Has `title`: "Regenerate <lockfile> to match <manifest>"
+      (substitute the concrete filenames you observed)
+    - Has `body` that states: the manifest file, the lockfile file, the exact
+      missing/mismatched package(s) quoted from the log, the regeneration
+      command appropriate to the tool (`npm install`, `yarn install`,
+      `pnpm install --no-frozen-lockfile`, `uv lock`, `poetry lock --no-update`,
+      `go mod tidy`, `cargo generate-lockfile`), and a verification step
+      (`npm ci` / `uv sync --frozen` / `go mod verify` / `cargo build --locked`
+      succeeds)
+    - Has `priority`: 1 (blocks every downstream test)
+    - Has `depends_on`: []
+  Rationale: these drifts are caused by the editor adding/bumping a
+  dependency without refreshing the lockfile — they are application-side
+  defects that the implement pipeline can fix by running the regeneration
+  command and committing the updated lockfile. Reporting them as
+  `harness_error` blocks the fix-up loop and requires a human to run
+  `npm install` in the consumer repo.
+
+- This carve-out applies ONLY to lockfile-drift signatures above. Genuine
+  harness defects (wrong Dockerfile path, YAML parse error, missing COPY
+  source, wrong build context) remain `harness_error`.
+
 `depends_on` is optional and should be included only when applicable.
 
 {{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}
