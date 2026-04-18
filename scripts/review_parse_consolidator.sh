@@ -346,10 +346,10 @@ process_block()
 		parser_tags+=("LINE_UNVERIFIED")
 		line_unverified=$((line_unverified + 1))
 		if parse_line_range "${line_spec}"; then
-			echo -e "${file_path}\t${PARSED_LINE_START}\t${PARSED_LINE_END}" >> "${covered_ranges_file}"
+			printf '%s\t%s\t%s\n' "${file_path}" "${PARSED_LINE_START}" "${PARSED_LINE_END}" >> "${covered_ranges_file}"
 		fi
 	else
-		echo -e "${file_path}\t${PARSED_LINE_START}\t${PARSED_LINE_END}" >> "${covered_ranges_file}"
+		printf '%s\t%s\t%s\n' "${file_path}" "${PARSED_LINE_START}" "${PARSED_LINE_END}" >> "${covered_ranges_file}"
 	fi
 
 	if [ -z "${lens}" ]; then
@@ -578,7 +578,7 @@ coverage_ratio="0"
 if [ "${anchors_total}" -gt 0 ]; then
 	coverage_ratio="$(awk -v covered="${anchors_covered}" -v total="${anchors_total}" 'BEGIN { printf "%.3f", covered / total }')"
 fi
-review_log "parsed_blocks=${parsed_blocks} passthrough_blocks=${passthrough_blocks} anchors_total=${anchors_total} anchors_covered=${anchors_covered} coverage_ratio=${coverage_ratio} parse_failed=${parse_failed}"
+review_log "parsed_blocks=${parsed_blocks} passthrough_blocks=${passthrough_blocks} anchors_total=${anchors_total} anchors_covered=${anchors_covered} coverage_ratio=${coverage_ratio} line_unverified=${line_unverified} evidence_unverified=${evidence_unverified} dropped_invalid_file=${dropped_invalid_file} dropped_unknown_reason=${dropped_unknown_reason} parse_failed=${parse_failed}"
 
 rm -rf "${tmp_dir}"
 exit 0
