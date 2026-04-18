@@ -3175,7 +3175,7 @@ jobs:
               while IFS= read -r touched_path; do
                 [ -z "${touched_path}" ] && continue
                 case "${touched_path}" in
-                  node_modules|node_modules/*) continue ;;
+                  node_modules|node_modules/*|*/node_modules|*/node_modules/*) continue ;;
                 esac
                 if [ -e "${touched_path}" ]; then
                   git add -- "${touched_path}" 2>/dev/null || true
