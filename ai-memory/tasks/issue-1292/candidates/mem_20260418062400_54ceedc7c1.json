@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Validation templates rollout: manifest-driven harness rendering, linting, refresh automation, and cutover\",\"issues\":[{\"id\":\"validation-template-scaffold\",\"title\":\"Build deterministic validation template scaffold + manifest renderer core\",\"priority\":1},{\"id\":\"validation-template-runtime-optin\",\"title\":\"Wire template rendering into validation runtime behind VALIDATION_USE_TEMPLATES opt-in\",\"priority\":1},{\"id\":\"validation-family-python-mongo-flask\",\"title\":\"Add python-mongo-flask validation template family\",\"priority\":2},{\"id\":\"validation-family-node-hardhat-solidity\",\"title\":\"Add node-hardhat-solidity validation template family\",\"priority\":2},{\"id\":\"validation-lint-engine\",\"title\":\"Implement validation_lint.py with encoded hard rules + per-rule tests\",\"priority\":2},{\"id\":\"validation-render-self-heal\",\"title\":\"Retarget validation self-heal to render+linter loop (no freehand harness edits)\",\"priority\":1},{\"id\":\"validation-refresh-automation\",\"title\":\"Add zero-human validation-refresh automation for consumer repos\",\"priority\":3},{\"id\":\"validation-nightly-selftest\",\"title\":\"Add nightly cross-fixture validation template self-test coverage\",\"priority\":4},{\"id\":\"validation-template-cutover-docs\",\"title\":\"Cut over to template-first validation by default, remove freehand path, and sync docs\",\"priority\":2}],\"dependency_edges\":[{\"from\":\"validation-template-scaffold\",\"to\":\"validation-template-runtime-optin\"},{\"from\":\"validation-template-scaffold\",\"to\":\"validation-family-python-mongo-flask\"},{\"from\":\"validation-template-scaffold\",\"to\":\"validation-family-node-hardhat-solidity\"},{\"from\":\"validation-family-python-mongo-flask\",\"to\":\"validation-lint-engine\"},{\"from\":\"validation-family-node-hardhat-solidity\",\"to\":\"validation-lint-engine\"},{\"from\":\"validation-template-runtime-optin\",\"to\":\"validation-render-self-heal\"},{\"from\":\"validation-lint-engine\",\"to\":\"validation-render-self-heal\"},{\"from\":\"validation-render-self-heal\",\"to\":\"validation-refresh-automation\"},{\"from\":\"validation-render-self-heal\",\"to\":\"validation-nightly-selftest\"},{\"from\":\"validation-refresh-automation\",\"to\":\"validation-template-cutover-docs\"},{\"from\":\"validation-nightly-selftest\",\"to\":\"validation-template-cutover-docs\"}]}",
+  "fingerprint": "05a45ace7ccce25c8f6b52e151a8e6336cfd5b8805dd342616332f0a9f3d361d",
+  "lineage": {
+    "issue_number": 1292,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24598623557",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24598623557",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260418062400_54ceedc7c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1292,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24598623557"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Validation templates rollout: manifest-driven harness rendering, linting, refresh automation, and cutover' into 9 issues (tracking #1292)",
+  "timestamps": {
+    "created_at": "2026-04-18T06:24:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
