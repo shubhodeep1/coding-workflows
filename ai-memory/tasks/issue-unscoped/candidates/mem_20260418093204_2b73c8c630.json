@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 5\nIssues with multi-reviewer agreement: 1\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: scripts/orchestrate_poll_process.sh (line ~50)\n      Problem: The function extracts the PR number from linked_json but does NOT validate that it is numeric before using it in the log output and returning 0 (guard fires).; Code in question:; ```bash; local pr_num; pr_num=\"$(printf '%s' \"${linked_json}\" | jq -r '.number // empty' 2>/dev/null || echo \"\")\"; FRESH_PUSH_PR_NUM=\"${pr_num}\"; FRESH_PUSH_AGE_SECS=\"${age_secs}\"; return 0; In contrast, the similar function `_check_merged_pr_guard` (lines 49,973-49,975) properly validates:; ```bash; if ! [[ \"${pr_num}\" =~ ^[0-9]+$ ]]; then; return 1; Why it matters at runtime: If `.number` is null/empty in the JSON or jq extraction fails silently, the function would return 0 (guard fires) with potentially empty or invalid `FRESH_PUSH_PR_NUM`. This leads to malformed log output like `pr=` or `pr=invalid`, confusing downstream log analysis and violating the expected log contract. Additionally, this creates inconsistency with `_check_merged_pr_guard` which has proper numeric validation.; ## Other Observations; The rest of the implementation is correct:; - Design properly addresses the race condition between autofix push and workflow materialization; - 30-minute window is reasonable and documented as non-configurable per project decision; - Fail-open behavior correctly implemented for all edge cases; - Zero additional API calls in steady state (reuses batched GraphQL data); - Properly integrated into both orchestrator-managed and standalone stall recovery paths; - Documentation in README.md and agents.md is accurate; No other issues were identified.; ## HARDENING_SUGGESTIONS\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [2] File: scripts/orchestrate_poll_process.sh (line ~5045)\n      Problem: Missing numeric validation for extracted PR number before guard returns 0 (fires); If .number field is null/malformed in JSON or jq extraction fails, pr_num could be empty or non-numeric but function returns 0 (guard fires), leading to malformed log output \"pr=\" or \"pr=invalid\" and inconsistency with _check_merged_pr_guard which validates numeric PR numbers; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: scripts/orchestrate_poll_process.sh\n      Problem: Location: Inside `_check_fresh_push_guard` function, after extracting `pr_num`; Issue: Missing numeric validation for extracted PR number; Suggested minimal fix: Add validation after line extracting pr_num:; ```bash; [[ \"${pr_num}\" =~ ^[0-9]+$ ]] || return 1; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1; SUMMARY: 1 issue found (PR number validation), no changes are needed for the rest.\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\n  [4] File: `scripts/orchestrate_poll_process.sh`\n      Problem: Missing numeric validation for the extracted PR number.; Currently, the code extracts `pr_num` and assigns it to `FRESH_PUSH_PR_NUM` before returning 0. If `.number` is null/empty or `jq` extraction fails, `FRESH_PUSH_PR_NUM` will be empty. This results in malformed log lines (`pr= ` instead of `pr=123`), which violates the log-prefix contract and is inconsistent with `_check_merged_pr_guard`, which correctly validates `[[ \"${pr_num}\" =~ ^[0-9]+$ ]]`.; HARDENING_SUGGESTIONS:\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: `scripts/orchestrate_poll_process.sh`\n      Problem: Location: `_check_fresh_push_guard` function; Issue: Missing numeric validation for PR number.; Suggested minimal fix: Add `[[ \"${pr_num}\" =~ ^[0-9]+$ ]] || return 1` after extracting `pr_num`.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1; Verdict: No critical runtime failures identified; logic is sound and addresses the race condition effectively. One hardening fix for log consistency is recommended.\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\nscripts/orchestrate_poll_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n`scripts/orchestrate_poll_process.sh`",
+  "fingerprint": "905c3c1573938337c9456f0e99ad86a0c46057a47130f6e877a9e450b9aba39f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1312,
+    "run_id": "24601533891",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24601533891",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418093204_2b73c8c630",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1312,
+    "run_id": "24601533891"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-18T09:32:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
