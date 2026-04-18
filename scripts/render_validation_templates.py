@@ -364,7 +364,8 @@ def write_outputs(output_root: Path, rendered_files: list[RenderedFile]) -> list
 				f"Failed creating parent directory for '{target}': {exc}"
 			) from exc
 		try:
-			target.write_text(rendered_file.content, encoding="utf-8")
+			with open(target, "w", encoding="utf-8", newline="") as handle:
+				handle.write(rendered_file.content)
 		except OSError as exc:
 			raise OutputWriteError(f"Failed writing rendered file '{target}': {exc}") from exc
 		written_paths.append(target)
