@@ -465,7 +465,7 @@ ensure_label_exists()
   [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
 
   if printf '%s' "${_label_err}" | grep -Eiq 'already[ _-]*exists|already_exists'; then
-    tg_notify "ensure_label_exists: label already exists, skipping '${label_name}'." "DEBUG"
+    echo "::debug::ensure_label_exists: label already exists, skipping '${label_name}'." >&2
     return 0
   fi
 
