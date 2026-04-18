@@ -2238,16 +2238,21 @@ if [ "${DIAG_STATUS}" = "needs_fixes" ] \
 	&& [ -n "${FAILURE_FINGERPRINT}" ] \
 	&& [ "${VALIDATION_CYCLE}" -ge 3 ] \
 	&& [ -n "${PRIOR_COMMENTS:-}" ]; then
-	PRIOR_FINGERPRINT_HITS="$(printf '%s' "${PRIOR_COMMENTS}" \
-		| grep -cF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle:" 2>/dev/null || true)"
-	PRIOR_FINGERPRINT_HITS="${PRIOR_FINGERPRINT_HITS:-0}"
-	if ! [[ "${PRIOR_FINGERPRINT_HITS}" =~ ^[0-9]+$ ]]; then
-		PRIOR_FINGERPRINT_HITS=0
+	PREV_CYCLE_1="$((VALIDATION_CYCLE - 1))"
+	PREV_CYCLE_2="$((VALIDATION_CYCLE - 2))"
+	HIT_PREV_CYCLE_1=0
+	HIT_PREV_CYCLE_2=0
+	if printf '%s' "${PRIOR_COMMENTS}" | grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_1} -->" 2>/dev/null; then
+		HIT_PREV_CYCLE_1=1
 	fi
+	if printf '%s' "${PRIOR_COMMENTS}" | grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_2} -->" 2>/dev/null; then
+		HIT_PREV_CYCLE_2=1
+	fi
+	PRIOR_FINGERPRINT_HITS="$((HIT_PREV_CYCLE_1 + HIT_PREV_CYCLE_2))"
 	if [ "${PRIOR_FINGERPRINT_HITS}" -ge 2 ]; then
 		ESCALATED_FROM_NEEDS_FIXES=true
 		DIAG_STATUS="harness_error"
-		echo "Cross-cycle escalation: needs_fixes fingerprint ${FAILURE_FINGERPRINT} seen in ${PRIOR_FINGERPRINT_HITS} prior cycle(s); promoting to harness_error (cycle ${VALIDATION_CYCLE})."
+		echo "Cross-cycle escalation: needs_fixes fingerprint ${FAILURE_FINGERPRINT} seen in consecutive prior cycles (${PREV_CYCLE_2}, ${PREV_CYCLE_1}); promoting to harness_error (cycle ${VALIDATION_CYCLE})."
 	fi
 fi
 
