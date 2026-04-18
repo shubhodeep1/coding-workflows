@@ -5,13 +5,30 @@
   "entry_id": "processed_command_1300_4273120886_approved",
   "issue_number": 1300,
   "metadata": {
+    "branch": "ai/issue-1300",
+    "changed_files": [
+      "scripts/review_floor_rules.sh",
+      "tests/fixtures/review_pipeline/floor_keywords_override.txt",
+      "tests/fixtures/review_pipeline/floor_tags_mixed_expected.txt",
+      "tests/fixtures/review_pipeline/reviewer_bundle_long_excerpt.txt",
+      "tests/fixtures/review_pipeline/reviewer_bundle_malformed.txt",
+      "tests/fixtures/review_pipeline/reviewer_bundle_mixed.txt",
+      "tests/fixtures/review_pipeline/reviewer_bundle_override.txt",
+      "tests/fixtures/review_pipeline/reviewer_bundle_tolerance.txt",
+      "tests/test_review_floor_rules.py"
+    ],
+    "issue_number": 1300,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1300",
+    "pr_number": 1308,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1308",
+    "run_attempt": "1",
+    "run_id": "24599785445",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24599785445"
   },
   "run_attempt": 1,
   "run_id": "24599785445",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-18T07:26:28Z",
+  "status": "completed",
+  "timestamp": "2026-04-18T07:43:03Z",
   "workflow": "implement"
 }
