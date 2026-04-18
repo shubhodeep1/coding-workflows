@@ -64,6 +64,14 @@ read_anchor_context()
 	local line_spec="$2"
 	local fallback_current_code="$3"
 	local line_start line_end anchor_line ext range_start range_end
+	if [ -z "${file_path}" ]; then
+		printf '%s\n' ""
+		return
+	fi
+	if [[ "${file_path}" == /* ]] || [[ "${file_path}" == *".."* ]] || [[ ! "${file_path}" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+		printf '%s\n' ""
+		return
+	fi
 	if [[ "${line_spec}" =~ ^([0-9]+)(-([0-9]+))?$ ]]; then
 		line_start="${BASH_REMATCH[1]}"
 		if [ -n "${BASH_REMATCH[3]:-}" ]; then
@@ -672,7 +680,8 @@ awk -F '\t' -v floor_file="${floor_map_file}" -v out_file="${current_with_ids_fi
 		if (severity == "") {
 			severity = "low"
 		}
-		anchor = file ":" lines
+		split(lines, ln_arr, "-")
+		anchor = file ":" trim(ln_arr[1])
 		floor_cat = floor[anchor]
 		if (floor_cat == "") {
 			floor_cat = "none"
