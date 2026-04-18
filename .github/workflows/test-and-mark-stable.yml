@@ -957,7 +957,7 @@ jobs:
           # Remove other ai: phase labels to simulate a clean review-blocked state
           for label in ai:done ai:ready-to-merge ai:implementing ai:merged; do
             gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/labels/${label}" \
-              -X DELETE 2>/dev/null || true
+              -X DELETE >/dev/null 2>&1 || true
           done
 
           # 6b: Create a tracking issue with orchestrator state pointing to this issue
@@ -1036,9 +1036,40 @@ jobs:
             echo "::error::Failed to create temp file for stderr capture (mktemp failed)"
             exit 1
           fi
-          if ! jq -n --arg body "${STATE_COMMENT}" '{"body": $body}' | \
-              gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}/comments" \
-                --method POST --input - >"${POST_OUT}" 2>"${POST_ERR}"; then
+
+          # GitHub has a brief eventual-consistency window between issues.create
+          # and the new issue node being resolvable by id for child writes
+          # (comments). The first POST after create can fail with HTTP 422
+          # "Could not resolve to a node with the global id of '<node_id>'".
+          # Retry on that specific class of 422 with bounded backoff; a 422
+          # for any other reason fails fast.
+          COMMENT_POST_OK=0
+          COMMENT_POST_MAX_ATTEMPTS=5
+          COMMENT_POST_SLEEP=2
+          for attempt in $(seq 1 "${COMMENT_POST_MAX_ATTEMPTS}"); do
+            : >"${POST_OUT}"
+            : >"${POST_ERR}"
+            if jq -n --arg body "${STATE_COMMENT}" '{"body": $body}' | \
+                gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}/comments" \
+                  --method POST --input - >"${POST_OUT}" 2>"${POST_ERR}"; then
+              COMMENT_POST_OK=1
+              break
+            fi
+            # Retry only on the eventual-consistency 422 ("Could not resolve to
+            # a node") — every other failure (auth, validation, 5xx, etc.) is
+            # surfaced immediately so we don't mask real bugs.
+            if grep -q "Could not resolve to a node" "${POST_ERR}" "${POST_OUT}" 2>/dev/null; then
+              if [ "${attempt}" -lt "${COMMENT_POST_MAX_ATTEMPTS}" ]; then
+                echo "  ⏳ Comment POST hit eventual-consistency 422 (attempt ${attempt}/${COMMENT_POST_MAX_ATTEMPTS}) — retrying in ${COMMENT_POST_SLEEP}s"
+                sleep "${COMMENT_POST_SLEEP}"
+                COMMENT_POST_SLEEP=$((COMMENT_POST_SLEEP * 2))
+                continue
+              fi
+            fi
+            break
+          done
+
+          if [ "${COMMENT_POST_OK}" -ne 1 ]; then
             echo "::error::Failed to post orchestrator state comment (repo=${TEST_REPO} tracking_issue=${TRACKING_NUMBER})"
             echo "::group::gh stderr"
             cat "${POST_ERR}" || true
