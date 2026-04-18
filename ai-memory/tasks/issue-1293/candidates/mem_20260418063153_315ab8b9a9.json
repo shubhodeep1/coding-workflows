@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `10207603f6d32a768cf63f234235fedd3d0bc3dd`\n- Checked-out branch: `orchestrator/project-1292`\n- Integration metadata branch: `orchestrator/project-1292`\n- Integration mismatch: `false` (planning can proceed on this ref)\n\nClarification mapping:\n- No `Q1...Qn` clarification items were asked in this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cno additional clarification required; proceed with planning.\u201d\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/render_validation_templates.py` (new)\n- `scripts/templates/slot_manifest.schema.json` (new)\n- `workflow-templates/validation-harness/_shared/*` (new shared scaffold templates for canary/TAP primitives)\n- `tests/test_render_validation_templates.py` (new)\n- `.github/workflows/ci.yml` (likely update so the new script is syntax-checked and the new unit test is executed, if allowed by `files_touched`)\n\n2. Functions/modules to implement\n- In `scripts/render_validation_templates.py`:\n- `build_parser()` and `main()` for CLI entrypoint\n- `load_manifest()` for `.ai/validate.yml` parsing\n- `load_schema()` for `slot_manifest.schema.json`\n- `validate_manifest()` for schema enforcement + actionable errors\n- `resolve_family()` for dispatch routing by manifest `type`\n- `collect_templates()` and `render_templates()` for deterministic template traversal/render\n- `write_outputs()` for deterministic file writes (stable ordering, consistent newlines)\n- Renderer behavior should hard-fail (non-zero) on invalid schema and unknown family type values with explicit error text.\n\n3. Data structures affected\n- New manifest schema contract in `scripts/templates/slot_manifest.schema.json`:\n- Required top-level shape (including required keys such as family/type and slot data)\n- Allowed value types for render slots\n- Explicit constraints used by tests for failure-mode validation\n- In renderer module:\n- Family dispatch registry/map (`type` -> template family handler/path)\n- Deterministic render result structure (e.g., rendered file list sorted lexicographically)\n\n4. API/interface changes\n- New CLI tool:\n- `python3 scripts/render_validation_templates.py` with defaults targeting `.ai/validate.yml` and validation-harness templates\n- Optional path overrides for tests/temp dirs\n- Exit code contract:\n- `0` on success\n- non-zero on manifest/schema/dispatch/render errors\n- No validate runtime pipeline behavior changes in this issue (explicitly preserve current runtime flow).\n\n5. Risks and edge cases\n- Manifest parse failures (malformed YAML) must produce actionable errors.\n- Unknown `type` values must fail early and clearly.\n- Missing required keys or wrong types must be caught by schema validation before render.\n- Determinism risks:\n- non-stable filesystem traversal\n- non-deterministic dict iteration in context rendering\n- platform newline differences\n- Template/manifest mismatch risks:\n- undefined slot references in templates\n- accidental path traversal via manifest-provided paths (must prevent writes outside output root)\n- Dependency availability risk (YAML/schema/template libs) should fail with clear install guidance if missing.\n\n6. Testing considerations\n- Add `tests/test_render_validation_templates.py` covering:\n- Happy path render from valid manifest into temp dir\n- Invalid schema (missing required keys / wrong types) -> non-zero + clear error\n- Unknown family type -> non-zero + clear error\n- Family dispatch routing correctness\n- Deterministic golden output:\n- render same manifest twice to separate temp dirs\n- compare file sets and file bytes/hashes for exact equality\n- Test both library-level helpers and CLI `main()` path.\n- If allowed by `files_touched`, wire CI to run this test and include `py_compile` for new script.\n\nConflict detection (issue vs codebase)\n- `docs/validation-templates-plan.md` milestone text includes an M1 runtime toggle in `validate_driver.sh`, but this issue explicitly says \u201cdo not modify validate pipeline runtime behavior.\u201d Implementation should defer any runtime wiring and only deliver renderer/schema/shared scaffold/tests in this issue.\n- `workflow-templates/validation-harness/` is currently absent; this issue\u2019s scaffold creation is net-new and should not assume existing family template trees beyond what is added here.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6a43105c979dcfc59dc67464be819fb4e2b624175e0ac4f21118a701877fe0d8",
+  "lineage": {
+    "issue_number": 1293,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24598793378",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24598793378",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1293"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418063153_315ab8b9a9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1293,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24598793378"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1293",
+  "timestamps": {
+    "created_at": "2026-04-18T06:31:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
