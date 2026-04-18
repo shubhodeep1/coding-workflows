@@ -148,14 +148,11 @@ def _stable_value(value: Any) -> Any:
 def _json_pointer_from_path(path_parts: list[Any]) -> str:
 	if not path_parts:
 		return "$"
-	pointer = "$"
+	segments: list[str] = []
 	for segment in path_parts:
-		if isinstance(segment, int):
-			pointer += f"[{segment}]"
-		else:
-			escaped = str(segment).replace("~", "~0").replace("/", "~1")
-			pointer += f".{escaped}"
-	return pointer
+		escaped = str(segment).replace("~", "~0").replace("/", "~1")
+		segments.append(escaped)
+	return "/" + "/".join(segments)
 
 
 def load_manifest(manifest_path: Path) -> dict[str, Any]:
