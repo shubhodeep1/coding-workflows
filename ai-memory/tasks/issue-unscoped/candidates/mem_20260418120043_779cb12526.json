@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 8\nIssues with multi-reviewer agreement: 7\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: tests/test_ai_label_precreation_contract.py (line ~21)\n      Problem: The regex patterns use `['\\\"]` which matches exactly ONE quote character, but does not make quotes optional. Patterns like `re.compile(r\"gh\\s+label\\s+create\\s+['\\\"]ai:orchestrator-tracking['\\\"]\")` will NOT match unquoted usage such as `gh label create ai:orchestrator-tracking`.; If a developer introduces direct label creation without quotes (which is valid shell syntax), the contract test fails to detect the forbidden pattern, allowing direct `gh label create` calls to bypass CI detection. This undermines the contract enforcement that requires using `ensure_label_exists` helper.; **Issue 2: must_contain patterns still use literal strings**\n      Confidence: avg 4.0\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5\n\n  [2] File: tests/test_ai_label_precreation_contract.py (line ~33)\n      Problem: The regex `re.compile(r'gh\\s+api\\s+\"repos/\\$\\{GITHUB_REPOSITORY\\}/labels\"\\s+--method\\s+POST')` requires double quotes around the API path. Using single quotes would bypass detection.; A developer could use `gh api 'repos/${GITHUB_REPOSITORY}/labels' --method POST` to bypass the forbidden pattern check.\n      Confidence: avg 3.5\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5\n\n  [3] File: tests/test_ai_label_precreation_contract.py (line ~54)\n      Problem: The regex requires specific quote styles: single quotes around `%s` and double quotes around `${FINAL_LABEL}`. Using different quote styles (both single or both double) bypasses detection.; Alternative quote usage like `'%s'` with `'${FINAL_LABEL}'` or `\"%s\"` with `\"${FINAL_LABEL}\"` would not be caught by the pattern.\n      Confidence: avg 3.5\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5\n\n  [4] File: tests/test_ai_label_precreation_contract.py (line ~15)\n      Problem: The must_contain patterns use literal string matching (e.g., `'ensure_label_exists \"ai:orchestrator-tracking\" \"${{ github.repository }}\"'`). These are brittle to whitespace changes, quote style changes, or variable spacing.; Minor formatting changes in workflow files could cause false test failures, increasing maintenance burden and reducing test reliability.; **HARDENING_SUGGESTIONS:**\n      Confidence: avg 2.7\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5\n\n  [5] File: tests/test_ai_label_precreation_contract.py\n      Problem: Location: Lines 21-24, 44 (must_not_contain patterns for gh label create); Issue: Regex patterns don't account for unquoted label names; Suggested minimal fix: Change `['\\\"]` to `['\\\"]?` to make quotes optional, e.g.:; ```python; re.compile(r\"gh\\s+label\\s+create\\s+['\\\"]?ai:orchestrator-tracking['\\\"]?\"),; Estimated lines changed: 5; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5\n\n  [6] File: tests/test_ai_label_precreation_contract.py\n      Problem: Location: Line 33 (must_not_contain pattern for comprehensive-test-and-release.yml); Issue: Regex requires specific quote style for API path; Suggested minimal fix: Make quotes flexible: `re.compile(r'gh\\s+api\\s+[\\'\"]repos/\\$\\{GITHUB_REPOSITORY\\}/labels[\\'\"]\\s+--method\\s+POST')`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5\n\n  [7] File: tests/test_ai_label_precreation_contract.py\n      Problem: Location: Lines 15-18, 29-30, 39-40, 50-51 (must_contain literal strings); Issue: Brittle literal string matching; Suggested minimal fix: Convert to regex patterns with flexible whitespace, e.g.:; ```python; re.compile(r'ensure_label_exists\\s+[\\'\"]ai:orchestrator-tracking[\\'\"]\\s+[\\'\"]\\$\\{\\{\\s*github\\.repository\\s*\\}\\}[\\'\"]'),; Estimated lines changed: 8-10; HARDENING_RISK_SCORE: 1; **SYSTEM BEHAVIOR ANALYSIS:**; The test contract aims to enforce that workflows use the shared `ensure_label_exists` helper instead of direct `gh label create` or `gh api POST repos/.../labels` calls for specific ai:* labels. This ensures labels exist before mutation, preventing runtime failures. The current implementation converts some patterns to regex but has coverage gaps that could allow violations to slip through CI.; **RUNTIME BEHAVIOR VERIFICATION:**; Test passes with current workflow files (`PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_label_precreation_contract.py` returns PASS). The modified regex patterns in the last run correctly match the existing workflow content. No runtime syntax errors in test or workflow files.; **CROSS MODULE ANALYSIS:**; `ensure_label_exists` function in `scripts/label_helpers.sh` is called by the workflows in the contract. It has fail-open error handling (returns 0 with warning on non-\"already exists\" errors). Workflows don't check return value, assuming best-effort label creation. The test contract coverage gaps don't affect runtime behavior of existing code but reduce the effectiveness of CI enforcement.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [8] File: tests/test_ai_label_precreation_contract.py\n      Problem: Location: Line 54 (must_not_contain pattern for issue_pr_status.yml); Issue: Fixed quote requirements in printf pattern; Suggested minimal fix: Make quotes flexible: `re.compile(r'repos/\\$\\{REPOSITORY\\}/labels/\\$\\(printf\\s+[\\'\"]%s[\\'\"]\\s+[\\'\"]\\$\\{FINAL_LABEL\\}[\\'\"]')`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\ntests/test_ai_label_precreation_contract.py\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "a4d580bc26b9cc2efba24fd7bdec91d521b7897828383fa703691de39d70f60b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1319,
+    "run_id": "24603731893",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24603731893",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418120043_779cb12526",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1319,
+    "run_id": "24603731893"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-18T12:00:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
