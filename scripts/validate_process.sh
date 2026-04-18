@@ -1223,6 +1223,82 @@ PY2
 		fi
 	done
 
+	# Preflight: app-container CANARY_TOOLS scope check.
+	#
+	# mode-validate-generate.txt hard rule: service-side CLIs (mongosh, mongo,
+	# psql, redis-cli, mysql, mysqladmin, kafkacat, kcat) must NOT appear in
+	# the app container's CANARY_TOOLS loop unless the app image explicitly
+	# installs that exact binary. Canonical false-positive symptom:
+	# `not ok N - mongosh is NOT available in app` on a python:*-slim-based
+	# image whose app never invokes mongosh (Mongo reachability is already
+	# covered by a service-side assertion that runs inside the mongo
+	# container). The generator prompt already forbids this at lines 491-492,
+	# but the LLM has been observed to violate it; mechanical enforcement
+	# here routes the violation through the preflight self-heal path so the
+	# regenerate/self-heal loop can intercept before a validation cycle
+	# burns. See docs/validation-improvements.md for the motivating run.
+	if [ -f validation/tests/00_canary.sh ]; then
+		local _canary_tools_line
+		_canary_tools_line="$(grep -E '^[[:space:]]*CANARY_TOOLS=' validation/tests/00_canary.sh | head -n 1 || true)"
+		if [ -n "${_canary_tools_line}" ]; then
+			local _canary_tools_raw
+			# Strip the default-value wrapper from any of these shapes:
+			#   CANARY_TOOLS="${CANARY_TOOLS:-curl jq python3 mongosh}"
+			#   CANARY_TOOLS='${CANARY_TOOLS:-curl jq python3}'
+			#   CANARY_TOOLS="curl jq python3 mongosh"
+			#   CANARY_TOOLS=curl jq python3         (unquoted — sol3 bug; still scannable)
+			_canary_tools_raw="$(printf '%s\n' "${_canary_tools_line}" \
+				| sed -E 's/^[[:space:]]*CANARY_TOOLS=//' \
+				| sed -E 's/[[:space:]]*#.*$//' \
+				| sed -E 's/^"\$\{CANARY_TOOLS:-//; s/\}"[[:space:]]*$//' \
+				| sed -E "s/^'\\\$\\{CANARY_TOOLS:-//; s/\\}'[[:space:]]*$//" \
+				| sed -E 's/^\$\{CANARY_TOOLS:-//; s/\}[[:space:]]*$//' \
+				| sed -E 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
+			local _denylist="mongosh mongo psql redis-cli mysql mysqladmin kafkacat kcat"
+			local _tool _tool_pattern _offenders=""
+			set -f
+			for _tool in ${_canary_tools_raw}; do
+				case " ${_denylist} " in
+					*" ${_tool} "*)
+					case "${_tool}" in
+						psql) _tool_pattern='psql|postgresql-client' ;;
+						redis-cli) _tool_pattern='redis-cli|redis-tools' ;;
+						mysql|mysqladmin) _tool_pattern="${_tool}|mysql-client|default-mysql-client|mariadb-client" ;;
+						kcat|kafkacat) _tool_pattern='kcat|kafkacat' ;;
+						*) _tool_pattern="${_tool}" ;;
+					esac
+						# Tool is service-side. Accept it only if the app
+						# image explicitly installs it (apt/pip/custom RUN).
+						# The token-boundary regex avoids matching the tool
+						# name inside an unrelated identifier.
+						if [ -f validation/Dockerfile.app ] && \
+							grep -Ev '^[[:space:]]*#' validation/Dockerfile.app \
+							| sed -E 's/[[:space:]]+#.*$//' \
+							| sed -E ':a;N;$!ba;s/\\[[:space:]]*\n[[:space:]]*/ /g' \
+							| grep -qE "(^|[^[:alnum:]_])(${_tool_pattern})([^[:alnum:]_]|$)"; then
+							: # installed; scope satisfied
+						else
+							_offenders="${_offenders:+${_offenders} }${_tool}"
+						fi
+						;;
+				esac
+			done
+			set +f
+			if [ -n "${_offenders}" ]; then
+				{
+					echo "validation/tests/00_canary.sh CANARY_TOOLS references service-side CLI(s) not installed in validation/Dockerfile.app: ${_offenders}"
+					echo "mode-validate-generate.txt hard rule: do NOT include service-side CLIs (mongosh, mongo, psql, redis-cli, mysql, mysqladmin, kafkacat, kcat) in the app-container CANARY_TOOLS unless the app image explicitly installs that exact binary."
+					echo "Fix options (choose one per offending tool):"
+					echo "  1) Remove the tool from CANARY_TOOLS in 00_canary.sh. For DB reachability, probe from the service container (docker compose exec -T <service> <cli> ...) or use a native client inside the app (python3 + pymongo, psycopg2, redis-py, etc.)."
+					echo "  2) Install the tool in validation/Dockerfile.app via apt (plus any required repo/GPG plumbing, e.g. MongoDB official apt repo for mongosh) and leave CANARY_TOOLS unchanged."
+				} >> "${PRE_FLIGHT_LOG_FILE}"
+				PRE_FLIGHT_STATUS="fail"
+				_emit_preflight_tail "CANARY_TOOLS scope violation: service-side CLI(s) referenced in app canary but not installed in app image: ${_offenders}"
+				return 1
+			fi
+		fi
+	fi
+
 	PRE_FLIGHT_STATUS="pass"
 	return 0
 }
