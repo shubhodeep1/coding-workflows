@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 5\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/orchestrate_poll_process.sh\n      Problem: No runtime correctness issues identified. Implementation properly handles guard ordering (merged-PR before fresh-push), fails open on errors, and maintains zero-extra-API-call contract.; Correctly prevents premature stall recovery when a linked PR was recently pushed (within 30 minutes), resolving the race condition between autofix push and pull_request.synchronize workflow materialization.; **Hardening suggestions from pass 1 reviewers** (advisory, not blocking):; - Date parsing could use `jq fromdateiso8601` for better portability (currently uses `date -d` which works in GHA Ubuntu); - Multiple jq calls could be combined for efficiency; - Test coverage for the new guard function is recommended but not required for correctness; The implementation satisfies all safety requirements: correct guard ordering, fail-open behavior, zero extra API calls in steady state, and proper logging for downstream analysis.\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: tests/test_orchestrate_poll_process.py\n      Problem: Location: Missing test coverage for `_check_fresh_push_guard`; Issue: The new guard function `_check_fresh_push_guard` lacks dedicated unit tests. While the implementation is correct, lack of test coverage creates regression risk for future changes to the 30-minute window logic, phase filtering, or date parsing.; Suggested minimal fix: Add test cases following the existing pattern for `_check_merged_pr_guard` that verify:; - Fresh push (< 30 min) in `ai:done`/`ai:ready-to-merge` returns 0 and sets exported variables; - Old push (> 30 min) returns 1; - Non-target phases return 1; - Malformed/missing data fails open (returns 1); Estimated lines changed: 40-60 lines of test code; HARDENING_RISK_SCORE: 2 (low-medium risk for maintainability); ## Conclusion; The PR implementation is **correct and safe to merge**. The fresh-push suppression guard is properly designed with:; - Correct guard ordering (merged-PR before fresh-push); - Appropriate fail-open error handling; - Zero additional API calls; - Stable log contract for downstream analysis; - Complete documentation in README.md and agents.md; The only concern is the advisory test coverage gap, which is a future maintainability issue rather than a blocking correctness problem.\n      Confidence: avg n/a\n      Flagged by: moonshotai_kimi-k2_5\n\n  [3] File: tests/test_orchestrate_poll_process.py\n      Problem: Issue: No dedicated unit tests for `_check_fresh_push_guard`.; Suggested: Add tests covering phase gating, missing/unparseable `headPushedAt`, age threshold, and PR number validation following existing guard test patterns. ~40-60 lines.; Risk: 2 (maintainability); **Overall Assessment:** The PR correctly implements the fresh-push stall recovery guard. All guard logic, data flow, and error handling are correct and consistent with repository conventions. Documentation is complete. No blocking issues found; the PR is safe to merge.\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\n  [4] File: scripts/orchestrate_poll_process.sh, location `_check_fresh_push_guard`\n      Problem: Issue: `date -d \"${pushed_at_iso}\"` is GNU-specific; acceptable on GHA ubuntu-latest but limits portability.; Suggested: Use `date -u -d` for explicit UTC or a jq-based epoch conversion; 1-line change.; Risk: 1\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\n  [5] File: scripts/orchestrate_poll_process.sh, location jq extractions\n      Problem: Issue: The `_std_linked_json` variable is extracted once upfront and reused, which is good; minor redundancy remains in the case-block merged-guard path for cache-miss scenarios but does not affect correctness.; Suggested: No action required; current code is safe.; Risk: 1\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nscripts/orchestrate_poll_process.sh\nscripts/orchestrate_poll_process.sh, location `_check_fresh_push_guard`\nscripts/orchestrate_poll_process.sh, location jq extractions\ntests/test_orchestrate_poll_process.py",
+  "fingerprint": "5503bd580b1c51a0e60d93af076c979e5be398ea4546de2be36bb4e697b9041e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1312,
+    "run_id": "24603255890",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24603255890",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418112137_4d7cf71a21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1312,
+    "run_id": "24603255890"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T11:21:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
