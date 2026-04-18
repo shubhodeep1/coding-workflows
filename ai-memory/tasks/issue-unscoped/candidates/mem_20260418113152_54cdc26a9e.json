@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 2\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: prompts/mode-validate-discover.txt\n      Problem: Location: Line 37 (env_overrides guidance); Issue: Using an empty string `\"\"` as a placeholder value for a required variable might inadvertently satisfy simple \"if not value\" checks in some applications, failing to trigger the intended \"missing variable\" error during validation.; Suggested minimal fix: Recommend using `null` or a descriptive sentinel like `\"<REQUIRED_FERNET_KEY>\"` to explicitly signal a missing value that needs generation.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: prompts/mode-validate-generate.txt\n      Problem: Location: Line 35 (Scan instructions); Issue: The instruction for multi-line checks is slightly ambiguous regarding how far to look for subsequent lines.; Suggested minimal fix: Clarify to \"check the same block or immediate next line for an unconditional raise or custom exception.\"; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1; **FINAL ASSESSMENT**; The changes are correct, follow repository style (including UK spelling conventions), and successfully implement the PR intent. The instructions are compatible with the existing validation workflow and improve the robustness of the AI-generated validation harnesses.; **RESULT: No issues found. The PR is ready for merge.**\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\nprompts/mode-validate-discover.txt\nprompts/mode-validate-generate.txt",
+  "fingerprint": "21b39842af6d8bf01fb302d379eea4bf7d47e2be57921af34063990fb55f34fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1323,
+    "run_id": "24603591489",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24603591489",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418113152_54cdc26a9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1323,
+    "run_id": "24603591489"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T11:31:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
