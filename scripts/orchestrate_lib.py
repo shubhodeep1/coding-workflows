@@ -787,6 +787,15 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:closed",
 	"ai:needs-human",
 	"ai:blocked",
+	"ai:clarify-failed",
+	"ai:clarify-respond-failed",
+	"ai:plan-failed",
+	"ai:implement-diagnose-failed",
+	"ai:review-autofix-failed",
+	"ai:validate-failed",
+	"ai:integration-judge-failed",
+	"ai:log-analysis-failed",
+	"ai:memory-maintenance-failed",
 	"ai:ready-to-merge",
 	"ai:review-blocked",
 	"ai:implementation-failed",
@@ -802,7 +811,21 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:clarification",
 ]
 
-TERMINAL_PHASES: set[str] = {"ai:merged", "ai:closed", "ai:validated", "ai:validation-failed"}
+TERMINAL_PHASES: set[str] = {
+	"ai:merged",
+	"ai:closed",
+	"ai:validated",
+	"ai:validation-failed",
+	"ai:clarify-failed",
+	"ai:clarify-respond-failed",
+	"ai:plan-failed",
+	"ai:implement-diagnose-failed",
+	"ai:review-autofix-failed",
+	"ai:validate-failed",
+	"ai:integration-judge-failed",
+	"ai:log-analysis-failed",
+	"ai:memory-maintenance-failed",
+}
 TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
 
 # Phases already handled by dedicated logic in the poller — stall detector
