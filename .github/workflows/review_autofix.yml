@@ -1689,7 +1689,8 @@ jobs:
             CODEX_TOUCHED_FILE="${RUNTIME_DIR}/codex_touched_autofix.txt"
             : > "${CODEX_TOUCHED_FILE}"
             git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
-            git ls-files --others --exclude-standard >> "${CODEX_TOUCHED_FILE}" || true
+            git diff --cached --diff-filter=A --name-only HEAD >> "${CODEX_TOUCHED_FILE}" 2>/dev/null || true
+            git ls-files --others --exclude-standard -- ':!node_modules' >> "${CODEX_TOUCHED_FILE}" || true
             sort -u -o "${CODEX_TOUCHED_FILE}" "${CODEX_TOUCHED_FILE}"
             touched_count="$(wc -l < "${CODEX_TOUCHED_FILE}" | tr -d '[:space:]')"
             echo "Editor-touched files (${touched_count}):"
