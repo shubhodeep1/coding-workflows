@@ -130,7 +130,7 @@ def test_prior_fingerprint_scan_uses_existing_prior_comments_fetch() -> None:
 	# The PRIOR_COMMENTS variable must be defined before the escalation block
 	# (which relies on it), and the escalation block must read from it.
 	prior_comments_def = text.find('PRIOR_COMMENTS="$(gh_retry gh api')
-	escalation_read = text.find('validation-failure-fingerprint:[[:space:]]*${FAILURE_FINGERPRINT}')
+	escalation_read = text.find('<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle:')
 	assert prior_comments_def != -1, (
 		"expected PRIOR_COMMENTS fetch to exist (validate_process.sh:~1678)"
 	)

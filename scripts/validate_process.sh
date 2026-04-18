@@ -2226,9 +2226,9 @@ PRIOR_FINGERPRINT_HITS=0
 ESCALATED_FROM_NEEDS_FIXES=false
 
 if [ "${DIAG_STATUS}" = "needs_fixes" ]; then
-	FP_FIX_COUNT="$(jq -r '.fix_issues | length' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || echo 0)"
+	FP_FIX_COUNT="$(jq -r 'if (.fix_issues | type) == "array" then (.fix_issues | length) else 0 end' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || echo 0)"
 	if [ "${FP_FIX_COUNT:-0}" -gt 0 ]; then
-		FAILURE_FINGERPRINT="$(jq -r '.fix_issues | sort_by(.title // "") | .[].title // ""' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null \
+		FAILURE_FINGERPRINT="$(jq -r '.fix_issues | sort_by(.title // "") | map(.title // "") | join("\n")' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null \
 			| sha256sum \
 			| cut -c1-16)"
 	fi
@@ -2239,7 +2239,7 @@ if [ "${DIAG_STATUS}" = "needs_fixes" ] \
 	&& [ "${VALIDATION_CYCLE}" -ge 3 ] \
 	&& [ -n "${PRIOR_COMMENTS:-}" ]; then
 	PRIOR_FINGERPRINT_HITS="$(printf '%s' "${PRIOR_COMMENTS}" \
-		| grep -cE "validation-failure-fingerprint:[[:space:]]*${FAILURE_FINGERPRINT}" 2>/dev/null || true)"
+		| grep -cF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle:" 2>/dev/null || true)"
 	PRIOR_FINGERPRINT_HITS="${PRIOR_FINGERPRINT_HITS:-0}"
 	if ! [[ "${PRIOR_FINGERPRINT_HITS}" =~ ^[0-9]+$ ]]; then
 		PRIOR_FINGERPRINT_HITS=0
@@ -2372,9 +2372,9 @@ case "${DIAG_STATUS}" in
       HARNESS_FIXES_FROM_LLM="$(jq -r '.harness_fixes // ""' "${DIAGNOSE_RESULT_FILE}" \
         | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
       if [ -n "${HARNESS_FIXES_FROM_LLM}" ]; then
-        HARNESS_FIXES="Cross-cycle escalation: the same fix-up proposal (fingerprint ${FAILURE_FINGERPRINT}) failed in ${PRIOR_FINGERPRINT_HITS} consecutive prior cycle(s). LLM fallback guidance: ${HARNESS_FIXES_FROM_LLM}"
+        HARNESS_FIXES="Cross-cycle escalation: the same fix-up proposal (fingerprint ${FAILURE_FINGERPRINT}) failed in ${PRIOR_FINGERPRINT_HITS} prior cycle(s). LLM fallback guidance: ${HARNESS_FIXES_FROM_LLM}"
       else
-        HARNESS_FIXES="Cross-cycle escalation: the same fix-up proposal (fingerprint ${FAILURE_FINGERPRINT}) failed in ${PRIOR_FINGERPRINT_HITS} consecutive prior cycle(s). The repeated failure suggests the root cause is in harness-owned files (under \`validation/\`, in workflow wrappers referencing \`shubhodeep1/coding-workflows\`, or in scripts fetched from \`coding-workflows\` at runtime) rather than in consumer-repo application code. A human needs to inspect the diagnosis and determine whether to patch the harness or update the consumer repo manually."
+        HARNESS_FIXES="Cross-cycle escalation: the same fix-up proposal (fingerprint ${FAILURE_FINGERPRINT}) failed in ${PRIOR_FINGERPRINT_HITS} prior cycle(s). The repeated failure suggests the root cause is in harness-owned files (under \`validation/\`, in workflow wrappers referencing \`shubhodeep1/coding-workflows\`, or in scripts fetched from \`coding-workflows\` at runtime) rather than in consumer-repo application code. A human needs to inspect the diagnosis and determine whether to patch the harness or update the consumer repo manually."
       fi
       failure_summary="Validation harness error (cross-cycle escalation): ${HARNESS_FIXES}"
 
