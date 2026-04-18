@@ -1058,7 +1058,7 @@ jobs:
             # Retry only on the eventual-consistency 422 ("Could not resolve to
             # a node") — every other failure (auth, validation, 5xx, etc.) is
             # surfaced immediately so we don't mask real bugs.
-            if grep -q "Could not resolve to a node" "${POST_ERR}" "${POST_OUT}" 2>/dev/null; then
+            if grep -qi "Could not resolve to a node" "${POST_ERR}" "${POST_OUT}" 2>/dev/null; then
               if [ "${attempt}" -lt "${COMMENT_POST_MAX_ATTEMPTS}" ]; then
                 echo "  ⏳ Comment POST hit eventual-consistency 422 (attempt ${attempt}/${COMMENT_POST_MAX_ATTEMPTS}) — retrying in ${COMMENT_POST_SLEEP}s"
                 sleep "${COMMENT_POST_SLEEP}"
@@ -1589,14 +1589,14 @@ jobs:
           if [ -n "${TRACKING_NUMBER}" ]; then
             gh api "repos/${TEST_REPO}/issues/${TRACKING_NUMBER}" \
               -X PATCH -f state=closed -f state_reason=not_planned \
-              2>/dev/null || echo "Warning: could not close tracking issue #${TRACKING_NUMBER}"
+              >/dev/null 2>&1 || echo "Warning: could not close tracking issue #${TRACKING_NUMBER}"
             echo "  Closed tracking issue #${TRACKING_NUMBER}"
           fi
 
           # Delete test branch
           BRANCH="ai/issue-${ISSUE_NUMBER}"
           gh api "repos/${TEST_REPO}/git/refs/heads/${BRANCH}" -X DELETE \
-            2>/dev/null || echo "  Branch ${BRANCH} already deleted or does not exist"
+            >/dev/null 2>&1 || echo "  Branch ${BRANCH} already deleted or does not exist"
           echo "  Deleted branch ${BRANCH}"
 
           echo "Cleanup complete."
