@@ -1,6 +1,6 @@
 # Resilient Codex/OpenAI Failure Handling, Universal Label Auto-Creation, Per-Phase Resume Signals, and Poller Label-Repair Sweep
 
-> Status: **DRAFT — pending Q1–Q6 answers (see §12).**
+> Status: **READY — Q1–Q6 answered 2026-04-18 (see Appendix A).**
 > Owner: orchestrator (implementation will be driven by the AI orchestrator pipeline).
 > Source: resumed from a prior planning session; this document is the canonical plan of record.
 
@@ -58,14 +58,14 @@ Port the attempt/backoff/empty-check pattern used at `.github/workflows/implemen
 | `.github/workflows/plan.yml` | `run_codex` (~L932) | `ai:plan-failed` | `retrigger_plan` |
 | `.github/workflows/implement.yml` | main codex (L1032-1072), diagnose (L2678), repair (L1291), summary (L2188) | keep `ai:implementation-failed`; add `ai:implement-diagnose-failed` | `retrigger_implement` |
 | `.github/workflows/review_autofix.yml` | all `codex exec` invocations | `ai:review-autofix-failed` | `retrigger_review` |
-| `.github/workflows/validate.yml` (+ `internal-validate.yml`) | all `codex exec` invocations | `ai:validate-failed` (distinct from existing `ai:validation-failed` — keep both; **CONFIRM naming in Q1**) | `retrigger_validate` |
+| `.github/workflows/validate.yml` (+ `internal-validate.yml`) | all `codex exec` invocations | `ai:validate-failed` (distinct from existing `ai:validation-failed` — keep both; **decided Q1=A**) | `retrigger_validate` |
 | `scripts/orchestrate_poll_process.sh` integration-conflict judge (~L2293) and post-validation judge | same pattern | `ai:integration-judge-failed` | internal retry only |
 | `.github/workflows/workflow-log-analysis.yml` (L331, L628, L872) | same pattern | `ai:log-analysis-failed` | human only |
 | `.github/workflows/ai-memory-maintenance.yml` | any codex call | `ai:memory-maintenance-failed` | human only |
 
 The in-workflow retry must:
 
-- Match `implement.yml`'s backoff (`10s * 2^(attempt-1)`, default `max_attempts=3`) — **do not** introduce a new variable name; reuse `MAX_CODEX_ATTEMPTS` (**CONFIRM Q2**: introduce this as a shared `vars.*` with per-phase overrides, or keep inline?).
+- Match `implement.yml`'s backoff (`10s * 2^(attempt-1)`, default `max_attempts=3`) — **do not** introduce a new variable name; reuse `MAX_CODEX_ATTEMPTS` as a single global `vars.MAX_CODEX_ATTEMPTS` (default `3`) used by every workflow (**decided Q2=A**, no per-phase overrides).
 - Treat all three failure modes as "attempt failed": `RC≠0`, empty stdout, or phase-specific validator rejection (e.g. `plan.yml:1027` `NEEDS_CLARIFICATION`, `clarify.yml:891` `STATUS` parse, `implement.yml:1052` empty `git status --porcelain`).
 - On final failure, skip the rest of the workflow cleanly (no half-applied labels / no half-written PRs), then execute the single "terminal failure" step defined in §5.
 
@@ -150,7 +150,7 @@ Add a new top-level phase `label_repair_sweep` that runs **once per poller cycle
 
 	Evidence block must cite the comment ID / PR number / state-file wave that drove the decision, so future audits can reconstruct the reasoning.
 
-6. **Contradiction handling (CONFIRM Q3):** if evidence genuinely conflicts (e.g. open PR + `ai:plan-failed` marker + `ai:implementing` label all simultaneously), default to applying `ai:needs-human` and **not** touching the phase label.
+6. **Contradiction handling (decided Q3=B):** if evidence genuinely conflicts (e.g. open PR + `ai:plan-failed` marker + `ai:implementing` label all simultaneously), apply the label matching the **most-advanced evidence** (open PR → `ai:implementing`/`ai:done`; merged PR → `ai:done`) and discard older fail markers. The audit comment must list every discarded marker (comment ID + phase + run ID) so the decision is reconstructable. Only escalate to `ai:needs-human` when no evidence source is conclusive.
 
 This sweep must add **zero new per-issue API calls**: reuse the prefetch already on the hot path and the existing edit call.
 
@@ -184,13 +184,13 @@ List every call before/after in the final response's "API inventory" section.
 
 ## 10. Env Vars (additive only; all with defaults per CLAUDE.md §4)
 
-Propose (**CONFIRM Q4** — accept list wholesale, or trim?):
+Adopted (**decided Q4=A** — all six accepted with proposed defaults):
 
 - `MAX_CODEX_ATTEMPTS` (default `3`) — per-workflow Codex retry cap.
 - `CODEX_RETRY_BACKOFF_BASE_SECS` (default `10`).
 - `ENABLE_PHASE_FAILURE_COMMENTS` (default `true`) — emit `AI_PHASE_FAILURE_V1`.
 - `ENABLE_LABEL_REPAIR_SWEEP` (default `true`).
-- `LABEL_REPAIR_DRY_RUN` (default `false`).
+- `LABEL_REPAIR_DRY_RUN` (default `false`) — Q6=B says ship enabled out of the gate, relying on the test matrix in §11; flip this to `true` per-repo only if a regression is observed in audit comments.
 - `LABEL_REPAIR_MAX_ISSUES_PER_CYCLE` (default `50`) — safety bound.
 
 **Do not** reuse, repurpose, or rename `STALL_THRESHOLD_*_MINUTES`, `MAX_STALL_RECOVERIES_PER_ISSUE`, `MAX_RECOVERY_ATTEMPTS`, or `MAX_VALIDATION_RECOVERY_ATTEMPTS` (CLAUDE.md §6).
@@ -303,12 +303,15 @@ Per CLAUDE.md §2, ask these in a single batch and wait.
 
 | Q | Decision | Date | Source |
 | --- | --- | --- | --- |
-| Q1 | _pending_ | | |
-| Q2 | _pending_ | | |
-| Q3 | _pending_ | | |
-| Q4 | _pending_ | | |
-| Q5 | _pending_ | | |
-| Q6 | _pending_ | | |
+| Q1 | **A** — Add `ai:validate-failed` as Codex-workflow-failure label; keep `ai:validation-failed` for semantic-rejection. | 2026-04-18 | user reply |
+| Q2 | **A** — Single global `vars.MAX_CODEX_ATTEMPTS` (default `3`) used by every workflow; no per-phase overrides. | 2026-04-18 | user reply |
+| Q3 | **B** — On contradictory evidence, apply the label matching the most-advanced evidence (open PR → `ai:implementing`/`ai:done`) and discard older fail markers. Audit comment lists discarded markers. (Deviates from the recommended conservative `ai:needs-human` default.) | 2026-04-18 | user reply |
+| Q4 | **A** — Accept all six env vars (`MAX_CODEX_ATTEMPTS`, `CODEX_RETRY_BACKOFF_BASE_SECS`, `ENABLE_PHASE_FAILURE_COMMENTS`, `ENABLE_LABEL_REPAIR_SWEEP`, `LABEL_REPAIR_DRY_RUN`, `LABEL_REPAIR_MAX_ISSUES_PER_CYCLE`) with proposed defaults. | 2026-04-18 | user reply |
+| Q5 | **A** — Sweep only issues carrying `ai:orchestrator-managed`; matches existing `has_known_label` guard in `ai_labels.py:122`. | 2026-04-18 | user reply |
+| Q6 | **B** — Ship label-repair sweep enabled (`LABEL_REPAIR_DRY_RUN=false` default); rely on the §11 test matrix; flip per-repo to dry-run only on observed regression. (Deviates from the recommended one-release dry-run rollout.) | 2026-04-18 | user reply |
+| Q7 | **A** — Keep `docs/resilient-codex-failure-plan.md` as the canonical filename. | 2026-04-18 | user reply |
+| Q8 | **A** — Single-source commit: answers folded into Appendix A before commit. (Original commit `aba881f` was made under stop-hook pressure with `_pending_` rows; this update finalises Appendix A.) | 2026-04-18 | user reply |
+| Q9 | **A** — Push to `claude/document-resilience-plan-jarfu`. | 2026-04-18 | user reply |
 
 
 
