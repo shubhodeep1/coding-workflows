@@ -1252,7 +1252,7 @@ backfill_validation_fix_issue_merged_label() {
 
   edit_args+=(--add-label "ai:merged")
   if [ -f "${contract_file}" ]; then
-    phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
+    phase_changes="$(python3 scripts/ai_labels.py resolve-phase --contract-file "${contract_file}" --phase "ai:merged" 2>/dev/null || jq -c --arg phase "ai:merged" '[((.phase_groups // [])[]? | select(type == "object") | .members as $members | select(($members | type) == "array" and ($members | index($phase) != null)) | $members[]? | select(type == "string" and . != $phase))] | unique | {remove: .}' "${contract_file}" 2>/dev/null || echo '{"remove":["ai:closed"]}')"
     while IFS= read -r remove_label; do
       [ -n "${remove_label}" ] || continue
       if has_label "${fix_labels}" "${remove_label}"; then
@@ -1455,7 +1455,8 @@ if forced and contract_file:
     try:
         with open(contract_file, "r") as fh:
             contract = json.load(fh)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        print(f"::warning::reconcile_managed_issue_labels: failed to load contract file {contract_file}: {exc}", file=sys.stderr)
         contract = None
     if isinstance(contract, dict):
         for group in contract.get("phase_groups", []) or []:
