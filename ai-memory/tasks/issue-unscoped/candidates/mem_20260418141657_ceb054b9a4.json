@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 2\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: tests/test_family_python_mongo_flask.py\n      Problem: The filter is missing other common Python bytecode/artifact extensions like `.pyo` or `.pyd`.; If a user runs tests in an environment that generates optimized bytecode or on Windows, these files could leak into the fixture snapshot comparison and cause false failures.; HARDENING_SUGGESTIONS:\n      Confidence: avg 3.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: tests/test_family_python_mongo_flask.py\n      Problem: Location: `_fixture_files` function; Issue: Potential leak of secondary Python artifacts (`.pyo`, `.pyd`) into fixture snapshots.; Suggested minimal fix: Expand the `endswith` check to a tuple: `not path.name.endswith((\".pyc\", \".pyo\", \".pyd\"))`.; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1; OVERALL ASSESSMENT:; The changes are correct, minimal, and significantly improve test reliability. No critical runtime bugs or security regressions were introduced.; Applied: All code changes from the last run are verified as correct.; Already satisfied: The PID removal correctly addresses the \"unsafe guess\" logic.; Ignored: The suggestion to restore the `|| echo 1` fallback was ignored as it violates the prime directive of correctness/safety.\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\ntests/test_family_python_mongo_flask.py",
+  "fingerprint": "6716bf0be91805537a7e5a908082033e16bde2dc5635b64e5645cbcee2ee54fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1328,
+    "run_id": "24606219233",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24606219233",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418141657_ceb054b9a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1328,
+    "run_id": "24606219233"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T14:16:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
