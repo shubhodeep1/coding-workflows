@@ -385,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
 		family = resolve_family(manifest)
 		template_specs = collect_templates(templates_root, family)
 		context = build_render_context(manifest, family)
+		context.setdefault("output_root_name", output_root.name or "validation")
 		rendered_files = render_templates(template_specs, templates_root, context)
 		written_paths = write_outputs(output_root, rendered_files)
 	except RenderValidationTemplatesError as exc:

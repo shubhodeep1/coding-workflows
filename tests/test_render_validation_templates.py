@@ -233,10 +233,43 @@ def test_renderer_family_dispatch_routing() -> None:
 
 		result = _run_renderer(manifest_path, output_root)
 		assert result.returncode == 0, f"renderer failed: {result.stderr}"
-		family_marker = output_root / "tests" / "10_family_marker.sh"
-		assert family_marker.exists()
-		text = family_marker.read_text(encoding="utf-8")
-		assert "node-hardhat-solidity family for demo-project" in text
+		expected_files = [
+			output_root / "Dockerfile.app",
+			output_root / "docker-compose.test.yml",
+			output_root / "validate.env",
+			output_root / "_lib" / "graceful_shutdown.sh",
+			output_root / "_lib" / "tap_helpers.sh",
+			output_root / "tests" / "00_canary.sh",
+			output_root / "tests" / "10_family_marker.sh",
+			output_root / "tests" / "20_rpc_probe.sh",
+			output_root / "tests" / "30_hardhat_test.sh",
+			output_root / "tests" / "90_tap_report.sh",
+		]
+		for expected in expected_files:
+			assert expected.exists(), f"missing rendered file: {expected}"
+
+		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
+		assert "ENV PATH=/root/.foundry/bin:${PATH}" in dockerfile_text
+
+		env_text = (output_root / "validate.env").read_text(encoding="utf-8")
+		for line in env_text.splitlines():
+			if not line.strip() or line.startswith("#"):
+				continue
+			assert '="' in line and line.endswith('"'), f"validate.env value must be double-quoted: {line}"
+
+		rpc_probe_text = (output_root / "tests" / "20_rpc_probe.sh").read_text(encoding="utf-8")
+		assert 'type == "object"' in rpc_probe_text
+		assert 'has("result") and (.result != null) and (.result | type == "string") and (.result | length > 0)' in rpc_probe_text
+
+		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+		assert "dockerfile: out/Dockerfile.app" in compose_text
+
+		hardhat_test_text = (output_root / "tests" / "30_hardhat_test.sh").read_text(encoding="utf-8")
+		assert '. "${ROOT_DIR}/_lib/graceful_shutdown.sh"' in hardhat_test_text
+		assert "npx hardhat test --network localhost" in hardhat_test_text
+
+		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
+		assert "node-hardhat-solidity family for demo-project" in family_marker_text
 		assert not (output_root / "tests" / "10_http_smoke.sh").exists()
 
 

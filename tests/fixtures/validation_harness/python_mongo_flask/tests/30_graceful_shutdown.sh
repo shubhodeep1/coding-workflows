@@ -15,10 +15,7 @@ GRACEFUL_SHUTDOWN_LOG_TAIL_LINES="${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES:-40}"
 echo "1..1"
 
 set +e
-app_pid="$({
-	docker compose -f validation/docker-compose.test.yml exec -T app /bin/sh -c 'cat /tmp/flask-app.pid 2>/dev/null' \
-		|| docker compose -f validation/docker-compose.test.yml exec -T app /bin/sh -c 'echo 1'
-} 2>/dev/null | tr -d '\r' | tail -n 1)"
+app_pid="$(docker compose -f validation/docker-compose.test.yml exec -T app /bin/sh -c 'cat /tmp/flask-app.pid 2>/dev/null' 2>/dev/null | tr -d '\r' | tail -n 1)"
 set -e
 
 if ! printf '%s' "${app_pid}" | grep -Eq '^[0-9]+$'; then
