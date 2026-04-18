@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef/context check passed:\n- `HEAD`: `56fd255fac8978f66e6a3885eaa21994a777793e`\n- Checked-out branch: `orchestrator/project-1303`\n- Integration metadata branch: `orchestrator/project-1303`\n- Mismatch: `false`\n- Clarification mapping: no Q-IDs were issued; `/answer [auto-answered-by-orchestrator]` means proceed without additional clarification.\n\nImplementation plan\n\n1. Representative pattern to follow\n- Use the existing pattern in `.github/workflows/plan.yml` / `.github/workflows/clarify.yml`: source `scripts/label_helpers.sh`, then call `ensure_label_exists` before any `ai:*` label add/swap call.\n\n2. Files likely to change\n- `.github/workflows/orchestrate.yml`\n- `.github/workflows/comprehensive-test-and-release.yml`\n- `.github/workflows/validation-improvements-intake.yml`\n- `.github/workflows/issue_pr_status.yml`\n- `scripts/label_helpers.sh` (label catalog additions for missing scoped labels)\n- `tests/test_ai_label_precreation_contract.py` (new static enforcement test)\n\n3. Functions/modules to implement\n- `.github/workflows/orchestrate.yml`\n  - In step `Ensure orchestrator labels exist`, replace direct `gh label create` calls with:\n    - `source scripts/label_helpers.sh`\n    - `ensure_label_exists \"ai:orchestrator-tracking\" ...`\n    - `ensure_label_exists \"ai:clarification\" ...`\n    - `ensure_label_exists \"ai:orchestrator-managed\" ...`\n    - `ensure_label_exists \"ai:orchestrator-validate-required\" ...`\n- `.github/workflows/comprehensive-test-and-release.yml`\n  - In phase 3 dispatch step, replace direct `gh api .../labels POST` with:\n    - `source scripts/label_helpers.sh`\n    - `ensure_label_exists \"${PENDING_LABEL}\" \"${GITHUB_REPOSITORY}\"`\n  - Keep existing `gh issue edit --add-label \"${PENDING_LABEL}\"`.\n- `.github/workflows/validation-improvements-intake.yml`\n  - Replace ad-hoc `gh label list | grep` probe + conditional `gh label create` with:\n    - `source scripts/label_helpers.sh`\n    - `ensure_label_exists \"ai:needs-prompt-review\" \"${GITHUB_REPOSITORY}\"`\n- `.github/workflows/issue_pr_status.yml`\n  - Replace explicit label GET/create probe for `FINAL_LABEL` with:\n    - `source scripts/label_helpers.sh`\n    - `ensure_label_exists \"${FINAL_LABEL}\" \"${REPOSITORY}\"`\n  - Ensure helper availability in this workflow\u2019s support-script bootstrap path if needed (since this reusable workflow can run in consumer repos).\n- `scripts/label_helpers.sh`\n  - Add catalog entries (color + description) for:\n    - `ai:comprehensive-test-pending`\n    - `ai:needs-prompt-review`\n  - This preserves current label semantics instead of falling back to generic defaults.\n\n4. Data structures affected\n- `_AI_LABEL_COLORS` and `_AI_LABEL_DESCS` associative maps in `scripts/label_helpers.sh`.\n- New static test\u2019s workflow-to-expectation mapping (scoped workflows and required ensure-before-mutate rules).\n\n5. API/interface changes\n- No external interface changes.\n- Internal workflow behavior change: standardized pre-create via `ensure_label_exists` before scoped `ai:*` label mutations.\n- API hygiene improvement:\n  - Remove ad-hoc existence probes (`gh label list`, label GET checks) where replaced by helper.\n  - Avoid introducing per-issue/per-label extra calls beyond current mutation flow.\n\n6. Potential risks / edge cases\n- `issue_pr_status.yml` runs in caller repos; helper sourcing must be compatible with its support-script staging.\n- Variable-driven labels (`FINAL_LABEL`, `PENDING_LABEL`) need ensure calls using variable values (not hardcoded literals).\n- Must keep fail-open behavior (warning/non-fatal) on label-create races/permission quirks.\n- Static test must avoid false positives from non-mutating references to `ai:*` in comments/docs.\n\n7. Testing considerations\n- Add a static contract test (`tests/test_ai_label_precreation_contract.py`) that scans the four scoped workflows for `ai:*` label mutation commands and asserts corresponding `ensure_label_exists` coverage in the same run-step block.\n- Include checks for both literal labels and variable-backed labels used in mutations (`FINAL_LABEL`, `PENDING_LABEL`).\n- Run targeted tests:\n  - new static enforcement test\n  - existing workflow-contract tests that touch modified files (at minimum workflow audit tests) to catch unintended breakage.\n\nConflict detection\n- No factual issue/codebase conflicts found.\n- Notable gap confirmed by inspection: scoped workflows still have mixed ad-hoc label probes/creates; this plan closes that gap with shared helper-based enforcement.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c483513c619ce21b125cbde7b65ed24b436d635db2757d1c9b02d1ea3f249f72",
+  "lineage": {
+    "issue_number": 1317,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24601998092",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24601998092",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1317"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260418094715_d4436dba73",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1317,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24601998092"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1317",
+  "timestamps": {
+    "created_at": "2026-04-18T09:47:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
