@@ -787,6 +787,15 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:closed",
 	"ai:needs-human",
 	"ai:blocked",
+	"ai:clarify-failed",
+	"ai:clarify-respond-failed",
+	"ai:plan-failed",
+	"ai:implement-diagnose-failed",
+	"ai:review-autofix-failed",
+	"ai:validate-failed",
+	"ai:integration-judge-failed",
+	"ai:log-analysis-failed",
+	"ai:memory-maintenance-failed",
 	"ai:ready-to-merge",
 	"ai:review-blocked",
 	"ai:implementation-failed",
@@ -802,7 +811,21 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:clarification",
 ]
 
-TERMINAL_PHASES: set[str] = {"ai:merged", "ai:closed", "ai:validated", "ai:validation-failed"}
+TERMINAL_PHASES: set[str] = {
+	"ai:merged",
+	"ai:closed",
+	"ai:validated",
+	"ai:validation-failed",
+	"ai:clarify-failed",
+	"ai:clarify-respond-failed",
+	"ai:plan-failed",
+	"ai:implement-diagnose-failed",
+	"ai:review-autofix-failed",
+	"ai:validate-failed",
+	"ai:integration-judge-failed",
+	"ai:log-analysis-failed",
+	"ai:memory-maintenance-failed",
+}
 TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
 
 # Phases already handled by dedicated logic in the poller — stall detector
@@ -864,6 +887,11 @@ STALL_RECOVERY_ACTIONS: dict[str, list[str]] = {
 		"attempt_merge",
 		"escalate_human",
 	],
+	"ai:validating": [
+		"retrigger_validate",
+		"retrigger_validate",
+		"escalate_human",
+	],
 }
 
 VALID_STALL_RECOVERY_ACTIONS: set[str] = {
@@ -874,7 +902,498 @@ VALID_STALL_RECOVERY_ACTIONS: set[str] = {
 VALID_STALL_RECOVERY_ACTIONS.update({
 	"close_and_reissue",
 	"resolve_merge_conflict",
+	"retrigger_validate",
 })
+
+STALL_RECOVERY_ACTION_PRIORITY: dict[str, int] = {
+	"retrigger_pipeline": 10,
+	"auto_respond_clarify": 20,
+	"retrigger_plan": 30,
+	"auto_approve": 40,
+	"retrigger_implement": 50,
+	"retrigger_review": 60,
+	"resolve_merge_conflict": 65,
+	"retrigger_validate": 70,
+	"attempt_merge": 80,
+	"close_and_reissue": 90,
+	"escalate_human": 100,
+}
+
+PHASE_FAILURE_MARKER_RE = re.compile(
+	r"<!--\s*AI_PHASE_FAILURE_V1\s*\n(.*?)\nAI_PHASE_FAILURE_V1\s*-->",
+	re.DOTALL,
+)
+
+PHASE_FAILURE_PHASE_TO_PHASE_LABEL: dict[str, str] = {
+	"clarify": "ai:clarification",
+	"clarify-respond": "ai:clarification",
+	"plan": "ai:planning",
+	"implement": "ai:implementing",
+	"review-autofix": "ai:done",
+	"validate": "ai:validating",
+	"integration-judge": "ai:ready-to-merge",
+	"log-analysis": "ai:validation-fixing",
+	"memory-maintenance": "ai:validation-fixing",
+}
+
+PHASE_FAILURE_PHASE_TO_FAILURE_LABEL: dict[str, str] = {
+	"clarify": "ai:clarify-failed",
+	"clarify-respond": "ai:clarify-respond-failed",
+	"plan": "ai:plan-failed",
+	"implement": "ai:implement-diagnose-failed",
+	"review-autofix": "ai:review-autofix-failed",
+	"validate": "ai:validate-failed",
+	"integration-judge": "ai:integration-judge-failed",
+	"log-analysis": "ai:log-analysis-failed",
+	"memory-maintenance": "ai:memory-maintenance-failed",
+}
+
+
+def _stable_int(value: Any, default: int = 0) -> int:
+	try:
+		return int(value)
+	except (TypeError, ValueError):
+		return default
+
+
+def parse_phase_failure_markers(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Extract and normalize every AI_PHASE_FAILURE_V1 marker from comments."""
+	markers: list[dict[str, Any]] = []
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		body = comment.get("body")
+		if not isinstance(body, str) or "AI_PHASE_FAILURE_V1" not in body:
+			continue
+		created_at_raw = comment.get("created_at")
+		if not isinstance(created_at_raw, str) or not created_at_raw.strip():
+			created_at_raw = comment.get("createdAt")
+		created_at = created_at_raw.strip() if isinstance(created_at_raw, str) else ""
+		comment_id = _stable_int(comment.get("id"), 0)
+		for match in PHASE_FAILURE_MARKER_RE.finditer(body):
+			raw_payload = (match.group(1) or "").strip()
+			if not raw_payload:
+				continue
+			try:
+				payload = json.loads(raw_payload)
+			except ValueError:
+				continue
+			if not isinstance(payload, dict):
+				continue
+			recommended_action_raw = payload.get("recommended_resume_action", "")
+			phase_raw = payload.get("phase", "")
+			run_id_raw = payload.get("workflow_run_id", "")
+			ts_raw = payload.get("timestamp", "")
+			recommended_action = recommended_action_raw.strip() if isinstance(recommended_action_raw, str) else ""
+			phase = phase_raw.strip() if isinstance(phase_raw, str) else ""
+			run_id = run_id_raw.strip() if isinstance(run_id_raw, str) else ""
+			marker_ts = ts_raw.strip() if isinstance(ts_raw, str) else ""
+			markers.append(
+				{
+					"comment_id": comment_id,
+					"created_at": created_at,
+					"timestamp": marker_ts or created_at,
+					"phase": phase,
+					"recommended_resume_action": recommended_action,
+					"workflow_run_id": run_id,
+					"workflow_run_url": payload.get("workflow_run_url"),
+					"payload": payload,
+				}
+			)
+	markers.sort(
+		key=lambda item: (
+			str(item.get("timestamp", "") or item.get("created_at", "") or ""),
+			_stable_int(item.get("comment_id"), 0),
+		),
+		reverse=True,
+	)
+	return markers
+
+
+def _phase_failure_markers_to_evidence(markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	evidence: list[dict[str, Any]] = []
+	for marker in markers:
+		action = marker.get("recommended_resume_action")
+		if not isinstance(action, str) or action not in STALL_RECOVERY_ACTION_PRIORITY:
+			continue
+		evidence.append(
+			{
+				"action": action,
+				"source": "phase_failure_marker",
+				"phase": marker.get("phase", ""),
+				"workflow_run_id": marker.get("workflow_run_id", ""),
+				"timestamp": marker.get("timestamp", "") or marker.get("created_at", ""),
+				"comment_id": _stable_int(marker.get("comment_id"), 0),
+				"marker": marker,
+			}
+		)
+	return evidence
+
+
+def _linked_pr_evidence(linked_pr: dict[str, Any] | None) -> dict[str, Any] | None:
+	if not isinstance(linked_pr, dict):
+		return None
+	if bool(linked_pr.get("merged")):
+		return {
+			"action": "attempt_merge",
+			"source": "linked_pr_state",
+			"timestamp": str(linked_pr.get("headPushedAt") or ""),
+			"comment_id": 0,
+		}
+	state_raw = linked_pr.get("state")
+	state = state_raw.strip().lower() if isinstance(state_raw, str) else ""
+	if state == "open":
+		return {
+			"action": "retrigger_review",
+			"source": "linked_pr_state",
+			"timestamp": str(linked_pr.get("headPushedAt") or ""),
+			"comment_id": 0,
+		}
+	return None
+
+
+def _comment_is_newer_than_marker(comment: dict[str, Any], marker: dict[str, Any]) -> bool:
+	comment_created_raw = comment.get("created_at")
+	if not isinstance(comment_created_raw, str) or not comment_created_raw.strip():
+		comment_created_raw = comment.get("createdAt")
+	comment_created = comment_created_raw.strip() if isinstance(comment_created_raw, str) else ""
+	comment_id = _stable_int(comment.get("id"), 0)
+	marker_ts = str(marker.get("timestamp", "") or marker.get("created_at", "") or "")
+	marker_id = _stable_int(marker.get("comment_id"), 0)
+	return (comment_created, comment_id) > (marker_ts, marker_id)
+
+
+def evaluate_phase_failure_resume(
+	*,
+	candidate_action: str,
+	current_phase: str,
+	labels: list[str],
+	comments: list[dict[str, Any]],
+	linked_pr: dict[str, Any] | None,
+	processed_workflow_run_ids: list[str] | set[str] | None = None,
+) -> dict[str, Any]:
+	"""Evaluate whether a phase-failure marker can safely resume a retrigger action."""
+	markers = parse_phase_failure_markers(comments)
+	if not markers:
+		return {
+			"marker_found": False,
+			"ok": True,
+			"reason": "no_phase_failure_marker",
+			"selected_marker": None,
+			"selected_evidence_source": "none",
+			"selected_action": "",
+			"discarded_markers": [],
+		}
+
+	evidence = _phase_failure_markers_to_evidence(markers)
+	pr_evidence = _linked_pr_evidence(linked_pr)
+	if pr_evidence is not None:
+		evidence.append(pr_evidence)
+
+	selection = choose_most_advanced_conclusive_evidence(evidence)
+	selected = selection.get("selected")
+	discarded_raw = selection.get("discarded", [])
+	discarded_markers: list[dict[str, Any]] = []
+	for item in discarded_raw:
+		if isinstance(item, dict) and item.get("source") == "phase_failure_marker":
+			marker = item.get("marker")
+			if isinstance(marker, dict):
+				discarded_markers.append(marker)
+	selected_source = "none"
+	selected_action = ""
+	if isinstance(selected, dict):
+		selected_source = str(selected.get("source", "") or "none")
+		action_raw = selected.get("action", "")
+		if isinstance(action_raw, str):
+			selected_action = action_raw
+
+	if not isinstance(selected, dict) or selected_source != "phase_failure_marker":
+		return {
+			"marker_found": True,
+			"ok": False,
+			"reason": "newer_conclusive_non_marker_evidence",
+			"selected_marker": None,
+			"selected_evidence_source": selected_source,
+			"selected_action": selected_action,
+			"discarded_markers": discarded_markers,
+		}
+
+	selected_marker = selected.get("marker")
+	if not isinstance(selected_marker, dict):
+		return {
+			"marker_found": True,
+			"ok": False,
+			"reason": "selected_marker_unavailable",
+			"selected_marker": None,
+			"selected_evidence_source": selected_source,
+			"selected_action": selected_action,
+			"discarded_markers": discarded_markers,
+		}
+
+	selected_run_id_raw = selected_marker.get("workflow_run_id", "")
+	selected_run_id = selected_run_id_raw.strip() if isinstance(selected_run_id_raw, str) else ""
+	if selected_run_id:
+		processed = {item for item in (processed_workflow_run_ids or []) if isinstance(item, str)}
+		if selected_run_id in processed:
+			return {
+				"marker_found": True,
+				"ok": False,
+				"reason": "workflow_run_id_already_processed",
+				"selected_marker": selected_marker,
+				"selected_evidence_source": selected_source,
+				"selected_action": selected_action,
+				"discarded_markers": discarded_markers,
+			}
+
+	marker_action_raw = selected_marker.get("recommended_resume_action", "")
+	marker_action = marker_action_raw.strip() if isinstance(marker_action_raw, str) else ""
+	if marker_action and marker_action != candidate_action:
+		return {
+			"marker_found": True,
+			"ok": False,
+			"reason": "recommended_action_mismatch",
+			"selected_marker": selected_marker,
+			"selected_evidence_source": selected_source,
+			"selected_action": marker_action,
+			"discarded_markers": discarded_markers,
+		}
+
+	marker_phase_raw = selected_marker.get("phase", "")
+	marker_phase = marker_phase_raw.strip() if isinstance(marker_phase_raw, str) else ""
+	expected_phase_label = PHASE_FAILURE_PHASE_TO_PHASE_LABEL.get(marker_phase)
+	expected_failure_label = PHASE_FAILURE_PHASE_TO_FAILURE_LABEL.get(marker_phase)
+	if expected_phase_label:
+		label_set = {label for label in labels if isinstance(label, str)}
+		if expected_phase_label not in label_set and (not expected_failure_label or expected_failure_label not in label_set):
+			return {
+				"marker_found": True,
+				"ok": False,
+				"reason": "label_phase_mismatch",
+				"selected_marker": selected_marker,
+				"selected_evidence_source": selected_source,
+				"selected_action": marker_action,
+				"discarded_markers": discarded_markers,
+			}
+
+	if candidate_action == "auto_respond_clarify":
+		for comment in comments:
+			if not isinstance(comment, dict) or not _comment_is_newer_than_marker(comment, selected_marker):
+				continue
+			body = comment.get("body", "")
+			if isinstance(body, str) and re.search(r"^\s*/answer(\s|$)", body, flags=re.MULTILINE):
+				return {
+					"marker_found": True,
+					"ok": False,
+					"reason": "clarify_answers_present",
+					"selected_marker": selected_marker,
+					"selected_evidence_source": selected_source,
+					"selected_action": marker_action,
+					"discarded_markers": discarded_markers,
+				}
+
+	if candidate_action == "retrigger_plan":
+		for comment in comments:
+			if not isinstance(comment, dict) or not _comment_is_newer_than_marker(comment, selected_marker):
+				continue
+			body = comment.get("body", "")
+			if not isinstance(body, str):
+				continue
+			if re.search(r"^\s*/approved(\s|$)", body, flags=re.MULTILINE) or "Implementation Plan" in body:
+				return {
+					"marker_found": True,
+					"ok": False,
+					"reason": "plan_already_approved",
+					"selected_marker": selected_marker,
+					"selected_evidence_source": selected_source,
+					"selected_action": marker_action,
+					"discarded_markers": discarded_markers,
+				}
+
+	if candidate_action == "retrigger_implement":
+		if isinstance(linked_pr, dict) and _stable_int(linked_pr.get("number"), 0) > 0:
+			return {
+				"marker_found": True,
+				"ok": False,
+				"reason": "linked_pr_already_exists",
+				"selected_marker": selected_marker,
+				"selected_evidence_source": selected_source,
+				"selected_action": marker_action,
+				"discarded_markers": discarded_markers,
+			}
+
+	if candidate_action == "retrigger_review":
+		state_raw = (linked_pr or {}).get("state") if isinstance(linked_pr, dict) else None
+		state = state_raw.strip().lower() if isinstance(state_raw, str) else ""
+		if state != "open":
+			return {
+				"marker_found": True,
+				"ok": False,
+				"reason": "linked_pr_not_open",
+				"selected_marker": selected_marker,
+				"selected_evidence_source": selected_source,
+				"selected_action": marker_action,
+				"discarded_markers": discarded_markers,
+			}
+
+	if candidate_action == "retrigger_validate":
+		for comment in comments:
+			if not isinstance(comment, dict) or not _comment_is_newer_than_marker(comment, selected_marker):
+				continue
+			body = comment.get("body", "")
+			if not isinstance(body, str):
+				continue
+			if "## 🧪 Runtime validation dispatched" in body or "## ✅ Runtime validation complete" in body:
+				return {
+					"marker_found": True,
+					"ok": False,
+					"reason": "validation_already_dispatched",
+					"selected_marker": selected_marker,
+					"selected_evidence_source": selected_source,
+					"selected_action": marker_action,
+					"discarded_markers": discarded_markers,
+				}
+
+	return {
+		"marker_found": True,
+		"ok": True,
+		"reason": "actionable_phase_failure_marker",
+		"selected_marker": selected_marker,
+		"selected_evidence_source": selected_source,
+		"selected_action": marker_action,
+		"discarded_markers": discarded_markers,
+	}
+
+
+def resolve_label_repair_evidence(
+	*,
+	labels: list[str],
+	comments: list[dict[str, Any]],
+	linked_pr: dict[str, Any] | None,
+) -> dict[str, Any]:
+	"""Resolve authoritative label evidence and stale-marker audit details."""
+	markers = parse_phase_failure_markers(comments)
+	evidence = _phase_failure_markers_to_evidence(markers)
+	pr_evidence = _linked_pr_evidence(linked_pr)
+	if pr_evidence is not None:
+		evidence.append(pr_evidence)
+	current_phase = determine_phase(labels)
+	if current_phase != "no_labels":
+		phase_ladder = STALL_RECOVERY_ACTIONS.get(current_phase, [])
+		if current_phase in TERMINAL_PHASES:
+			phase_action = "escalate_human"
+		elif phase_ladder:
+			phase_action = phase_ladder[0]
+		else:
+			phase_action = "retrigger_pipeline"
+		evidence.append(
+			{
+				"action": phase_action,
+				"source": "current_labels",
+				"phase": current_phase,
+				"timestamp": "",
+				"comment_id": 0,
+			}
+		)
+
+	selection = choose_most_advanced_conclusive_evidence(evidence)
+	selected = selection.get("selected")
+	discarded_raw = selection.get("discarded", [])
+	discarded_markers: list[dict[str, Any]] = []
+	for item in discarded_raw:
+		if isinstance(item, dict) and item.get("source") == "phase_failure_marker":
+			marker = item.get("marker")
+			if isinstance(marker, dict):
+				discarded_markers.append(marker)
+
+	authoritative_phase = current_phase if current_phase != "no_labels" else ""
+	selected_source = "none"
+	selected_action = ""
+	if isinstance(selected, dict):
+		selected_source = str(selected.get("source", "") or "none")
+		action_raw = selected.get("action", "")
+		if isinstance(action_raw, str):
+			selected_action = action_raw
+		if selected_source == "linked_pr_state":
+			if bool((linked_pr or {}).get("merged")):
+				authoritative_phase = "ai:merged"
+			else:
+				authoritative_phase = "ai:done" if current_phase in {"ai:done", "ai:ready-to-merge"} else "ai:implementing"
+		elif selected_source == "phase_failure_marker":
+			marker = selected.get("marker")
+			if isinstance(marker, dict):
+				marker_phase = marker.get("phase", "")
+				if isinstance(marker_phase, str):
+					authoritative_phase = PHASE_FAILURE_PHASE_TO_PHASE_LABEL.get(marker_phase, authoritative_phase)
+		elif selected_source == "current_labels":
+			phase_raw = selected.get("phase", "")
+			if isinstance(phase_raw, str) and phase_raw:
+				authoritative_phase = phase_raw
+		if selected_source == "phase_failure_marker" and current_phase in TERMINAL_PHASES:
+			authoritative_phase = current_phase
+
+	return {
+		"authoritative_phase": authoritative_phase,
+		"selected_evidence_source": selected_source,
+		"selected_action": selected_action,
+		"discarded_markers": discarded_markers,
+	}
+
+
+def choose_most_advanced_conclusive_evidence(
+	evidence_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+	"""Select the most advanced conclusive evidence item and list stale ones.
+
+	Evidence items should include at least an ``action`` key and may optionally
+	include ``timestamp`` and ``comment_id`` for deterministic tie-breaking.
+	Items with unknown actions or ``conclusive == False`` are treated as stale.
+	"""
+	candidates: list[dict[str, Any]] = []
+	discarded: list[dict[str, Any]] = []
+
+	for raw_item in evidence_items:
+		if not isinstance(raw_item, dict):
+			continue
+		item = dict(raw_item)
+		action = item.get("action")
+		conclusive = bool(item.get("conclusive", True))
+		if not isinstance(action, str) or action not in STALL_RECOVERY_ACTION_PRIORITY or not conclusive:
+			discarded.append(item)
+			continue
+		candidates.append(item)
+
+	def _sort_key(item: dict[str, Any]) -> tuple[int, str, int]:
+		action = str(item.get("action", ""))
+		rank = STALL_RECOVERY_ACTION_PRIORITY.get(action, -1)
+		ts = str(item.get("timestamp", "") or "")
+		raw_comment_id = item.get("comment_id", 0)
+		try:
+			comment_id = int(raw_comment_id)
+		except (TypeError, ValueError):
+			comment_id = 0
+		return rank, ts, comment_id
+
+	selected: dict[str, Any] | None = None
+	if candidates:
+		selected = max(candidates, key=_sort_key)
+		selected_id = id(selected)
+		for item in candidates:
+			if id(item) != selected_id:
+				discarded.append(item)
+
+	discarded_sorted = sorted(
+		discarded,
+		key=lambda item: (
+			str(item.get("timestamp", "") or ""),
+			_stable_int(item.get("comment_id"), 0),
+		),
+		reverse=True,
+	)
+
+	return {
+		"selected": selected,
+		"discarded": discarded_sorted,
+	}
 
 
 def _nearest_non_human_stall_action(actions: list[str], start_idx: int) -> str | None:
@@ -1002,6 +1521,8 @@ def reconcile_wave_issue_status(
 		return "ready-to-merge", "label_ai_ready_to_merge"
 	if "ai:done" in labels:
 		return "done", "label_ai_done"
+	if determine_phase(labels) in TERMINAL_PHASES:
+		return "closed", "label_terminal_phase"
 	return "in_progress", "default_in_progress"
 
 

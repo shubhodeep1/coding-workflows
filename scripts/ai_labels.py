@@ -43,17 +43,32 @@ def load_label_contract(path: Path) -> dict[str, Any]:
     if not isinstance(phase_groups, list) or not phase_groups:
         raise LabelContractError("phase_groups must be a non-empty array")
 
+    seen_group_names: set[str] = set()
     for group in phase_groups:
         if not isinstance(group, dict):
             raise LabelContractError("Each phase group must be an object")
+
+        group_name = group.get("name")
+        if not isinstance(group_name, str) or not group_name.strip():
+            raise LabelContractError("Each phase group must define a non-empty name")
+        group_name = group_name.strip()
+        if group_name in seen_group_names:
+            raise LabelContractError(f"Duplicate phase group name: {group_name}")
+        seen_group_names.add(group_name)
+
         members = group.get("members")
         if not isinstance(members, list) or len(members) < 2:
             raise LabelContractError("Each phase group must contain at least two members")
+
+        seen_members: set[str] = set()
         for member in members:
             if not isinstance(member, str):
                 raise LabelContractError(f"Phase group members must be strings: {member!r}")
             if member not in labels:
                 raise LabelContractError(f"Phase group member not declared in labels: {member}")
+            if member in seen_members:
+                raise LabelContractError(f"Duplicate member in phase group {group_name}: {member}")
+            seen_members.add(member)
 
         fallback = group.get("fallback")
         if fallback is not None:
@@ -140,8 +155,8 @@ def cmd_repair_labels(args: argparse.Namespace) -> int:
         "ok": True,
         "known_labels": sorted(known_labels),
         "issue_labels": issue_labels,
-        "add": sorted(set(desired) - set(issue_labels)),
-        "remove": sorted(remove),
+        "add": sorted(set(desired) - issue_labels_set),
+        "remove": sorted(remove - set(desired)),
     }
     _print_json(output)
     return 0
