@@ -194,6 +194,7 @@ line_unverified=0
 evidence_unverified=0
 dropped_invalid_file=0
 dropped_unknown_reason=0
+unmatched_markers=0
 parse_failed=0
 parse_error=""
 anchors_total=0
@@ -350,9 +351,6 @@ process_block()
 		line_is_verified=0
 		parser_tags+=("LINE_UNVERIFIED")
 		line_unverified=$((line_unverified + 1))
-		if parse_line_range "${line_spec}"; then
-			printf '%s\t%s\t%s\n' "${file_path}" "${PARSED_LINE_START}" "${PARSED_LINE_END}" >> "${covered_ranges_file}"
-		fi
 	else
 		printf '%s\t%s\t%s\n' "${file_path}" "${PARSED_LINE_START}" "${PARSED_LINE_END}" >> "${covered_ranges_file}"
 	fi
@@ -413,6 +411,7 @@ while IFS= read -r line || [ -n "${line}" ]; do
 	if [[ "${line}" =~ ^===[[:space:]]ISSUE[[:space:]]([0-9]+)[[:space:]]===$ ]]; then
 		if [ "${block_open}" -eq 1 ]; then
 			dropped_unknown_reason=$((dropped_unknown_reason + 1))
+			unmatched_markers=$((unmatched_markers + 1))
 		fi
 		reset_block
 		block_open=1
@@ -428,6 +427,7 @@ while IFS= read -r line || [ -n "${line}" ]; do
 			reset_block
 		else
 			dropped_unknown_reason=$((dropped_unknown_reason + 1))
+			unmatched_markers=$((unmatched_markers + 1))
 		fi
 		continue
 	fi
@@ -514,10 +514,18 @@ done < "${CONSOLIDATOR_RAW_FILE}"
 
 if [ "${block_open}" -eq 1 ]; then
 	dropped_unknown_reason=$((dropped_unknown_reason + 1))
+	unmatched_markers=$((unmatched_markers + 1))
 fi
 
 if [ "${marker_open_count}" -eq 0 ]; then
-	finish_parse_failure "no_issue_markers" 3
+	parse_failed=1
+	parse_error="no_issue_markers"
+	review_log "event=no_issue_markers failopen=${REVIEW_PARSER_FAILOPEN}"
+	if [ "${REVIEW_PARSER_FAILOPEN}" = "0" ]; then
+		: > "${REVIEW_ISSUES_FILE}"
+		write_stats
+		exit 3
+	fi
 fi
 
 if [ -s "${covered_ranges_file}" ] && [ -s "${anchors_file}" ]; then
@@ -583,7 +591,7 @@ coverage_ratio="0"
 if [ "${anchors_total}" -gt 0 ]; then
 	coverage_ratio="$(awk -v covered="${anchors_covered}" -v total="${anchors_total}" 'BEGIN { printf "%.3f", covered / total }')"
 fi
-review_log "parsed_blocks=${parsed_blocks} passthrough_blocks=${passthrough_blocks} anchors_total=${anchors_total} anchors_covered=${anchors_covered} coverage_ratio=${coverage_ratio} line_unverified=${line_unverified} evidence_unverified=${evidence_unverified} dropped_invalid_file=${dropped_invalid_file} dropped_unknown_reason=${dropped_unknown_reason} parse_failed=${parse_failed}"
+review_log "parsed_blocks=${parsed_blocks} passthrough_blocks=${passthrough_blocks} anchors_total=${anchors_total} anchors_covered=${anchors_covered} coverage_ratio=${coverage_ratio} line_unverified=${line_unverified} evidence_unverified=${evidence_unverified} dropped_invalid_file=${dropped_invalid_file} dropped_unknown_reason=${dropped_unknown_reason} unmatched_markers=${unmatched_markers} parse_failed=${parse_failed}"
 
 rm -rf "${tmp_dir}"
 exit 0
