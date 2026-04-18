@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 7\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/validate.yml\n      Problem: Workflow bootstrap references template files `docker-compose.test.yml.j2` and `validate.env.j2` that do not exist in the repository.; When `VALIDATION_USE_TEMPLATES` is enabled, `validate_process.sh` checks for these files and returns exit code 13 if missing, causing template mode to fail.\n      Confidence: avg 5.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: .github/workflows/validate.yml\n      Problem: Dependency installation uses `set -euo pipefail` with `continue-on-error: true`. If `pip install` fails, shell exits immediately without logging detailed error.; Installation failures are masked; later template renderer will fail with import errors (exit code 14), making root cause debugging harder.\n      Confidence: avg 3.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: .github/workflows/validate.yml\n      Problem: Location: Line 457-476 (dependency installation); Issue: Add error handling for `pip install` failure to log more informative error; Suggested minimal fix: Wrap `pip install` in a conditional or add error trapping; Estimated lines changed: 3-5; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\n  [4] File: .github/workflows/validate.yml (line ~288)\n      Problem: The workflow references two template files that do not exist in the repository:; - `workflow-templates/validation-harness/_shared/docker-compose.test.yml.j2`; - `workflow-templates/validation-harness/_shared/validate.env.j2`; The `scripts/validate_process.sh` function `run_template_validation_harness_renderer()` (lines 977-979) explicitly checks for these files and returns exit code 13 with the error message \"Template mode requires workflow-templates/validation- Harness/_shared/{docker-compose.test.yml.j2,validate.env.j2,tests/00_canary.sh.j2}; one or more required templates are missing.\"; Evidence:; $ find workflow-templates -name \"*.j2\" -type f; workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2; workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2; workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2; ... (no docker-compose.test.yml.j2 or validate.env.j2); The LAST RUN DIFF shows the workflow now includes references to these missing files (lines 288-289 added to template copy list, plus a new pip install step). However, the template files themselves were never created. This means template mode will always fail when enabled via VALIDATION_USE_TEMPLATES.; This is a critical blocker for the template mode feature to work. The fix requires creating these two template files with valid Jinja2 content that satisfies the manifest slot requirements.; HARDENING_SUGGESTIONS:\n      Confidence: avg 5.0\n      Flagged by: minimax_minimax-m2_5\n\n  [5] File: .github/workflows/validate.yml\n      Problem: Location: Line 288-290 (template file copy loop); Issue: Missing template files cause silent failure in bootstrap (uses `|| true`) but hard failure later in validate_process.sh; Suggested minimal fix: Add validation after the copy loop to verify required templates exist, fail fast with clear error if missing; Estimated lines changed: 5-8; HARDENING_RISK_SCORE: 2; **SUMMARY**: The critical issue (missing template files) remains unresolved. All autofix runs have added references to these files but never created them. This must be fixed before template mode can function.\n      Confidence: avg n/a\n      Flagged by: minimax_minimax-m2_5\n\n  [6] File: tests/test_validate_workflow_validate_bootstrap.py\n      Problem: Test asserts template paths are in workflow but doesn't verify templates actually exist or can be copied.; Test passes even though templates don't exist, giving false confidence. Runtime will still fail.; HARDENING_SUGGESTIONS:\n      Confidence: avg 2.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [7] File: tests/test_validate_workflow_validate_bootstrap.py\n      Problem: Location: Line 23-24 (template assertions); Issue: Test should verify templates actually exist, not just that paths are in workflow; Suggested minimal fix: Add file existence checks or integration test; Estimated lines changed: 5-10; HARDENING_RISK_SCORE: 1; The critical issue that must be fixed is the missing template files. Without these files, the template mode feature cannot work.\n      Confidence: avg n/a\n      Flagged by: deepseek_deepseek-v3_2\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/validate.yml\ntests/test_validate_workflow_validate_bootstrap.py",
+  "fingerprint": "cae5638e44a74497dfaeac6aeb80d1a5d0ec5d1f371df2cc5e390c8183c81aa2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1330,
+    "run_id": "24608448620",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24608448620",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260418162034_9159f5f233",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1330,
+    "run_id": "24608448620"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-18T16:20:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
