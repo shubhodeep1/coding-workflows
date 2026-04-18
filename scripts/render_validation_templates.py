@@ -139,7 +139,7 @@ def _normalize_newlines(content: str) -> str:
 
 def _stable_value(value: Any) -> Any:
 	if isinstance(value, dict):
-		return {key: _stable_value(value[key]) for key in sorted(value.keys())}
+		return {key: _stable_value(value[key]) for key in sorted(value.keys(), key=str)}
 	if isinstance(value, list):
 		return [_stable_value(item) for item in value]
 	return value
@@ -236,7 +236,7 @@ def resolve_family(manifest: dict[str, Any]) -> FamilySpec:
 	manifest_type = manifest_type.strip()
 	family = FAMILY_REGISTRY.get(manifest_type)
 	if family is None:
-		supported = ", ".join(sorted(FAMILY_REGISTRY.keys()))
+		supported = ", ".join(sorted(FAMILY_REGISTRY.keys(), key=str))
 		raise FamilyResolutionError(
 			f"Unknown manifest type '{manifest_type}'. Supported types: {supported}"
 		)
@@ -278,7 +278,7 @@ def collect_templates(templates_root: Path, family: FamilySpec) -> list[Template
 				output_rel_path=output_rel,
 			)
 
-	template_specs = [template_map[key] for key in sorted(template_map.keys())]
+	template_specs = [template_map[key] for key in sorted(template_map.keys(), key=str)]
 	if not template_specs:
 		raise TemplateCollectionError(
 			f"No templates found for family '{family.name}' under {templates_root}"
@@ -364,7 +364,7 @@ def write_outputs(output_root: Path, rendered_files: list[RenderedFile]) -> list
 				f"Failed creating parent directory for '{target}': {exc}"
 			) from exc
 		try:
-			target.write_text(rendered_file.content, encoding="utf-8", newline="\n")
+			target.write_text(rendered_file.content, encoding="utf-8")
 		except OSError as exc:
 			raise OutputWriteError(f"Failed writing rendered file '{target}': {exc}") from exc
 		written_paths.append(target)
