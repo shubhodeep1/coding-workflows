@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+export LC_ALL=C
 
 BUNDLE_FILE="${1:-reviewer_bundle.txt}"
 OUT_FILE="${2:-floor_tags.txt}"
@@ -8,12 +9,12 @@ TOLERANCE_LINES=3
 warn() {
 	local event="$1"
 	shift || true
-	printf 'stage=floor_rules level=warning event=%s %s\n' "${event}" "$*" >&2
+	printf 'stage=floor_rules level=warning event=%s %s\n' "${event}" "$*" >&2 || true
 }
 
 log_stats() {
 	printf 'stage=floor_rules anchors_scanned=%s multi_reviewer_hits=%s keyword_hits=%s high_confidence_hits=%s output_rows=%s\n' \
-		"$1" "$2" "$3" "$4" "$5" >&2
+		"$1" "$2" "$3" "$4" "$5" >&2 || true
 }
 
 write_empty_output() {
@@ -141,13 +142,15 @@ normalize_override_keywords() {
 	' "${source_file}" > "${target_file}"
 }
 
-trap 'fail_open "unhandled_error"' ERR
-
-tmp_dir="$(mktemp -d)"
+tmp_dir=""
+if ! tmp_dir="$(mktemp -d 2>/dev/null)"; then
+	fail_open "tmp_dir_create_failed"
+fi
 cleanup() {
 	rm -rf "${tmp_dir}"
 }
 trap cleanup EXIT
+trap 'fail_open "unhandled_error"' ERR
 
 if [ ! -s "${BUNDLE_FILE}" ]; then
 	warn "bundle_missing_or_empty" "bundle=${BUNDLE_FILE}"
@@ -176,7 +179,7 @@ fi
 raw_rows_file="${tmp_dir}/floor_rows.tsv"
 stats_file="${tmp_dir}/stats.txt"
 
-awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v stats_out="${stats_file}" '
+awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v stats_out="${stats_file}" -v repo_root="${PWD}" '
 	function trim(s) {
 		sub(/^[[:space:]]+/, "", s)
 		sub(/[[:space:]]+$/, "", s)
@@ -206,6 +209,12 @@ awk -v tolerance_lines="${TOLERANCE_LINES}" -v raw_out="${raw_rows_file}" -v sta
 		gsub(/[`"]/, "", p)
 		sub(/^[.][\/]/, "", p)
 		gsub(/\\/, "/", p)
+		if (substr(p, 1, 1) == "/" && repo_root != "") {
+			prefix = repo_root "/"
+			if (index(p, prefix) == 1) {
+				p = substr(p, length(prefix) + 1)
+			}
+		}
 		if (match(p, /:[0-9]+$/)) {
 			p = substr(p, 1, RSTART - 1)
 		}
