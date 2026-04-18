@@ -1254,17 +1254,26 @@ PY2
 				| sed -E 's/^\$\{CANARY_TOOLS:-//; s/\}[[:space:]]*$//' \
 				| sed -E 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
 			local _denylist="mongosh mongo psql redis-cli mysql mysqladmin kafkacat kcat"
-			local _tool _offenders=""
+			local _tool _tool_pattern _offenders=""
+			set -f
 			for _tool in ${_canary_tools_raw}; do
 				case " ${_denylist} " in
 					*" ${_tool} "*)
+						case "${_tool}" in
+							psql) _tool_pattern='psql|postgresql-client' ;;
+							redis-cli) _tool_pattern='redis-cli|redis-tools' ;;
+							mysql|mysqladmin) _tool_pattern="${_tool}|mysql-client" ;;
+							*) _tool_pattern="${_tool}" ;;
+						esac
 						# Tool is service-side. Accept it only if the app
 						# image explicitly installs it (apt/pip/custom RUN).
 						# The token-boundary regex avoids matching the tool
 						# name inside an unrelated identifier.
 						if [ -f validation/Dockerfile.app ] && \
 							grep -Ev '^[[:space:]]*#' validation/Dockerfile.app \
-							| grep -qE "(^|[^[:alnum:]_])${_tool}([[:space:]=]|$)"; then
+							| sed -E 's/[[:space:]]+#.*$//' \
+							| sed -E ':a;N;$!ba;s/\\[[:space:]]*\n[[:space:]]*/ /g' \
+							| grep -qE "(^|[^[:alnum:]_])(${_tool_pattern})([^[:alnum:]_]|$)"; then
 							: # installed; scope satisfied
 						else
 							_offenders="${_offenders:+${_offenders} }${_tool}"
@@ -1272,6 +1281,7 @@ PY2
 						;;
 				esac
 			done
+			set +f
 			if [ -n "${_offenders}" ]; then
 				{
 					echo "validation/tests/00_canary.sh CANARY_TOOLS references service-side CLI(s) not installed in validation/Dockerfile.app: ${_offenders}"

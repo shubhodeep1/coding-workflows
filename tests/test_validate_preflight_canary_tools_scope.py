@@ -56,12 +56,21 @@ _LINT_SNIPPET = textwrap.dedent(r"""
 
     _denylist="mongosh mongo psql redis-cli mysql mysqladmin kafkacat kcat"
     _offenders=""
+    set -f
     for _tool in ${_canary_tools_raw}; do
         case " ${_denylist} " in
             *" ${_tool} "*)
+                case "${_tool}" in
+                    psql) _tool_pattern='psql|postgresql-client' ;;
+                    redis-cli) _tool_pattern='redis-cli|redis-tools' ;;
+                    mysql|mysqladmin) _tool_pattern="${_tool}|mysql-client" ;;
+                    *) _tool_pattern="${_tool}" ;;
+                esac
                 if [ -f validation/Dockerfile.app ] && \
                     grep -Ev '^[[:space:]]*#' validation/Dockerfile.app \
-                    | grep -qE "(^|[^[:alnum:]_])${_tool}([[:space:]=]|$)"; then
+                    | sed -E 's/[[:space:]]+#.*$//' \
+                    | sed -E ':a;N;$!ba;s/\\[[:space:]]*\n[[:space:]]*/ /g' \
+                    | grep -qE "(^|[^[:alnum:]_])(${_tool_pattern})([^[:alnum:]_]|$)"; then
                     :
                 else
                     _offenders="${_offenders:+${_offenders} }${_tool}"
@@ -69,6 +78,7 @@ _LINT_SNIPPET = textwrap.dedent(r"""
                 ;;
         esac
     done
+    set +f
 
     if [ -n "${_offenders}" ]; then
         echo "OFFENDERS:${_offenders}"
@@ -216,6 +226,81 @@ class CanaryToolsScopeLintTests(unittest.TestCase):
             result = _run(tmp)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("OFFENDERS:mongosh", result.stdout)
+
+    def test_inline_comment_does_not_satisfy_install(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                os.path.join(tmp, "validation/tests/00_canary.sh"),
+                'CANARY_TOOLS="${CANARY_TOOLS:-curl jq mongosh}"\n',
+            )
+            _write(
+                os.path.join(tmp, "validation/Dockerfile.app"),
+                "FROM python:3.12-slim\n"
+                "RUN apt-get install -y curl jq # mongosh\n",
+            )
+            result = _run(tmp)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("OFFENDERS:mongosh", result.stdout)
+
+    def test_package_alias_install_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                os.path.join(tmp, "validation/tests/00_canary.sh"),
+                'CANARY_TOOLS="${CANARY_TOOLS:-curl jq psql}"\n',
+            )
+            _write(
+                os.path.join(tmp, "validation/Dockerfile.app"),
+                "FROM python:3.12-slim\n"
+                "RUN apt-get install -y curl jq postgresql-client\n",
+            )
+            result = _run(tmp)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("OK", result.stdout)
+
+    def test_tool_match_handles_shell_punctuation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                os.path.join(tmp, "validation/tests/00_canary.sh"),
+                'CANARY_TOOLS="${CANARY_TOOLS:-curl jq psql}"\n',
+            )
+            _write(
+                os.path.join(tmp, "validation/Dockerfile.app"),
+                "FROM python:3.12-slim\n"
+                "RUN apt-get install -y psql; echo done\n",
+            )
+            result = _run(tmp)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("OK", result.stdout)
+
+    def test_line_continuation_install_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                os.path.join(tmp, "validation/tests/00_canary.sh"),
+                'CANARY_TOOLS="${CANARY_TOOLS:-curl jq redis-cli}"\n',
+            )
+            _write(
+                os.path.join(tmp, "validation/Dockerfile.app"),
+                "FROM python:3.12-slim\n"
+                "RUN apt-get install -y curl jq \\\n                    redis-tools\n",
+            )
+            result = _run(tmp)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("OK", result.stdout)
+
+    def test_glob_literal_does_not_expand_to_filenames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                os.path.join(tmp, "validation/tests/00_canary.sh"),
+                'CANARY_TOOLS="${CANARY_TOOLS:-*}"\n',
+            )
+            _write(
+                os.path.join(tmp, "validation/Dockerfile.app"),
+                "FROM python:3.12-slim\nRUN apt-get install -y curl jq\n",
+            )
+            _write(os.path.join(tmp, "mongosh"), "sentinel\n")
+            result = _run(tmp)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("OK", result.stdout)
 
 
 if __name__ == "__main__":
