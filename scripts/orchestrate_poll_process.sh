@@ -5267,14 +5267,24 @@ PY
       continue
     fi
 
-    # ---- Fresh-push guard: skip recovery when the linked PR was pushed within the last 30m ----
-    # Complements issue_has_active_workflow above; see _check_fresh_push_guard
-    # for rationale.  Consumes the linked_pr field already populated in
-    # _candidate_details_json (0 additional API calls).  Only fires for
-    # ai:done / ai:ready-to-merge phases; fails open otherwise.
-    local _std_fresh_lpr
-    _std_fresh_lpr="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // null' 2>/dev/null || echo "null")"
-    if _check_fresh_push_guard "${issue_num}" "${_std_fresh_lpr}" "${phase}"; then
+    # ---- Merged-PR + fresh-push guards ----
+    # Check merged first so recently merged PRs are reconciled (ai:merged)
+    # before fresh-push suppression can short-circuit this issue for the cycle.
+    local _std_linked_json
+    _std_linked_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // null' 2>/dev/null || echo "null")"
+    if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
+      echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
+      _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
+      continue
+    fi
+
+    # Fresh-push guard complements issue_has_active_workflow above; see
+    # _check_fresh_push_guard for rationale. Consumes linked_pr already
+    # populated in _candidate_details_json (0 additional API calls).
+    if _check_fresh_push_guard "${issue_num}" "${_std_linked_json}" "${phase}"; then
       echo "  [standalone-stall] Issue #${issue_num} linked PR #${FRESH_PUSH_PR_NUM} was pushed ${FRESH_PUSH_AGE_SECS}s ago — skipping recovery (fresh push)."
       echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}"
       if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
@@ -5296,8 +5306,6 @@ PY
     # are empty — the stall action then runs as before.
     case "${action}" in
       retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement)
-        local _std_linked_json
-        _std_linked_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // null' 2>/dev/null || echo "null")"
         # Cache miss — REST fallback (timeline → PR payload → merged_at).
         # Two extra API calls per cache-miss issue, bounded by the
         # rarity of prefetch failures.  Gated on the guard flag so
@@ -5759,7 +5767,7 @@ recover_stalled_issue() {
     return 1  # Signal: no action taken (caller should not increment counter)
   fi
 
-  # ---- Guard: skip recovery when the linked PR was pushed within the last 30m ----
+  # ---- Guards: merged PR first, then fresh push suppression ----
   # Covers the race where autofix just pushed a commit but the next
   # pull_request.synchronize workflow run hasn't materialised yet, so
   # issue_has_active_workflow momentarily returns false.  Scope is
@@ -5770,13 +5778,19 @@ recover_stalled_issue() {
   # STALL_MANAGED_LINKED_PR_CACHE via _fetch_linked_pr_status_graphql
   # (0 additional API calls).  Fails open when the cache is missing or
   # headPushedAt is unavailable.
+  local _fresh_lpr_entry="null"
   if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
-    local _fresh_lpr_entry
     _fresh_lpr_entry="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null")"
-    if _check_fresh_push_guard "${issue_num}" "${_fresh_lpr_entry}" "${phase}"; then
-      echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}"
-      return 1  # Signal: no action taken (caller should not increment counter)
-    fi
+  fi
+  if _check_merged_pr_guard "${issue_num}" "${_fresh_lpr_entry}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
+    _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+    STALL_HEALING_CHANGED=true
+    return 1  # Signal: no action taken (caller should not increment counter)
+  fi
+  if _check_fresh_push_guard "${issue_num}" "${_fresh_lpr_entry}" "${phase}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}"
+    return 1  # Signal: no action taken (caller should not increment counter)
   fi
 
   # ---- Guard: skip pre-implementation recovery when a linked PR already exists ----
