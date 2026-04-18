@@ -60,7 +60,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. |
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
-| `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` | No | `8` | review_autofix | Seconds the post-commit and editor-changes-lost retrigger steps wait before checking for an already-queued peer review run on the same PR branch. If a peer is found the retrigger skips its own `workflow_dispatch` to avoid the two runs cancelling each other in the `pr-autofix-${PR}` concurrency group (see [Autofix retrigger dedup](#autofix-retrigger-dedup)). Must be an integer in `0..60`; invalid values clamp to `8`. |
+| `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` | No | `8` | review_autofix | Seconds the post-commit and editor-changes-lost retrigger steps wait before checking for an already-queued peer review run on the same PR branch. If a peer is found the retrigger skips its own `workflow_dispatch` to avoid creating a redundant queued run (and extra API/UI noise) in the `pr-autofix-${PR}` concurrency group (see [Autofix retrigger dedup](#autofix-retrigger-dedup)). Must be an integer in `0..60`; invalid values clamp to `8`. |
 | `ENABLE_REVIEWER_TWO_PASS` | No | `true` | review_autofix | When true, reviewers run two passes per iteration: pass 1 at `medium` reasoning (broad sweep), then pass 2 at the scheduled reasoning level with a cross-pollination summary of pass 1 findings. Set to `false` to use a single pass at the scheduled reasoning level. |
 | `ENABLE_REVIEW_BLOCKED_JUDGE` | No | `true` | review_autofix | When true, non-orchestrator PRs that exhaust autofix iterations invoke a judge (LLM) to decide: merge as-is, push a fix commit, or close and reissue. Orchestrator-managed PRs are skipped (handled by the poller). PRs without linked issues use the PR title/body as requirement context. |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | No | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge in non-orchestrator PRs (`xhigh`, `high`, `medium`, `low`). |
@@ -304,9 +304,11 @@ jobs:
 > commit, `review_autofix.yml` pushes to the PR branch and then fires a
 > `workflow_dispatch` retrigger (for the case where the `pull_request.synchronize`
 > event's merge ref is unbuildable). Both entry points land in the same
-> `pr-autofix-${PR}` concurrency group with `cancel-in-progress: true`, so the
-> loser is killed mid-flight after it has already spent runner minutes and
-> possibly LLM setup tokens. To avoid this waste, the retrigger steps now wait
+> `pr-autofix-${PR}` concurrency group with `cancel-in-progress: false`, so new
+> runs queue behind the running peer. GitHub keeps only the most recent pending
+> run in the group (older pending runs are cancelled), but that newest queued
+> run still appears in the Actions UI and consumes a `workflow_dispatch` API
+> call. To avoid this waste, the retrigger steps now wait
 > `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` (default `8`) for the synchronize-event
 > run to materialize, then query the Actions API for in-flight peers on the
 > same head branch (matching workflow file paths `review_autofix.yml`,
