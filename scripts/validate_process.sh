@@ -1187,7 +1187,7 @@ attempt_render_recovery_after_preflight_failure()
 	fi
 
 	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
-	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}" || true
 	if [ -s "${tmp_log}" ]; then
 		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
 	else
