@@ -1147,13 +1147,15 @@ attempt_render_recovery_after_preflight_failure()
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
 		return 1
 	fi
+	classify_preflight_failure
 	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
-		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
-		return 1
+		if [ "${PRE_FLIGHT_FAILURE_KIND:-non_lint}" != "lint" ]; then
+			echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
+			return 1
+		fi
 	fi
 
 	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
-	classify_preflight_failure
 	if [ "${PRE_FLIGHT_FAILURE_KIND}" = "lint" ]; then
 		echo "Render recovery: lint-classified pre-flight failure; attempting deterministic rerender/re-lint recovery." >> "${PRE_FLIGHT_LOG_FILE}"
 		if attempt_template_render_recovery_after_preflight_lint; then
