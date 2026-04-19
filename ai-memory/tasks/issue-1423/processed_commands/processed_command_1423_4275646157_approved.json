@@ -5,13 +5,25 @@
   "entry_id": "processed_command_1423_4275646157_approved",
   "issue_number": 1423,
   "metadata": {
+    "branch": "ai/issue-1423",
+    "changed_files": [
+      "README.md",
+      "scripts/dev/replay_review_pipeline.sh",
+      "tests/test_implement_post_codex_recovery.py",
+      "tests/test_review_pipeline_integration.py"
+    ],
+    "issue_number": 1423,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1423",
+    "pr_number": 1430,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1430",
+    "run_attempt": "1",
+    "run_id": "24626335629",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24626335629"
   },
   "run_attempt": 1,
   "run_id": "24626335629",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-19T09:54:31Z",
+  "status": "completed",
+  "timestamp": "2026-04-19T10:09:31Z",
   "workflow": "implement"
 }
