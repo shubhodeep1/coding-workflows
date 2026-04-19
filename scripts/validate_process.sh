@@ -221,6 +221,15 @@ attempt_self_heal_and_reexec()
 {
   local phase="${1:-unknown}"
 
+  case "${phase}" in
+    discover|generate|preflight|render|canary|diagnose|runtime|unknown)
+      ;;
+    *)
+      echo "::warning::self-heal invoked with unsupported phase '${phase}'; normalizing to 'unknown'." >&2
+      phase="unknown"
+      ;;
+  esac
+
   if [ "${MAX_SELF_HEAL_ATTEMPTS:-0}" -le 0 ]; then
     return 0
   fi
@@ -1121,6 +1130,32 @@ run_template_validation_harness_renderer()
 	fi
 
 	return 0
+}
+
+run_preflight_render_recovery()
+{
+	local renderer_exit=0
+
+	echo "VALIDATION_RENDER_RECOVERY phase=render status=start" >> "${GENERATE_LOG_FILE}"
+	if run_template_validation_harness_renderer; then
+		renderer_exit=0
+	else
+		renderer_exit=$?
+	fi
+
+	if [ "${renderer_exit}" -ne 0 ]; then
+		echo "VALIDATION_RENDER_RECOVERY phase=render status=renderer_failed renderer_exit=${renderer_exit}" >> "${GENERATE_LOG_FILE}"
+		return 1
+	fi
+
+	echo "VALIDATION_RENDER_RECOVERY phase=render status=rerender_pass rerun=preflight" >> "${GENERATE_LOG_FILE}"
+	if run_preflight_checks; then
+		echo "VALIDATION_RENDER_RECOVERY phase=render status=relint_pass" >> "${GENERATE_LOG_FILE}"
+		return 0
+	fi
+
+	echo "VALIDATION_RENDER_RECOVERY phase=render status=relint_failed" >> "${GENERATE_LOG_FILE}"
+	return 1
 }
 
 run_preflight_checks()
@@ -2292,24 +2327,32 @@ fi
 # Phase 2: Pre-flight checks for generated harness
 # ---------------------------------------------------------------
 if ! run_preflight_checks; then
-  failure_summary="Validation pre-flight checks failed. See validation_preflight.log artifact."
-  jq -n \
-    --arg diagnosis "Pre-flight validation failed before test execution." \
-    --arg harness_fixes "$(tail -n 120 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true)" \
-    '{
-      status: "harness_error",
-      diagnosis: $diagnosis,
-      fix_issues: [],
-      harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix validation/docker-compose.test.yml, shell syntax, or build context/dockerfile paths." end)
-    }' > "${DIAGNOSE_RESULT_FILE}"
+  if [ "${VALIDATION_USE_TEMPLATES_ENABLED}" = "true" ] && run_preflight_render_recovery; then
+    :
+  else
+    failure_summary="Validation pre-flight checks failed. See validation_preflight.log artifact."
+    jq -n \
+      --arg diagnosis "Pre-flight validation failed before test execution." \
+      --arg harness_fixes "$(tail -n 120 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true)" \
+      '{
+        status: "harness_error",
+        diagnosis: $diagnosis,
+        fix_issues: [],
+        harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix validation/docker-compose.test.yml, shell syntax, or build context/dockerfile paths." end)
+      }' > "${DIAGNOSE_RESULT_FILE}"
 
-  # Self-heal interception: bad harness is often a prompt-wording defect.
-  attempt_self_heal_and_reexec "preflight"
-  post_tracking_comment "## ❌ Runtime validation harness pre-flight failed\n\n${failure_summary}\n\n\`docker compose config\`, shell syntax, or build context/dockerfile path checks failed."
-  set_tracking_phase_label "ai:validation-failed"
-  write_result_files "fail" "Validation failed due to harness pre-flight error" "${failure_summary}" "harness_error"
-  tg_notify "Validation pre-flight failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
-  exit 0
+    # Self-heal interception: bad harness is often a prompt-wording defect.
+    if [ "${VALIDATION_USE_TEMPLATES_ENABLED}" = "true" ]; then
+      attempt_self_heal_and_reexec "render"
+    else
+      attempt_self_heal_and_reexec "preflight"
+    fi
+    post_tracking_comment "## ❌ Runtime validation harness pre-flight failed\n\n${failure_summary}\n\n\`docker compose config\`, shell syntax, or build context/dockerfile path checks failed."
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "fail" "Validation failed due to harness pre-flight error" "${failure_summary}" "harness_error"
+    tg_notify "Validation pre-flight failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    exit 0
+  fi
 fi
 
 
