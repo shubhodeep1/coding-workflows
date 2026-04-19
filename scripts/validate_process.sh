@@ -218,7 +218,7 @@ fi
 # returns and the caller proceeds with its normal hard-fail path.
 #
 # Usage: attempt_self_heal_and_reexec "<failure-phase-tag>"
-#   phase tag: generate|preflight|canary|runtime|diagnose|discover
+#   phase tag: generate|preflight|canary|runtime|diagnose|discover|render
 attempt_self_heal_and_reexec()
 {
   local phase="${1:-unknown}"
@@ -1740,7 +1740,7 @@ attempt_template_render_recovery_after_preflight_lint()
 		if run_preflight_checks; then
 			echo "PRE_FLIGHT_RENDER_RECOVERY recovered=true attempt=${render_recovery_attempt}/${max_render_recovery_attempts}" >&2
 			PRE_FLIGHT_FAILURE_KIND="none"
-			PRE_FLIGHT_FAILURE_REASON="render_retry_recovered"
+			PRE_FLIGHT_FAILURE_REASON="none"
 			return 0
 		fi
 
