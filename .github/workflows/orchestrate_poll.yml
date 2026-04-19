@@ -456,6 +456,58 @@ jobs:
             --actor "${GITHUB_ACTOR}" \
             --metadata-json "{\"run_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"repository\":\"${GITHUB_REPOSITORY}\",\"job_status\":\"${{ job.status }}\",\"has_work\":\"${{ steps.find_tracking.outputs.has_work || 'false' }}\"}" || true
 
+      - name: Notify Telegram on job failure
+        if: failure()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        shell: bash
+        run: |
+          # Fire-and-forget Telegram alert on job-level failure. Inline
+          # tg_notify() calls inside scripts/orchestrate_poll_process.sh
+          # only cover semantic events (judge merged, follow-up blocked,
+          # etc.) — when the script hard-crashes via `set -e` (e.g. a
+          # bad git add), no inline alert ever runs. This step covers
+          # that gap. Body intentionally omits any step output / log
+          # tail; only the workflow name, failing step name, and run
+          # URL are sent.
+          set -uo pipefail
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::tg_helpers.sh not found; cannot send job-failure TG alert"
+            exit 0
+          fi
+          # shellcheck disable=SC1091
+          source scripts/tg_helpers.sh
+
+          run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          workflow_name="${GITHUB_WORKFLOW:-orchestrate_poll}"
+
+          # Resolve the first failing step name via the GitHub API. Fail
+          # open: if the lookup fails or returns nothing, still send the
+          # alert without the step name rather than dropping the alert.
+          failing_step=""
+          if [ -n "${GH_TOKEN:-}" ]; then
+            jobs_json="$(curl -fsSL \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "${GITHUB_API_URL:-https://api.github.com}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT:-1}/jobs" 2>/dev/null || echo '')"
+            if [ -n "${jobs_json}" ]; then
+              failing_step="$(printf '%s' "${jobs_json}" \
+                | jq -r '.jobs[]?.steps[]? | select(.conclusion == "failure") | .name' 2>/dev/null \
+                | head -n1)"
+            fi
+          fi
+
+          msg="Workflow failed: ${workflow_name}"
+          if [ -n "${failing_step}" ]; then
+            msg+=$'\n'"Failing step: ${failing_step}"
+          fi
+          msg+=$'\n'"Run: ${run_url}"
+
+          tg_send_msg "${msg}" "ERROR" >/dev/null || true
+
       - name: Check rate-limit circuit breaker
         id: circuit_breaker
         if: always()

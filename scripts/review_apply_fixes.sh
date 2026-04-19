@@ -196,6 +196,16 @@ For issues marked PERSISTING or RESURGENT, prior fix attempts failed: use a mate
 When you disagree with a consolidator recommendation, include a summary line:
 CONSOLIDATOR_OVERRIDDEN: <issue_id> - <short reason>
 
+ADDITIONAL REVIEWER CONTEXT (PASS-1 — OPTIONAL, CONSULT ON DEMAND)
+The two-pass reviewer pipeline also retained pass-1 (broad-sweep) artifacts
+for each reviewer model at the following paths. These are NOT bundled
+because pass-2 (which IS in reviewer_bundle.txt) already cross-pollinated
+them; read them only if a pass-2 finding is ambiguous or you need to check
+whether pass-1 flagged something pass-2 dropped:
+- Compact LLM-summarised ledgers: ${PREVIOUS_REVIEWS_DIR}/summary_<safe_model_name>.txt
+- Full raw pass-1 outputs:        ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt
+Prefer the summary_*.txt ledgers over the raw pass1_*.txt files.
+
 HARDENING TASKS
 
 Extract HARDENING_SUGGESTIONS sections from reviewer outputs in the bundle.

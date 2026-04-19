@@ -63,6 +63,17 @@ env:
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
+  # Pipelined cross-pollination summariser (pass-1 -> compact ledger for pass-2).
+  # Uses a cheap OpenRouter model so pass-2 prompts stay small even on large PRs
+  # (pre-summariser they grew unbounded and triggered OOM on standard runners).
+  ENABLE_REVIEWER_XPOLL_SUMMARISER: ${{ vars.ENABLE_REVIEWER_XPOLL_SUMMARISER || 'true' }}
+  XPOLL_SUMMARISER_MODEL: ${{ vars.XPOLL_SUMMARISER_MODEL || 'openai/gpt-5.4-mini' }}
+  XPOLL_SUMMARISER_REASONING: ${{ vars.XPOLL_SUMMARISER_REASONING || 'xhigh' }}
+  XPOLL_SUMMARISER_LINES_PER_REVIEWER: ${{ vars.XPOLL_SUMMARISER_LINES_PER_REVIEWER || '160' }}
+  XPOLL_SUMMARISER_CALL_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_CALL_TIMEOUT_SECS || '180' }}
+  XPOLL_SUMMARISER_WAIT_TIMEOUT_SECS: ${{ vars.XPOLL_SUMMARISER_WAIT_TIMEOUT_SECS || '300' }}
+  XPOLL_SUMMARISER_MAX_INPUT_LINES: ${{ vars.XPOLL_SUMMARISER_MAX_INPUT_LINES || '3000' }}
+  XPOLL_SUMMARISER_FALLBACK_LINES: ${{ vars.XPOLL_SUMMARISER_FALLBACK_LINES || '200' }}
 
 jobs:
   gate:
@@ -324,7 +335,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh build_issue_consensus.py"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh build_issue_consensus.py summarize_pass1_output.py"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -2401,7 +2412,7 @@ jobs:
           # git merge later tries to write the same path from origin/BASE_BRANCH.
           # In the source repo these files are tracked, so git reset --hard HEAD
           # will restore them after this removal — no data loss occurs.
-          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh 2>/dev/null || true
+          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_pass1_output.py 2>/dev/null || true
           git reset --hard HEAD
           # Use -ffdx: double-force clears nested git repos (-ff), and -x also
           # removes files matching .gitignore (e.g. .serena/) so nothing
@@ -2412,7 +2423,7 @@ jobs:
           # commit step (caller repos delete fetched scripts before committing)
           # or wiped by git clean -ffdx above.
           # Re-stage any missing scripts from checked-out support source.
-          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_pass1_output.py; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               src=".codex-workflow-src/scripts/${f}"
@@ -2615,7 +2626,7 @@ jobs:
           # check_workflow_script_refs.py then fails the [ai-merge-resolve]
           # commit because the referenced scripts are missing from disk.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh 2>/dev/null || true
+            rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_pass1_output.py 2>/dev/null || true
           fi
           RESOLVE_STASH="$(mktemp -d)"
           for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
@@ -4273,7 +4284,7 @@ jobs:
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/build_issue_consensus.py
+            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/build_issue_consensus.py scripts/summarize_pass1_output.py
             rm -rf .serena prompts
             rm -f .github/ai/orchestrate_schema.v1.json
           fi
