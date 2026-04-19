@@ -29,9 +29,9 @@ Fix strategy:
 
 CRITICAL — build_verification checker routing by file type:
 - When repairing `validation/tests/01_build_verification.sh` (or equivalent build-verification script), preserve and/or restore extension-based syntax checker routing.
-- `*.py` MUST be checked with `python3 -m py_compile`.
-- `*.js` MUST be checked with `node --check`.
-- `*.sh` MUST be checked with `bash -n` (or equivalent shell syntax checker).
+- `*.py` MUST be checked with `python3 -m py_compile <file>`.
+- `*.js` MUST be checked with `node --check <file>`.
+- `*.sh` MUST be checked with `bash -n <file>` (or equivalent shell syntax checker).
 - `*.yml` / `*.yaml` MUST be checked with `python3 -c "import yaml, sys; f=open(sys.argv[1], 'rb'); list(yaml.safe_load_all(f)); f.close()" <file>`.
 - Never run `python3 -m py_compile` on shell scripts; explicit prohibited regression: `python3 -m py_compile scripts/validate_process.sh`.
 - Keep the checker map aligned with `scripts/validate_changed_files_syntax.sh` semantics (language-appropriate checker selected by extension).

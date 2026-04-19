@@ -148,6 +148,10 @@ class TestHardhatRpcProbe(unittest.TestCase):
         line = _run_probe(resp)
         self.assertTrue(line.startswith("RESULT:missing_result_field:"), line)
 
+    def test_prompt_files_contain_rpc_guidance(self) -> None:
+        """Backward-compatible alias for external filters using the legacy test name."""
+        self.test_prompt_files_contain_required_guidance()
+
     def test_prompt_files_contain_required_guidance(self) -> None:
         """Verify that both prompt files contain required RPC and checker-routing guidance."""
         from pathlib import Path
