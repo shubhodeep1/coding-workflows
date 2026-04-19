@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `ebb0220ae50755387e9a221b0c429b738549eeee`\n- Checked-out branch: `orchestrator/project-1292`\n- Integration branch metadata: `orchestrator/project-1292`\n- Integration branch mismatch: `false`\n\nClarification mapping:\n- No `Q1/Q2/...` clarification questions were present in this planning context.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as: proceed using the issue body/acceptance criteria as authoritative scope.\n\nConflict detection (explicit):\n- The requested render-phase recovery behavior already exists on this ref:\n  - `scripts/validate_process.sh` contains `attempt_render_recovery_after_preflight_failure`, preflight rerender+relint flow, and render-phase routing to `attempt_self_heal_and_reexec \"render\"`.\n  - `scripts/self_heal_validation.sh` already recognizes `SELF_HEAL_FAILURE_PHASE=render`.\n  - `prompts/mode-validate-self-heal.txt` already constrains render failures to prompt-only self-heal scope.\n  - `tests/test_validate_process_render_recovery.py` already includes success, fail-open, and non-template legacy-path cases.\n- Implementation plan is therefore a verification-first/minimal-delta plan; code changes only if a gap is found during validation.\n\nImplementation plan:\n1. Confirm acceptance criteria against the current implementation (no edits yet).\n2. If any gap is found, patch only the existing render-recovery path in `scripts/validate_process.sh`:\n   - Keep deterministic rerender + relint retry before terminalization.\n   - Keep single-attempt guard via `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`.\n   - Keep fail-open behavior when renderer/rerun fails.\n   - Preserve \u201cno freehand harness edits\u201d in this recovery path.\n3. If needed, patch `scripts/self_heal_validation.sh` logging/phase handling only to preserve `render` phase observability without expanding target scope.\n4. If needed, patch `prompts/mode-validate-self-heal.txt` wording only to reinforce prompt-only self-heal constraints for render failures (no harness/renderer/workflow edits).\n5. Update/add tests only where coverage is actually missing; keep tests integration-style and phase-specific.\n6. Run targeted test suite and stop at minimal change set.\n\nFiles likely to change (only if gap found):\n- `scripts/validate_process.sh`\n- `scripts/self_heal_validation.sh`\n- `prompts/mode-validate-self-heal.txt`\n- `tests/test_validate_process_render_recovery.py`\n- `tests/test_validate_process_template_mode.py` (only if contract assertions need alignment)\n\nRepresentative implementation pattern to follow:\n- `scripts/validate_process.sh` preflight failure block + `attempt_render_recovery_after_preflight_failure`.\n- `tests/test_validate_process_render_recovery.py` for expected behavior contracts.\n\nFunctions/modules in scope:\n- `attempt_render_recovery_after_preflight_failure`\n- `run_template_validation_harness_renderer`\n- preflight failure branch in main validate flow (`if ! run_preflight_checks; then ...`)\n- `attempt_self_heal_and_reexec`\n- `scripts/self_heal_validation.sh` phase capture/decision logging path\n\nData structures affected:\n- Runtime shell state variables: `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`, `HARNESS_MODE`, `HARNESS_GENERATOR_MODE`, `SELF_HEAL_FAILURE_PHASE`\n- Self-heal decision/ledger JSON fields (existing): `target_prompt`, `patch`, `failure_phase`\n- No MongoDB collections/contracts are affected.\n\nAPI/interface changes:\n- No external API or workflow interface changes planned.\n- Internal behavior contract remains: render recovery is deterministic and self-heal remains prompt-file-only.\n\nRisks / edge cases:\n- Regressing legacy non-template path by invoking render recovery outside template mode.\n- Accidentally widening self-heal allow-list beyond the 4 validation prompt files.\n- Breaking fail-open behavior when renderer assets are missing/failing.\n- Accidentally introducing freehand harness mutation into render recovery.\n\nTesting considerations:\n- Run:\n  - `pytest -q tests/test_validate_process_render_recovery.py`\n  - `pytest -q tests/test_validate_process_template_mode.py`\n- If script logic changes beyond those paths, run related validate-process contract tests:\n  - `pytest -q tests/test_validate_process_fixup_labels.py tests/test_validate_process_cross_cycle_escalation.py`\n- Expected outcome for this issue: either no-op with passing evidence, or minimal targeted patch with the above tests green.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "052b64697124fc9aa80f01beedf8933e3a024efdf798b920c0ffa421ff4414e1",
+  "lineage": {
+    "issue_number": 1376,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24622862021",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24622862021",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1376"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419063619_b1d76ad540",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1376,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24622862021"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1376",
+  "timestamps": {
+    "created_at": "2026-04-19T06:36:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
