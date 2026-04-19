@@ -11,7 +11,8 @@
 #   VALIDATION_COMPOSE_FILE,
 #   VALIDATION_TEST_USERNAME, VALIDATION_TEST_PASSWORD, VALIDATION_TEST_API_KEY,
 #   SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS,
-#   CONTEXT7_DISABLED, GIT_MCP_DISABLED
+#   CONTEXT7_DISABLED, GIT_MCP_DISABLED,
+#   VALIDATE_PREFLIGHT_PYFLAKES_ENABLED, VALIDATE_PREFLIGHT_PYFLAKES_RULES
 
 set -euo pipefail
 
@@ -43,6 +44,16 @@ if ! [[ "${VALIDATION_TIMEOUT}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_TIMEOUT}" -le 
   exit 1
 fi
 TOOL_CALL_BUDGET_VALIDATE="${TOOL_CALL_BUDGET_VALIDATE:-60}"
+MAX_CODEX_ATTEMPTS="${MAX_CODEX_ATTEMPTS:-3}"
+if ! [[ "${MAX_CODEX_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_CODEX_ATTEMPTS}" -lt 1 ]; then
+  echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${MAX_CODEX_ATTEMPTS}); defaulting to 3."
+  MAX_CODEX_ATTEMPTS="3"
+fi
+CODEX_RETRY_BACKOFF_BASE_SECS="${CODEX_RETRY_BACKOFF_BASE_SECS:-10}"
+if ! [[ "${CODEX_RETRY_BACKOFF_BASE_SECS}" =~ ^[0-9]+$ ]] || [ "${CODEX_RETRY_BACKOFF_BASE_SECS}" -lt 1 ]; then
+  echo "::warning::CODEX_RETRY_BACKOFF_BASE_SECS must be a positive integer (got: ${CODEX_RETRY_BACKOFF_BASE_SECS}); defaulting to 10."
+  CODEX_RETRY_BACKOFF_BASE_SECS="10"
+fi
 VALIDATION_COMPOSE_FILE="${VALIDATION_COMPOSE_FILE:-docker-compose.yml}"
 VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-test-user}"
 VALIDATION_TEST_PASSWORD="${VALIDATION_TEST_PASSWORD:-test-password}"
@@ -52,6 +63,27 @@ if ! [[ "${VALIDATION_CYCLE}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_CYCLE}" -lt 1 ];
   echo "::warning::VALIDATION_CYCLE must be a positive integer (got: ${VALIDATION_CYCLE}); defaulting to 1."
   VALIDATION_CYCLE="1"
 fi
+
+# Preflight pyflakes/ruff lint gate for embedded Python heredocs in
+# validation/**/*.sh. Catches undefined-name (F821) / other F-code bugs
+# that ast.parse cannot see and that runtime tests miss when the bug
+# lives in an unexercised conditional branch (observed as
+# `unknown_error:NameError` in consumer-repo autobet flows). See
+# run_preflight_checks() for the implementation.
+VALIDATE_PREFLIGHT_PYFLAKES_ENABLED="${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED:-true}"
+case "${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED}" in
+  true|false) ;;
+  *)
+    echo "::warning::VALIDATE_PREFLIGHT_PYFLAKES_ENABLED must be 'true' or 'false' (got: ${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED}); defaulting to 'true'."
+    VALIDATE_PREFLIGHT_PYFLAKES_ENABLED="true"
+    ;;
+esac
+VALIDATE_PREFLIGHT_PYFLAKES_RULES="${VALIDATE_PREFLIGHT_PYFLAKES_RULES:-F}"
+if ! [[ "${VALIDATE_PREFLIGHT_PYFLAKES_RULES}" =~ ^[A-Z0-9,]+$ ]]; then
+  echo "::warning::VALIDATE_PREFLIGHT_PYFLAKES_RULES must match ^[A-Z0-9,]+\$ (got: ${VALIDATE_PREFLIGHT_PYFLAKES_RULES}); defaulting to 'F'."
+  VALIDATE_PREFLIGHT_PYFLAKES_RULES="F"
+fi
+export VALIDATE_PREFLIGHT_PYFLAKES_ENABLED VALIDATE_PREFLIGHT_PYFLAKES_RULES
 
 PROJECT_SPEC_FILE="${RUNTIME_DIR}/project_spec.txt"
 STATIC_CONTEXT_FILE="${RUNTIME_DIR}/validate_static.txt"
@@ -911,6 +943,96 @@ write_result_files()
   write_metadata_file "${status}" "${summary}" "${failure_summary}" "${raw_status}"
 }
 
+emit_phase_failure_marker()
+{
+  local phase="$1"
+  local failed_step_name="$2"
+  local failure_mode="$3"
+  local attempt_count="$4"
+  local failure_summary="$5"
+
+  if ! is_tracking_run; then
+    echo "::warning::AI_PHASE_FAILURE_V1 skipped: no tracking issue context (phase=${phase}, step=${failed_step_name})." >&2
+    return 0
+  fi
+
+  local timestamp
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  local run_id="${GITHUB_RUN_ID:-}"
+  local run_attempt="${GITHUB_RUN_ATTEMPT:-}"
+  local run_url=""
+  if [ -n "${run_id}" ]; then
+    run_url="$(_gh_url "actions/runs/${run_id}")"
+  fi
+
+  local payload
+  payload="$(jq -cn \
+    --arg phase "${phase}" \
+    --arg failure_mode "${failure_mode}" \
+    --arg failed_step_name "${failed_step_name}" \
+    --arg workflow_run_id "${run_id}" \
+    --arg workflow_run_attempt "${run_attempt}" \
+    --arg workflow_name "${GITHUB_WORKFLOW:-AI Validate (Reusable)}" \
+    --arg workflow_file "validate.yml" \
+    --arg workflow_run_url "${run_url}" \
+    --arg repository "${GITHUB_REPOSITORY}" \
+    --arg tracking_issue "${TRACKING_ISSUE_NUM}" \
+    --arg attempt_count "${attempt_count}" \
+    --arg recommended_resume_action "retrigger_validate" \
+    --arg timestamp "${timestamp}" \
+    '{
+      schema_version: 1,
+      phase: $phase,
+      failure_mode: $failure_mode,
+      failed_step_name: $failed_step_name,
+      workflow_run_id: $workflow_run_id,
+      workflow_run_attempt: $workflow_run_attempt,
+      workflow_name: $workflow_name,
+      workflow_file: $workflow_file,
+      workflow_run_url: (if ($workflow_run_url | length) > 0 then $workflow_run_url else null end),
+      repository: $repository,
+      tracking_issue: $tracking_issue,
+      attempt_count: $attempt_count,
+      recommended_resume_action: $recommended_resume_action,
+      timestamp: $timestamp
+    }')"
+
+  local comment_body
+  comment_body="<!-- AI_PHASE_FAILURE_V1
+${payload}
+AI_PHASE_FAILURE_V1 -->
+## ❌ Validate workflow failure
+
+${failure_summary}"
+
+  if [ -n "${run_url}" ]; then
+    comment_body+=$'\n\n'"Run: ${run_url}"
+  fi
+
+  post_tracking_comment "${comment_body}"
+}
+
+fail_validate_codex_phase()
+{
+  local failed_step_name="$1"
+  local failure_mode="$2"
+  local attempt_count="$3"
+  local failure_summary="$4"
+
+  emit_phase_failure_marker "validate" "${failed_step_name}" "${failure_mode}" "${attempt_count}" "${failure_summary}"
+
+  if is_tracking_run; then
+    set_tracking_phase_label "ai:validate-failed" || true
+  else
+    echo "::warning::Validate workflow Codex failure occurred without tracking issue context; skipped applying ai:validate-failed." >&2
+  fi
+
+  write_result_files "error" "Validate workflow failed before runtime validation could complete" "${failure_summary}" "codex_failure"
+  tg_notify "Validate workflow Codex failure during ${failed_step_name} for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+  exit 1
+}
+
 cleanup_runtime_containers()
 {
   if [ -f "validation/docker-compose.test.yml" ]; then
@@ -1198,6 +1320,188 @@ PY2
 		PRE_FLIGHT_STATUS="fail"
 		_emit_preflight_tail "embedded Python syntax check failed in validation/**/*.sh"
 		return 1
+	fi
+
+	# Embedded-Python F-code lint for generated harness scripts.
+	#
+	# ast.parse above detects SyntaxError only — it does not resolve
+	# names. A `NameError` (F821 undefined-name) in a conditional branch
+	# that the runtime test suite does not exercise will therefore reach
+	# production. Observed in a consumer-repo autobet flow:
+	# `autobet_finalize ... reason=unknown_error:NameError attempt=0`
+	# fired on every finalize call because the failing branch was never
+	# tripped by a `tests/NN_*.sh` case. Running pyflakes + ruff (both,
+	# per ask-first decision Q1=C) against each quoted python3 heredoc
+	# body flags these statically so the preflight self-heal loop can
+	# intercept before a validation cycle burns.
+	#
+	# Env vars (defaults in header): VALIDATE_PREFLIGHT_PYFLAKES_ENABLED,
+	# VALIDATE_PREFLIGHT_PYFLAKES_RULES. On missing tools the preflight
+	# attempts `python3 -m pip install --user --quiet` (Q4=C); if that
+	# fails (PEP 668, offline runner, etc.) the check fails open with a
+	# ::warning:: — matches the fail-open convention used by
+	# verify_integration_fingerprints.py (see agents.md §18).
+	if [ "${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED}" = "true" ]; then
+		local _pf_tool _pf_missing=""
+		for _pf_tool in pyflakes ruff; do
+			if ! command -v "${_pf_tool}" >/dev/null 2>&1; then
+				if ! python3 -m pip install --user --quiet "${_pf_tool}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+					if ! python3 -m pip install --user --quiet --break-system-packages "${_pf_tool}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+						_pf_missing="${_pf_missing:+${_pf_missing} }${_pf_tool}"
+					fi
+				fi
+				# Refresh PATH for --user site-packages bin dir.
+				local _pf_user_bin
+				_pf_user_bin="$(python3 -c 'import site,os; print(os.path.join(site.getuserbase(), "bin"))' 2>/dev/null || true)"
+				if [ -n "${_pf_user_bin}" ] && [ -d "${_pf_user_bin}" ]; then
+					case ":${PATH}:" in
+						*":${_pf_user_bin}:"*) ;;
+						*) PATH="${_pf_user_bin}:${PATH}" ;;
+					esac
+				fi
+				if ! command -v "${_pf_tool}" >/dev/null 2>&1; then
+					case " ${_pf_missing} " in
+						*" ${_pf_tool} "*) ;;
+						*) _pf_missing="${_pf_missing:+${_pf_missing} }${_pf_tool}" ;;
+					esac
+				fi
+			fi
+		done
+		if [ -n "${_pf_missing}" ]; then
+			echo "::warning::Preflight F-code lint fail-open: could not install ${_pf_missing}; skipping embedded-Python pyflakes/ruff lint." >&2
+		elif ! python3 - >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY3'
+import ast
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+
+RULES = os.environ.get("VALIDATE_PREFLIGHT_PYFLAKES_RULES", "F").strip() or "F"
+
+HEREDOC_PATTERN = re.compile(
+    r'^(?![ \t]*#).*\bpython3\b[^\n<]*<<\s*(-)?\s*[\'"](\w+)[\'"][^\n]*$',
+    re.MULTILINE,
+)
+
+def iter_bodies(path):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        yield None, None, None, f"{path}: cannot read: {exc}"
+        return
+    for match in HEREDOC_PATTERN.finditer(text):
+        strip_tabs = bool(match.group(1))
+        delim = match.group(2)
+        rest = text[match.end():]
+        close_re = re.compile(
+            r'^' + (r'\t*' if strip_tabs else r'') + re.escape(delim) + r'\s*$',
+            re.MULTILINE,
+        )
+        close_match = close_re.search(rest)
+        if close_match is None:
+            continue
+        body = rest[: close_match.start()]
+        if body.startswith('\n'):
+            body = body[1:]
+        if strip_tabs:
+            body = '\n'.join(line.lstrip('\t') for line in body.splitlines())
+        opener_line = text[: match.start()].count('\n') + 1
+        yield opener_line, delim, body, None
+
+def run_tool(cmd, tmp_path):
+    try:
+        proc = subprocess.run(
+            cmd + [tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 2, "", f"tool invocation failed: {exc}"
+    return proc.returncode, proc.stdout, proc.stderr
+
+LINE_RE = re.compile(r'^[^:]+:(\d+):(?:(\d+):)?\s*(.+)$')
+
+def absolutise(raw, opener_line, path, delim, tool_label):
+    m = LINE_RE.match(raw)
+    if m:
+        rel_line = int(m.group(1))
+        absolute_line = opener_line + rel_line
+        return (
+            f"{path}:{absolute_line}: embedded Python heredoc <<{delim}>>: "
+            f"{tool_label}: {m.group(3)}"
+        )
+    return f"{path}: {tool_label}: {raw}"
+
+errors = []
+root = pathlib.Path("validation")
+if not root.is_dir():
+    print("validation/ directory missing; embedded Python lint skipped.")
+    sys.exit(0)
+
+for path in sorted(root.rglob("*.sh")):
+    if "logs" in path.parts:
+        continue
+    for opener_line, delim, body, read_err in iter_bodies(path):
+        if read_err:
+            errors.append(read_err)
+            continue
+        try:
+            ast.parse(body)
+        except SyntaxError:
+            # ast.parse block above already reports SyntaxError; avoid
+            # double-flagging the same body here.
+            continue
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(body)
+            tmp_path = f.name
+        try:
+            pf_rc, pf_out, pf_err = run_tool(["pyflakes"], tmp_path)
+            if pf_rc != 0:
+                for raw in (pf_out + pf_err).splitlines():
+                    if raw.strip():
+                        errors.append(absolutise(raw, opener_line, path, delim, "pyflakes"))
+            rf_rc, rf_out, rf_err = run_tool(
+                ["ruff", "check", "--select", RULES, "--no-cache", "--output-format=concise", "--quiet"],
+                tmp_path,
+            )
+            if rf_rc != 0:
+                for raw in (rf_out + rf_err).splitlines():
+                    stripped = raw.strip()
+                    if not stripped:
+                        continue
+                    if stripped.startswith("Found ") or stripped.startswith("All checks"):
+                        continue
+                    errors.append(absolutise(raw, opener_line, path, delim, f"ruff[{RULES}]"))
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+if errors:
+    print("Embedded Python F-code lint violations in generated harness scripts:")
+    for err in errors:
+        print(f"  {err}")
+    print(
+        "These are undefined-name / unused-binding class bugs that would "
+        "produce a runtime NameError in any branch reached at runtime. "
+        "Ensure every identifier used in the heredoc body is imported or "
+        "defined. Disable gate via VALIDATE_PREFLIGHT_PYFLAKES_ENABLED=false "
+        "only as a temporary break-glass — the bug class is the same one "
+        "that produced `unknown_error:NameError` in consumer autobet logs."
+    )
+    sys.exit(1)
+
+print("Embedded Python F-code lint (pyflakes + ruff) passed.")
+PY3
+		then
+			PRE_FLIGHT_STATUS="fail"
+			_emit_preflight_tail "embedded Python F-code lint failed in validation/**/*.sh (pyflakes/ruff)"
+			return 1
+		fi
 	fi
 
 	# Preflight: scan generated validation Dockerfiles for apt package names that
@@ -1539,10 +1843,21 @@ else
   } > "${DISCOVER_PROMPT_FILE}"
 
   DISCOVER_SUCCESS=false
-  for attempt in 1 2; do
-    echo "Validation hint discovery attempt ${attempt}/2"
-    if cat "${DISCOVER_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2); then
-      if python3 - "${DISCOVER_OUTPUT_FILE}" "${VALIDATE_HINTS_FILE}" <<'PY'
+  DISCOVER_FAILURE_MODE=""
+  DISCOVER_ATTEMPTS_USED=0
+  for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
+    DISCOVER_ATTEMPTS_USED="${attempt}"
+    echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
+    set +e
+    cat "${DISCOVER_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
+    DISCOVER_EXIT=$?
+    set -e
+
+    if [ "${DISCOVER_EXIT}" -ne 0 ]; then
+      DISCOVER_FAILURE_MODE="codex_rc_nonzero"
+    elif ! grep -q '[^[:space:]]' "${DISCOVER_OUTPUT_FILE}"; then
+      DISCOVER_FAILURE_MODE="codex_empty_output"
+    elif python3 - "${DISCOVER_OUTPUT_FILE}" "${VALIDATE_HINTS_FILE}" <<'PY'
 import re
 import sys
 
@@ -1586,18 +1901,21 @@ with open(output_file, "w", encoding="utf-8") as handle:
     handle.write(candidate)
     handle.write("\n")
 PY
-      then
-        DISCOVER_SUCCESS=true
-        HINTS_SOURCE="discovered"
-        break
-      fi
+    then
+      DISCOVER_SUCCESS=true
+      HINTS_SOURCE="discovered"
+      break
+    else
+      DISCOVER_FAILURE_MODE="validator_rejected"
     fi
-    if [ "${attempt}" -lt 2 ]; then
-      sleep $((attempt * 5))
+
+    if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then
+      sleep $((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
     fi
   done
 
   if [ "${DISCOVER_SUCCESS}" != "true" ]; then
+    echo "::warning::Validation hint discovery exhausted ${DISCOVER_ATTEMPTS_USED} attempt(s) (mode=${DISCOVER_FAILURE_MODE:-unknown}); continuing without discovered hints." >&2
     printf '# No .ai/validate.yml hints file found\n' > "${VALIDATE_HINTS_FILE}"
     HINTS_SOURCE="none"
   else
@@ -1766,30 +2084,40 @@ fi
 } > "${GENERATE_PROMPT_FILE}"
 
 GENERATE_SUCCESS=false
-for attempt in 1 2; do
-  echo "Validation harness ${HARNESS_MODE} attempt ${attempt}/2"
-  if cat "${GENERATE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${GENERATE_OUTPUT_FILE}" 2> >(tee -a "${GENERATE_LOG_FILE}" >&2); then
+GENERATE_FAILURE_MODE=""
+GENERATE_ATTEMPTS_USED=0
+for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
+  GENERATE_ATTEMPTS_USED="${attempt}"
+  echo "Validation harness ${HARNESS_MODE} attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
+  set +e
+  cat "${GENERATE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${GENERATE_OUTPUT_FILE}" 2> >(tee -a "${GENERATE_LOG_FILE}" >&2)
+  GENERATE_EXIT=$?
+  set -e
+
+  if [ "${GENERATE_EXIT}" -ne 0 ]; then
+    GENERATE_FAILURE_MODE="codex_rc_nonzero"
+  elif ! grep -q '[^[:space:]]' "${GENERATE_OUTPUT_FILE}"; then
+    GENERATE_FAILURE_MODE="codex_empty_output"
+  else
     ensure_validate_wrapper
     if is_validation_harness_runnable; then
       GENERATE_SUCCESS=true
       break
     fi
+    GENERATE_FAILURE_MODE="validator_rejected"
   fi
-  if [ "${attempt}" -lt 2 ]; then
-    sleep $((attempt * 10))
+
+  if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then
+    sleep $((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
   fi
 done
 
 if [ "${GENERATE_SUCCESS}" != "true" ]; then
-  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum)."
+  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum); mode=${GENERATE_FAILURE_MODE:-unknown}; attempts=${GENERATE_ATTEMPTS_USED}/${MAX_CODEX_ATTEMPTS}."
   # Self-heal interception: if the generate/fix-harness prompt is at fault,
   # patch it and re-exec before burning a validation cycle.
   attempt_self_heal_and_reexec "generate"
-  post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for generation logs."
-  set_tracking_phase_label "ai:validation-failed"
-  write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
-  tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
-  exit 1
+  fail_validate_codex_phase "validation_harness_generation" "${GENERATE_FAILURE_MODE:-validator_rejected}" "${GENERATE_ATTEMPTS_USED:-${MAX_CODEX_ATTEMPTS}}" "${local_failure_summary}"
 fi
 
 if command -v git >/dev/null 2>&1; then
@@ -2161,28 +2489,36 @@ fi
 } > "${DIAGNOSE_PROMPT_FILE}"
 
 DIAGNOSE_SUCCESS=false
-for attempt in 1 2; do
-  echo "Validation diagnosis attempt ${attempt}/2"
-  if cat "${DIAGNOSE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2); then
-    if extract_last_json_with_key "${DIAGNOSE_OUTPUT_FILE}" "status" "${DIAGNOSE_RESULT_FILE}"; then
-      DIAGNOSE_SUCCESS=true
-      break
-    fi
+DIAGNOSE_FAILURE_MODE=""
+DIAGNOSE_ATTEMPTS_USED=0
+for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
+  DIAGNOSE_ATTEMPTS_USED="${attempt}"
+  echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
+  set +e
+  cat "${DIAGNOSE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
+  DIAGNOSE_EXIT=$?
+  set -e
+
+  if [ "${DIAGNOSE_EXIT}" -ne 0 ]; then
+    DIAGNOSE_FAILURE_MODE="codex_rc_nonzero"
+  elif ! grep -q '[^[:space:]]' "${DIAGNOSE_OUTPUT_FILE}"; then
+    DIAGNOSE_FAILURE_MODE="codex_empty_output"
+  elif extract_last_json_with_key "${DIAGNOSE_OUTPUT_FILE}" "status" "${DIAGNOSE_RESULT_FILE}"; then
+    DIAGNOSE_SUCCESS=true
+    break
+  else
+    DIAGNOSE_FAILURE_MODE="validator_rejected"
   fi
-  if [ "${attempt}" -lt 2 ]; then
-    sleep $((attempt * 10))
+
+  if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then
+    sleep $((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
   fi
 done
 
 if [ "${DIAGNOSE_SUCCESS}" != "true" ]; then
-  jq -n \
-    --arg diagnosis "Diagnosis output could not be parsed into required JSON contract." \
-    '{
-      status: "harness_error",
-      diagnosis: $diagnosis,
-      fix_issues: [],
-      harness_fixes: "Update mode-validate-diagnose prompt or improve failure context extraction."
-    }' > "${DIAGNOSE_RESULT_FILE}"
+  attempt_self_heal_and_reexec "diagnose"
+  failure_summary="Codex diagnosis failed to produce contract-compliant JSON (mode=${DIAGNOSE_FAILURE_MODE:-unknown}, attempts=${DIAGNOSE_ATTEMPTS_USED}/${MAX_CODEX_ATTEMPTS})."
+  fail_validate_codex_phase "validation_diagnosis" "${DIAGNOSE_FAILURE_MODE:-validator_rejected}" "${DIAGNOSE_ATTEMPTS_USED:-${MAX_CODEX_ATTEMPTS}}" "${failure_summary}"
 fi
 
 DIAG_STATUS="$(jq -r '.status // "harness_error"' "${DIAGNOSE_RESULT_FILE}")"

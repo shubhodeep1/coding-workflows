@@ -468,6 +468,16 @@ def test_check_wave_status_closed_counts_as_failed():
 	assert issues_by_gh[10]["status"] == "closed"
 
 
+def test_check_wave_status_failure_phase_counts_as_failed():
+	state = _make_state()
+	labels = {"10": ["ai:plan-failed"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["any_failed"] is True
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "closed"
+	assert issues_by_gh[10]["decision_source"] == "label_terminal_phase"
+
+
 def test_check_wave_status_null_github_issue_means_not_created():
 	"""Issues with github_issue: null should be reported as not_created."""
 	waves = [
