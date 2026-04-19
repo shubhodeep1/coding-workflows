@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_process_template_mode.py:50 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The test assertion uses a literal string match for the shell variable pattern, which is brittle if the variable names or message format change.\n  WHY: Both reviewers noted this is a low-severity maintainability concern rather than a runtime defect; severity is low and confidence reflects that it is only a potential fragility.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validate_process_template_mode.py:50 | severity=low | confidence=2\n  PROBLEM: Test assertion uses literal string matching for shell variable pattern, which could be brittle if variable names change in the future.\n  WHY: This is a test design issue, not a runtime failure; the test checks exact script source text, so future variable renames would break it even if behavior stayed correct.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_validate_process_template_mode.py:50 | severity=low | confidence=1\n  PROBLEM: Literal string assertion on dynamically-generated message format creates test fragility.\n  WHY: This is a maintainability concern only; the test correctly matches current production output, but could break if the message format changes again.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "d33761ca9c844c9337577c31de20729d9dd842444568b219ec6263ebd02e13f6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1444,
+    "run_id": "24628342107",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24628342107",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419121003_7e2c698896",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1444,
+    "run_id": "24628342107"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T12:10:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
