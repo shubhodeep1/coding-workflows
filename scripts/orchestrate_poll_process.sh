@@ -5545,6 +5545,9 @@ PY
             if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
               write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
             fi
+            add_healing_note "Issue #${issue_num}: open PR #${STALL_CONFLICT_PR_NUM} has merge conflicts (phase=${phase}); dispatched conflict resolver instead of '${action}'"
+            STALL_HEALING_CHANGED=true
+            cancel_zombie_runs_for_issue "${issue_num}"
             continue
             ;;
           2)
