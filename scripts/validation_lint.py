@@ -389,7 +389,8 @@ def _check_shell_parity(context: LintContext) -> list[Finding]:
 		for idx, line in enumerate(lines, start=1):
 			if line.lstrip().startswith("#"):
 				continue
-			if SHELL_LC_RE.search(line):
+			clean_line = _strip_inline_comment(line)
+			if SHELL_LC_RE.search(clean_line):
 				findings.append(
 					Finding(
 						path=path,
@@ -400,7 +401,7 @@ def _check_shell_parity(context: LintContext) -> list[Finding]:
 					)
 				)
 				continue
-			if SHELL_BASH_C_RE.search(line):
+			if SHELL_BASH_C_RE.search(clean_line):
 				findings.append(
 					Finding(
 						path=path,
@@ -695,7 +696,8 @@ def _check_external_tool_dependencies(context: LintContext) -> list[Finding]:
 		for idx, line in enumerate(hardhat_lines, start=1):
 			if line.lstrip().startswith("#"):
 				continue
-			if re.search(r"(?<![A-Za-z0-9._+-])hardhat(?![A-Za-z0-9._+-])", line, re.IGNORECASE):
+			clean_line = _strip_inline_comment(line)
+			if re.search(r"(?<![A-Za-z0-9._+-])hardhat(?![A-Za-z0-9._+-])", clean_line, re.IGNORECASE):
 				required_tools.append(("hardhat", hardhat_test, idx))
 				break
 
