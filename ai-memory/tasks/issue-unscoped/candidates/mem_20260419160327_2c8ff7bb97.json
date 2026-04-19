@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `scripts/orchestrate_poll_process.sh`:5601 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, stepfun_step-3_5-flash]\n  PROBLEM: The retry loop\u2019s early-break condition requires `merge_state` to be non-empty and not `unknown` even when `mergeable` is already `true` or `false`, so it can keep polling unnecessarily.\n  WHY: This can add up to ~50s of avoidable latency and extra API calls when GitHub has already returned a definitive mergeability result; reviewers disagreed only on whether empty `merge_state` is a separate edge case, but all flagged the same root cause.\n- `scripts/orchestrate_poll_process.sh`:5584-5586 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The assignment `_STD_ITER_PR_NUM_CACHED=\"${_std_conflict_pr_num_try}\"` inside the retry loop is redundant.\n  WHY: The PR number is already known and does not change during retries, so this adds no functional value and only reduces clarity.\n- `scripts/orchestrate_poll_process.sh`:5583-5602 | severity=low | confidence=1\n  flagged_by: [stepfun_step-3_5-flash]\n  PROBLEM: The retry loop does not check whether the PR becomes `closed` or `merged` before continuing mergeability polling.\n  WHY: This can waste a few extra API calls before the post-loop guard runs, but the finding was only raised by one reviewer.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- `scripts/orchestrate_poll_process.sh`:5593-5602 | severity=medium | confidence=3\n  PROBLEM: The early-break condition requires `merge_state` to be non-empty (`[ -n \"${_std_attempt_merge_state}\" ]`) when `mergeable` is true/false, so polling can continue even after GitHub has returned a definitive mergeability result.\n  WHY: If GitHub returns `mergeable=true` or `mergeable=false` with an empty `merge_state`, the loop will not exit early and may continue through all retry attempts.\n- `scripts/orchestrate_poll_process.sh`:5584 | severity=low | confidence=2\n  PROBLEM: The assignment `_STD_ITER_PR_NUM_CACHED=\"${_std_conflict_pr_num_try}\"` is redundant.\n  WHY: `_STD_ITER_PR_NUM_CACHED` was already set earlier and `_std_conflict_pr_num_try` is derived from it, so this is only a code clarity issue.\n- `README.md, agents.md`:line 1 | severity=low | confidence=2\n  PROBLEM: Documentation updates mentioned in the PR description are not reflected in the last run changed files list.\n  WHY: This suggests potential documentation-code drift, although the reviewer noted these files appear in the original PR diff and may already be updated.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `scripts/orchestrate_poll_process.sh`:5601 | severity=medium | confidence=4\n  PROBLEM: The retry loop continues to poll mergeability even when it is already definitive if the state string is still `unknown`.\n  WHY: If `mergeable=\"false\"`, the PR is already definitely conflicted, but the loop still waits for `merge_state` to become non-`unknown`, adding unnecessary stall-recovery latency.\n- `scripts/orchestrate_poll_process.sh`:5585-5586 | severity=low | confidence=3\n  PROBLEM: The assignment `_STD_ITER_PR_NUM_CACHED=\"${_std_conflict_pr_num_try}\"` inside the retry loop is redundant.\n  WHY: `_STD_ITER_PR_NUM_CACHED` is already set earlier and the PR number does not change within the loop, so this is only a minor clarity issue.\n- `scripts/orchestrate_poll_process.sh`:5541 | severity=medium | confidence=3\n  PROBLEM: The minimal JSON payload used to seed the cache may be insufficiently robust.\n  WHY: The reviewer flagged a possible `jq` failure if the cached PR number is empty and noted that a minimal payload lacking the `state` field can cause downstream guard logic to fail open until the retry loop fetches full JSON.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `scripts/../orchestrate_oll_oll_roll_process..sh`:55,584-55,589 | severity=low | confidence=3\n  PROBLEM: The assignment `_STD_ITER_PR_NUM_CACHED=\"${_std_conflict_pr_num_try}\"` inside the retry loop is redundant.\n  WHY: The PR number was already established earlier and does not change across retries, so reassigning it has no functional effect and only adds confusion.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- `scripts/orchestrate_poll_process.sh`:~5601 | severity=medium | confidence=5\n  PROBLEM: The break condition requires `_std_attempt_merge_state` to be non-empty when `mergeable` is `true` or `false`, so the loop can keep retrying even after GitHub has returned a definitive mergeability result.\n  WHY: For settled PRs with an absent or empty `merge_state`, the stall recovery wastes time and API calls by retrying up to five times.\n- `scripts/orchestrate_poll_process.sh`:5584 | severity=low | confidence=3\n  PROBLEM: `_STD_ITER_PR_NUM_CACHED=\"${_std_conflict_pr_num_try}\"` adds no functional value.\n  WHY: The same value was already captured earlier and the loop does not mutate the PR number, so this is harmless but confusing.\n- `README.md, agents.md`:line 1 | severity=low\n  PROBLEM: The docs updates for the \u201cStall recovery: merge-conflict pre-dispatch override\u201d section are already present.\n  WHY: The reviewer states the repository HEAD contains the README.md and agents.md updates, so no action is needed.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "c36f547bd0756a347f3c139ef2d0015c9f9a2569ca1059233fc31c92ee034502",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1441,
+    "run_id": "24632687906",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24632687906",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419160327_2c8ff7bb97",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1441,
+    "run_id": "24632687906"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T16:03:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
