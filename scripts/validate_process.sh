@@ -1822,7 +1822,7 @@ attempt_template_render_recovery_after_preflight_lint()
 			return 2
 		fi
 
-		if run_preflight_checks; then
+		if PRE_FLIGHT_APPEND_LOG="true" run_preflight_checks; then
 			echo "PRE_FLIGHT_RENDER_RECOVERY recovered=true attempt=${render_recovery_attempt}/${max_render_recovery_attempts}" >&2
 			PRE_FLIGHT_FAILURE_KIND="none"
 			PRE_FLIGHT_FAILURE_REASON="none"
