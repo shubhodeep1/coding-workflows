@@ -269,7 +269,10 @@ if [ "${IS_FIRST_ITERATION}" != "true" ] && [ "${REVIEWER_ITERATION_SCOPING_ENAB
   fi
 
   if [ -s "${scope_tmp_file}" ]; then
-    LC_ALL=C sort -u "${scope_tmp_file}" > "${ITERATION_SCOPED_FILES_FILE}"
+    if ! LC_ALL=C sort -u "${scope_tmp_file}" > "${ITERATION_SCOPED_FILES_FILE}"; then
+      echo "::warning::Iteration scoping sort failed; falling back to full-diff review behavior." >&2
+      : > "${ITERATION_SCOPED_FILES_FILE}"
+    fi
   else
     : > "${ITERATION_SCOPED_FILES_FILE}"
   fi
