@@ -149,7 +149,11 @@ class TestHardhatRpcProbe(unittest.TestCase):
         self.assertTrue(line.startswith("RESULT:missing_result_field:"), line)
 
     def test_prompt_files_contain_rpc_guidance(self) -> None:
-        """Verify that both prompt files contain the Hardhat JSON-RPC guidance section."""
+        """Backward-compatible alias for external filters using the legacy test name."""
+        self.test_prompt_files_contain_required_guidance()
+
+    def test_prompt_files_contain_required_guidance(self) -> None:
+        """Verify that both prompt files contain required RPC and checker-routing guidance."""
         from pathlib import Path
 
         prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
@@ -169,6 +173,31 @@ class TestHardhatRpcProbe(unittest.TestCase):
                 'type == "object"',
                 content,
                 f"{fname} must include 'type == \"object\"' guard in JSON-RPC pattern",
+            )
+            self.assertIn(
+                "python3 -m py_compile",
+                content,
+                f"{fname} must include Python syntax-check guidance",
+            )
+            self.assertIn(
+                "bash -n",
+                content,
+                f"{fname} must include shell syntax-check guidance",
+            )
+            self.assertIn(
+                "node --check",
+                content,
+                f"{fname} must include JavaScript syntax-check guidance",
+            )
+            self.assertIn(
+                "import yaml",
+                content,
+                f"{fname} must include YAML syntax-check guidance",
+            )
+            self.assertIn(
+                "scripts/validate_process.sh",
+                content,
+                f"{fname} must explicitly guard against py_compile on shell scripts",
             )
 
     def test_validate_generate_prompt_contract_scoped_to_repo_artifacts(self) -> None:
