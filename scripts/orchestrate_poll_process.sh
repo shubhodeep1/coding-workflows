@@ -5585,12 +5585,12 @@ PY
               }' 2>/dev/null || echo "null")"
               local _std_attempt_mergeable _std_attempt_merge_state
               _std_attempt_mergeable="$(printf '%s' "${_std_conflict_linked}" | jq -r '.mergeable // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
-              _std_attempt_merge_state="$(printf '%s' "${_std_conflict_linked}" | jq -r '.merge_state_status // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
-              # Settled when mergeable is definitive (true|false) AND
-              # merge_state_status is a settled enum (anything other
-              # than empty/unknown).  dirty/clean/blocked/behind/
-              # has_hooks/unstable/draft all count as settled.
-              if { [ "${_std_attempt_mergeable}" = "true" ] || [ "${_std_attempt_mergeable}" = "false" ]; } && [ -n "${_std_attempt_merge_state}" ] && [ "${_std_attempt_merge_state}" != "unknown" ]; then
+              _std_attempt_merge_state="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.merge_state_status // .mergeable_state // empty)' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+              # Settled when either merge_state is already DIRTY
+              # (conflict known even while mergeable is UNKNOWN) OR
+              # mergeable is definitive (true|false) with a settled
+              # merge_state_status (non-empty and non-unknown).
+              if [ "${_std_attempt_merge_state}" = "dirty" ] || { { [ "${_std_attempt_mergeable}" = "true" ] || [ "${_std_attempt_mergeable}" = "false" ]; } && [ -n "${_std_attempt_merge_state}" ] && [ "${_std_attempt_merge_state}" != "unknown" ]; }; then
                 echo "  [standalone-stall] Issue #${issue_num} PR #${_std_conflict_pr_num_try} mergeability settled on attempt $((_std_attempt + 1)): mergeable=${_std_attempt_mergeable} state=${_std_attempt_merge_state}"
                 break
               fi
