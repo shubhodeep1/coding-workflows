@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `b10d04c13dad53cbc170e08235862488f4c3dd58`\n- Resolved checkout ref: `orchestrator/project-1299`\n- `git symbolic-ref --short -q HEAD`: `orchestrator/project-1299`\n- Integration metadata ref: `orchestrator/project-1299` (mismatch: `false`)\n\nClarification interpretation:\n- No Q<ID> clarification items were required for this issue.\n- `/answer [auto-answered-by-orchestrator]` confirms continuation with no additional constraints.\n\nFactual conflicts to surface:\n- The issue references `validation/logs/01_build_verification.sh`, but this repo does not store a static `validation/` harness; those files are generated at runtime.\n- `scripts/validate_changed_files_syntax.sh` already routes by extension correctly (`*.py -> py_compile`, `*.sh -> bash -n`), so the defect is most likely in generated build-verification harness logic/prompt guidance, not that script.\n\nImplementation plan\n\n1. Files likely to change\n- `prompts/mode-validate-generate.txt`\n- `prompts/mode-validate-fix-harness.txt`\n- `tests/test_validate_harness_rpc.py` (extend prompt-contract assertions) or add a focused new test file for checker routing contract\n\n2. Functions/modules to implement\n- Prompt contract update in `mode-validate-generate.txt`:\n  - Add explicit build-verification checker routing rules for key scripts by file type.\n  - Mandate `python3 -m py_compile` only for `*.py`.\n  - Mandate shell syntax checking (`bash -n` or equivalent) for `*.sh`.\n  - Add an explicit \u201cnever run py_compile on `.sh` (example: `scripts/validate_process.sh`)\u201d guard.\n- Prompt contract update in `mode-validate-fix-harness.txt`:\n  - When repairing `01_build_verification.sh`, preserve/restore the same extension-based checker map.\n  - Prohibit regressions that reintroduce Python checker on shell scripts.\n- Representative pattern to follow:\n  - Mirror the language-routing pattern already implemented in `scripts/validate_changed_files_syntax.sh`.\n\n3. Data structures affected\n- Generated harness command mapping for build verification (checker selected by file extension).\n- No schema changes expected to validation result JSON (`coverage.build_verification` remains unchanged).\n\n4. API/interface changes\n- No external API changes.\n- Internal behavioral contract change only: generated build-verification scripts must use language-appropriate syntax checkers consistently in generate and fix-harness phases.\n\n5. Potential risks/edge cases\n- Overly rigid prompt wording could break legitimate variants (for example, non-`.sh` shell entrypoints).\n- Changing assertion text in generated TAP output may impact downstream log expectations; keep assertion labels stable where possible.\n- Ensure fix-harness prompt does not conflict with its existing scope constraints (`validation/` only changes).\n\n6. Testing considerations\n- Add/extend prompt contract tests to assert:\n  - Presence of `.py -> py_compile` guidance.\n  - Presence of `.sh -> bash -n` guidance.\n  - Explicit prohibition of `py_compile` on shell scripts.\n- Run targeted tests:\n  - `python3 tests/test_validate_harness_rpc.py` (if extended there)\n  - New focused prompt-contract test (if added)\n- Validation acceptance criteria after implementation:\n  - `validation/logs/01_build_verification.sh` no longer runs `py_compile` on `.sh`.\n  - Python files still use `py_compile`; shell files use shell syntax checker.\n  - Prior `01_build_verification.sh` failure signature disappears from summary.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8680f07775f6072f5b65eb32991c3416c7233d1c104f4aae1c79464474736fea",
+  "lineage": {
+    "issue_number": 1456,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24638401398",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24638401398",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1456"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419203253_d28b54e574",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1456,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24638401398"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1456",
+  "timestamps": {
+    "created_at": "2026-04-19T20:32:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
