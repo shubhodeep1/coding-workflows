@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_process_render_recovery.py:31, 163, 294, 416 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, stepfun_step-3_5-flash]\n  PROBLEM: The embedded bash scripts reference `${RUNTIME_DIR}` under `set -u` without a guard against it being unset.\n  WHY: An unset `RUNTIME_DIR` would terminate the script with an unbound-variable error before assertions run; one review disagreed that the newest test lacked the guard, but the highest severity/confidence finding is the same root cause.\n- tests/test_validate_process_render_recovery.py:29-528 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, stepfun_step-3_5-flash]\n  PROBLEM: The file contains substantial duplicated bash-harness boilerplate across the embedded test scripts.\n  WHY: This is a maintainability risk rather than a runtime defect, but it increases the chance of copy-paste inconsistencies and makes future changes harder.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- tests/test_validate_process_render_recovery.py:29-528 | severity=low | confidence=3\n  PROBLEM: Significant code duplication with existing test functions.\n  WHY: This is a maintainability concern rather than a runtime bug, but it increases the maintenance burden if the validation harness changes.\n- tests/test_validate_process_render_recovery.py:31, 163, 294, 416 | severity=medium | confidence=5\n  PROBLEM: The `RUNTIME_DIR` guard issue has been addressed in all test functions.\n  WHY: Previously, `set -u` could have triggered an unbound-variable error if `RUNTIME_DIR` were not injected; the explicit guard now prevents that.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- tests/test_validate_process_render_recovery.py:416 | severity=medium | confidence=5\n  PROBLEM: The newly introduced test case was missing the `RUNTIME_DIR` guard.\n  WHY: Without the guard, a failure to inject `RUNTIME_DIR` would cause `set -u` to abort the script with an unbound-variable error.\n- tests/test_validate_process_render_recovery.py:29-528 | severity=low | confidence=4\n  PROBLEM: Severe code duplication of the mock bash harness.\n  WHY: Each test function duplicates roughly 100 lines of bash logic, so a bug in the shared harness has to be fixed in multiple places.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- tests/test_validate_process_render_recovery.py:31, 163, 294, 416 | severity=medium | confidence=5\n  PROBLEM: The embedded bash scripts use `set -euo pipefail` and reference `${RUNTIME_DIR}` without first guarding against the variable being unset.\n  WHY: If `RUNTIME_DIR` is not injected into the subprocess environment, the scripts abort before test assertions, causing false-negative failures.\n- tests/test_validate_process_render_recovery.py:29-528 | severity=low | confidence=4\n  PROBLEM: Significant code duplication across the embedded bash script blocks.\n  WHY: The repeated ~140-line harness increases maintenance burden and the risk of inconsistencies when the harness logic changes.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "1ad7d569e92fb12ec4cb9b5599c989cf522888b49a2006e81b2a973415b4fcbe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1388,
+    "run_id": "24623559848",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 2,
+    "run_id": "24623559848",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419080928_7b612eadde",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1388,
+    "run_id": "24623559848"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T08:09:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
