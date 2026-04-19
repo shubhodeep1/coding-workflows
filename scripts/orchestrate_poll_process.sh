@@ -8048,12 +8048,21 @@ sys.exit(1)
                 git config user.email "codex@users.noreply.github.com"
                 if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
                   # Use a single add call so empty/minimal repos do not fail on
-                  # exclude-only pathspecs (e.g. ':!node_modules').
-                  git add -A -- . ':!node_modules' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  # exclude-only pathspecs.
+                  # NOTE: do not list .gitignored directories (node_modules, .serena)
+                  # as `:!` exclude pathspecs here. `git add -A -- . ':!<dir>'`
+                  # treats the exclude path as an explicit name and fails with
+                  # "The following paths are ignored by one of your .gitignore
+                  # files" + exit 1 when that dir exists on disk. .gitignore
+                  # already excludes them; the pathspec exclude is redundant
+                  # and turns into a hard failure after Serena setup creates
+                  # .serena/ or any step creates node_modules/.
+                  git add -A -- . ':!.github/prompts' ':!.github/scripts'
                 else
                   # Keep workflow-edit guard exclusions while avoiding brittle
-                  # tracked/untracked split staging pathspec failures.
-                  git add -A -- . ':!node_modules' ':!scripts' ':!prompts' ':!.github/ai' ':!.github/workflows' ':!.serena' ':!.github/prompts' ':!.github/scripts'
+                  # tracked/untracked split staging pathspec failures. Same
+                  # gitignore-dir exclusion caveat as above applies.
+                  git add -A -- . ':!scripts' ':!prompts' ':!.github/ai' ':!.github/workflows' ':!.github/prompts' ':!.github/scripts'
                 fi
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
