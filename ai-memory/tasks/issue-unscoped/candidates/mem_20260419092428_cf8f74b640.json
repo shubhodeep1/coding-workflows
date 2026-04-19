@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:1783-1826 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: `attempt_template_render_recovery_after_preflight_lint` calls `run_preflight_checks` without setting `PRE_FLIGHT_APPEND_LOG=\"true\"`, so the preflight log is truncated during render recovery.\n  WHY: This loses the original preflight failure diagnostics and recovery diagnostics that the flow is meant to preserve; reviewer severities differ, so the highest severity is kept.\n- scripts/validate_process.sh:1736-1744 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: `classify_preflight_failure` returns `0` when `PRE_FLIGHT_LOG_FILE` is unreadable, even though it has encountered an error condition.\n  WHY: The function still sets `PRE_FLIGHT_FAILURE_KIND=\"unknown\"` and `PRE_FLIGHT_FAILURE_REASON=\"preflight_log_unreadable\"`, but the success exit code can mislead callers that rely on status; reviewer severity/disagreement is preserved at the highest level.\n- scripts/validate_process.sh:1178-1181 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The `return 1` path in `attempt_render_recovery_after_preflight_failure` appears unreachable because `attempt_template_render_recovery_after_preflight_lint` now returns only `0` or `2`.\n  WHY: This is a dead-code concern with no runtime impact, identified by a single reviewer.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/validate_process.sh:1783-1826 | severity=critical | confidence=5\n  PROBLEM: `attempt_template_render_recovery_after_preflight_lint` calls `run_preflight_checks` without setting `PRE_FLIGHT_APPEND_LOG=\"true\"`, so it truncates the preflight log instead of appending to it.\n  WHY: This loses the original preflight failure diagnostics, render recovery messages, and intermediate diagnostics, which hurts debugging and can affect downstream log-based classification.\n- scripts/validate_process.sh:1738-1742 | severity=medium | confidence=3\n  PROBLEM: When `PRE_FLIGHT_LOG_FILE` is unreadable, `classify_preflight_failure` sets `PRE_FLIGHT_FAILURE_KIND=\"unknown\"` and `PRE_FLIGHT_FAILURE_REASON=\"preflight_log_unreadable\"` but returns `0`.\n  WHY: A function that encounters an error condition should return non-zero; future callers that check exit codes may misinterpret an unreadable log as successful classification.\n- scripts/validate_process.sh:1178-1181 | severity=low | confidence=2\n  PROBLEM: The `return 1` path in `attempt_render_recovery_after_preflight_failure` may be unreachable because `attempt_template_render_recovery_after_preflight_lint` now returns only `0` or `2`.\n  WHY: This has no runtime impact, but dead code increases maintenance complexity.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/validate_process.sh | severity=critical | confidence=5\n  PROBLEM: The render-recovery flow in `attempt_template_render_recovery_after_preflight_lint` calls `run_preflight_checks` without setting `PRE_FLIGHT_APPEND_LOG=\"true\"`.\n  WHY: This causes `run_preflight_checks` to truncate the log file at the start of the recovery attempt, losing all preceding failure diagnostics and rerender logs, which breaks the intent of preserving initial pre-flight diagnostics.\n- scripts/validate_process.sh | severity=medium | confidence=4\n  PROBLEM: `classify_preflight_failure` returns `0` early when `PRE_FLIGHT_LOG_FILE` is unreadable, missing, or empty.\n  WHY: Callers rely on this function to update `PRE_FLIGHT_FAILURE_KIND` and `PRE_FLIGHT_FAILURE_REASON` for diagnostic logging and flow control; returning success can leave stale values and lead to incorrect recovery decisions.\n- scripts/validate_process.sh | severity=low | confidence=3\n  PROBLEM: `run_template_validation_harness_renderer` appends renderer failure output to `GENERATE_LOG_FILE` instead of `PRE_FLIGHT_LOG_FILE` during preflight recovery.\n  WHY: This splits a single recovery attempt\u2019s audit trail across two log files, complicating failure analysis.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_process.sh:1139-1182 | severity=low | confidence=3\n  PROBLEM: After refactoring, `PRE_FLIGHT_APPEND_LOG=\"true\"` is no longer set at the caller level before `run_preflight_checks`.\n  WHY: The inner helper currently sets the flag correctly, so the behavioral impact is minimal; the concern is mainly that the explicit append-logic control moved out of the caller.\n- scripts/validate_process.sh:1736-1742 | severity=medium | confidence=3\n  PROBLEM: `classify_preflight_failure` returns `0` when `PRE_FLIGHT_LOG_FILE` is unreadable, even though it has encountered an error.\n  WHY: The function populates `PRE_FLIGHT_FAILURE_KIND=\"unknown\"` before returning, but the success status misleads callers that interpret exit code as classification success.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_process.sh:1783-1825 | severity=critical | confidence=4\n  PROBLEM: `attempt_template_render_recovery_after_preflight_lint` no longer sets `local PRE_FLIGHT_APPEND_LOG=\"true\"` before calling `run_preflight_checks`.\n  WHY: `run_preflight_checks` then treats the log as non-append mode and truncates `validation_preflight.log`, destroying the initial diagnostics that were meant to be preserved.\n- scripts/validate_process.sh:1738-1743 | severity=medium | confidence=3\n  PROBLEM: `classify_preflight_failure` returns `0` when `PRE_FLIGHT_LOG_FILE` is unreadable or missing.\n  WHY: The function contract relies on callers inspecting `PRE_FLIGHT_FAILURE_KIND`, but the success exit code can mask operational issues when log files are inaccessible.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "2c750f5bda229ab8624fc040f717c3c046f7584f2590c800fa0eda86f2d98795",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1395,
+    "run_id": "24625398159",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24625398159",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419092428_cf8f74b640",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1395,
+    "run_id": "24625398159"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T09:24:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
