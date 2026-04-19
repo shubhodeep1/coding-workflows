@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `6c8ccc98d6a760a7c3d1558f3ebb06e1ce5da816`\n- Checked-out branch: `orchestrator/project-1292`\n- Integration metadata branch: `orchestrator/project-1292`\n- Integration branch mismatch: `false`\n\nClarification mapping:\n- No Q<ID> clarification questions were issued for this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as approval to proceed with the issue-defined scope and constraints as written.\n\nConflict detection (issue vs codebase):\n- The requested render-phase recovery behavior appears to already be implemented in the current branch:\n  - Deterministic rerender + relint flow exists in `scripts/validate_process.sh` (`attempt_render_recovery_after_preflight_failure` and preflight failure routing).\n  - Render phase is already recognized by self-heal plumbing in `scripts/self_heal_validation.sh`.\n  - `prompts/mode-validate-self-heal.txt` already includes render-phase prompt-only guidance.\n  - Integration tests for render recovery behavior and fail-open handling already exist in `tests/test_validate_process_render_recovery.py` and `tests/test_validate_process_template_mode.py`.\n- Implementation should therefore be a gap-audit + minimal corrective patch only where behavior/tests still diverge from acceptance criteria.\n\nImplementation plan:\n\n1. Verify render-phase recovery control flow in `scripts/validate_process.sh`.\n- Confirm lint-only gating for rerender attempts (`PRE_FLIGHT_FAILURE_CLASS=lint`).\n- Confirm deterministic path is template-mode only (`HARNESS_MODE=template_generate`, `HARNESS_GENERATOR_MODE=templates`).\n- Confirm rerender failure and relint failure both route to `attempt_self_heal_and_reexec \"render\"` (not `\"preflight\"`).\n- Confirm `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED` prevents recursive rerender loops.\n\n2. Preserve and validate self-heal safety constraints in `scripts/self_heal_validation.sh`.\n- Keep allowed targets restricted to the four validation prompt files.\n- Keep additive-only patch enforcement and out-of-scope file rejection.\n- Keep render phase as a failure-phase tag only (no harness-file edit path introduced).\n\n3. Ensure prompt guidance remains render-safe in `prompts/mode-validate-self-heal.txt`.\n- Keep explicit instruction that render/lint harness recovery is renderer-driven in `validate_process.sh`.\n- Keep prompt self-heal scope limited to validation prompt files.\n- Apply only additive wording clarifications if any ambiguity remains.\n\n4. Update/extend tests only if gaps are found.\n- Primary files: `tests/test_validate_process_render_recovery.py`, `tests/test_validate_process_template_mode.py`.\n- Ensure coverage for:\n  - rerender success -> pipeline continues;\n  - rerender hard failure -> fail-open and render-phase self-heal path;\n  - relint failure after rerender -> render-phase self-heal path;\n  - non-template preflight failures preserve legacy behavior;\n  - guardrails stay intact (allow-list and additive-only checks).\n\n5. Keep interfaces stable.\n- No env var renames/removals.\n- No workflow interface or schema changes.\n- No MongoDB contract/index/data structure changes expected.\n\nData structures affected:\n- Runtime shell state in `validate_process.sh` (`PRE_FLIGHT_*`, `HARNESS_*`, `SELF_HEAL_*`).\n- Self-heal patch ledger JSONL entries in `SELF_HEAL_PATCHES_FILE` (not schema-changing; render phase value should remain additive).\n\nAPI/interface changes:\n- None expected (internal behavior/logging only).\n\nRisks and edge cases:\n- Accidental fallback to freehand harness edits during render failure handling.\n- Recursive preflight/rerender loops if retry guard is bypassed.\n- Misclassification of non-lint preflight failures as rerender-eligible.\n- Regressions in non-template/legacy preflight handling.\n\nTesting considerations:\n- Run targeted tests:\n  - `python3 tests/test_validate_process_render_recovery.py`\n  - `python3 tests/test_validate_process_template_mode.py`\n- If any behavior change is needed after audit, add narrowly scoped assertions to these same suites rather than broad new harness frameworks.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "11349112a6dc2c0784bf569482474a75caeae98ab534376c47f7dfcc1f089719",
+  "lineage": {
+    "issue_number": 1436,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24627426152",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24627426152",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1436"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419105856_51f427e5ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1436,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24627426152"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1436",
+  "timestamps": {
+    "created_at": "2026-04-19T10:58:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
