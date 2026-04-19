@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- `HEAD`: `df7fa001abf2a14ca96928febb3528918f3181fb`\n- Checked-out ref: `orchestrator/project-1299`\n- Integration metadata ref: `orchestrator/project-1299`\n- Integration mismatch: `false`\n\nClarification mapping\n- No Q-ID clarifications were asked.\n- `/answer [auto-answered-by-orchestrator]` confirms \u201cno clarification required,\u201d so planning proceeds.\n\nRepresentative implementation pattern to follow\n- Stage ordering and fail-open behavior: `scripts/review_apply_fixes.sh` (floor \u2192 consolidate \u2192 parse \u2192 ledger).\n- Parser contract assertions pattern: `tests/test_review_parse_consolidator.py`.\n- Ledger contract assertions pattern: `tests/test_review_issue_ledger.py`.\n\nImplementation plan\n\n1. Files likely to change\n- `tests/test_review_pipeline_integration.py` (new): integration-style chain test harness.\n- `tests/test_implement_post_codex_recovery.py` (or another already CI-executed test file): add one delegating test so new integration coverage runs under current CI command path without workflow edits.\n- `scripts/dev/replay_review_pipeline.sh` (new): optional local replay helper.\n- `README.md`: brief developer usage note for replay helper.\n- `tests/fixtures/review_pipeline/*`: reuse existing fixtures; add only if strictly necessary.\n\n2. Functions/modules to implement\n- In `tests/test_review_pipeline_integration.py`:\n- `_seed_workspace_repo(...)` to create deterministic temp repo/runtime.\n- `_install_mock_codex(...)` to intercept `codex exec` for consolidator stage.\n- `_run_stage_chain(...)` to execute `review_floor_rules.sh`, `review_consolidate.sh`, `review_parse_consolidator.sh`, `review_issue_ledger.sh` in order.\n- `test_chain_happy_path_with_mocked_consolidator()`.\n- `test_chain_fail_open_when_consolidator_disabled()`.\n- `test_chain_fail_open_when_consolidator_returns_empty()`.\n- In CI-executed test file:\n- Add one test function that subprocess-runs the new integration test module and asserts exit code 0.\n- In `scripts/dev/replay_review_pipeline.sh`:\n- Argument parsing (`--runtime-dir`, optional mode flags).\n- Stage runner wrapper with explicit env setup and artifact summary output.\n\n3. Data structures affected\n- Artifact contracts asserted end-to-end:\n- `floor_tags.txt` (line-oriented floor findings).\n- `review_issues.txt` (issue blocks + passthrough blocks).\n- `parser_stats.txt` (key=value map including `parse_failed`, `anchors_total`, `anchors_covered`).\n- `ledger_status.txt` (tab-separated rows, lifecycle status fields).\n- Environment contracts used by chain:\n- `RUNTIME_DIR`, `REVIEW_CONSOLIDATOR_ENABLED`, `REVIEW_PARSER_FAILOPEN`,\n  `PR_NUMBER`, `AUTOFIX_ITERATION`, `REVIEW_ISSUES_FILE`, `LEDGER_STATUS_FILE`, `FLOOR_TAGS_FILE`, `REVIEW_LEDGER_ENABLED`.\n\n4. API/interface changes\n- No production API/workflow interface changes.\n- New developer-only CLI helper: `scripts/dev/replay_review_pipeline.sh` with documented local usage.\n- No new env var contract required (reuse existing stage env vars).\n\n5. Risks and edge cases\n- Real `codex` invocation risk in tests if PATH mocking is wrong.\n- Mitigation: prepend mock bin to PATH and assert deterministic mocked output path.\n- Consolidator disabled/empty must still produce parser/ledger artifacts via fail-open.\n- Ledger stage depends on git repo + issue metadata env; test harness must seed both.\n- Maintain strict non-invasive behavior: replay helper must not call workflows or mutate workflow paths.\n\n6. Testing considerations\n- Determinism:\n- Use existing fixtures under `tests/fixtures/review_pipeline` and temp directories.\n- Assert exact presence of all four artifact files for each scenario.\n- Contract checks:\n- Happy path: `parse_failed=0`, expected parsed/passthrough mix, ledger row presence.\n- Disabled/empty consolidator: `parse_failed=1`, fail-open passthrough behavior, non-crashing ledger stage.\n- CI-path requirement:\n- Ensure new integration coverage is executed through an already-invoked CI test command (no new workflow file, no `ci.yml` edit).\n\nConflict detection\n- Conflict: acceptance requires \u201ctests run under existing CI command path,\u201d but current CI workflow executes an explicit fixed set of test files that does not include review-pipeline tests.\n- Plan resolution: add a delegating invocation from an already CI-executed test file to the new integration test module, preserving the \u201cno `.github/workflows/ci.yml` edits\u201d constraint.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4fa85091816bb98ca8949d129a4f2bcf2a8b4112cbb468bc242446d0aed42ec1",
+  "lineage": {
+    "issue_number": 1423,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24626069622",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24626069622",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1423"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419095341_41fda5a2e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1423,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24626069622"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1423",
+  "timestamps": {
+    "created_at": "2026-04-19T09:53:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
