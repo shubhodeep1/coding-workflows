@@ -1148,6 +1148,15 @@ attempt_render_recovery_after_preflight_failure()
 	fi
 
 	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
+	classify_preflight_failure
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" = "lint" ]; then
+		echo "Render recovery: lint-classified pre-flight failure; attempting deterministic rerender/re-lint recovery." >> "${PRE_FLIGHT_LOG_FILE}"
+		if attempt_template_render_recovery_after_preflight_lint; then
+			return 0
+		fi
+		return 2
+	fi
+
 	{
 		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
 		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
@@ -1785,9 +1794,10 @@ attempt_template_render_recovery_after_preflight_lint()
 			PRE_FLIGHT_FAILURE_KIND="render"
 			PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_${renderer_exit}"
 			echo "PRE_FLIGHT_RENDER_RECOVERY renderer_failed exit=${renderer_exit}" >&2
-			return 1
+			return 2
 		fi
 
+		local PRE_FLIGHT_APPEND_LOG="true"
 		if run_preflight_checks; then
 			echo "PRE_FLIGHT_RENDER_RECOVERY recovered=true attempt=${render_recovery_attempt}/${max_render_recovery_attempts}" >&2
 			PRE_FLIGHT_FAILURE_KIND="none"
@@ -1800,7 +1810,7 @@ attempt_template_render_recovery_after_preflight_lint()
 		if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
 			PRE_FLIGHT_FAILURE_KIND="render"
 			PRE_FLIGHT_FAILURE_REASON="render_retry_non_lint_after_rerender"
-			return 1
+			return 2
 		fi
 
 		render_recovery_attempt=$((render_recovery_attempt + 1))
@@ -1808,7 +1818,7 @@ attempt_template_render_recovery_after_preflight_lint()
 
 	PRE_FLIGHT_FAILURE_KIND="render"
 	PRE_FLIGHT_FAILURE_REASON="render_retry_exhausted"
-	return 1
+	return 2
 }
 
 enforce_managed_validation_artifact_contract()
