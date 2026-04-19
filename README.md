@@ -355,7 +355,7 @@ Runtime invariants:
 - Floor rules are non-skippable classifier findings when emitted: editor output must either address them or reject them explicitly with rationale.
 - Consolidator output is advisory and never gates execution. Disable/error/missing-script paths fail open with empty `consolidator_raw.txt`.
 - Parser output is advisory and fail-open by default (`REVIEW_PARSER_FAILOPEN=1`): parser failures emit empty `review_issues.txt` and continue. Set `REVIEW_PARSER_FAILOPEN=0` to hard-fail parser errors for debugging.
-- Input authority in editor stage (`scripts/review_apply_fixes.sh`): `reviewer_bundle.txt` is authoritative; `review_issues.txt`, `ledger_status.txt`, and `consolidator_raw.txt` are advisory context.
+- Input authority in editor stage (`scripts/review_apply_fixes.sh`): `reviewer_bundle.txt` is authoritative; `review_issues.txt`, `ledger_status.txt`, and `floor_tags.txt` are advisory context.
 - Ledger lifecycle (`scripts/review_issue_ledger.sh`) uses `NEW`, `PERSISTING`, `FIXED`, `RESURGENT`, and `accepted-residual`. Non-residual issues that persist to `REVIEW_LEDGER_PERSIST_LIMIT` are promoted to `accepted-residual`; those entries remain persisted while corresponding blocks are removed from `review_issues.txt`.
 - Consolidator divergence convention is literal: `CONSOLIDATOR_OVERRIDDEN: <reason>`.
 - Editor summary machine signal is authoritative: `Change status:` must be exactly `edited` or `not-edited` for downstream no-op/retrigger decisions.
