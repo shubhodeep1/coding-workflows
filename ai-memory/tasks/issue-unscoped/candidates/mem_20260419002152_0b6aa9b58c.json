@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 5\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: .github/workflows/review_autofix.yml\n      Problem: In the \"Commit changes\" step of the workflow-source repo path, the previous code incorrectly used `git rm -q` on files that were detected as deleted (missing from the working tree). `git rm -q` fails if the file is already gone from the filesystem. The fix correctly uses `git add -u` which stages the deletion of tracked files regardless of whether they exist on disk. This change is correctly applied at both the main autofix commit loop (line 1827) and the resolver commit loop (line 3183).; Without this, file deletions performed by the editor or resolver would not be staged in the workflow-source repository, leading to incomplete commits and potentially causing \"Editor changes lost\" errors because the working tree would remain dirty.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [2] File: .github/workflows/review_autofix.yml\n      Problem: Location: Line 1729 (in the captured diff); Issue: The snapshot parsing loop for Kind `T` assigns fields to `diff_a` (sha), `diff_b` (exec), and `diff_c` (path). The `printf` at line 1533 generates 4 tab-separated fields: 'T', hash, exec, and path. The `read` command correctly captures these 4 fields. However, the `git hash-object` call lacks a check for an empty `diff_path`.; Suggested minimal fix: `[ -z \"${diff_path}\" ] && continue; new_sha=...` (Wait, line 1728 already has `[ -z \"${diff_path}\" ] && continue`).; Estimated lines changed: 0 (Already satisfied); HARDENING_RISK_SCORE: 0\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [3] File: .github/workflows/review_autofix.yml\n      Problem: Location: Lines 1744-1745; Issue: Temporary files `PRE_UNTRACKED_LIST` and `POST_UNTRACKED_LIST` are created via `mktemp` but are only cleaned up at the end of the happy path. If the job is cancelled or fails before cleanup, these files persist (though `/tmp` is eventually cleared by the runner).; Suggested minimal fix: Use a `trap 'rm -f ...' EXIT` after creation.; Estimated lines changed: 2; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: test_file.txt\n      Problem: The file `test_file.txt` was added to the repository with the content \"Test file for git diff\". This is clearly a test artifact created during the previous AI autofix run and serves no functional purpose in the production codebase.; It pollutes the repository with unnecessary artifacts but does not cause a functional failure.; HARDENING_SUGGESTIONS:\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: `.github/workflows/review_autofix.yml`\n      Problem: Location: Temp file creation sites (e.g., `PRE_UNTRACKED_LIST`/`POST_UNTRACKED_LIST` around lines 1744\u20131745, `CURRENT_DIFF_LIST` around line 1797, similar in resolver section lines 3005\u20133006); Issue: Temp files are cleaned up only on the happy path. If the script exits early due to an error or signal between creation and cleanup, these files could leak until runner teardown. The job already has an EXIT trap for another file (line 3701); extending it to cover these variables would close the gap.; Suggested minimal fix: Add a trap immediately after the first temp file creation in each block, e.g.:; ```bash; PRE_UNTRACKED_LIST=\"$(mktemp)\"; POST_UNTRACKED_LIST=\"$(mktemp)\"; trap 'rm -f \"${PRE_UNTRACKED_LIST}\" \"${POST_UNTRACKED_LIST}\"' EXIT; Also add similar trap for `CURRENT_DIFF_LIST` where used. Existing explicit `rm -f` calls at the end can remain; the trap will be a fail-safe.; Estimated lines changed: 4\u20136 (adding trap statements).; HARDENING_RISK_SCORE: 1 (minor improvement; no functional impact, good hygiene); **Classification of Previously Raised Findings**; - Deletion staging bug (`git rm -q` \u2192 `git add -u`): Applied/fixed in current branch. Verified at two locations.; - Extraneous `test_file.txt`: Already satisfied \u2014 staged for deletion.; - Field-parsing concern (TSV offsets): Ignored \u2014 incorrect; the `printf`/`read` field count matches exactly.; - Safety-union `comm` usage: Already satisfied \u2014 correct; both sides are sorted and deduped.; - Temp file trap (moonshotai Issue 1): Not blocked; offered above as hardening.; - Missing quotes in mktemp fallback: Already satisfied/not an issue \u2014 the command substitution output is double-quoted; no unquoted expansion risk.; - Empty `PRE_EDITOR_STATE_FILE` validation: Already satisfied \u2014 the `-f` test is adequate because fallback path covers the empty case; no change needed.; **Assumptions**; - `IS_WORKFLOW_SOURCE_REPO` is correctly set by the workflow (true on coding-workflows, false on consumer repos).; - `git hash-object` failures are rare; safety union provides a reliable fallback.; - Node_modules nesting deeper than one intermediate directory (`a/b/node_modules`) is not matched by the current patterns; this is an acceptable limitation given typical repo layouts.; **Summary**; The PR\u2019s primary goal \u2014 accurate editor-touched file detection with safe exclusion of pre-existing changes \u2014 is achieved. The two previously identified correctness issues (deletion staging and test artifact) have been addressed in the current branch state. No blocking issues remain; the optional trap hardening is a minor quality-of-life improvement.\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n.github/workflows/review_autofix.yml\n`.github/workflows/review_autofix.yml`\ntest_file.txt",
+  "fingerprint": "a5a29cc624f7049fb24b3317727f6bbf231eaa7566cb5d95cd2f0174a17d8d86",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1349,
+    "run_id": "24616909471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24616909471",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419002152_0b6aa9b58c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1349,
+    "run_id": "24616909471"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-19T00:21:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
