@@ -23,6 +23,7 @@ Hard constraints (NON-NEGOTIABLE):
 - The patch MUST apply cleanly with `patch -p1` or `git apply` against the exact file contents shown in the "CURRENT VALIDATION PROMPT FILES" section below.
 - Prefer the smallest diff that plausibly prevents the failure. One file, a handful of added lines, surgical wording fixes.
 - Do not invent failure modes. Base the patch on concrete evidence from the failure context.
+- For `failing_phase=render` or deterministic template rerender/lint recovery failures, keep self-heal scope prompt-only: `validate_process.sh` owns harness rerender + relint. Do not propose harness-file edits, renderer-script edits, or workflow changes.
 
 Inputs to use:
 - Self-heal attempt counter (so you know if a prior patch already tried and failed).

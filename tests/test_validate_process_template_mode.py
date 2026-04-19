@@ -25,6 +25,10 @@ def test_template_mode_selection_contract_present() -> None:
 	assert 'if [ "${VALIDATION_USE_TEMPLATES_ENABLED}" = "true" ]; then' in text
 	assert 'HARNESS_MODE="template_generate"' in text
 	assert 'HARNESS_GENERATOR_MODE="templates"' in text
+	assert 'PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"' in text
+	assert 'attempt_render_recovery_after_preflight_failure()' in text
+	assert 'if attempt_render_recovery_after_preflight_failure; then' in text
+	assert 'attempt_self_heal_and_reexec "render"' in text
 	assert 'elif [ "${VALIDATION_CYCLE}" -gt 1 ] \\' in text
 	assert 'HARNESS_GENERATOR_MODE="freehand"' in text
 
