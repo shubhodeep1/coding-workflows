@@ -571,6 +571,12 @@ if is_truthy "${ENABLE_VALIDATION_RAW}"; then
   ENABLE_VALIDATION="true"
 fi
 
+if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
+  ALLOW_WORKFLOW_EDITS="true"
+else
+  ALLOW_WORKFLOW_EDITS="false"
+fi
+
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
   echo "::warning::MAX_VALIDATE_CYCLES must be a positive integer; defaulting to 3"
