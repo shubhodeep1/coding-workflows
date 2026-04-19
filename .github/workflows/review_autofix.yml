@@ -61,6 +61,19 @@ env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
+  REVIEW_FLOOR_RULES_ENABLED: ${{ vars.REVIEW_FLOOR_RULES_ENABLED || '1' }}
+  REVIEW_FLOOR_KEYWORDS_FILE: ${{ vars.REVIEW_FLOOR_KEYWORDS_FILE || '' }}
+  REVIEW_CONSOLIDATOR_ENABLED: ${{ vars.REVIEW_CONSOLIDATOR_ENABLED || '1' }}
+  REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-5.4-mini' }}
+  REVIEW_CONSOLIDATOR_REASONING: ${{ vars.REVIEW_CONSOLIDATOR_REASONING || 'medium' }}
+  REVIEW_CONSOLIDATOR_TIMEOUT_SECS: ${{ vars.REVIEW_CONSOLIDATOR_TIMEOUT_SECS || '300' }}
+  REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}
+  REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}
+  REVIEW_LEDGER_ENABLED: ${{ vars.REVIEW_LEDGER_ENABLED || '1' }}
+  REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}
+  REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || '.ai/review_issue_ledger.txt' }}
+  REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}
+  REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
@@ -333,7 +346,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_floor_rules.sh review_consolidate.sh review_parse_consolidator.sh review_issue_ledger.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -510,6 +523,13 @@ jobs:
             echo "EDITOR_SUMMARY_FILE=${RUNTIME_DIR}/editor_summary.txt"
             echo "PR_EDITOR_COMMENT_FILE=${RUNTIME_DIR}/pr_editor_comment.txt"
             echo "REVIEWER_CONSENSUS_FILE=${RUNTIME_DIR}/reviewer_consensus.txt"
+            echo "REVIEWER_MANIFEST_FILE=${RUNTIME_DIR}/reviewer_manifest.txt"
+            echo "REVIEWER_BUNDLE_FILE=${RUNTIME_DIR}/reviewer_bundle.txt"
+            echo "FLOOR_TAGS_FILE=${RUNTIME_DIR}/floor_tags.txt"
+            echo "CONSOLIDATOR_RAW_FILE=${RUNTIME_DIR}/consolidator_raw.txt"
+            echo "REVIEW_ISSUES_FILE=${RUNTIME_DIR}/review_issues.txt"
+            echo "PARSER_STATS_FILE=${RUNTIME_DIR}/parser_stats.txt"
+            echo "LEDGER_STATUS_FILE=${RUNTIME_DIR}/ledger_status.txt"
             echo "LINKED_ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/linked_issue_context.txt"
             echo "MEMORY_CONTEXT_FILE=${RUNTIME_DIR}/memory_context.txt"
             echo "CONFLICT_RESOLVER_PROMPT_FILE=${RUNTIME_DIR}/conflict_resolver_prompt.txt"
@@ -1380,6 +1400,203 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
+      - name: Run floor rules stage
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        id: floor_stage
+        run: |
+          set -euo pipefail
+
+          AUTOFIX_ITERATION="${AUTOFIX_ITERATION:-}"
+          if ! [[ "${AUTOFIX_ITERATION}" =~ ^[0-9]+$ ]] || [ "${AUTOFIX_ITERATION}" -lt 1 ]; then
+            autofix_count=0
+            while true; do
+              if [ "${autofix_count}" -ge 1000 ]; then
+                echo "::warning::autofix iteration scan capped at 1000 commits"
+                break
+              fi
+              msg="$(git log -1 --format='%s' "HEAD~${autofix_count}" 2>/dev/null || true)"
+              if [ -z "${msg}" ]; then
+                break
+              fi
+              if echo "${msg}" | grep -q '^\[ai-autofix\]'; then
+                autofix_count=$((autofix_count + 1))
+              else
+                break
+              fi
+            done
+            AUTOFIX_ITERATION="$((autofix_count + 1))"
+          fi
+          echo "AUTOFIX_ITERATION=${AUTOFIX_ITERATION}" >> "$GITHUB_ENV"
+
+          find "${PREVIOUS_REVIEWS_DIR}" -maxdepth 1 -type f -name 'review_*.txt' | sort > "${REVIEWER_MANIFEST_FILE}"
+          if [ ! -s "${REVIEWER_MANIFEST_FILE}" ]; then
+            echo "::warning::Reviewer manifest is empty; creating empty review artifacts for downstream stages."
+            : > "${REVIEWER_BUNDLE_FILE}"
+            : > "${FLOOR_TAGS_FILE}"
+            echo "REVIEW_FLOOR_TAGS_COUNT=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          : > "${REVIEWER_BUNDLE_FILE}"
+          while IFS= read -r reviewer_file; do
+            reviewer_sha="$(sha256sum "${reviewer_file}" | awk '{print $1}')"
+            reviewer_bytes="$(wc -c < "${reviewer_file}" | tr -d '[:space:]')"
+            {
+              echo "FILE_PATH: ${reviewer_file}"
+              echo "BYTES: ${reviewer_bytes}"
+              echo "SHA256: ${reviewer_sha}"
+              echo "CONTENT_START"
+              cat "${reviewer_file}"
+              echo
+              echo "CONTENT_END"
+              echo
+            } >> "${REVIEWER_BUNDLE_FILE}"
+          done < "${REVIEWER_MANIFEST_FILE}"
+
+          floor_script="${SUPPORT_SCRIPTS_DIR}/review_floor_rules.sh"
+          if [ "${REVIEW_FLOOR_RULES_ENABLED:-1}" = "0" ]; then
+            : > "${FLOOR_TAGS_FILE}"
+          elif [ ! -f "${floor_script}" ]; then
+            echo "::warning::review_floor_rules.sh not found; continuing with empty floor_tags.txt"
+            : > "${FLOOR_TAGS_FILE}"
+          else
+            set +e
+            bash "${floor_script}" "${REVIEWER_BUNDLE_FILE}" "${FLOOR_TAGS_FILE}"
+            stage_rc="$?"
+            set -e
+            if [ "${stage_rc}" -ne 0 ]; then
+              echo "::warning::review_floor_rules.sh failed with rc=${stage_rc}; continuing with empty floor_tags.txt"
+              : > "${FLOOR_TAGS_FILE}"
+            fi
+          fi
+
+          floor_tags_count="$(awk 'NF { c++ } END { print c + 0 }' "${FLOOR_TAGS_FILE}" 2>/dev/null || echo 0)"
+          echo "REVIEW_FLOOR_TAGS_COUNT=${floor_tags_count}" >> "$GITHUB_ENV"
+
+      - name: Run consolidator stage
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        id: consolidator_stage
+        run: |
+          set -euo pipefail
+
+          consolidator_status="yes"
+          if [ "${REVIEW_CONSOLIDATOR_ENABLED:-1}" = "0" ]; then
+            consolidator_status="no"
+            : > "${CONSOLIDATOR_RAW_FILE}"
+          elif [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_consolidate.sh" ]; then
+            consolidator_status="failed"
+            echo "::warning::review_consolidate.sh not found; continuing with empty consolidator_raw.txt"
+            : > "${CONSOLIDATOR_RAW_FILE}"
+          else
+            consolidator_log_file="${RUNTIME_DIR}/consolidator_stage.log"
+            set +e
+            bash "${SUPPORT_SCRIPTS_DIR}/review_consolidate.sh" 2> "${consolidator_log_file}"
+            stage_rc="$?"
+            set -e
+            if [ -s "${consolidator_log_file}" ]; then
+              cat "${consolidator_log_file}" >&2
+            fi
+            if [ "${stage_rc}" -ne 0 ]; then
+              consolidator_status="failed"
+              echo "::warning::review_consolidate.sh failed with rc=${stage_rc}; continuing with empty consolidator_raw.txt"
+              : > "${CONSOLIDATOR_RAW_FILE}"
+            elif grep -q 'failopen=1' "${consolidator_log_file}" 2>/dev/null; then
+              consolidator_status="failed"
+            fi
+            rm -f "${consolidator_log_file}"
+          fi
+
+          consolidator_output_bytes="$(wc -c < "${CONSOLIDATOR_RAW_FILE}" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+          echo "REVIEW_CONSOLIDATOR_STAGE_STATUS=${consolidator_status}" >> "$GITHUB_ENV"
+          echo "REVIEW_CONSOLIDATOR_OUTPUT_BYTES=${consolidator_output_bytes}" >> "$GITHUB_ENV"
+
+      - name: Run parser stage
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        id: parser_stage
+        run: |
+          set -euo pipefail
+
+          parse_failed_metric="0"
+          parser_script="${SUPPORT_SCRIPTS_DIR}/review_parse_consolidator.sh"
+          if [ ! -f "${parser_script}" ]; then
+            echo "::warning::review_parse_consolidator.sh not found; continuing with empty review_issues.txt and parser_stats.txt"
+            : > "${REVIEW_ISSUES_FILE}"
+            cat > "${PARSER_STATS_FILE}" <<'STATS'
+          parsed_blocks=0
+          passthrough_blocks=0
+          line_unverified=0
+          evidence_unverified=0
+          dropped_invalid_file=0
+          dropped_unknown_reason=0
+          parse_failed=1
+          parse_error=script_missing
+          anchors_total=0
+          anchors_covered=0
+          STATS
+            parse_failed_metric="1"
+          else
+            set +e
+            bash "${parser_script}"
+            stage_rc="$?"
+            set -e
+            if [ "${stage_rc}" -ne 0 ]; then
+              if [ "${REVIEW_PARSER_FAILOPEN:-1}" = "0" ]; then
+                echo "::error::review_parse_consolidator.sh failed with rc=${stage_rc} and REVIEW_PARSER_FAILOPEN=0"
+                exit "${stage_rc}"
+              fi
+              echo "::warning::review_parse_consolidator.sh failed with rc=${stage_rc}; continuing with empty review_issues.txt"
+              : > "${REVIEW_ISSUES_FILE}"
+              if [ ! -s "${PARSER_STATS_FILE}" ]; then
+                cat > "${PARSER_STATS_FILE}" <<'STATS'
+          parsed_blocks=0
+          passthrough_blocks=0
+          line_unverified=0
+          evidence_unverified=0
+          dropped_invalid_file=0
+          dropped_unknown_reason=0
+          parse_failed=1
+          parse_error=workflow_stage_nonzero
+          anchors_total=0
+          anchors_covered=0
+          STATS
+              fi
+            fi
+          fi
+
+          if [ -s "${PARSER_STATS_FILE}" ]; then
+            parse_failed_metric="$(awk -F '=' '$1=="parse_failed" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
+          fi
+          if ! [[ "${parse_failed_metric}" =~ ^[01]$ ]]; then
+            parse_failed_metric="0"
+          fi
+          echo "REVIEW_PARSER_FAILED=${parse_failed_metric}" >> "$GITHUB_ENV"
+
+      - name: Run issue ledger stage
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        id: ledger_stage
+        run: |
+          set -euo pipefail
+
+          ledger_script="${SUPPORT_SCRIPTS_DIR}/review_issue_ledger.sh"
+          if [ "${REVIEW_LEDGER_ENABLED:-1}" = "0" ]; then
+            : > "${LEDGER_STATUS_FILE}"
+          elif [ ! -f "${ledger_script}" ]; then
+            echo "::warning::review_issue_ledger.sh not found; continuing with empty ledger_status.txt"
+            : > "${LEDGER_STATUS_FILE}"
+          else
+            set +e
+            bash "${ledger_script}"
+            stage_rc="$?"
+            set -e
+            if [ "${stage_rc}" -ne 0 ]; then
+              echo "::warning::review_issue_ledger.sh failed with rc=${stage_rc}; continuing with empty ledger_status.txt"
+              : > "${LEDGER_STATUS_FILE}"
+            fi
+          fi
+
+          ledger_entries_total="$(awk 'NF { c++ } END { print c + 0 }' "${LEDGER_STATUS_FILE}" 2>/dev/null || echo 0)"
+          echo "REVIEW_LEDGER_ENTRIES_TOTAL=${ledger_entries_total}" >> "$GITHUB_ENV"
+
       - name: Record reviewer consensus candidate in memory (fail-open)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
@@ -2005,6 +2222,96 @@ jobs:
             echo "did_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Append review pipeline metrics summary
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        run: |
+          set -euo pipefail
+
+          reviewers_run="0"
+          if [ -s "${REVIEWER_MANIFEST_FILE:-}" ]; then
+            reviewers_run="$(wc -l < "${REVIEWER_MANIFEST_FILE}" | tr -d '[:space:]')"
+          fi
+
+          reviewer_scope="full-diff"
+          if [ "${REVIEW_REVIEWER_ITERATION_SCOPING:-1}" = "1" ] && [ -s "${RUNTIME_DIR}/reviewer_scoped_files.txt" ]; then
+            reviewer_scope="scoped"
+          fi
+
+          raw_bundle_size="$(wc -c < "${REVIEWER_BUNDLE_FILE:-/dev/null}" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+          floor_tags_count="${REVIEW_FLOOR_TAGS_COUNT:-0}"
+          consolidator_model="${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.4-mini}"
+          consolidator_invoked="${REVIEW_CONSOLIDATOR_STAGE_STATUS:-yes}"
+          consolidator_output_bytes="${REVIEW_CONSOLIDATOR_OUTPUT_BYTES:-0}"
+
+          parser_stats_parsed_blocks="0"
+          parser_stats_passthrough_blocks="0"
+          parser_stats_line_unverified="0"
+          parser_failed_metric="${REVIEW_PARSER_FAILED:-0}"
+          if [ -s "${PARSER_STATS_FILE:-}" ]; then
+            parser_stats_parsed_blocks="$(awk -F '=' '$1=="parsed_blocks" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
+            parser_stats_passthrough_blocks="$(awk -F '=' '$1=="passthrough_blocks" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
+            parser_stats_line_unverified="$(awk -F '=' '$1=="line_unverified" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
+            parser_failed_metric="$(awk -F '=' '$1=="parse_failed" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
+          fi
+          for v in parser_stats_parsed_blocks parser_stats_passthrough_blocks parser_stats_line_unverified parser_failed_metric; do
+            if ! [[ "${!v}" =~ ^[0-9]+$ ]]; then
+              printf -v "$v" '%s' "0"
+            fi
+          done
+
+          ledger_entries_total="${REVIEW_LEDGER_ENTRIES_TOTAL:-0}"
+          ledger_new="0"
+          ledger_persisting="0"
+          ledger_fixed="0"
+          ledger_resurgent="0"
+          ledger_accepted_residual="0"
+          if [ -s "${LEDGER_STATUS_FILE:-}" ]; then
+            ledger_entries_total="$(awk 'NF { c++ } END { print c + 0 }' "${LEDGER_STATUS_FILE}" | tr -d '[:space:]')"
+            ledger_new="$(awk -F '\t' '$2=="NEW" { c++ } END { print c + 0 }' "${LEDGER_STATUS_FILE}" | tr -d '[:space:]')"
+            ledger_persisting="$(awk -F '\t' '$2=="PERSISTING" { c++ } END { print c + 0 }' "${LEDGER_STATUS_FILE}" | tr -d '[:space:]')"
+            ledger_fixed="$(awk -F '\t' '$2=="FIXED" { c++ } END { print c + 0 }' "${LEDGER_STATUS_FILE}" | tr -d '[:space:]')"
+            ledger_resurgent="$(awk -F '\t' '$2=="RESURGENT" { c++ } END { print c + 0 }' "${LEDGER_STATUS_FILE}" | tr -d '[:space:]')"
+            ledger_accepted_residual="$(awk -F '\t' '$2=="accepted-residual" { c++ } END { print c + 0 }' "${LEDGER_STATUS_FILE}" | tr -d '[:space:]')"
+          fi
+
+          consolidator_overridden_count="0"
+          if [ -s "${EDITOR_SUMMARY_FILE:-}" ]; then
+            consolidator_overridden_count="$(grep -c 'CONSOLIDATOR_OVERRIDDEN:' "${EDITOR_SUMMARY_FILE}" 2>/dev/null || true)"
+            if ! [[ "${consolidator_overridden_count}" =~ ^[0-9]+$ ]]; then
+              consolidator_overridden_count=0
+            fi
+          fi
+
+          editor_invoked="yes"
+          editor_commit_produced="${{ steps.commit_changes.outputs.did_commit == 'true' && 'yes' || 'no' }}"
+
+          {
+            echo "### Review Pipeline — Iteration ${AUTOFIX_ITERATION:-1}"
+            echo
+            echo "| Metric | Value |"
+            echo "|---|---|"
+            echo "| Reviewers run | ${reviewers_run} |"
+            echo "| Reviewer scope | ${reviewer_scope} |"
+            echo "| Raw bundle size (bytes) | ${raw_bundle_size} |"
+            echo "| Floor tags | ${floor_tags_count} |"
+            echo "| Consolidator model | ${consolidator_model} |"
+            echo "| Consolidator invoked | ${consolidator_invoked} |"
+            echo "| Consolidator output bytes | ${consolidator_output_bytes} |"
+            echo "| Parsed issue blocks | ${parser_stats_parsed_blocks} |"
+            echo "| Passthrough blocks | ${parser_stats_passthrough_blocks} |"
+            echo "| Line-unverified blocks | ${parser_stats_line_unverified} |"
+            echo "| Parser failed | ${parser_failed_metric} |"
+            echo "| Ledger entries total | ${ledger_entries_total} |"
+            echo "| NEW | ${ledger_new} |"
+            echo "| PERSISTING | ${ledger_persisting} |"
+            echo "| FIXED | ${ledger_fixed} |"
+            echo "| RESURGENT | ${ledger_resurgent} |"
+            echo "| accepted-residual | ${ledger_accepted_residual} |"
+            echo "| Editor invoked | ${editor_invoked} |"
+            echo "| CONSOLIDATOR_OVERRIDDEN count | ${consolidator_overridden_count} |"
+            echo "| Editor commit produced | ${editor_commit_produced} |"
+            echo
+          } >> "${GITHUB_STEP_SUMMARY}"
       - name: Post editor summary comment
         if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'"
         env:
@@ -2017,22 +2324,22 @@ jobs:
             cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
           Changes made:
           - none (no editor summary output was generated)
-
+          
           Already satisfied (suggested but already present):
           - none (no editor summary output was generated)
-
+          
           Ignored suggestions (with short reason):
           - no summary available from editor stage
-
+          
           Reviewer files processed:
           - none (no editor summary output was generated)
-
+          
           Review file issue audit:
           - none (no editor summary output was generated)
-
+          
           Regression fingerprint:
           - unavailable (editor fallback)
-
+          
           Runtime failure path:
           - unavailable (editor fallback)
           __EDITOR_SUMMARY__
