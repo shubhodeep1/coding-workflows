@@ -5518,22 +5518,81 @@ PY
     # retrigger-style recovery allowance.
     if [ "${action}" = "retrigger_review" ]; then
       local _std_conflict_linked="${_std_linked_json}"
-      if [ -z "${_std_conflict_linked}" ] || [ "${_std_conflict_linked}" = "null" ]; then
-        local _std_conflict_pr_num _std_conflict_pr_json
-        _std_conflict_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
-        if [[ "${_std_conflict_pr_num}" =~ ^[0-9]+$ ]]; then
-          _std_conflict_pr_json="$(_fetch_pr_json "${_std_conflict_pr_num}")"
-          if [ -n "${_std_conflict_pr_json}" ] && [ "${_std_conflict_pr_json}" != "{}" ]; then
-            _std_conflict_linked="$(printf '%s' "${_std_conflict_pr_json}" | jq -c '{
-              number: (.number // null),
-              state: (.state // null),
-              head_ref: (.head.ref // null),
-              mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
-              merge_state_status: (.mergeable_state // null)
-            }' 2>/dev/null || echo "null")"
-          fi
+      # Cycle-local PR-JSON cache for this iteration.  When the REST
+      # fallback below fetches the PR payload, stash it here so the
+      # downstream retrigger_review case (when the guard fails open)
+      # can reuse the JSON instead of issuing a second gh api call —
+      # matches CLAUDE.md §15 GitHub API hygiene.
+      _STD_ITER_PR_NUM_CACHED=""
+      _STD_ITER_PR_JSON_CACHED=""
+
+      # Widen the REST-fallback trigger: GitHub computes mergeability
+      # asynchronously — a push kicks off a background job and the API
+      # briefly returns mergeable=null / mergeable_state=unknown (REST)
+      # or mergeable=UNKNOWN / mergeStateStatus=UNKNOWN (GraphQL).  If
+      # the cache shows UNKNOWN we treat it as a cache miss and hit
+      # REST with retries so we get a definitive signal before
+      # deciding.  Without this widening, the guard fails open on
+      # UNKNOWN and the legacy empty-commit dispatch runs — which
+      # itself triggers another mergeable recomputation, perpetuating
+      # the loop (observed for PR #1375/#1380 vs. settled PR #1413).
+      local _std_conflict_should_retry="false"
+      if [ -z "${_std_conflict_linked}" ] || [ "${_std_conflict_linked}" = "null" ] || [ "${_std_conflict_linked}" = "{}" ]; then
+        _std_conflict_should_retry="true"
+      else
+        local _std_cache_mergeable _std_cache_merge_state
+        _std_cache_mergeable="$(printf '%s' "${_std_conflict_linked}" | jq -r '.mergeable // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+        _std_cache_merge_state="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.merge_state_status // .mergeable_state // empty)' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+        if [ -z "${_std_cache_mergeable}" ] || [ "${_std_cache_mergeable}" = "unknown" ] || [ -z "${_std_cache_merge_state}" ] || [ "${_std_cache_merge_state}" = "unknown" ]; then
+          _std_conflict_should_retry="true"
         fi
       fi
+
+      if [ "${_std_conflict_should_retry}" = "true" ]; then
+        # Retry schedule per Q1:A + Q3:A (user-adjusted backoffs):
+        # 5 attempts total (initial + 4 retries), sleeping 5,10,15,20s
+        # between retries (50s worst case).  GitHub's API contract is
+        # that a GET /pulls/{n} request kicks off mergeability
+        # recomputation, so the subsequent retries are likely to
+        # return the definitive state.  On all-attempts-still-unknown
+        # we fail open and the legacy retrigger_review case fires,
+        # reusing the cached PR JSON (no duplicate gh api call).
+        local _std_conflict_pr_num_try _std_conflict_pr_json_try _std_attempt
+        local _std_backoff_sleeps=(5 10 15 20)
+        _std_conflict_pr_num_try="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+        if [[ "${_std_conflict_pr_num_try}" =~ ^[0-9]+$ ]]; then
+          for _std_attempt in 0 1 2 3 4; do
+            _std_conflict_pr_json_try="$(_fetch_pr_json "${_std_conflict_pr_num_try}")"
+            if [ -n "${_std_conflict_pr_json_try}" ] && [ "${_std_conflict_pr_json_try}" != "{}" ]; then
+              _STD_ITER_PR_NUM_CACHED="${_std_conflict_pr_num_try}"
+              _STD_ITER_PR_JSON_CACHED="${_std_conflict_pr_json_try}"
+              _std_conflict_linked="$(printf '%s' "${_std_conflict_pr_json_try}" | jq -c '{
+                number: (.number // null),
+                state: (.state // null),
+                head_ref: (.head.ref // null),
+                mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
+                merge_state_status: (.mergeable_state // null)
+              }' 2>/dev/null || echo "null")"
+              local _std_attempt_mergeable _std_attempt_merge_state
+              _std_attempt_mergeable="$(printf '%s' "${_std_conflict_linked}" | jq -r '.mergeable // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+              _std_attempt_merge_state="$(printf '%s' "${_std_conflict_linked}" | jq -r '.merge_state_status // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+              # Settled when mergeable is definitive (true|false) AND
+              # merge_state_status is a settled enum (anything other
+              # than empty/unknown).  dirty/clean/blocked/behind/
+              # has_hooks/unstable/draft all count as settled.
+              if { [ "${_std_attempt_mergeable}" = "true" ] || [ "${_std_attempt_mergeable}" = "false" ]; } && [ -n "${_std_attempt_merge_state}" ] && [ "${_std_attempt_merge_state}" != "unknown" ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${_std_conflict_pr_num_try} mergeability settled on attempt $((_std_attempt + 1)): mergeable=${_std_attempt_mergeable} state=${_std_attempt_merge_state}"
+                break
+              fi
+              echo "  [standalone-stall] Issue #${issue_num} PR #${_std_conflict_pr_num_try} mergeability still unsettled on attempt $((_std_attempt + 1)) (mergeable=${_std_attempt_mergeable:-null} state=${_std_attempt_merge_state:-unknown}); retrying..."
+            fi
+            if [ "${_std_attempt}" -lt 4 ]; then
+              sleep "${_std_backoff_sleeps[${_std_attempt}]}"
+            fi
+          done
+        fi
+      fi
+
       if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
         local _std_conflict_rc=0
         _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
@@ -5658,7 +5717,18 @@ STALL_EOF
           pr_lookup_ok="false"
         fi
         if [ "${pr_lookup_ok}" = "true" ] && [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
-          pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" 2>/dev/null || echo "")"
+          # API hygiene (CLAUDE.md §15): if the merge-conflict guard
+          # above fetched the same PR's JSON during its retry loop,
+          # reuse that payload instead of issuing a redundant gh api
+          # call.  _STD_ITER_PR_NUM_CACHED/_JSON_CACHED are iteration-
+          # scoped and reset at the top of each iteration's guard
+          # block, so stale cache carryover across issues cannot
+          # happen.
+          if [ "${_STD_ITER_PR_NUM_CACHED:-}" = "${pr_num}" ] && [ -n "${_STD_ITER_PR_JSON_CACHED:-}" ] && [ "${_STD_ITER_PR_JSON_CACHED}" != "{}" ]; then
+            pr_json="${_STD_ITER_PR_JSON_CACHED}"
+          else
+            pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" 2>/dev/null || echo "")"
+          fi
           head_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
           if [ -n "${head_ref}" ] && git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && git checkout "origin/${head_ref}" 2>/dev/null; then
             git config user.name "codex-bot"
