@@ -131,6 +131,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_cross_cycle_escalation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_render_recovery.py
 
       - name: Implement post-Codex recovery unit tests
         run: |
