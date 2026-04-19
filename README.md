@@ -1126,6 +1126,20 @@ Fail-open: `_check_fresh_push_guard` returns "not fresh" (i.e. lets the existing
 
 Log prefix `STALL_SKIP issue=... reason=fresh_push pr=... pushed_age_secs=... phase=... action=...` is a public contract (CLAUDE.md §6 Naming Immutability) — downstream log analysis and dashboards pivot on it; renames require the alongside-old-name shim documented in §6.
 
+### Stall recovery: merge-conflict pre-dispatch override
+
+The standalone stall loop (`run_standalone_stall_recovery`) reroutes the `retrigger_review` recovery action to the conflict resolver (`_dispatch_review_for_conflicts`) whenever the latest linked PR is known to be in a merge-conflict state. Without this override, the retrigger path pushes an empty commit to the PR head branch to re-kick Review Autofix — but autofix operates on the branch as-is and cannot resolve a merge conflict with base, so the next stall cycle repeats the same no-op dispatch until `MAX_STALL_RECOVERIES_PER_ISSUE` is reached.
+
+Detection (`_check_open_pr_conflict_guard`) fires when the cached linked-PR entry shows `state=OPEN` AND (`mergeable ∈ {CONFLICTING,false}` OR `mergeStateStatus/mergeable_state == DIRTY`) — matching the same signal the rebase-bot already uses. Primary data source is `_candidate_details_json`, extended in `_fetch_candidate_issue_details_graphql` to include `headRefName`, `mergeable`, and `mergeStateStatus` on the cross-referenced PR node (zero additional API calls on cache hit). Cache miss triggers a single REST `GET /pulls/{n}` fallback so a GraphQL hiccup cannot silently regress the guard.
+
+On a hit the poller logs `STALL_RECOVERY issue=<n> reason=open_pr_merge_conflict pr=<p> phase=<phase> action=dispatch_conflict_resolver override_from=retrigger_review`, emits a Telegram WARNING, and `continue`s the loop. The `stall_recovery_count` counter is **not** incremented — conflict resolution has its own budget and does not consume the retrigger-style recovery allowance. Duplicate same-cycle dispatches are suppressed via `_CONFLICT_DISPATCH_TRACKER` (return code 2 → `STALL_SKIP reason=open_pr_merge_conflict_dispatch_skipped`); dispatch failures (rc≠0 and ≠2) log `STALL_RECOVERY reason=open_pr_merge_conflict_dispatch_failed` and skip this cycle without burning the counter.
+
+A belt-and-braces check is also wired into `execute_stall_recovery_action retrigger_review`: if the pre-dispatch guard was bypassed (cache empty, managed-path entry, etc.) the action-level check fetches the PR JSON once (reusing the head_ref lookup), detects the conflict, and recursively dispatches `resolve_merge_conflict` with `STALL_RECOVERY_SHOULD_INCREMENT` forced to `false` so the override remains budget-neutral.
+
+Fail-open: when neither cache nor REST fallback can confirm a conflict state, the legacy `retrigger_review` empty-commit push runs as before. The guard can never cause an action that otherwise would not have fired; it only redirects `retrigger_review` → `resolve_merge_conflict` within the conflict window.
+
+Log prefixes `STALL_RECOVERY issue=... reason=open_pr_merge_conflict ...` / `STALL_SKIP issue=... reason=open_pr_merge_conflict_dispatch_skipped ...` are public contracts (CLAUDE.md §6 Naming Immutability).
+
 ### Stall recovery: linked-PR closure and re-issue Gap-2 surfacing
 
 When stall recovery closes a stuck issue and opens a replacement, two contracts are enforced by `scripts/orchestrate_poll_process.sh`:
