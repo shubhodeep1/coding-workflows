@@ -1439,14 +1439,24 @@ jobs:
 
           : > "${REVIEWER_BUNDLE_FILE}"
           while IFS= read -r reviewer_file; do
-            reviewer_sha="$(sha256sum "${reviewer_file}" | awk '{print $1}')"
-            reviewer_bytes="$(wc -c < "${reviewer_file}" | tr -d '[:space:]')"
+            if [ ! -r "${reviewer_file}" ]; then
+              echo "::warning::Skipping unreadable reviewer file: ${reviewer_file}"
+              continue
+            fi
+            reviewer_sha="$(sha256sum "${reviewer_file}" 2>/dev/null | awk '{print $1}' || true)"
+            reviewer_bytes="$(wc -c < "${reviewer_file}" 2>/dev/null | tr -d '[:space:]' || true)"
+            if [ -z "${reviewer_sha}" ] || [ -z "${reviewer_bytes}" ]; then
+              echo "::warning::Skipping reviewer file with unreadable metadata: ${reviewer_file}"
+              continue
+            fi
             {
               echo "FILE_PATH: ${reviewer_file}"
               echo "BYTES: ${reviewer_bytes}"
               echo "SHA256: ${reviewer_sha}"
               echo "CONTENT_START"
-              cat "${reviewer_file}"
+              if ! cat "${reviewer_file}" 2>/dev/null; then
+                echo "::warning::Unable to read reviewer file body: ${reviewer_file}" >&2
+              fi
               echo
               echo "CONTENT_END"
               echo
@@ -1567,7 +1577,7 @@ jobs:
             parse_failed_metric="$(awk -F '=' '$1=="parse_failed" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
           fi
           if ! [[ "${parse_failed_metric}" =~ ^[01]$ ]]; then
-            parse_failed_metric="0"
+            parse_failed_metric="1"
           fi
           echo "REVIEW_PARSER_FAILED=${parse_failed_metric}" >> "$GITHUB_ENV"
 
@@ -2240,13 +2250,13 @@ jobs:
           raw_bundle_size="$(wc -c < "${REVIEWER_BUNDLE_FILE:-/dev/null}" 2>/dev/null | tr -d '[:space:]' || echo 0)"
           floor_tags_count="${REVIEW_FLOOR_TAGS_COUNT:-0}"
           consolidator_model="${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.4-mini}"
-          consolidator_invoked="${REVIEW_CONSOLIDATOR_STAGE_STATUS:-yes}"
+          consolidator_invoked="${REVIEW_CONSOLIDATOR_STAGE_STATUS:-no}"
           consolidator_output_bytes="${REVIEW_CONSOLIDATOR_OUTPUT_BYTES:-0}"
 
           parser_stats_parsed_blocks="0"
           parser_stats_passthrough_blocks="0"
           parser_stats_line_unverified="0"
-          parser_failed_metric="${REVIEW_PARSER_FAILED:-0}"
+          parser_failed_metric="${REVIEW_PARSER_FAILED:-1}"
           if [ -s "${PARSER_STATS_FILE:-}" ]; then
             parser_stats_parsed_blocks="$(awk -F '=' '$1=="parsed_blocks" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
             parser_stats_passthrough_blocks="$(awk -F '=' '$1=="passthrough_blocks" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
