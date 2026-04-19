@@ -286,6 +286,153 @@ echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
 		assert "Render recovery: template rerender failed with exit=14" in log
 
 
+def test_render_recovery_relint_failure_routes_render_phase() -> None:
+	script = """#!/usr/bin/env bash
+set -euo pipefail
+
+PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
+PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_KIND="none"
+PRE_FLIGHT_FAILURE_REASON="not_run"
+PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
+HARNESS_MODE="template_generate"
+HARNESS_GENERATOR_MODE="templates"
+SELF_HEAL_PHASE_LOG="${RUNTIME_DIR}/self_heal_phase.log"
+RENDER_CALLS_FILE="${RUNTIME_DIR}/render_calls.txt"
+PRECHECK_SEQUENCE="fail,fail"
+
+run_template_validation_harness_renderer() {
+	echo "called" >> "${RENDER_CALLS_FILE}"
+	return 0
+}
+
+run_preflight_checks() {
+	PRE_FLIGHT_STATUS="running"
+	if [ "${PRE_FLIGHT_APPEND_LOG:-false}" != "true" ]; then
+		: > "${PRE_FLIGHT_LOG_FILE}"
+	fi
+	local next="${PRECHECK_SEQUENCE%%,*}"
+	if [[ "${PRECHECK_SEQUENCE}" == *,* ]]; then
+		PRECHECK_SEQUENCE="${PRECHECK_SEQUENCE#*,}"
+	fi
+	case "${next}" in
+		pass)
+			PRE_FLIGHT_STATUS="pass"
+			return 0
+			;;
+		*)
+			PRE_FLIGHT_STATUS="fail"
+			echo "Compose syntax/validation check failed." >> "${PRE_FLIGHT_LOG_FILE}"
+			return 1
+			;;
+	esac
+}
+
+classify_preflight_failure() {
+	PRE_FLIGHT_FAILURE_KIND="non_lint"
+	PRE_FLIGHT_FAILURE_REASON="preflight_failure_other"
+	if grep -Fq "Compose syntax/validation check failed." "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="compose_schema_lint"
+	fi
+	return 0
+}
+
+attempt_template_render_recovery_after_preflight_lint() {
+	local PRE_FLIGHT_APPEND_LOG="true"
+	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
+	if run_template_validation_harness_renderer; then
+		if run_preflight_checks; then
+			PRE_FLIGHT_FAILURE_KIND="none"
+			PRE_FLIGHT_FAILURE_REASON="none"
+			return 0
+		fi
+		classify_preflight_failure
+		if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
+			PRE_FLIGHT_FAILURE_KIND="render"
+			PRE_FLIGHT_FAILURE_REASON="render_retry_non_lint_after_rerender"
+			return 1
+		fi
+		PRE_FLIGHT_FAILURE_KIND="render"
+		PRE_FLIGHT_FAILURE_REASON="render_retry_exhausted"
+		return 1
+	fi
+	PRE_FLIGHT_FAILURE_KIND="render"
+	PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_1"
+	return 1
+}
+
+attempt_self_heal_and_reexec() {
+	printf '%s\n' "$1" >> "${SELF_HEAL_PHASE_LOG}"
+	return 0
+}
+
+attempt_render_recovery_after_preflight_failure() {
+	local render_recovery_exit=0
+
+	if [ "${HARNESS_MODE}" != "template_generate" ] || [ "${HARNESS_GENERATOR_MODE}" != "templates" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+
+	classify_preflight_failure
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
+		return 1
+	fi
+
+	if attempt_template_render_recovery_after_preflight_lint; then
+		return 0
+	else
+		render_recovery_exit=$?
+	fi
+	if [ "${render_recovery_exit}" -ne 0 ]; then
+		return 2
+	fi
+	return 0
+}
+
+if ! run_preflight_checks; then
+	render_recovery_exit=1
+	if attempt_render_recovery_after_preflight_failure; then
+		render_recovery_exit=0
+	else
+		render_recovery_exit=$?
+	fi
+
+	if [ "${render_recovery_exit}" -ne 0 ]; then
+		if [ "${render_recovery_exit}" -eq 2 ]; then
+			attempt_self_heal_and_reexec "render"
+		else
+			attempt_self_heal_and_reexec "preflight"
+		fi
+		echo "terminal-failure" > "${RUNTIME_DIR}/terminal.txt"
+		exit 0
+	fi
+fi
+
+echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
+"""
+
+	with tempfile.TemporaryDirectory(prefix="validate-render-recovery-relint-fail-") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		env = os.environ.copy()
+		env["RUNTIME_DIR"] = str(runtime_dir)
+		proc = _run_script(script, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert not (runtime_dir / "pipeline.txt").exists()
+		assert (runtime_dir / "terminal.txt").read_text(encoding="utf-8").strip() == "terminal-failure"
+		phase_log = (runtime_dir / "self_heal_phase.log").read_text(encoding="utf-8").strip().splitlines()
+		assert phase_log == ["render"]
+		render_calls = (runtime_dir / "render_calls.txt").read_text(encoding="utf-8").strip().splitlines()
+		assert render_calls == ["called"]
+		log = (runtime_dir / "validation_preflight.log").read_text(encoding="utf-8")
+		assert log.count("Compose syntax/validation check failed.") == 2
+
+
 def test_non_template_preflight_failure_preserves_legacy_path() -> None:
 	script = """#!/usr/bin/env bash
 set -euo pipefail
@@ -407,10 +554,131 @@ echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
 		assert (runtime_dir / "terminal.txt").read_text(encoding="utf-8").strip() == "terminal-failure"
 
 
+def test_template_non_lint_preflight_failure_skips_render_recovery() -> None:
+	script = """#!/usr/bin/env bash
+set -euo pipefail
+
+PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
+PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_KIND="none"
+PRE_FLIGHT_FAILURE_REASON="not_run"
+PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
+HARNESS_MODE="template_generate"
+HARNESS_GENERATOR_MODE="templates"
+SELF_HEAL_PHASE_LOG="${RUNTIME_DIR}/self_heal_phase.log"
+RENDER_CALLS_FILE="${RUNTIME_DIR}/render_calls.txt"
+
+run_template_validation_harness_renderer() {
+	echo "called" >> "${RENDER_CALLS_FILE}"
+	return 0
+}
+
+run_preflight_checks() {
+	PRE_FLIGHT_STATUS="running"
+	if [ "${PRE_FLIGHT_APPEND_LOG:-false}" != "true" ]; then
+		: > "${PRE_FLIGHT_LOG_FILE}"
+	fi
+	echo "Missing validation/validate.env" >> "${PRE_FLIGHT_LOG_FILE}"
+	PRE_FLIGHT_STATUS="fail"
+	return 1
+}
+
+classify_preflight_failure() {
+	PRE_FLIGHT_FAILURE_KIND="non_lint"
+	PRE_FLIGHT_FAILURE_REASON="preflight_failure_other"
+	if grep -Fq "Missing validation/validate.env" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_REASON="missing_validation_artifact"
+	fi
+	return 0
+}
+
+attempt_template_render_recovery_after_preflight_lint() {
+	local PRE_FLIGHT_APPEND_LOG="true"
+	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
+	if run_template_validation_harness_renderer; then
+		if run_preflight_checks; then
+			PRE_FLIGHT_FAILURE_KIND="none"
+			PRE_FLIGHT_FAILURE_REASON="none"
+			return 0
+		fi
+		classify_preflight_failure
+		PRE_FLIGHT_FAILURE_KIND="render"
+		PRE_FLIGHT_FAILURE_REASON="render_retry_exhausted"
+		return 1
+	fi
+	PRE_FLIGHT_FAILURE_KIND="render"
+	PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_1"
+	return 1
+}
+
+attempt_self_heal_and_reexec() {
+	printf '%s\n' "$1" >> "${SELF_HEAL_PHASE_LOG}"
+	return 0
+}
+
+attempt_render_recovery_after_preflight_failure() {
+	if [ "${HARNESS_MODE}" != "template_generate" ] || [ "${HARNESS_GENERATOR_MODE}" != "templates" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+
+	classify_preflight_failure
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
+		echo "Render recovery: deterministic template rerender skipped for non-lint pre-flight failure (reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
+
+	if attempt_template_render_recovery_after_preflight_lint; then
+		return 0
+	fi
+	return 2
+}
+
+if ! run_preflight_checks; then
+	render_recovery_exit=1
+	if attempt_render_recovery_after_preflight_failure; then
+		render_recovery_exit=0
+	else
+		render_recovery_exit=$?
+	fi
+
+	if [ "${render_recovery_exit}" -ne 0 ]; then
+		if [ "${render_recovery_exit}" -eq 2 ]; then
+			attempt_self_heal_and_reexec "render"
+		else
+			attempt_self_heal_and_reexec "preflight"
+		fi
+		echo "terminal-failure" > "${RUNTIME_DIR}/terminal.txt"
+		exit 0
+	fi
+fi
+
+echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
+"""
+
+	with tempfile.TemporaryDirectory(prefix="validate-render-recovery-non-lint-") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		env = os.environ.copy()
+		env["RUNTIME_DIR"] = str(runtime_dir)
+		proc = _run_script(script, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		phase_log = (runtime_dir / "self_heal_phase.log").read_text(encoding="utf-8").strip().splitlines()
+		assert phase_log == ["preflight"]
+		assert not (runtime_dir / "render_calls.txt").exists()
+		log = (runtime_dir / "validation_preflight.log").read_text(encoding="utf-8")
+		assert "Render recovery: deterministic template rerender skipped for non-lint pre-flight failure" in log
+
+
 def main() -> int:
 	test_render_recovery_success_continues_pipeline()
 	test_render_recovery_fail_open_uses_render_phase_self_heal()
+	test_render_recovery_relint_failure_routes_render_phase()
 	test_non_template_preflight_failure_preserves_legacy_path()
+	test_template_non_lint_preflight_failure_skips_render_recovery()
 	return 0
 
 
