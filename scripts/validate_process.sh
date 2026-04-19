@@ -123,7 +123,10 @@ HINTS_SOURCE="none"
 HARNESS_MODE="generate"
 HARNESS_GENERATOR_MODE="freehand"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_KIND="none"
+PRE_FLIGHT_FAILURE_REASON="not_run"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
+PRE_FLIGHT_APPEND_LOG="false"
 GENERATED_VALIDATE_SCRIPT_PATH=""
 CANONICAL_VALIDATE_DRIVER_REL="scripts/validate_process.sh"
 CANONICAL_VALIDATE_HARNESS_REL="validation/validate.sh"
@@ -221,6 +224,15 @@ fi
 attempt_self_heal_and_reexec()
 {
   local phase="${1:-unknown}"
+
+  case "${phase}" in
+    discover|generate|preflight|render|canary|diagnose|runtime|unknown)
+      ;;
+    *)
+      echo "::warning::self-heal invoked with unsupported phase '${phase}'; normalizing to 'unknown'." >&2
+      phase="unknown"
+      ;;
+  esac
 
   if [ "${MAX_SELF_HEAL_ATTEMPTS:-0}" -le 0 ]; then
     return 0
@@ -1140,7 +1152,6 @@ attempt_render_recovery_after_preflight_failure()
 		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
 		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
 	} >> "${PRE_FLIGHT_LOG_FILE}"
-
 	if run_template_validation_harness_renderer; then
 		renderer_exit=0
 	else
@@ -1166,6 +1177,8 @@ attempt_render_recovery_after_preflight_failure()
 run_preflight_checks()
 {
 	PRE_FLIGHT_STATUS="running"
+	PRE_FLIGHT_FAILURE_KIND="unknown"
+	PRE_FLIGHT_FAILURE_REASON="running"
 	if [ "${PRE_FLIGHT_APPEND_LOG:-false}" != "true" ]; then
 		: > "${PRE_FLIGHT_LOG_FILE}"
 	fi
@@ -1705,7 +1718,97 @@ PY3
 	fi
 
 	PRE_FLIGHT_STATUS="pass"
+	PRE_FLIGHT_FAILURE_KIND="none"
+	PRE_FLIGHT_FAILURE_REASON="none"
 	return 0
+}
+
+classify_preflight_failure()
+{
+	PRE_FLIGHT_FAILURE_KIND="non_lint"
+	PRE_FLIGHT_FAILURE_REASON="preflight_failure_other"
+
+	if [ ! -s "${PRE_FLIGHT_LOG_FILE}" ]; then
+		PRE_FLIGHT_FAILURE_REASON="preflight_log_empty"
+		echo "PRE_FLIGHT_CLASSIFICATION kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}" >&2
+		return 0
+	fi
+
+	if grep -Fq "Embedded Python F-code lint violations in generated harness scripts:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="embedded_python_fcode_lint"
+	elif grep -Fq "Embedded Python syntax errors in generated harness scripts:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="embedded_python_syntax"
+	elif grep -Fq "Compose syntax/validation check failed." "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="compose_schema_lint"
+	elif grep -Fq "Shell syntax check failed:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="shell_syntax_lint"
+	elif grep -Fq "validation/tests/00_canary.sh CANARY_TOOLS references service-side CLI(s)" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="canary_tools_scope_lint"
+	elif grep -Fq "references 'mongosh'/'mongodb-mongosh' but does not add MongoDB's official apt repo" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="dockerfile_package_lint"
+	elif grep -Fq "missing build context:" "${PRE_FLIGHT_LOG_FILE}" \
+		|| grep -Fq "missing dockerfile:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="compose_build_path_lint"
+	elif grep -Fq "Missing validation/docker-compose.test.yml" "${PRE_FLIGHT_LOG_FILE}" \
+		|| grep -Fq "Missing validation/validate.env" "${PRE_FLIGHT_LOG_FILE}" \
+		|| grep -Fq "Missing validation/tests/00_canary.sh" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="non_lint"
+		PRE_FLIGHT_FAILURE_REASON="missing_validation_artifact"
+	fi
+
+	echo "PRE_FLIGHT_CLASSIFICATION kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}" >&2
+	return 0
+}
+
+attempt_template_render_recovery_after_preflight_lint()
+{
+	local max_render_recovery_attempts=1
+	local render_recovery_attempt=1
+	local renderer_exit=0
+
+	while [ "${render_recovery_attempt}" -le "${max_render_recovery_attempts}" ]; do
+		echo "PRE_FLIGHT_RENDER_RECOVERY attempt=${render_recovery_attempt}/${max_render_recovery_attempts} reason=${PRE_FLIGHT_FAILURE_REASON}" >&2
+		if run_template_validation_harness_renderer; then
+			renderer_exit=0
+		else
+			renderer_exit=$?
+		fi
+
+		if [ "${renderer_exit}" -ne 0 ]; then
+			PRE_FLIGHT_FAILURE_KIND="render"
+			PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_${renderer_exit}"
+			echo "PRE_FLIGHT_RENDER_RECOVERY renderer_failed exit=${renderer_exit}" >&2
+			return 1
+		fi
+
+		if run_preflight_checks; then
+			echo "PRE_FLIGHT_RENDER_RECOVERY recovered=true attempt=${render_recovery_attempt}/${max_render_recovery_attempts}" >&2
+			PRE_FLIGHT_FAILURE_KIND="none"
+			PRE_FLIGHT_FAILURE_REASON="none"
+			return 0
+		fi
+
+		classify_preflight_failure
+		echo "PRE_FLIGHT_RENDER_RECOVERY recovered=false attempt=${render_recovery_attempt}/${max_render_recovery_attempts} kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}" >&2
+		if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
+			PRE_FLIGHT_FAILURE_KIND="render"
+			PRE_FLIGHT_FAILURE_REASON="render_retry_non_lint_after_rerender"
+			return 1
+		fi
+
+		render_recovery_attempt=$((render_recovery_attempt + 1))
+	done
+
+	PRE_FLIGHT_FAILURE_KIND="render"
+	PRE_FLIGHT_FAILURE_REASON="render_retry_exhausted"
+	return 1
 }
 
 enforce_managed_validation_artifact_contract()
