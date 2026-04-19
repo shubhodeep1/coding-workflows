@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:1152-1155 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: The lint-classified recovery branch calls `attempt_template_render_recovery_after_preflight_lint` directly instead of following the same top-level deterministic rerender flow as the non-lint path.\n  WHY: Multiple reviewers flagged that this path diverges from the main recovery sequencing; one reviewer judged it intentionally equivalent because the helper rerenders internally, but the others treated the branch as a recovery-flow regression.\n\n- scripts/validate_process.sh:1799-1801 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `PRE_FLIGHT_APPEND_LOG` is declared `local` in `attempt_template_render_recovery_after_preflight_lint`, which reviewers say prevents `run_preflight_checks` from preserving the append-log behavior.\n  WHY: Reviewers agreed this line is intended to keep diagnostics across retries, though they disagreed on bash scoping; one reviewer said the concern is invalid because bash locals propagate to child function calls.\n\n- scripts/validate_process.sh:1794-1821 | severity=medium | confidence=3\n  flagged_by: [google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `attempt_template_render_recovery_after_preflight_lint` returns `2` on its failure paths instead of `1`, changing the helper\u2019s failure classification.\n  WHY: Reviewers described this as inconsistent with the surrounding return-code contract, while another reviewer said it was an intentional phase-selection change and not a runtime bug.\n\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/validate_process.sh:1148-1158, 1797, 1799, 1813, 1821 | severity=low | confidence=1\n  PROBLEM: The reported lint-recovery, append-log, and return-code regressions are not actual bugs.\n  WHY: The reviewer concluded the lint helper already rerenders, bash `local` scoping is sufficient here, and the `2` return codes appear intentional.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/validate_process.sh:1152-1155 | severity=medium | confidence=4\n  PROBLEM: The new lint branch bypasses the deterministic rerender step before retrying preflight checks.\n  WHY: The reviewer says this breaks the established recovery ordering and may reduce auto-healing success for transient generation artifacts.\n\n- scripts/validate_process.sh:1799 | severity=medium | confidence=4\n  PROBLEM: `PRE_FLIGHT_APPEND_LOG` is declared `local` inside `attempt_template_render_recovery_after_preflight_lint`.\n  WHY: The reviewer says `run_preflight_checks` depends on that flag to decide whether to truncate the log, so scoping may cause diagnostic loss.\n\n- scripts/validate_process.sh:1794, 1813, 1821 | severity=medium | confidence=3\n  PROBLEM: The helper returns `2` on failure paths, which the reviewer says can terminate recovery too early.\n  WHY: The reviewer argues that returning `2` suppresses further recovery attempts that the parent function might otherwise perform.\n\n- scripts/validate_process.sh:1149-1151 | severity=low | confidence=1\n  PROBLEM: Missing log entry for recovery attempt start.\n  WHY: The reviewer suggested adding a log line before switching kinds to improve observability.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_process.sh:1148-1158 | severity=medium | confidence=3\n  PROBLEM: The lint path calls `attempt_template_render_recovery_after_preflight_lint` directly without mirroring the non-lint path\u2019s top-level rerender sequence.\n  WHY: The reviewer judged the behavior functionally equivalent but structurally inconsistent, and called the concern valid though misleading.\n\n- scripts/validate_process.sh:1799-1801 | severity=low | confidence=2\n  PROBLEM: `local PRE_FLIGHT_APPEND_LOG=\"true\"` does not propagate to `run_preflight_checks`.\n  WHY: The reviewer rejected that premise as technically incorrect, but noted the initial failure diagnostics may already have been truncated before recovery begins.\n\n- scripts/validate_process.sh:1794-1815 | severity=medium | confidence=4\n  PROBLEM: The retry helper\u2019s failure paths now return `2` consistently.\n  WHY: The reviewer treated this as a valid code change and noted it appears intentional and functionally appropriate.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_process.sh:1800 | severity=high | confidence=5\n  PROBLEM: `PRE_FLIGHT_APPEND_LOG` is declared `local` inside `attempt_template_render_recovery_after_preflight_lint`, so `run_preflight_checks` cannot see it.\n  WHY: The reviewer says this prevents log preservation across retries and causes earlier diagnostics to be lost.\n\n- scripts/validate_process.sh:1797, 1807, 1816 | severity=medium | confidence=3\n  PROBLEM: `attempt_template_render_recovery_after_preflight_lint` returns `2` on failure paths, which is inconsistent with the caller\u2019s return-code contract.\n  WHY: The reviewer says the code currently works by accident but violates the established meaning of the return codes.\n\n- scripts/validate_process.sh:1787 | severity=low | confidence=1\n  PROBLEM: The concern that the lint recovery path skips rerendering is not an issue.\n  WHY: The reviewer states `attempt_template_render_recovery_after_preflight_lint` itself calls `run_template_validation_harness_renderer`, so rerendering still happens.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/validate_process.sh | severity=unknown | confidence=unknown\n  PROBLEM: The review says it removed the lint branch, removed `local PRE_FLIGHT_APPEND_LOG`, and changed failure returns from `2` to `1`.\n  WHY: The review describes applied changes and verification, but does not present them as findings with explicit severity/confidence.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "184b5b4f690998a1658cb9b93fb16040131dbd2de1181df9904f887383ed535f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1393,
+    "run_id": "24625409780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24625409780",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419092402_1d4323a793",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1393,
+    "run_id": "24625409780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T09:24:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
