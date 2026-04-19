@@ -5532,6 +5532,14 @@ PY
       local _STD_ITER_PR_NUM_CACHED=""
       local _STD_ITER_PR_JSON_CACHED=""
       _STD_ITER_PR_NUM_CACHED="$(printf '%s' "${_std_conflict_linked}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+      # API hygiene: when GraphQL already gave us PR number + head ref,
+      # seed a minimal JSON payload so retrigger_review can skip a
+      # redundant gh api pulls/{n} fetch on the non-retry fast path.
+      local _std_cached_head_ref=""
+      _std_cached_head_ref="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_ref // .head.ref // .headRefName // empty)' 2>/dev/null || echo "")"
+      if [[ "${_STD_ITER_PR_NUM_CACHED}" =~ ^[0-9]+$ ]] && [ -n "${_std_cached_head_ref}" ] && [ "${_std_cached_head_ref}" != "null" ]; then
+        _STD_ITER_PR_JSON_CACHED="$(jq -cn --argjson n "${_STD_ITER_PR_NUM_CACHED}" --arg hr "${_std_cached_head_ref}" '{number: $n, head: {ref: $hr}}' 2>/dev/null || echo "")"
+      fi
 
       # Widen the REST-fallback trigger: GitHub computes mergeability
       # asynchronously — a push kicks off a background job and the API
