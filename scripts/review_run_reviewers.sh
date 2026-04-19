@@ -877,7 +877,14 @@ run_reviewer() {
       fi
     fi
     (
-      exec "${codex_bin}" exec --model "${model}" --full-auto < "${prompt_file}"
+      # Reviewers must not mutate the workspace: a reviewer write pollutes the
+      # pre-editor snapshot in review_autofix.yml and suppresses legitimate
+      # editor edits via the Part-3 "paths dirty before editor ran" subtraction,
+      # producing a false-positive EDITOR_CHANGES_LOST. --sandbox read-only
+      # blocks those writes. stdin is piped, so codex exec is already
+      # non-interactive; no approval-policy flag is needed (and the installed
+      # codex CLI does not accept --ask-for-approval on the exec subcommand).
+      exec "${codex_bin}" exec --model "${model}" --sandbox read-only < "${prompt_file}"
     ) > "${tmp_output}" 2> >(
       while IFS= read -r line || [ -n "$line" ]; do
         # Atomic heartbeat update: write to tmp then rename
