@@ -5529,8 +5529,8 @@ PY
       # downstream retrigger_review case (when the guard fails open)
       # can reuse the JSON instead of issuing a second gh api call —
       # matches CLAUDE.md §15 GitHub API hygiene.
-      _STD_ITER_PR_NUM_CACHED=""
-      _STD_ITER_PR_JSON_CACHED=""
+      local _STD_ITER_PR_NUM_CACHED=""
+      local _STD_ITER_PR_JSON_CACHED=""
 
       # Widen the REST-fallback trigger: GitHub computes mergeability
       # asynchronously — a push kicks off a background job and the API
@@ -5591,6 +5591,9 @@ PY
                 break
               fi
               echo "  [standalone-stall] Issue #${issue_num} PR #${_std_conflict_pr_num_try} mergeability still unsettled on attempt $((_std_attempt + 1)) (mergeable=${_std_attempt_mergeable:-null} state=${_std_attempt_merge_state:-unknown}); retrying..."
+            else
+              echo "  [standalone-stall] Issue #${issue_num} PR #${_std_conflict_pr_num_try} fetch failed on attempt $((_std_attempt + 1)); failing open."
+              break
             fi
             if [ "${_std_attempt}" -lt 4 ]; then
               sleep "${_std_backoff_sleeps[${_std_attempt}]}"
