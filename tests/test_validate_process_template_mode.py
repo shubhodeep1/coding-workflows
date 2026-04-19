@@ -27,6 +27,16 @@ def test_template_mode_selection_contract_present() -> None:
 	assert 'HARNESS_GENERATOR_MODE="templates"' in text
 	assert 'elif [ "${VALIDATION_CYCLE}" -gt 1 ] \\' in text
 	assert 'HARNESS_GENERATOR_MODE="freehand"' in text
+	assert 'PRE_FLIGHT_FAILURE_KIND="none"' in text
+	assert 'PRE_FLIGHT_RECOVERY_STATUS="not_attempted"' in text
+
+
+def test_template_mode_render_recovery_contract_present() -> None:
+	text = _validate_process_text()
+	assert "attempt_preflight_render_recovery()" in text
+	assert 'if [ "${HARNESS_MODE}" != "template_generate" ]; then' in text
+	assert 'if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then' in text
+	assert 'attempt_self_heal_and_reexec "${self_heal_phase}"' in text
 
 
 def test_template_mode_missing_manifest_returns_harness_error() -> None:
@@ -167,6 +177,7 @@ esac
 
 def main() -> int:
 	test_template_mode_selection_contract_present()
+	test_template_mode_render_recovery_contract_present()
 	test_template_mode_missing_manifest_returns_harness_error()
 	return 0
 

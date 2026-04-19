@@ -16,6 +16,7 @@ Hard constraints (NON-NEGOTIABLE):
   - prompts/mode-validate-generate.txt
   - prompts/mode-validate-fix-harness.txt
   - prompts/mode-validate-diagnose.txt
+- Render-phase harness recovery is handled mechanically by `scripts/validate_process.sh` (deterministic template re-render + preflight re-run). Do NOT treat render-phase failures as permission to edit harness files, scripts, workflows, or non-validation prompts.
 - You MUST NOT propose edits to any other file (including scripts/, workflow YAML, or any other prompt).
 - You MUST NOT rename, remove, or repurpose any identifier, field name, JSON key, label, env var, or tool name referenced by these prompts. Additive clarifications only.
 - You MUST NOT change the declared output JSON schema of any prompt. You may tighten wording or add guidance, but the shape of the contract is immutable.
