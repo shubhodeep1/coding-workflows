@@ -123,6 +123,7 @@ HINTS_SOURCE="none"
 HARNESS_MODE="generate"
 HARNESS_GENERATOR_MODE="freehand"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 GENERATED_VALIDATE_SCRIPT_PATH=""
 CANONICAL_VALIDATE_DRIVER_REL="scripts/validate_process.sh"
 CANONICAL_VALIDATE_HARNESS_REL="validation/validate.sh"
@@ -216,7 +217,7 @@ fi
 # returns and the caller proceeds with its normal hard-fail path.
 #
 # Usage: attempt_self_heal_and_reexec "<failure-phase-tag>"
-#   phase tag: generate|preflight|canary|runtime|diagnose|discover
+#   phase tag: generate|preflight|render|canary|runtime|diagnose|discover
 attempt_self_heal_and_reexec()
 {
   local phase="${1:-unknown}"
@@ -1132,11 +1133,22 @@ run_template_validation_harness_renderer()
 	return 0
 }
 
-run_preflight_render_recovery()
+attempt_render_recovery_after_preflight_failure()
 {
 	local renderer_exit=0
 
-	echo "VALIDATION_RENDER_RECOVERY phase=render status=start" >> "${GENERATE_LOG_FILE}"
+	if [ "${HARNESS_MODE}" != "template_generate" ] || [ "${HARNESS_GENERATOR_MODE}" != "templates" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+
+	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
+	{
+		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
+		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
+	} >> "${PRE_FLIGHT_LOG_FILE}"
 	if run_template_validation_harness_renderer; then
 		renderer_exit=0
 	else
@@ -1144,24 +1156,27 @@ run_preflight_render_recovery()
 	fi
 
 	if [ "${renderer_exit}" -ne 0 ]; then
-		echo "VALIDATION_RENDER_RECOVERY phase=render status=renderer_failed renderer_exit=${renderer_exit}" >> "${GENERATE_LOG_FILE}"
-		return 1
+		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 2
 	fi
 
-	echo "VALIDATION_RENDER_RECOVERY phase=render status=rerender_pass rerun=preflight" >> "${GENERATE_LOG_FILE}"
+	echo "Render recovery: rerender completed; re-running pre-flight checks." >> "${PRE_FLIGHT_LOG_FILE}"
+	local PRE_FLIGHT_APPEND_LOG="true"
 	if run_preflight_checks; then
-		echo "VALIDATION_RENDER_RECOVERY phase=render status=relint_pass" >> "${GENERATE_LOG_FILE}"
+		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 0
 	fi
 
-	echo "VALIDATION_RENDER_RECOVERY phase=render status=relint_failed" >> "${GENERATE_LOG_FILE}"
-	return 1
+	echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+	return 2
 }
 
 run_preflight_checks()
 {
 	PRE_FLIGHT_STATUS="running"
-	: > "${PRE_FLIGHT_LOG_FILE}"
+	if [ "${PRE_FLIGHT_APPEND_LOG:-false}" != "true" ]; then
+		: > "${PRE_FLIGHT_LOG_FILE}"
+	fi
 
 	# Emit the tail of the pre-flight log to stderr so that the failing command's
 	# output is visible directly in the GitHub Actions job log, without requiring
@@ -2327,9 +2342,14 @@ fi
 # Phase 2: Pre-flight checks for generated harness
 # ---------------------------------------------------------------
 if ! run_preflight_checks; then
-  if [ "${VALIDATION_USE_TEMPLATES_ENABLED}" = "true" ] && run_preflight_render_recovery; then
-    :
+  render_recovery_exit=1
+  if attempt_render_recovery_after_preflight_failure; then
+    render_recovery_exit=0
   else
+    render_recovery_exit=$?
+  fi
+
+  if [ "${render_recovery_exit}" -ne 0 ]; then
     failure_summary="Validation pre-flight checks failed. See validation_preflight.log artifact."
     jq -n \
       --arg diagnosis "Pre-flight validation failed before test execution." \
@@ -2342,7 +2362,7 @@ if ! run_preflight_checks; then
       }' > "${DIAGNOSE_RESULT_FILE}"
 
     # Self-heal interception: bad harness is often a prompt-wording defect.
-    if [ "${VALIDATION_USE_TEMPLATES_ENABLED}" = "true" ]; then
+    if [ "${render_recovery_exit}" -eq 2 ]; then
       attempt_self_heal_and_reexec "render"
     else
       attempt_self_heal_and_reexec "preflight"

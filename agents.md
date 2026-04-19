@@ -346,8 +346,7 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ## 16. Validation Self-Healing
 
-- `scripts/validate_process.sh` attempts to self-heal prompt-wording defects in the four validation prompts (`mode-validate-{discover,generate,fix-harness,diagnose}.txt`) before burning a `MAX_VALIDATE_CYCLES` cycle. The self-heal flow is driven by `prompts/mode-validate-self-heal.txt` and `scripts/self_heal_validation.sh`.
-- Template-mode preflight failures now run deterministic render recovery first (`run_preflight_render_recovery` in `scripts/validate_process.sh`): rerender harness from manifest/templates, rerun preflight lint/checks, and only then fall through to self-heal or terminal failure if recovery does not pass.
+- `scripts/validate_process.sh` attempts to self-heal prompt-wording defects in the four validation prompts (`mode-validate-{discover,generate,fix-harness,diagnose}.txt`) before burning a `MAX_VALIDATE_CYCLES` cycle. The self-heal flow is driven by `prompts/mode-validate-self-heal.txt` and `scripts/self_heal_validation.sh`. For template-mode preflight failures, `validate_process.sh` first attempts one deterministic rerender + relint recovery before terminalizing.
 - The budget is `MAX_SELF_HEAL_ATTEMPTS` (default `2`) per `validate_process.sh` invocation. Self-heal re-execs do NOT increment `VALIDATION_CYCLE`.
 - Self-heal is ONLY permitted to edit the four validation prompt files. Do not extend it to scripts, workflow YAML, or other prompts without a new ask-first decision.
 - Render-phase (`SELF_HEAL_FAILURE_PHASE=render`) prompt self-heal remains wording-only; harness corrections in that path must stay renderer-driven and must not revert to freehand harness generation.

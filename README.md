@@ -1330,12 +1330,11 @@ editing the prompt and re-running.
 **How it works**
 
 1. When any phase of `scripts/validate_process.sh` is about to fail hard
-   (generate parse failure, preflight failure, canary failure, diagnose
-   decision point), it invokes `scripts/self_heal_validation.sh`.
-   Template-mode preflight failures first run a deterministic render
-   recovery step (`run_preflight_render_recovery`): rerender via
-   `scripts/render_validation_templates.py`, rerun preflight, and only
-   then fall through to self-heal/terminal failure if still failing.
+   (generate parse failure, preflight failure, template render-recovery
+   failure, canary failure, diagnose decision point), it invokes
+   `scripts/self_heal_validation.sh`. In template mode, preflight lint/syntax
+   failures first trigger one deterministic rerender + relint attempt in
+   `validate_process.sh` before terminalizing.
 2. The helper renders `prompts/mode-validate-self-heal.txt` with the full
    failure context and the current text of the four validation prompts,
    and asks the LLM to propose a minimal unified diff against exactly one
@@ -1350,9 +1349,6 @@ editing the prompt and re-running.
    per `validate_process.sh` invocation. After that, the original failure
    falls through to the normal hard-fail path and burns a validation
    cycle as today.
-   Render-phase (`failure_phase=render`) prompt self-heal remains limited
-   to prompt wording defects; harness recovery itself stays renderer-driven
-   (no freehand harness edits in this path).
 5. If the pipeline eventually passes after one or more successful self-
    heal attempts, `validate_process.sh` sends a `repository_dispatch`
    event of type `validation-prompt-self-heal` to
