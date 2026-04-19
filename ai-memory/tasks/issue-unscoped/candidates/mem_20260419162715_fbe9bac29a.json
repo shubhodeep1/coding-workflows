@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2253 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `consolidator_invoked` defaults to `yes`, so missing `REVIEW_CONSOLIDATOR_STAGE_STATUS` is reported as the consolidator being invoked.\n  WHY: Multiple reviewers agree this creates false-positive telemetry when the stage is skipped or the variable is unset, masking pipeline issues; one reviewer argued `no` is semantically correct, but the consensus issue is the default state itself.\n- .github/workflows/review_autofix.yml:2259 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `parser_failed_metric` defaults to `0`, so missing `REVIEW_PARSER_FAILED` is reported as parser success.\n  WHY: Multiple reviewers agree this can hide skipped or failed parser runs in telemetry; the severity is kept at the highest stated level and reflects disagreement only on whether the default is acceptable design versus a bug.\n- .github/workflows/review_autofix.yml:2259-2273 | severity=medium | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: `parser_failed_metric` changed from fail-closed defaulting to fail-open behavior when the env var is unset and the stats file is missing.\n  WHY: This reviewer treated the broader range as a conservative telemetry regression; no other reviewer identified this as a separate finding, so it remains a singleton.\n- .github/workflows/review_autofix.yml:~2238, ~2248 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `REVIEW_LEDGER_ENTRIES_TOTAL` and `REVIEW_FLOOR_TAGS_COUNT` are used without explicit default values.\n  WHY: The reviewer noted inconsistent variable handling that could cause subtle issues, but this was not corroborated elsewhere and was rated low confidence.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:2259 | severity=medium | confidence=5\n  PROBLEM: Default value is 0 (success) but should be 1 (failure) for fail-closed telemetry\n  WHY: When parser stage doesn't run or variable propagation fails, metrics incorrectly report success instead of failure, misleading debugging and monitoring\n- .github/workflows/review_autofix.yml:2253 | severity=medium | confidence=5\n  PROBLEM: Breaking change from fail-closed to fail-open default violates telemetry reliability principle\n  WHY: If consolidator stage status variable is unset (stage skipped or propagation failure), telemetry falsely reports stage was invoked, hiding potential pipeline issues\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml:2253, 2259, 2264 | severity=medium | confidence=5\n  PROBLEM: Telemetry variables default to \"success\" states (`consolidator_invoked=\"no\"`, `parser_failed_metric=\"0\"`) which can hide failures if data is missing.\n  WHY: If the consolidator or parser stages fail before setting their respective status variables or creating stats files, the final metrics summary will report that the consolidator was not invoked and that the parser succeeded, which violates the fail-closed principle for observability.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:2253 | severity=medium | confidence=5\n  PROBLEM: The default value for `consolidator_invoked` is incorrectly set to \"yes\" when `REVIEW_CONSOLIDATOR_STAGE_STATUS` is unset.\n  WHY: If the consolidator is disabled or skipped, the env var is never set, and the metrics will falsely report \"yes\" (invoked) when it was not.\n- .github/workflows/review_autofix.yml:2259-2273 | severity=medium | confidence=3\n  PROBLEM: The default value for `parser_failed_metric` changed from \"1\" (fail-closed) to \"0\" (fail-open).\n  WHY: When the parser stage never runs and the stats file doesn't exist, the metric reports parser success when it should indicate uncertainty or failure for missing data.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:2253 | severity=medium | confidence=4\n  PROBLEM: The uncommitted change in the working directory reverts HEAD's default from `yes` to `no`.\n  WHY: The consolidator stage only runs under specific conditions, so when `REVIEW_CONSOLIDATOR_STAGE_STATUS` is unset, defaulting to `no` accurately reflects that the stage was not invoked.\n- .github/workflows/review_autofix.yml:2259 | severity=medium | confidence=4\n  PROBLEM: Defaulting to `0` when `REVIEW_PARSER_FAILED` is unset can hide parser stage failures in telemetry.\n  WHY: If the parser stage is skipped or fails to export the variable, the metrics summary reports success erroneously.\n- .github/workflows/review_autofix.yml:~2238, ~2248 | severity=low | confidence=2\n  PROBLEM: `REVIEW_LEDGER_ENTRIES_TOTAL` and `REVIEW_FLOOR_TAGS_COUNT` are used without explicit default values.\n  WHY: While bash/awk handle empty strings, this is inconsistent with the explicit defaults used elsewhere and could cause subtle future issues.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/review_autofix.yml:2253 | severity=medium | confidence=5\n  PROBLEM: Default \"yes\" incorrectly reports the consolidator stage as invoked even when it was skipped.\n  WHY: When the consolidator stage does not run, `REVIEW_CONSOLIDATOR_STAGE_STATUS` remains unset and the metrics summary logs a false-positive invocation signal.\n- .github/workflows/review_autofix.yml:2259 | severity=medium | confidence=4\n  PROBLEM: Default 0 incorrectly reports parser success when parser status is missing.\n  WHY: If the parser stage is skipped or its status not propagated, `REVIEW_PARSER_FAILED` is unset and the metrics show success, which can hide skipped or failed parser runs.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "4a594caa9907516405f9039c10ce8417dc2cd45a31742e915c775738433ded98",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1453,
+    "run_id": "24633415339",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24633415339",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419162715_fbe9bac29a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1453,
+    "run_id": "24633415339"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T16:27:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
