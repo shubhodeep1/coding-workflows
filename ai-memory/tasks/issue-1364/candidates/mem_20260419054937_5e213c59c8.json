@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `c006ec9d69f79c0c779208e032bd629baa9cebe3`\n- `Checked-out ref`: `orchestrator/project-1292`\n- `Integration metadata ref`: `orchestrator/project-1292`\n- `Mismatch`: `false` (planning can proceed)\n\nClarification mapping:\n- No explicit `Q<ID>` questions were posted in the clarification phase.\n- Interpreted answer source: `/answer [auto-answered-by-orchestrator]` means \u201cno blocking ambiguity detected by clarify; proceed with planning.\u201d\n\nDetected codebase gaps/conflicts to surface:\n- `scripts/validate_process.sh` currently has no explicit \u201crender recovery\u201d phase between preflight failure and terminal handling; it goes directly to `attempt_self_heal_and_reexec \"preflight\"`.\n- `scripts/self_heal_validation.sh` documents known phases but does not list `render`.\n- `scripts/validation_lint.py` exists as a reusable harness linter, but validate flow does not currently expose a dedicated render+re-lint recovery step.\n\nImplementation plan:\n\n1. Add deterministic render recovery phase in `scripts/validate_process.sh`.\n- Introduce a helper dedicated to render recovery in template mode (re-render from manifest, then re-run lint/preflight checks).\n- Gate it to renderer-driven paths only (`template_generate` / templates), so non-template behavior remains unchanged.\n- Ensure single recovery attempt per failure event to avoid loops.\n\n2. Rewire preflight failure branch to use render recovery before terminalization.\n- In the current preflight failure block, attempt render recovery first.\n- If recovery succeeds, continue pipeline (do not terminally fail this cycle).\n- If recovery fails or is unavailable, fail open to existing path (diagnose artifact + tracking comment + status write), preserving backward compatibility.\n- Route self-heal phase tagging to `render` when the render recovery path was attempted and failed; keep `preflight` for legacy/non-render failures.\n\n3. Update self-heal plumbing while preserving guardrails.\n- In `scripts/self_heal_validation.sh`, add `render` to documented/telemetry phase vocabulary.\n- Keep allow-list unchanged (`mode-validate-{discover,generate,fix-harness,diagnose}.txt` only).\n- Keep patch scope enforcement and additive safety checks unchanged.\n\n4. Update `prompts/mode-validate-self-heal.txt` guidance.\n- Clarify that harness recovery for render/lint failures is renderer-driven in `validate_process.sh`.\n- Keep self-heal strictly prompt-file-limited; do not introduce any harness-edit path.\n- Preserve JSON schema and all existing hard constraints.\n\n5. Add integration-style tests for render recovery and fail-open behavior.\n- Add a new test module (likely `tests/test_validate_process_render_recovery.py`) covering:\n  - Render recovery success path: initial lint/preflight fail -> rerender -> relint pass -> no terminal failure branch.\n  - Render recovery fail-open: rerender unavailable/fails -> existing terminal path still runs.\n  - Non-template regression: no render recovery attempt; legacy preflight handling preserved.\n- Update existing validate-process contract tests (likely `tests/test_validate_process_template_mode.py`) to assert new render-recovery hook wiring.\n\nFiles likely to change:\n- `scripts/validate_process.sh`\n- `scripts/self_heal_validation.sh`\n- `prompts/mode-validate-self-heal.txt`\n- `tests/test_validate_process_render_recovery.py` (new)\n- `tests/test_validate_process_template_mode.py` (or adjacent validate-process contract test file)\n\nFunctions/modules to implement or modify:\n- `run_preflight_checks` caller path in `scripts/validate_process.sh` preflight failure branch.\n- New helper in `scripts/validate_process.sh` for deterministic render recovery + relint.\n- `attempt_self_heal_and_reexec` call-site phase selection (`render` vs `preflight`).\n- Phase documentation/logging in `scripts/self_heal_validation.sh`.\n- Self-heal policy text in `prompts/mode-validate-self-heal.txt`.\n\nData structures affected:\n- Shell-phase taxonomy (`SELF_HEAL_FAILURE_PHASE`) extended to include `render`.\n- Optional new internal shell state variables for render recovery attempt/result tracking.\n- Existing self-heal patch ledger schema remains unchanged (uses existing `failure_phase` field).\n\nAPI/interface changes:\n- No external API changes.\n- Operational log/telemetry will include `render` as a phase label where applicable.\n- No env var rename/removal expected.\n\nRisks and edge cases:\n- Infinite recovery loops if rerender/relint retries are not bounded.\n- Accidentally triggering freehand generation in template-mode recovery path (must be explicitly blocked).\n- Losing useful initial lint diagnostics if logs are overwritten between first lint and relint (preserve or clearly mark attempt boundaries).\n- Renderer-missing scenarios in older bootstrap states must fail open cleanly.\n\nTesting considerations:\n- Run targeted tests for changed contracts and new render-recovery cases first.\n- Verify non-template regression explicitly.\n- Verify self-heal allow-list and patch-scope checks remain intact after phase taxonomy update.\n- Confirm fail-open behavior when renderer assets are absent or renderer exits non-zero.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5c7b60899f12de38b1a538e328b3223f8d1aa7844d8ed7a15c8b7e888f868324",
+  "lineage": {
+    "issue_number": 1364,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24622084417",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24622084417",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1364"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419054937_5e213c59c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1364,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24622084417"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1364",
+  "timestamps": {
+    "created_at": "2026-04-19T05:49:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
