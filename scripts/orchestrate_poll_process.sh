@@ -6093,12 +6093,20 @@ _dispatch_review_for_conflicts()
 
 	echo "  ${log_prefix} Dispatching review workflow for conflict resolution..."
 
+	# Forward ALLOW_WORKFLOW_EDITS so the dispatched review run respects the
+	# repo-level opt-out semantics (vars.ALLOW_WORKFLOW_EDITS != 'false').
+	# Without this flag the dispatched workflow falls back to its own
+	# workflow_dispatch input default, which silently suppresses workflow
+	# edits even when the repo variable allows them. See
+	# review_autofix.yml:51 and internal-review.yml:15.
+	local allow_workflow_edits_flag="${ALLOW_WORKFLOW_EDITS:-false}"
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
 		if gh_retry gh workflow run "${wf_candidate}" \
 			--repo "${GITHUB_REPOSITORY}" \
 			--ref "${head_ref}" \
-			-f pr_number="${pr_number}" 2>/dev/null; then
-			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref}."
+			-f pr_number="${pr_number}" \
+			-f allow_workflow_edits="${allow_workflow_edits_flag}" 2>/dev/null; then
+			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref} (allow_workflow_edits=${allow_workflow_edits_flag})."
 			# Record in cycle-local tracker to prevent duplicate dispatches
 			echo "${pr_number}" >> "${_CONFLICT_DISPATCH_TRACKER}"
 			return 0
