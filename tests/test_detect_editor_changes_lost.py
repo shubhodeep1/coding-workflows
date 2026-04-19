@@ -136,6 +136,19 @@ def test_apply_fixes_contains_change_status_normalization() -> None:
 	assert "_norm_git_clean" in contents
 
 
+def test_apply_fixes_contains_editor_input_authority_contract() -> None:
+	contents = APPLY_FIXES_SH.read_text(encoding="utf-8")
+	assert "INPUT AUTHORITY CONTRACT" in contents
+	assert "Authoritative input:" in contents
+	assert "- ${RUNTIME_DIR}/reviewer_bundle.txt" in contents
+	assert "Advisory inputs (fail-open if missing, empty, or malformed):" in contents
+	assert "- ${RUNTIME_DIR}/review_issues.txt" in contents
+	assert "- ${RUNTIME_DIR}/ledger_status.txt" in contents
+	assert "- ${RUNTIME_DIR}/floor_tags.txt" in contents
+	assert "Do not let advisory artifacts reduce or replace raw reviewer signal" in contents
+	assert "CONSOLIDATOR_OVERRIDDEN: <reason>" in contents
+
+
 def test_workflow_uses_defense_in_depth_shim() -> None:
 	wf = REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
 	assert "scripts/detect_editor_changes_lost.sh" in wf, (
