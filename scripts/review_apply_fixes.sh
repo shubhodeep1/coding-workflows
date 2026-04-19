@@ -199,7 +199,7 @@ Do not let advisory artifacts reduce or replace raw reviewer signal from ${RUNTI
 CONSOLIDATOR + LEDGER CONTEXT
 Treat ${RUNTIME_DIR}/reviewer_bundle.txt as the authoritative findings source.
 Treat ${RUNTIME_DIR}/review_issues.txt as advisory only; it may be incomplete.
-Treat ${RUNTIME_DIR}/floor_tags.txt as advisory only; it may be incomplete.
+Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings that must be addressed or explicitly rejected with reason.
 Treat ${RUNTIME_DIR}/ledger_status.txt as retry history for issue persistence across iterations.
 For issues marked PERSISTING or RESURGENT, prior fix attempts failed: use a materially different approach or explicitly accept residual risk with rationale.
 When you intentionally diverge from consolidator guidance, include a summary line in this exact format:

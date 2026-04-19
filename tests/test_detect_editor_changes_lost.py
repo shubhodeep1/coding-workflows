@@ -146,6 +146,7 @@ def test_apply_fixes_contains_editor_input_authority_contract() -> None:
 	assert "- ${RUNTIME_DIR}/ledger_status.txt" in contents
 	assert "- ${RUNTIME_DIR}/floor_tags.txt" in contents
 	assert "Do not let advisory artifacts reduce or replace raw reviewer signal" in contents
+	assert "Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings" in contents
 	assert "CONSOLIDATOR_OVERRIDDEN: <reason>" in contents
 
 
