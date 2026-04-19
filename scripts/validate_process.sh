@@ -1138,8 +1138,6 @@ run_template_validation_harness_renderer()
 
 attempt_render_recovery_after_preflight_failure()
 {
-	local render_recovery_exit=0
-
 	if [ "${HARNESS_MODE}" != "template_generate" ] || [ "${HARNESS_GENERATOR_MODE}" != "templates" ]; then
 		return 1
 	fi
@@ -1161,8 +1159,6 @@ attempt_render_recovery_after_preflight_failure()
 	if attempt_template_render_recovery_after_preflight_lint; then
 		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 0
-	else
-		render_recovery_exit=$?
 	fi
 
 	if [ "${PRE_FLIGHT_FAILURE_REASON}" = "render_retry_non_lint_after_rerender" ]; then
@@ -1172,11 +1168,8 @@ attempt_render_recovery_after_preflight_failure()
 	else
 		echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
 	fi
-	if [ "${render_recovery_exit}" -ne 0 ]; then
-		return 2
-	fi
 
-	return 0
+	return 2
 }
 
 run_preflight_checks()
