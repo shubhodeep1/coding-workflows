@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:line ~64 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The `REVIEW_FLOOR_KEYWORDS_FILE` default is shown as `''`, which is less descriptive than the previous text.\n  WHY: The reviewer says this is documentation-only and technically correct, but the empty-string default is less user-friendly than the prior explanation.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- README.md:line ~64 | severity=low | confidence=2\n  PROBLEM: `REVIEW_FLOOR_KEYWORDS_FILE` uses an empty-string default `''`, which is less clear than descriptive text.\n  WHY: The reviewer says the empty string is technically correct but less user-friendly than documenting that the script uses the built-in catalog when unset.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "b1f3f6718aef178bb5709724a9441d8546818bed3cf1bcef7cdbc156769899c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1455,
+    "run_id": "24634656703",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24634656703",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419173111_b95535b3a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1455,
+    "run_id": "24634656703"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-19T17:31:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
