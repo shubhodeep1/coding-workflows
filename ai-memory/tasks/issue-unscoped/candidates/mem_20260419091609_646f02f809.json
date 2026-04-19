@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4278-4286 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: `STALL_RECOVERY_SHOULD_INCREMENT=\"false\"` may not propagate back to the caller in `run_standalone_stall_recovery`.\n  WHY: If `execute_stall_recovery_action` runs inside a subshell pipeline, the assignment can be lost after the iteration finishes, causing the caller to incorrectly increment the stall recovery budget.\n- scripts/orchestrate_poll_process.sh:4262-4275 | severity=medium | confidence=3\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: `_fetch_pr_json` failure returns empty object `{}` but code doesn't check for failure.\n  WHY: When `_fetch_pr_json` fails, `_jq_field` returns empty strings and the conflict check can silently miss a real conflict, falling back to a futile empty commit push.\n- scripts/orchestrate_poll_process.sh:4274-4275 | severity=medium | confidence=3\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: `_jq_field` is called with a third argument `'true|false'` that is treated as a regex pattern.\n  WHY: The helper validates `.mergeable` against that regex, which collapses non-boolean/null values to empty strings; this is brittle if later logic needs to distinguish \u201cnot false\u201d from \u201cactually true.\u201d\n- scripts/orchestrate_poll_process.sh:5195-5198 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5]\n  PROBLEM: `_check_open_pr_conflict_guard` does not explicitly document handling of the `UNKNOWN` mergeability state.\n  WHY: The code intentionally treats `UNKNOWN` as non-conflicting fail-open behavior, but the reviewers noted the handling is implicit rather than explicit.\n- scripts/orchestrate_poll_process.sh:4278-4280 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v3_2, moonshotai_kimi-k2_5]\n  PROBLEM: Comment references the wrong line number for `resolve_merge_conflict` setting `STALL_RECOVERY_SHOULD_INCREMENT=\"true\"`.\n  WHY: The cited line number is approximate and stale, which is documentation-only and does not affect runtime behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:5530 | severity=medium | confidence=3\n  PROBLEM: REST fallback JSON construction doesn't preserve GraphQL enum casing consistently\n  WHY: The code uses `.mergeable | tostring`, which converts GraphQL enum `CONFLICTING` to `\"CONFLICTING\"` and relies on later lowercasing; this is fragile across response shapes.\n- scripts/orchestrate_poll_process.sh:4278-4280 | severity=low | confidence=1\n  PROBLEM: Comment references wrong line number for `resolve_merge_conflict` setting `STALL_RECOVERY_SHOULD_INCREMENT=\"true\"`\n  WHY: Documentation issue only; the comment says line ~4405 but the actual line is 4432.\n- scripts/orchestrate_poll_process.sh:5195 | severity=low | confidence=1\n  PROBLEM: `_check_open_pr_conflict_guard` doesn't explicitly document handling of `UNKNOWN` mergeability state\n  WHY: Documentation issue only; the code correctly ignores `UNKNOWN` state, which is the safe behavior.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/orchestrate_poll_process.sh:4278-4286 | severity=medium | confidence=4\n  PROBLEM: `STALL_RECOVERY_SHOULD_INCREMENT=\"false\"` may not propagate back to the caller in `run_standalone_stall_recovery`.\n  WHY: If the loop is in a subshell pipeline, the assignment stays local to the subshell and is lost after the iteration finishes, causing the caller to overcount stall recovery.\n- scripts/orchestrate_poll_process.sh:4262-4275 | severity=medium | confidence=3\n  PROBLEM: `_fetch_pr_json` failure returns empty object `{}` but code doesn't check for failure.\n  WHY: A failed fetch yields empty strings from `_jq_field`, so the conflict check can miss a real conflict and fall back to an empty commit push.\n- scripts/orchestrate_poll_process.sh:4274-4275 | severity=medium | confidence=3\n  PROBLEM: `_jq_field` called with a third argument `'true|false'` which treats it as a regex pattern.\n  WHY: Non-boolean or null values become empty strings, which is brittle if later logic needs to distinguish true from merely not-false.\n- scripts/orchestrate_poll_process.sh:5195-5198 | severity=low | confidence=2\n  PROBLEM: Inconsistent logging/handling of \"unknown\" mergeability state\n  WHY: The code treats `false|conflicting` as conflict and otherwise fails open, but the reviewer noted the `UNKNOWN` case is handled only implicitly.\n- scripts/orchestrate_poll_process.sh:4278-4280 | severity=low | confidence=1\n  PROBLEM: Comment has wrong line number reference\n  WHY: The comment cites a line number that no longer matches the setting location; this is documentation-only.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- (No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "f116a5c3a9a1f46615f104db9811be77128c8e86f1b4ffe06ca15f1542076775",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1411,
+    "run_id": "24625219005",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24625219005",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419091609_646f02f809",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1411,
+    "run_id": "24625219005"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T09:16:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
