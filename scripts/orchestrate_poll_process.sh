@@ -5531,6 +5531,7 @@ PY
       # matches CLAUDE.md §15 GitHub API hygiene.
       local _STD_ITER_PR_NUM_CACHED=""
       local _STD_ITER_PR_JSON_CACHED=""
+      _STD_ITER_PR_NUM_CACHED="$(printf '%s' "${_std_conflict_linked}" | jq -r '.number // empty' 2>/dev/null || echo "")"
 
       # Widen the REST-fallback trigger: GitHub computes mergeability
       # asynchronously — a push kicks off a background job and the API
@@ -5565,7 +5566,10 @@ PY
         # reusing the cached PR JSON (no duplicate gh api call).
         local _std_conflict_pr_num_try _std_conflict_pr_json_try _std_attempt
         local _std_backoff_sleeps=(5 10 15 20)
-        _std_conflict_pr_num_try="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+        _std_conflict_pr_num_try="${_STD_ITER_PR_NUM_CACHED:-}"
+        if ! [[ "${_std_conflict_pr_num_try}" =~ ^[0-9]+$ ]]; then
+          _std_conflict_pr_num_try="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+        fi
         if [[ "${_std_conflict_pr_num_try}" =~ ^[0-9]+$ ]]; then
           for _std_attempt in 0 1 2 3 4; do
             _std_conflict_pr_json_try="$(_fetch_pr_json "${_std_conflict_pr_num_try}")"
@@ -5720,7 +5724,10 @@ STALL_EOF
         local pr_lookup_ok="false"
         local head_ref
         local pr_json
-        if pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null)"; then
+        if [[ "${_STD_ITER_PR_NUM_CACHED:-}" =~ ^[0-9]+$ ]]; then
+          pr_num="${_STD_ITER_PR_NUM_CACHED}"
+          pr_lookup_ok="true"
+        elif pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null)"; then
           pr_lookup_ok="true"
         else
           pr_lookup_ok="false"
