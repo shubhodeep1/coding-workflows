@@ -12,7 +12,7 @@ on:
       allow_workflow_edits:
         description: "Allow AI/editor changes to .github/workflows files"
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:

@@ -571,6 +571,12 @@ if is_truthy "${ENABLE_VALIDATION_RAW}"; then
   ENABLE_VALIDATION="true"
 fi
 
+if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
+  ALLOW_WORKFLOW_EDITS="true"
+else
+  ALLOW_WORKFLOW_EDITS="false"
+fi
+
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
   echo "::warning::MAX_VALIDATE_CYCLES must be a positive integer; defaulting to 3"
@@ -4253,7 +4259,34 @@ STALL_EOF
       pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
       if [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
         local head_ref
-        head_ref="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.head.ref' || echo "")"
+        # Belt-and-braces conflict check (Q1:A, Q2:A, Q3:B).  The
+        # pre-dispatch guard in run_standalone_stall_recovery should have
+        # redirected this action when the PR is conflicted, but the
+        # managed-path recover_stalled_issue dispatches straight here
+        # without that guard.  Single PR fetch (reused below for head_ref)
+        # so this adds no extra API calls on the happy path.
+        local _rtr_pr_json
+        local _rtr_mergeable
+        local _rtr_merge_state
+        _rtr_pr_json="$(_fetch_pr_json "${pr_num}")"
+        head_ref="$(_jq_field "${_rtr_pr_json}" '.head.ref')"
+        _rtr_mergeable="$(_jq_field "${_rtr_pr_json}" '.mergeable' 'true|false')"
+        _rtr_merge_state="$(_jq_field "${_rtr_pr_json}" '.mergeable_state')"
+        if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ] && \
+           { [ "${_rtr_mergeable}" = "false" ] || [ "${_rtr_merge_state}" = "dirty" ]; }; then
+          echo "  Issue #${issue_num} PR #${pr_num} has merge conflicts (mergeable=${_rtr_mergeable:-unknown}, mergeable_state=${_rtr_merge_state:-unknown}) — routing to resolve_merge_conflict instead of pushing an empty commit."
+          STALL_JUDGE_TARGET_PR="${pr_num}"
+          STALL_JUDGE_HEAD_REF="${head_ref}"
+          local _rtr_rc=0
+          execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rtr_rc=$?
+          # Q3:B — conflict override does not consume a retrigger-style
+          # recovery attempt.  resolve_merge_conflict sets
+          # STALL_RECOVERY_SHOULD_INCREMENT="true" on its happy path (line
+          # ~4405); reset it here so the override is budget-neutral.
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          STALL_RECOVERY_EFFECTIVE_ACTION="resolve_merge_conflict"
+          return "${_rtr_rc}"
+        fi
         if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
           if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && \
              git checkout "origin/${head_ref}" 2>/dev/null; then
@@ -4799,6 +4832,9 @@ _fetch_candidate_issue_details_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
+                    headRefName
+                    mergeable
+                    mergeStateStatus
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
                   }
                 }
@@ -4846,6 +4882,9 @@ _fetch_candidate_issue_details_graphql() {
                     number: .number,
                     state: .state,
                     merged: (.merged // false),
+                    head_ref: (.headRefName // null),
+                    mergeable: (.mergeable // null),
+                    merge_state_status: (.mergeStateStatus // null),
                     headPushedAt: (
                       ((.commits.nodes // [])[0].commit.pushedDate)
                       // ((.commits.nodes // [])[0].commit.committedDate)
@@ -5104,6 +5143,82 @@ _check_fresh_push_guard() {
   fi
 
   return 1
+}
+
+# _check_open_pr_conflict_guard — Detect whether the latest linked PR of a
+# stalled issue is in a merge-conflict state (mergeable=false OR
+# mergeStateStatus=DIRTY per Q2:A).  Used by run_standalone_stall_recovery
+# to redirect retrigger_review → resolve_merge_conflict BEFORE the empty-
+# commit push fires, because an autofix run on a conflicting branch cannot
+# resolve the conflict and the next stall cycle will just repeat the loop
+# until MAX_STALL_RECOVERIES_PER_ISSUE is hit.
+#
+# Inputs:
+#   $1 — issue number (for logging only)
+#   $2 — linked_pr JSON entry ({number,state,head_ref,mergeable,
+#        merge_state_status,...}) from _candidate_details_json, or
+#        "null"/"" when the cache missed.
+#
+# Output:
+#   Return 0 when the PR is confirmed conflicted AND has a usable head_ref.
+#   Exports STALL_CONFLICT_PR_NUM and STALL_CONFLICT_HEAD_REF on hit.
+#   Return 1 otherwise (no conflict, cache miss without REST fallback,
+#   missing head_ref).
+#
+# API calls: 0 on cache hit.  Callers may perform a REST fallback when the
+# cache is empty — kept out of this helper so it stays side-effect free.
+# GraphQL `mergeable` values: MERGEABLE | CONFLICTING | UNKNOWN.
+# GraphQL `mergeStateStatus` values: CLEAN|DIRTY|BLOCKED|BEHIND|...
+# REST `mergeable` values: true|false|null. REST `mergeable_state` values:
+# clean|dirty|blocked|behind|unknown|unstable|has_hooks|draft.
+# This helper accepts both representations so it can consume either cache
+# shape or a REST-fallback payload rehydrated into the same field names.
+_check_open_pr_conflict_guard() {
+  local issue_num="$1"
+  local linked_json="$2"
+  STALL_CONFLICT_PR_NUM=""
+  STALL_CONFLICT_HEAD_REF=""
+
+  if [ -z "${linked_json}" ] || [ "${linked_json}" = "null" ] || [ "${linked_json}" = "{}" ]; then
+    return 1
+  fi
+
+  local state
+  state="$(printf '%s' "${linked_json}" | jq -r '.state // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+  # Only open PRs can be conflict-resolved.  Merged/closed short-circuit.
+  if [ "${state}" != "open" ]; then
+    return 1
+  fi
+
+  local mergeable
+  local merge_state
+  mergeable="$(printf '%s' "${linked_json}" | jq -r '.mergeable // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+  merge_state="$(printf '%s' "${linked_json}" | jq -r '(.merge_state_status // .mergeable_state // empty)' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+
+  # Q2:A — treat either "REST mergeable=false" / "GraphQL CONFLICTING" OR
+  # "mergeable_state/mergeStateStatus=dirty" as conflict.  Matches the
+  # rebase-bot signal at line ~7241 and the managed-path guard at ~5946.
+  local is_conflict="false"
+  case "${mergeable}" in
+    false|conflicting) is_conflict="true" ;;
+  esac
+  if [ "${merge_state}" = "dirty" ]; then
+    is_conflict="true"
+  fi
+  if [ "${is_conflict}" != "true" ]; then
+    return 1
+  fi
+
+  local pr_num
+  local head_ref
+  pr_num="$(printf '%s' "${linked_json}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+  head_ref="$(printf '%s' "${linked_json}" | jq -r '(.head_ref // .head.ref // .headRefName // empty)' 2>/dev/null || echo "")"
+  [[ "${pr_num}" =~ ^[0-9]+$ ]] || return 1
+  [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ] || return 1
+
+  STALL_CONFLICT_PR_NUM="${pr_num}"
+  STALL_CONFLICT_HEAD_REF="${head_ref}"
+  return 0
 }
 
 # _reconcile_merged_pr_issue — Tag an issue whose linked PR is merged
@@ -5385,6 +5500,78 @@ PY
         fi
         ;;
     esac
+
+    # ---- Merge-conflict pre-dispatch guard (Q1:A, Q2:A, Q3:B) ----
+    # When recovery_action_for_phase picks retrigger_review (ai:done phase),
+    # the case-dispatch below pushes an empty commit to the PR head to
+    # re-trigger Review Autofix.  If the PR already has merge conflicts
+    # with base, that empty commit cannot resolve them — autofix runs on
+    # the branch as-is and exits without progress, so the next stall
+    # cycle repeats the same recovery until the attempt budget is burned.
+    # Redirect to the conflict resolver workflow BEFORE dispatching.
+    #
+    # Primary data source: the linked_pr payload already resolved from
+    # _candidate_details_json (enriched with head_ref, mergeable, and
+    # merge_state_status in _fetch_candidate_issue_details_graphql) — 0
+    # extra API calls on the fast path.  Cache miss triggers a single
+    # REST fallback so a GraphQL hiccup cannot silently regress this
+    # guard.  Fails open: when both cache and REST are empty the action
+    # proceeds as before and the belt-and-braces check in
+    # execute_stall_recovery_action retrigger_review catches it.
+    #
+    # Q3:B — this override does NOT increment STALL_RECOVERY_SHOULD_INCREMENT
+    # so conflict resolution has its own budget and does not burn the
+    # retrigger-style recovery allowance.
+    if [ "${action}" = "retrigger_review" ]; then
+      local _std_conflict_linked="${_std_linked_json}"
+      if [ -z "${_std_conflict_linked}" ] || [ "${_std_conflict_linked}" = "null" ]; then
+        local _std_conflict_pr_num _std_conflict_pr_json
+        _std_conflict_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+        if [[ "${_std_conflict_pr_num}" =~ ^[0-9]+$ ]]; then
+          _std_conflict_pr_json="$(_fetch_pr_json "${_std_conflict_pr_num}")"
+          if [ -n "${_std_conflict_pr_json}" ] && [ "${_std_conflict_pr_json}" != "{}" ]; then
+            _std_conflict_linked="$(printf '%s' "${_std_conflict_pr_json}" | jq -c '{
+              number: (.number // null),
+              state: (.state // null),
+              head_ref: (.head.ref // null),
+              mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
+              merge_state_status: (.mergeable_state // null)
+            }' 2>/dev/null || echo "null")"
+          fi
+        fi
+      fi
+      if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
+        local _std_conflict_rc=0
+        _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
+        case "${_std_conflict_rc}" in
+          0)
+            echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_CONFLICT_PR_NUM} has merge conflicts — dispatched conflict resolver instead of '${action}'."
+            echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict pr=${STALL_CONFLICT_PR_NUM} phase=${phase} action=dispatch_conflict_resolver override_from=${action}"
+            tg_notify_issue "${issue_num}" "Standalone stall recovery: PR #${STALL_CONFLICT_PR_NUM} has merge conflicts — dispatched conflict resolver (phase=${phase}, stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+            ;;
+          2)
+            echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_CONFLICT_PR_NUM} has merge conflicts but resolver already dispatched this cycle — skipping '${action}'."
+            echo "STALL_SKIP issue=${issue_num} reason=open_pr_merge_conflict_dispatch_skipped pr=${STALL_CONFLICT_PR_NUM} phase=${phase} action=${action}"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+            ;;
+          *)
+            echo "::warning::Standalone stall recovery: conflict-resolver dispatch failed for issue #${issue_num} PR #${STALL_CONFLICT_PR_NUM} rc=${_std_conflict_rc}; skipping '${action}' this cycle."
+            echo "STALL_RECOVERY issue=${issue_num} reason=open_pr_merge_conflict_dispatch_failed pr=${STALL_CONFLICT_PR_NUM} phase=${phase} action=${action} rc=${_std_conflict_rc}"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+            ;;
+        esac
+      fi
+    fi
 
     if [ "${action}" != "skip" ] && [ "${action}" != "attempt_merge" ] && [ "${action}" != "escalate_human" ]; then
       cancel_zombie_runs_for_issue "${issue_num}"
@@ -6093,12 +6280,20 @@ _dispatch_review_for_conflicts()
 
 	echo "  ${log_prefix} Dispatching review workflow for conflict resolution..."
 
+	# Forward ALLOW_WORKFLOW_EDITS so the dispatched review run respects the
+	# repo-level opt-out semantics (vars.ALLOW_WORKFLOW_EDITS != 'false').
+	# Without this flag the dispatched workflow falls back to its own
+	# workflow_dispatch input default, which silently suppresses workflow
+	# edits even when the repo variable allows them. See
+	# review_autofix.yml:51 and internal-review.yml:15.
+	local allow_workflow_edits_flag="${ALLOW_WORKFLOW_EDITS:-true}"
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
 		if gh_retry gh workflow run "${wf_candidate}" \
 			--repo "${GITHUB_REPOSITORY}" \
 			--ref "${head_ref}" \
-			-f pr_number="${pr_number}" 2>/dev/null; then
-			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref}."
+			-f pr_number="${pr_number}" \
+			-f allow_workflow_edits="${allow_workflow_edits_flag}" 2>/dev/null; then
+			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref} (allow_workflow_edits=${allow_workflow_edits_flag})."
 			# Record in cycle-local tracker to prevent duplicate dispatches
 			echo "${pr_number}" >> "${_CONFLICT_DISPATCH_TRACKER}"
 			return 0
@@ -8046,7 +8241,7 @@ sys.exit(1)
               if [ -n "$(git status --porcelain)" ]; then
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
-                if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
+                if [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ]; then
                   # Use a single add call so empty/minimal repos do not fail on
                   # exclude-only pathspecs.
                   # NOTE: do not list .gitignored directories (node_modules, .serena)
@@ -8066,7 +8261,7 @@ sys.exit(1)
                 fi
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
-                if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then
+                if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then
                   echo "Error: scripts/, prompts/, .github/ai/, or .github/workflows is staged while ALLOW_WORKFLOW_EDITS=false"
                   exit 1
                 fi

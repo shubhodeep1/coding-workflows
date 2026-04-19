@@ -39,6 +39,7 @@ set -euo pipefail
 
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="lint"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 HARNESS_MODE="template_generate"
 HARNESS_GENERATOR_MODE="templates"
@@ -86,6 +87,13 @@ attempt_self_heal_and_reexec() {
 	return 0
 }
 
+classify_preflight_failure()
+{
+	PRE_FLIGHT_FAILURE_KIND="lint"
+	PRE_FLIGHT_FAILURE_REASON="shell_syntax_lint"
+	return 0
+}
+
 attempt_render_recovery_after_preflight_failure()
 {
 	local renderer_exit=0
@@ -96,11 +104,22 @@ attempt_render_recovery_after_preflight_failure()
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
 		return 1
 	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
+
+	classify_preflight_failure
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
+		echo "Render recovery: skipped because pre-flight failure was classified as kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
 
 	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
 	{
 		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
 		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
+		echo "Render recovery: classification kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}."
 	} >> "${PRE_FLIGHT_LOG_FILE}"
 
 	if run_template_validation_harness_renderer; then
@@ -110,18 +129,31 @@ attempt_render_recovery_after_preflight_failure()
 	fi
 
 	if [ "${renderer_exit}" -ne 0 ]; then
-		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_FAILURE_KIND="render"
+		PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_${renderer_exit}"
+		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to render-phase self-heal." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 2
 	fi
 
 	echo "Render recovery: rerender completed; re-running pre-flight checks." >> "${PRE_FLIGHT_LOG_FILE}"
 	local PRE_FLIGHT_APPEND_LOG="true"
 	if run_preflight_checks; then
+		PRE_FLIGHT_FAILURE_KIND="none"
+		PRE_FLIGHT_FAILURE_REASON="none"
 		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 0
 	fi
 
-	echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}"
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
+	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
+	PRE_FLIGHT_FAILURE_KIND="render"
+	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
 	return 2
 }
 
@@ -170,6 +202,7 @@ set -euo pipefail
 
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="lint"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 HARNESS_MODE="template_generate"
 HARNESS_GENERATOR_MODE="templates"
@@ -217,6 +250,13 @@ attempt_self_heal_and_reexec() {
 	return 0
 }
 
+classify_preflight_failure()
+{
+	PRE_FLIGHT_FAILURE_KIND="lint"
+	PRE_FLIGHT_FAILURE_REASON="shell_syntax_lint"
+	return 0
+}
+
 attempt_render_recovery_after_preflight_failure()
 {
 	local renderer_exit=0
@@ -227,11 +267,22 @@ attempt_render_recovery_after_preflight_failure()
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
 		return 1
 	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
+
+	classify_preflight_failure
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
+		echo "Render recovery: skipped because pre-flight failure was classified as kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
 
 	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
 	{
 		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
 		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
+		echo "Render recovery: classification kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}."
 	} >> "${PRE_FLIGHT_LOG_FILE}"
 
 	if run_template_validation_harness_renderer; then
@@ -241,18 +292,31 @@ attempt_render_recovery_after_preflight_failure()
 	fi
 
 	if [ "${renderer_exit}" -ne 0 ]; then
-		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_FAILURE_KIND="render"
+		PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_${renderer_exit}"
+		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to render-phase self-heal." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 2
 	fi
 
 	echo "Render recovery: rerender completed; re-running pre-flight checks." >> "${PRE_FLIGHT_LOG_FILE}"
 	local PRE_FLIGHT_APPEND_LOG="true"
 	if run_preflight_checks; then
+		PRE_FLIGHT_FAILURE_KIND="none"
+		PRE_FLIGHT_FAILURE_REASON="none"
 		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 0
 	fi
 
-	echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}"
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
+	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
+	PRE_FLIGHT_FAILURE_KIND="render"
+	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
 	return 2
 }
 
@@ -300,13 +364,16 @@ set -euo pipefail
 
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="lint"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 HARNESS_MODE="template_generate"
 HARNESS_GENERATOR_MODE="templates"
 SELF_HEAL_PHASE_LOG="${RUNTIME_DIR}/self_heal_phase.log"
+RENDER_CALLS_FILE="${RUNTIME_DIR}/render_calls.txt"
 PRECHECK_CALLS=0
 
 run_template_validation_harness_renderer() {
+	echo "called" >> "${RENDER_CALLS_FILE}"
 	return 0
 }
 
@@ -326,6 +393,13 @@ attempt_self_heal_and_reexec() {
 	return 0
 }
 
+classify_preflight_failure()
+{
+	PRE_FLIGHT_FAILURE_KIND="lint"
+	PRE_FLIGHT_FAILURE_REASON="shell_syntax_lint"
+	return 0
+}
+
 attempt_render_recovery_after_preflight_failure()
 {
 	local renderer_exit=0
@@ -336,11 +410,22 @@ attempt_render_recovery_after_preflight_failure()
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
 		return 1
 	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
+
+	classify_preflight_failure
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
+		echo "Render recovery: skipped because pre-flight failure was classified as kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
 
 	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
 	{
 		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
 		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
+		echo "Render recovery: classification kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}."
 	} >> "${PRE_FLIGHT_LOG_FILE}"
 
 	if run_template_validation_harness_renderer; then
@@ -350,18 +435,31 @@ attempt_render_recovery_after_preflight_failure()
 	fi
 
 	if [ "${renderer_exit}" -ne 0 ]; then
-		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_FAILURE_KIND="render"
+		PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_${renderer_exit}"
+		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to render-phase self-heal." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 2
 	fi
 
 	echo "Render recovery: rerender completed; re-running pre-flight checks." >> "${PRE_FLIGHT_LOG_FILE}"
 	local PRE_FLIGHT_APPEND_LOG="true"
 	if run_preflight_checks; then
+		PRE_FLIGHT_FAILURE_KIND="none"
+		PRE_FLIGHT_FAILURE_REASON="none"
 		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 0
 	fi
 
-	echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}"
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
+	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
+	PRE_FLIGHT_FAILURE_KIND="render"
+	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
 	return 2
 }
 
@@ -399,11 +497,13 @@ echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
 		assert not (runtime_dir / "pipeline.txt").exists()
 		phase_log = (runtime_dir / "self_heal_phase.log").read_text(encoding="utf-8").strip().splitlines()
 		assert phase_log == ["render"]
+		render_calls = (runtime_dir / "render_calls.txt").read_text(encoding="utf-8").strip().splitlines()
+		assert render_calls == ["called"]
 		log = (runtime_dir / "validation_preflight.log").read_text(encoding="utf-8")
 		assert "preflight-fail-1" in log
 		assert "preflight-fail-2" in log
 		assert "Render recovery: rerender completed; re-running pre-flight checks." in log
-		assert "Render recovery: pre-flight checks still failing after deterministic rerender." in log
+		assert "Render recovery: pre-flight checks still failing after deterministic rerender (kind=lint reason=shell_syntax_lint)." in log
 
 
 def test_non_template_preflight_failure_preserves_legacy_path() -> None:
@@ -412,6 +512,7 @@ set -euo pipefail
 
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="lint"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 HARNESS_MODE="generate"
 HARNESS_GENERATOR_MODE="freehand"
@@ -452,6 +553,13 @@ attempt_self_heal_and_reexec() {
 	return 0
 }
 
+classify_preflight_failure()
+{
+	PRE_FLIGHT_FAILURE_KIND="lint"
+	PRE_FLIGHT_FAILURE_REASON="shell_syntax_lint"
+	return 0
+}
+
 attempt_render_recovery_after_preflight_failure()
 {
 	local renderer_exit=0
@@ -462,11 +570,22 @@ attempt_render_recovery_after_preflight_failure()
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
 		return 1
 	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
+
+	classify_preflight_failure
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
+		echo "Render recovery: skipped because pre-flight failure was classified as kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
 
 	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
 	{
 		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
 		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
+		echo "Render recovery: classification kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}."
 	} >> "${PRE_FLIGHT_LOG_FILE}"
 
 	if run_template_validation_harness_renderer; then
@@ -476,18 +595,31 @@ attempt_render_recovery_after_preflight_failure()
 	fi
 
 	if [ "${renderer_exit}" -ne 0 ]; then
-		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_FAILURE_KIND="render"
+		PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_${renderer_exit}"
+		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to render-phase self-heal." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 2
 	fi
 
 	echo "Render recovery: rerender completed; re-running pre-flight checks." >> "${PRE_FLIGHT_LOG_FILE}"
 	local PRE_FLIGHT_APPEND_LOG="true"
 	if run_preflight_checks; then
+		PRE_FLIGHT_FAILURE_KIND="none"
+		PRE_FLIGHT_FAILURE_REASON="none"
 		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 0
 	fi
 
-	echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}"
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
+	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
+	PRE_FLIGHT_FAILURE_KIND="render"
+	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
 	return 2
 }
 
@@ -533,6 +665,7 @@ set -euo pipefail
 
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="lint"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 HARNESS_MODE="template_generate"
 HARNESS_GENERATOR_MODE="templates"
@@ -582,6 +715,13 @@ attempt_self_heal_and_reexec() {
 	return 0
 }
 
+classify_preflight_failure()
+{
+	PRE_FLIGHT_FAILURE_KIND="lint"
+	PRE_FLIGHT_FAILURE_REASON="shell_syntax_lint"
+	return 0
+}
+
 attempt_render_recovery_after_preflight_failure()
 {
 	local renderer_exit=0
@@ -592,11 +732,22 @@ attempt_render_recovery_after_preflight_failure()
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
 		return 1
 	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
+
+	classify_preflight_failure
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
+		echo "Render recovery: skipped because pre-flight failure was classified as kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
 
 	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
 	{
 		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
 		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
+		echo "Render recovery: classification kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}."
 	} >> "${PRE_FLIGHT_LOG_FILE}"
 
 	if run_template_validation_harness_renderer; then
@@ -606,18 +757,31 @@ attempt_render_recovery_after_preflight_failure()
 	fi
 
 	if [ "${renderer_exit}" -ne 0 ]; then
-		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_FAILURE_KIND="render"
+		PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_${renderer_exit}"
+		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to render-phase self-heal." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 2
 	fi
 
 	echo "Render recovery: rerender completed; re-running pre-flight checks." >> "${PRE_FLIGHT_LOG_FILE}"
 	local PRE_FLIGHT_APPEND_LOG="true"
 	if run_preflight_checks; then
+		PRE_FLIGHT_FAILURE_KIND="none"
+		PRE_FLIGHT_FAILURE_REASON="none"
 		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 0
 	fi
 
-	echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}"
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
+	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
+	PRE_FLIGHT_FAILURE_KIND="render"
+	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
 	return 2
 }
 
@@ -660,7 +824,7 @@ echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
 		log = (runtime_dir / "validation_preflight.log").read_text(encoding="utf-8")
 		assert log.count("preflight-fail") == 2
 		assert "Render recovery: rerender completed; re-running pre-flight checks." in log
-		assert "Render recovery: pre-flight checks still failing after deterministic rerender." in log
+		assert "Render recovery: pre-flight checks still failing after deterministic rerender (kind=lint reason=shell_syntax_lint)." in log
 
 
 
