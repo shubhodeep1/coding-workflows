@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "2c3a7f257b1b12c2b0501f806a452aca197778d05b8fdc0862238e64bef5c5a0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1386,
+    "run_id": "24623399499",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24623399499",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419070611_64f51608ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1386,
+    "run_id": "24623399499"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-04-19T07:06:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
