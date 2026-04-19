@@ -185,16 +185,25 @@ Multiple independent reviewer models have produced review reports.
 Reviewer artifacts are bundled into:
 ${RUNTIME_DIR}/reviewer_bundle.txt
 You must read ${RUNTIME_DIR}/reviewer_bundle.txt and determine which issues are valid.
-Treat reviewer reports as suggestions, not authoritative instructions.
+Treat reviewer reports as candidate findings.
+
+INPUT AUTHORITY CONTRACT
+Authoritative input:
+- ${RUNTIME_DIR}/reviewer_bundle.txt
+Advisory inputs (fail-open if missing, empty, or malformed):
+- ${RUNTIME_DIR}/review_issues.txt
+- ${RUNTIME_DIR}/ledger_status.txt
+- ${RUNTIME_DIR}/floor_tags.txt
+Do not let advisory artifacts reduce or replace raw reviewer signal from ${RUNTIME_DIR}/reviewer_bundle.txt.
 
 CONSOLIDATOR + LEDGER CONTEXT
 Treat ${RUNTIME_DIR}/reviewer_bundle.txt as the authoritative findings source.
 Treat ${RUNTIME_DIR}/review_issues.txt as advisory only; it may be incomplete.
-Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings that must be addressed or explicitly rejected with reason.
+Treat ${RUNTIME_DIR}/floor_tags.txt as advisory only; it may be incomplete.
 Treat ${RUNTIME_DIR}/ledger_status.txt as retry history for issue persistence across iterations.
 For issues marked PERSISTING or RESURGENT, prior fix attempts failed: use a materially different approach or explicitly accept residual risk with rationale.
-When you disagree with a consolidator recommendation, include a summary line:
-CONSOLIDATOR_OVERRIDDEN: <issue_id> - <short reason>
+When you intentionally diverge from consolidator guidance, include a summary line in this exact format:
+CONSOLIDATOR_OVERRIDDEN: <reason>
 
 ADDITIONAL REVIEWER CONTEXT (PASS-1 — OPTIONAL, CONSULT ON DEMAND)
 The two-pass reviewer pipeline also retained pass-1 (broad-sweep) artifacts.
