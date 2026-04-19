@@ -1,0 +1,47 @@
+REVIEWER CHECKLIST (SEVEN LENSES)
+
+Classify findings under the exact lens headings below, in this exact order.
+If a lens has no findings, write exactly: NONE
+
+1. SECURITY & INPUT VALIDATION
+- auth/authz bypass
+- injection or command execution vectors
+- unsafe input parsing, sanitization, escaping
+- secret/token leakage or unsafe handling
+
+2. CORRECTNESS & LOGIC
+- incorrect conditions, comparisons, ordering
+- wrong assumptions, unreachable/dead branches
+- incomplete behavior vs expected runtime path
+
+3. CONCURRENCY / RACES / IDEMPOTENCY
+- race windows, read-modify-write hazards
+- duplicate side effects, missing idempotency guards
+- unsafe retries or replay behavior
+
+4. ERROR PATHS & EDGE CASES
+- missing error handling or swallowed failures
+- null/empty/missing-field edge cases
+- boundary and fallback path defects
+
+5. PERFORMANCE & RESOURCE USE
+- unbounded loops, retries, scans, allocations
+- N+1 or repeated expensive calls
+- missing timeout/backpressure controls
+
+6. INDEX-CONTRACT / DB RULES
+- query/index mismatch
+- uniqueness/partial-index contract violations
+- data access patterns that break documented DB invariants
+
+7. NAMING / BACKWARD COMPATIBILITY
+- renamed/repurposed public identifiers
+- breaking changes to env vars, fields, paths, metrics, log keys
+- behavior changes that violate compatibility expectations
+
+For every issue include:
+- File path
+- Line or code reference
+- Problem
+- Why it fails at runtime
+- ISSUE_CONFIDENCE: 1-5

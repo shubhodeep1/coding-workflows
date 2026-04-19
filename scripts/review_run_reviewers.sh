@@ -13,6 +13,39 @@ fi
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+
+normalize_feature_flag() {
+  local raw_value="$1"
+  local default_value="$2"
+  local normalized
+  normalized="$(printf '%s' "${raw_value}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "${normalized}" in
+    1|true|yes|on) echo "1" ;;
+    0|false|no|off) echo "0" ;;
+    "") echo "${default_value}" ;;
+    *) echo "${default_value}" ;;
+  esac
+}
+
+compute_autofix_iteration() {
+  local autofix_count=0
+  local msg=""
+  while true; do
+    if [ "${autofix_count}" -ge 1000 ]; then
+      break
+    fi
+    msg="$(git log -1 --format='%s' "HEAD~${autofix_count}" 2>/dev/null || true)"
+    if [ -z "${msg}" ]; then
+      break
+    fi
+    if printf '%s' "${msg}" | grep -q '^\[ai-autofix\]'; then
+      autofix_count=$((autofix_count + 1))
+    else
+      break
+    fi
+  done
+  echo "$((autofix_count + 1))"
+}
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty; using placeholder context for this run."
   echo "No previous AI autofix run diff is available." > "${LAST_RUN_DIFF_FILE}"
@@ -184,18 +217,101 @@ PROMPT_RUNTIME_CONTEXT_HINT="$(printf '%s\n' \
   'Useful files include git_status.txt, git_diff_stat.txt, shallow_tree.txt, environment_sorted.txt, recent_commits.txt, branches.txt, workflow_snapshot.yml, and run_logs_best_effort.txt.' \
   "Example command: cat ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
 
-# Detect whether this is the first review iteration (no prior AI autofix run).
-# Two conditions cover all first-run states:
-# 1. Missing or empty file — workflow never wrote a diff (very first run).
-# 2. Sentinel text — workflow wrote a placeholder string (e.g. "Initial run —
-#    no previous commit" or "No previous AI autofix") instead of a real diff.
-# Without both checks, runs where the workflow writes "Initial run — no
-# previous commit" would fall through and be classified as subsequent.
+REVIEWER_CHECKLIST_ENABLED="$(normalize_feature_flag "${REVIEW_REVIEWER_CHECKLIST_ENABLED:-1}" "1")"
+REVIEWER_ITERATION_SCOPING_ENABLED="$(normalize_feature_flag "${REVIEW_REVIEWER_ITERATION_SCOPING:-1}" "1")"
+
+AUTOFIX_ITERATION="${AUTOFIX_ITERATION:-}"
+if ! [[ "${AUTOFIX_ITERATION}" =~ ^[0-9]+$ ]] || [ "${AUTOFIX_ITERATION}" -lt 1 ]; then
+  AUTOFIX_ITERATION="$(compute_autofix_iteration)"
+fi
+
+# Detect whether this is the first review iteration from the autofix commit
+# chain. Iteration 1 uses full-diff review behavior.
 IS_FIRST_ITERATION=false
-if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
+if [ "${AUTOFIX_ITERATION}" -le 1 ]; then
   IS_FIRST_ITERATION=true
-elif grep -qE '^(No previous AI autofix|Initial run — no previous commit)' "${LAST_RUN_DIFF_FILE}" 2>/dev/null; then
-  IS_FIRST_ITERATION=true
+fi
+
+LEDGER_STATUS_FILE="${LEDGER_STATUS_FILE:-${RUNTIME_DIR}/ledger_status.txt}"
+ITERATION_SCOPED_FILES_FILE="${RUNTIME_DIR}/reviewer_scoped_files.txt"
+ITERATION_SCOPING_BLOCK=""
+
+if [ "${IS_FIRST_ITERATION}" != "true" ] && [ "${REVIEWER_ITERATION_SCOPING_ENABLED}" = "1" ]; then
+  scope_tmp_file="$(mktemp)"
+  : > "${scope_tmp_file}"
+  scope_has_autofix_commit=0
+  scope_has_ledger_context=0
+
+  if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+    head_subject="$(git log -1 --format='%s' HEAD 2>/dev/null || true)"
+    if printf '%s' "${head_subject}" | grep -q '^\[ai-autofix\]'; then
+      git diff --name-only "HEAD~1..HEAD" 2>/dev/null | sed '/^$/d' >> "${scope_tmp_file}" || true
+      scope_has_autofix_commit=1
+    fi
+  fi
+
+  if [ -s "${LEDGER_STATUS_FILE}" ]; then
+    awk -F '\t' '
+      NF < 4 { next }
+      {
+        status = toupper($2)
+        if (status != "OPEN" && status != "NEW" && status != "PERSISTING" && status != "RESURGENT") {
+          next
+        }
+        path = $4
+        sub(/:.*/, "", path)
+        if (path != "") {
+          print path
+        }
+      }
+    ' "${LEDGER_STATUS_FILE}" >> "${scope_tmp_file}" || true
+    scope_has_ledger_context=1
+  fi
+
+  if [ -s "${scope_tmp_file}" ]; then
+    LC_ALL=C sort -u "${scope_tmp_file}" > "${ITERATION_SCOPED_FILES_FILE}"
+  else
+    : > "${ITERATION_SCOPED_FILES_FILE}"
+  fi
+  rm -f "${scope_tmp_file}"
+
+  if [ -s "${ITERATION_SCOPED_FILES_FILE}" ] && { [ "${scope_has_autofix_commit}" -eq 1 ] || [ "${scope_has_ledger_context}" -eq 1 ]; }; then
+    ITERATION_SCOPING_BLOCK="$(printf '%s\n' \
+      'ITERATION-SCOPED REVIEW FILES' \
+      'Iteration scoping is enabled for this N>1 pass.' \
+      'Primary scope is the union of:' \
+      '- files touched by the last [ai-autofix] commit (HEAD~1..HEAD)' \
+      '- files in ledger_status active states (OPEN/NEW/PERSISTING/RESURGENT)' \
+      '' \
+      "Scoped file list: ${ITERATION_SCOPED_FILES_FILE}" \
+      'Read this list first and prioritize these files for detailed review.' \
+      'Only broaden outside this set when necessary to verify a concrete runtime interaction.' \
+      "Example command: cat ${ITERATION_SCOPED_FILES_FILE}" \
+      '')"
+  else
+    : > "${ITERATION_SCOPED_FILES_FILE}"
+    ITERATION_SCOPING_BLOCK="$(printf '%s\n' \
+      'ITERATION-SCOPED REVIEW FILES' \
+      'Iteration scoping is enabled but required scope artifacts were unavailable.' \
+      'Fail-open applied: use full-diff review behavior for this run.' \
+      '')"
+  fi
+fi
+
+REVIEWER_CHECKLIST_BLOCK=""
+if [ "${REVIEWER_CHECKLIST_ENABLED}" = "1" ]; then
+  CHECKLIST_PROMPT_FILE=""
+  if [ -n "${SUPPORT_PROMPTS_DIR:-}" ] && [ -s "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then
+    CHECKLIST_PROMPT_FILE="${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"
+  elif [ -s "prompts/review-reviewer-checklist.txt" ]; then
+    CHECKLIST_PROMPT_FILE="prompts/review-reviewer-checklist.txt"
+  fi
+
+  if [ -n "${CHECKLIST_PROMPT_FILE}" ]; then
+    REVIEWER_CHECKLIST_BLOCK="$(cat "${CHECKLIST_PROMPT_FILE}")"
+  else
+    echo "::warning::REVIEW_REVIEWER_CHECKLIST_ENABLED=1 but prompts/review-reviewer-checklist.txt was not found; continuing without checklist block." >&2
+  fi
 fi
 
 # Build iteration-awareness block for the reviewer prompt.
@@ -243,6 +359,8 @@ ${ITERATION_CONTEXT_BLOCK}
 
 ${PR_INTENT_BLOCK}
 ${LINKED_ISSUE_BLOCK}
+${ITERATION_SCOPING_BLOCK}
+${REVIEWER_CHECKLIST_BLOCK}
 SYMBOL-LEVEL DIFF SUMMARY
 A compact symbol-level summary of what changed is available at:
 ${SYMBOL_DIFF_SUMMARY_FILE}
