@@ -1138,7 +1138,8 @@ run_template_validation_harness_renderer()
 
 attempt_render_recovery_after_preflight_failure()
 {
-	local renderer_exit=0
+	local render_recovery_exit=1
+	local renderer_exit=""
 
 	if [ "${HARNESS_MODE}" != "template_generate" ] || [ "${HARNESS_GENERATOR_MODE}" != "templates" ]; then
 		return 1
@@ -1152,26 +1153,32 @@ attempt_render_recovery_after_preflight_failure()
 		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
 		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
 	} >> "${PRE_FLIGHT_LOG_FILE}"
-	if run_template_validation_harness_renderer; then
-		renderer_exit=0
+
+	if attempt_template_render_recovery_after_preflight_lint; then
+		render_recovery_exit=0
 	else
-		renderer_exit=$?
+		render_recovery_exit=$?
 	fi
 
-	if [ "${renderer_exit}" -ne 0 ]; then
-		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
-		return 2
-	fi
-
-	echo "Render recovery: rerender completed; re-running pre-flight checks." >> "${PRE_FLIGHT_LOG_FILE}"
-	local PRE_FLIGHT_APPEND_LOG="true"
-	if run_preflight_checks; then
+	if [ "${render_recovery_exit}" -eq 0 ]; then
 		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 0
 	fi
 
-	echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
-	return 2
+	if [ "${render_recovery_exit}" -eq 2 ]; then
+		case "${PRE_FLIGHT_FAILURE_REASON:-}" in
+			render_retry_renderer_exit_*)
+				renderer_exit="${PRE_FLIGHT_FAILURE_REASON#render_retry_renderer_exit_}"
+				echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
+				;;
+			*)
+				echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+				;;
+		esac
+		return 2
+	fi
+
+	return 1
 }
 
 run_preflight_checks()
@@ -1728,6 +1735,13 @@ classify_preflight_failure()
 	PRE_FLIGHT_FAILURE_KIND="non_lint"
 	PRE_FLIGHT_FAILURE_REASON="preflight_failure_other"
 
+	if [ ! -r "${PRE_FLIGHT_LOG_FILE}" ]; then
+		PRE_FLIGHT_FAILURE_KIND="unknown"
+		PRE_FLIGHT_FAILURE_REASON="preflight_log_unreadable"
+		echo "PRE_FLIGHT_CLASSIFICATION kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}" >&2
+		return 0
+	fi
+
 	if [ ! -s "${PRE_FLIGHT_LOG_FILE}" ]; then
 		PRE_FLIGHT_FAILURE_REASON="preflight_log_empty"
 		echo "PRE_FLIGHT_CLASSIFICATION kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}" >&2
@@ -1785,7 +1799,7 @@ attempt_template_render_recovery_after_preflight_lint()
 			PRE_FLIGHT_FAILURE_KIND="render"
 			PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_${renderer_exit}"
 			echo "PRE_FLIGHT_RENDER_RECOVERY renderer_failed exit=${renderer_exit}" >&2
-			return 1
+			return 2
 		fi
 
 		if run_preflight_checks; then
@@ -1800,7 +1814,7 @@ attempt_template_render_recovery_after_preflight_lint()
 		if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
 			PRE_FLIGHT_FAILURE_KIND="render"
 			PRE_FLIGHT_FAILURE_REASON="render_retry_non_lint_after_rerender"
-			return 1
+			return 2
 		fi
 
 		render_recovery_attempt=$((render_recovery_attempt + 1))
@@ -1808,7 +1822,7 @@ attempt_template_render_recovery_after_preflight_lint()
 
 	PRE_FLIGHT_FAILURE_KIND="render"
 	PRE_FLIGHT_FAILURE_REASON="render_retry_exhausted"
-	return 1
+	return 2
 }
 
 enforce_managed_validation_artifact_contract()
