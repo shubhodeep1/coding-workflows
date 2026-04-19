@@ -102,10 +102,13 @@ class LintContext:
 		if not path.exists() or not path.is_file():
 			self._line_cache[path] = None
 			return None
-		if path.stat().st_size > 1_000_000:
+		try:
+			if path.stat().st_size > 1_000_000:
+				self._line_cache[path] = None
+				return None
+			self._line_cache[path] = path.read_text(encoding="utf-8").splitlines()
+		except (OSError, UnicodeDecodeError):
 			self._line_cache[path] = None
-			return None
-		self._line_cache[path] = path.read_text(encoding="utf-8").splitlines()
 		return self._line_cache[path]
 
 	def read_text(self, path: Path) -> str | None:
