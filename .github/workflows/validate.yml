@@ -285,8 +285,6 @@ jobs:
             copy_from_ref_or_local "${template_path}" "${template_path}" "false" "true" || true
           done <<'EOF_TEMPLATE_FILES'
           workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2
-          workflow-templates/validation-harness/_shared/docker-compose.test.yml.j2
-          workflow-templates/validation-harness/_shared/validate.env.j2
           workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2
           workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2
           workflow-templates/validation-harness/python-mongo-flask/tests/10_family_marker.sh.j2
