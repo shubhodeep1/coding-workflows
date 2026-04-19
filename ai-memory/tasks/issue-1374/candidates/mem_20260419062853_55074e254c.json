@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `61b327ef37c8cd67538cd8f58a8d361def2c9641`\n- Checked-out ref: `orchestrator/project-1292`\n- Integration metadata ref: `orchestrator/project-1292`\n- Integration mismatch: `false`\n\nClarification mapping:\n- No `Q<ID>` questions were emitted in Clarify for this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpretable as \u201cscope is clear enough to proceed with planning.\u201d\n\nRepresentative implementation pattern to follow:\n- `scripts/validate_process.sh` template-mode path (`run_template_validation_harness_renderer`) and Phase-2 preflight branch.\n- `tests/test_validate_process_template_mode.py` style for focused shell-behavior integration checks.\n\nImplementation plan\n\n1) Files likely to change\n- `scripts/validate_process.sh`\n- `scripts/self_heal_validation.sh`\n- `prompts/mode-validate-self-heal.txt`\n- `tests/test_validate_process_template_mode.py` and/or a new focused test file for render recovery (for example `tests/test_validate_process_render_recovery.py`)\n\n2) Functions/modules to implement\n- In `scripts/validate_process.sh`, add a dedicated render-recovery step for preflight lint failures:\n  - Trigger only on lint-class preflight failures.\n  - Run deterministic renderer (`run_template_validation_harness_renderer`) from manifest.\n  - Re-run preflight lint checks.\n  - Continue pipeline if relint passes; otherwise proceed to existing terminal handling.\n- In `scripts/validate_process.sh`, add machine-readable preflight failure classification (lint vs non-lint) so render recovery is deterministic and scoped.\n- In `scripts/validate_process.sh`, update self-heal invocation/logging to include `phase=render` when failure occurs after render recovery path.\n- In `scripts/self_heal_validation.sh`, update phase documentation/plumbing so `render` is recognized/logged as a valid failure phase, without changing target allow-list or patch safety checks.\n- In `prompts/mode-validate-self-heal.txt`, add explicit guidance that harness recovery is renderer-driven in render phase and prompt self-heal remains limited to the four validation prompt files.\n\n3) Data structures affected\n- Shell runtime state in `validate_process.sh` (new phase/failure-class variables for render recovery control and logging).\n- Existing self-heal patch ledger entry field `failure_phase` will now include `\"render\"` as an additive value.\n- No schema/shape changes to existing status/result JSON outputs are planned.\n\n4) API/interface changes\n- No external API contract changes.\n- No identifier renames/removals.\n- Operational log surface will gain render-recovery markers (phase-specific warnings/debug lines).\n- Keep current env var interface unchanged unless a retry knob is added; if added, defaulted value will be required.\n\n5) Potential risks and edge cases\n- Infinite retry risk if render recovery re-enters itself; must enforce single bounded render-recovery attempt per failure.\n- Missing manifest/renderer assets in consumer repos; must fail open to current hard-fail path with clear warning (no crash).\n- Non-lint preflight failures must not trigger render recovery.\n- Must not route this phase into freehand harness edits.\n- Preserve existing self-heal guardrails: prompt target allow-list and additive-only patch enforcement.\n\n6) Testing considerations\n- Add integration-style test for success path:\n  - Simulate lint failure -> deterministic rerender -> relint success -> no terminal preflight failure.\n- Add integration-style test for fail-open path:\n  - Renderer unavailable/failing -> recovery path logs warning and falls back to existing terminal handling.\n- Add contract test that render phase is wired into self-heal phase plumbing/logging (`render` phase recognized).\n- Add prompt guardrail test/assertion that self-heal remains restricted to the four validation prompt files and does not imply harness-file edits.\n- Run targeted test set for touched files and existing validate-process regression tests.\n\nConflict detection (issue vs current code):\n- Current code sends preflight failures directly through `attempt_self_heal_and_reexec \"preflight\"` and then terminal harness-error flow; it does not currently perform a deterministic render+re-lint recovery phase for lint failures. This is the primary behavior gap this plan addresses.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5bb2fe419e1c12ef6f120a9efc71f927ffbe5d9a65edc745a17c3c06a3594053",
+  "lineage": {
+    "issue_number": 1374,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24622734477",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24622734477",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1374"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419062853_55074e254c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1374,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24622734477"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1374",
+  "timestamps": {
+    "created_at": "2026-04-19T06:28:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
