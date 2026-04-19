@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:202 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The prompt downgrades `floor_tags.txt` from non-skippable floor findings to advisory-only input.\n  WHY: This weakens the safety gate for security-critical and other high-impact findings, allowing them to be ignored instead of explicitly addressed or rejected.\n- scripts/review_apply_fixes.sh:206-207 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The `CONSOLIDATOR_OVERRIDDEN` summary line format was changed to exclude the `<issue_id>`.\n  WHY: Removing the issue identifier breaks traceability for logs and analysis, making it harder to correlate overrides with specific findings.\n- tests/test_detect_editor_changes_lost.py:136-154 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The test checks the contract text but does not assert the semantic floor-tag requirement or the issue-id portion of the override format.\n  WHY: This leaves the regression undetected because the test can pass even when the prompt weakens floor-tag handling or drops issue-id traceability.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/review_apply_fixes.sh:42-45 | severity=high | confidence=5\n  PROBLEM: The prompt downgrades `floor_tags.txt` from non-skippable floor findings to advisory-only input.\n  WHY: Floor tags are meant to catch critical security issues and should not be treated as optional or incomplete.\n- scripts/review_apply_fixes.sh:206 | severity=low | confidence=5\n  PROBLEM: The `CONSOLIDATOR_OVERRIDDEN` summary line format was changed to exclude the `<issue_id>`.\n  WHY: Removing the issue id reduces traceability and makes debugging and audit trails harder.\n- tests/test_detect_editor_changes_lost.py:test_apply_fixes_contains_editor_input_authority_contract | severity=low | confidence=5\n  PROBLEM: The test does not verify that floor tags remain non-skippable.\n  WHY: The current assertion only checks for the contract text, so the semantic downgrade can slip through.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/review_apply_fixes.sh:196, 202 | severity=high | confidence=5\n  PROBLEM: The editor prompt downgrades `floor_tags.txt` from non-skippable findings to advisory-only input.\n  WHY: `floor_tags.txt` contains security and critical logical findings that must be addressed, so labeling them advisory invites the editor to ignore mandatory safety findings.\n- scripts/review_apply_fixes.sh:206 | severity=high | confidence=5\n  PROBLEM: The `CONSOLIDATOR_OVERRIDDEN` summary line format was changed to exclude the `<issue_id>`.\n  WHY: Removing the identifier breaks traceability for issue-ledger and analysis scripts that need to correlate overrides with specific findings.\n- tests/test_detect_editor_changes_lost.py:146 | severity=low | confidence=4\n  PROBLEM: The test does not assert the semantic correctness of the contract, specifically the advisory status of floor tags.\n  WHY: It provides false coverage by checking for contract strings without verifying the problematic floor-tag label.\n- scripts/review_apply_fixes.sh:194 | severity=low | confidence=1\n  PROBLEM: The \"fail-open\" description for advisory inputs is redundant and potentially confusing.\n  WHY: The shell script already manages file presence, so the extra wording may mislead the model.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_apply_fixes. sh:202 | severity=medium | confidence=4\n  PROBLEM: The prompt changes `floor_tags.txt` from non-skippable floor findings to advisory only.\n  WHY: This weakens the safety gate for critical findings, allowing security, concurrency, resource, and data-loss issues to be ignored without explicit rejection.\n- tests/test_ detect_ editor_ changes_ lost. py | severity=low | confidence=3\n  PROBLEM: The test does not validate the semantic change that floor tags became advisory only.\n  WHY: It only checks for the presence of contract text, so the regression can still pass unnoticed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_apply_fixes.sh:202 | severity=high | confidence=5\n  PROBLEM: The floor_tags.txt handling was changed from non-skippable floor findings to advisory only.\n  WHY: This creates a bypass for security-critical issues because the editor is no longer required to explicitly address or reject them.\n- scripts/review_apply_fixes.sh:206 | severity=medium | confidence=4\n  PROBLEM: The `CONSOLIDATOR_OVERRIDDEN` format changed from including `<issue_id>` to omitting it.\n  WHY: Without the issue id, debugging and audit tracing become significantly harder.\n- tests/test_detect_editor_changes_lost.py:136-154 | severity=low | confidence=3\n  PROBLEM: The test only checks for contract text strings and does not verify the semantic nature of the floor-tags change.\n  WHY: The test can pass even when the mandatory handling of floor findings has been removed.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/review_apply_fixes.sh:188-206 | severity=high | confidence=5\n  PROBLEM: The prompt incorrectly classifies `floor_tags.txt` as advisory only instead of a non-skippable surface.\n  WHY: The design says floor tags are non-skippable, and weakening that invariant allows critical findings to be silently ignored.\n- scripts/review_apply_fixes.sh:207 | severity=medium | confidence=4\n  PROBLEM: The `CONSOLIDATOR_OVERRIDDEN` marker format changed from including `<issue_id>` to omitting it.\n  WHY: The issue identifier is required for traceability and correlating overrides back to specific findings.\n- tests/test_detect_editor_changes_lost.py | severity=low | confidence=4\n  PROBLEM: The test does not verify the semantic correctness of the floor-tags and override-format contract.\n  WHY: It only checks keyword strings, so a regression in the contract semantics would not be caught.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "164103464db1c8a41a6202abfc079b69688bf1e7f48780804a73f4b9c0720eb3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1420,
+    "run_id": "24627413959",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24627413959",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419111148_7ebcf1a8a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1420,
+    "run_id": "24627413959"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T11:11:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
