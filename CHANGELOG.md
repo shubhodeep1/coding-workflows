@@ -8,6 +8,7 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 ## [Unreleased]
 
 ### Changed
+- Published the review-autofix operational contract in docs: floor-rule classifier invariants, consolidator/parser/ledger fail-open boundaries, authoritative-vs-advisory input precedence, ledger `accepted-residual` persistence semantics, and rollback guidance via existing feature toggles. Added/normalized review pipeline env-var defaults in `README.md` and `agents.md` without renaming interfaces.
 - `ensure_label_exists` in `scripts/validate_process.sh` no longer routes the "label already exists, skipping" duplicate-label case through `tg_notify` (DEBUG); it now emits a local `::debug::` stderr line, matching the existing behaviour in `scripts/label_helpers.sh` and `scripts/orchestrate_poll_process.sh`. Genuine label-create failures still raise a `tg_notify` WARNING. No Telegram alert is sent for expected duplicate-label races.
 - H8: made reviewer watchdog PR-state polling interval configurable via `REVIEW_PR_STATE_POLL_INTERVAL_SECS` in `scripts/review_run_reviewers.sh` (default `10`, valid `10..3600`), with `rate_limit_audit_fallback` warning and fail-open fallback to default for invalid/out-of-range inputs.
 - Added H4 PR comment hydration shim in `scripts/gh_helpers.sh`: `gh_pr_with_all_comments` now uses a single GraphQL call for PR metadata + issue/review comments with deterministic ordering, mandatory fail-open REST fallback, and shared legacy JSON output contract for judge consumers.

@@ -61,13 +61,16 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
 | `REVIEW_FLOOR_RULES_ENABLED` | No | `1` | review_autofix | Enable (`1`) or disable (`0`) floor-rule extraction (`scripts/review_floor_rules.sh`). When disabled, the stage writes an empty `floor_tags.txt` and continues fail-open. |
-| `REVIEW_FLOOR_KEYWORDS_FILE` | No | (built-in catalog in script) | review_autofix | Optional path to a custom floor-rule keyword catalog consumed by `scripts/review_floor_rules.sh`. When unset, missing, or unreadable, the script falls back to its built-in keywords and logs a warning. |
+| `REVIEW_FLOOR_KEYWORDS_FILE` | No | `''` | review_autofix | Optional path to a custom floor-rule keyword catalog consumed by `scripts/review_floor_rules.sh`. When unset, missing, or unreadable, the script falls back to its built-in keywords and logs a warning. |
 | `REVIEW_CONSOLIDATOR_ENABLED` | No | `1` | review_autofix | Enable (`1`) or disable (`0`) the consolidator stage (`scripts/review_consolidate.sh`). Disabled runs emit an empty `consolidator_raw.txt` and continue. |
 | `REVIEW_CONSOLIDATOR_MODEL` | No | `openai/gpt-5.4-mini` | review_autofix | Model slug used by the consolidator stage when it deduplicates reviewer outputs into `consolidator_raw.txt`. |
 | `REVIEW_CONSOLIDATOR_REASONING` | No | `medium` | review_autofix | Reasoning effort passed to the consolidator model (`xhigh`, `high`, `medium`, `low`). |
 | `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` | No | `300` | review_autofix | Per-attempt timeout (seconds) for consolidator model invocation before fail-open fallback. |
 | `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | No | `16000` | review_autofix | Output budget for consolidator output (converted to byte cap before writing `consolidator_raw.txt`). |
 | `REVIEW_PARSER_FAILOPEN` | No | `1` | review_autofix | Parser failure mode for `scripts/review_parse_consolidator.sh`: `1` keeps fail-open behavior (warn + continue), `0` hard-fails parser-stage errors for debugging. |
+| `REVIEW_LEDGER_ENABLED` | No | `1` | review_autofix | Enable (`1`) or disable (`0`) review-issue ledger lifecycle tracking (`scripts/review_issue_ledger.sh`). When disabled, the stage writes an empty `ledger_status.txt` and skips ledger persistence updates. |
+| `REVIEW_LEDGER_PERSIST_LIMIT` | No | `2` | review_autofix | Persistence threshold for still-present issues; once an issue reaches this count it transitions to `accepted-residual`. |
+| `REVIEW_LEDGER_PATH` | No | `.ai/review_issue_ledger.txt` | review_autofix | Ledger file path persisted by `scripts/review_issue_ledger.sh`. Malformed prior ledgers fail-open (`ledger_reset=1`) with state reset semantics. |
 | `REVIEW_REVIEWER_CHECKLIST_ENABLED` | No | `1` | review_autofix | Enable (`1`) or disable (`0`) checklist/header injection in reviewer prompts. |
 | `REVIEW_REVIEWER_ITERATION_SCOPING` | No | `1` | review_autofix | Enable (`1`) scoped reviewer prompts on non-first iterations (latest autofix diff + open ledger paths). Set `0` to keep full-diff review every iteration. |
 | `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` | No | `8` | review_autofix | Seconds the post-commit and editor-changes-lost retrigger steps wait before checking for an already-queued peer review run on the same PR branch. If a peer is found the retrigger skips its own `workflow_dispatch` to avoid creating a redundant queued run (and extra API/UI noise) in the `pr-autofix-${PR}` concurrency group (see [Autofix retrigger dedup](#autofix-retrigger-dedup)). Must be an integer in `0..60`; invalid values clamp to `8`. |
@@ -339,6 +342,27 @@ jobs:
 > dispatch so the cycle is never silently broken. Look for
 > `AUTOFIX_PEER_CHECK` / `AUTOFIX_DISPATCH_SKIPPED` / `AUTOFIX_DISPATCH_ISSUED`
 > lines when auditing collision behaviour in Actions logs.
+
+### Review autofix reviewer pipeline
+
+`review_autofix.yml` runs a fixed review-artifact chain:
+- `scripts/review_floor_rules.sh` writes `floor_tags.txt`
+- `scripts/review_consolidate.sh` writes `consolidator_raw.txt`
+- `scripts/review_parse_consolidator.sh` writes `review_issues.txt`
+- `scripts/review_issue_ledger.sh` writes `ledger_status.txt` and persists ledger state at `REVIEW_LEDGER_PATH`
+
+Runtime invariants:
+- Floor rules are non-skippable classifier findings when emitted: editor output must either address them or reject them explicitly with rationale.
+- Consolidator output is advisory and never gates execution. Disable/error/missing-script paths fail open with empty `consolidator_raw.txt`.
+- Parser output is advisory and fail-open by default (`REVIEW_PARSER_FAILOPEN=1`): parser failures emit empty `review_issues.txt` and continue. Set `REVIEW_PARSER_FAILOPEN=0` to hard-fail parser errors for debugging.
+- Input authority in editor stage (`scripts/review_apply_fixes.sh`): `reviewer_bundle.txt` is authoritative; `review_issues.txt`, `ledger_status.txt`, and `consolidator_raw.txt` are advisory context.
+- Ledger lifecycle (`scripts/review_issue_ledger.sh`) uses `NEW`, `PERSISTING`, `FIXED`, `RESURGENT`, and `accepted-residual`. Non-residual issues that persist to `REVIEW_LEDGER_PERSIST_LIMIT` are promoted to `accepted-residual`; those entries remain persisted while corresponding blocks are removed from `review_issues.txt`.
+- Consolidator divergence convention is literal: `CONSOLIDATOR_OVERRIDDEN: <reason>`.
+- Editor summary machine signal is authoritative: `Change status:` must be exactly `edited` or `not-edited` for downstream no-op/retrigger decisions.
+
+Backward compatibility and rollback:
+- This rollout is additive only (no identifier/path renames or removals).
+- Roll back behavior via existing toggles instead of interface changes: `REVIEW_FLOOR_RULES_ENABLED=0`, `REVIEW_CONSOLIDATOR_ENABLED=0`, `REVIEW_LEDGER_ENABLED=0`, `REVIEW_REVIEWER_CHECKLIST_ENABLED=0`, `REVIEW_REVIEWER_ITERATION_SCOPING=0`, or `REVIEW_PARSER_FAILOPEN=0` for strict parser mode.
 
 ### Local replay helper for review artifacts
 
@@ -931,6 +955,16 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ENABLE_LABEL_REPAIR_SWEEP` | `true` | Contract-defined gate for poller label-repair sweep. Current branch status: reserved (not consumed yet); `reconcile_managed_issue_labels` runs every poll cycle for current-wave managed issues. |
 | `LABEL_REPAIR_DRY_RUN` | `false` | Contract-defined dry-run mode for label repair. Current branch status: reserved (not consumed yet); label diffs are applied live when detected. |
 | `LABEL_REPAIR_MAX_ISSUES_PER_CYCLE` | `50` | Contract-defined cap for per-cycle label-repair mutations. Current branch status: reserved (not consumed yet); effective scope is the current-wave issue set. |
+| `REVIEW_FLOOR_RULES_ENABLED` | `1` | Enable (`1`) or disable (`0`) floor-rule extraction (`scripts/review_floor_rules.sh`). Disabled runs emit empty `floor_tags.txt` and continue fail-open. |
+| `REVIEW_FLOOR_KEYWORDS_FILE` | `''` | Optional override keyword catalog for floor-rule extraction. Unset/missing/invalid files fail open to the built-in keyword catalog in `scripts/review_floor_rules.sh`. |
+| `REVIEW_CONSOLIDATOR_ENABLED` | `1` | Enable (`1`) or disable (`0`) consolidator stage (`scripts/review_consolidate.sh`). Disabled runs emit empty `consolidator_raw.txt` and continue. |
+| `REVIEW_CONSOLIDATOR_MODEL` | `openai/gpt-5.4-mini` | Model used by consolidator stage for reviewer-output dedup into `consolidator_raw.txt`. |
+| `REVIEW_CONSOLIDATOR_REASONING` | `medium` | Reasoning effort passed to consolidator model invocation. |
+| `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` | `300` | Consolidator per-attempt timeout in seconds before fail-open fallback. |
+| `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | `16000` | Consolidator output cap (tokens, converted internally to byte cap) before writing `consolidator_raw.txt`. |
+| `REVIEW_PARSER_FAILOPEN` | `1` | Parser-stage failure mode: `1` keeps fail-open behavior (warn + empty `review_issues.txt` + continue), `0` hard-fails parser errors. |
+| `REVIEW_REVIEWER_CHECKLIST_ENABLED` | `1` | Toggle checklist/header injection in reviewer prompts (`1` enabled, `0` disabled). |
+| `REVIEW_REVIEWER_ITERATION_SCOPING` | `1` | Toggle scoped reviewer prompts on non-first iterations (`1` scoped, `0` full-diff every iteration). |
 
 ## Semantic Cache (Clarification Only)
 
