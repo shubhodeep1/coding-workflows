@@ -1330,8 +1330,11 @@ editing the prompt and re-running.
 **How it works**
 
 1. When any phase of `scripts/validate_process.sh` is about to fail hard
-   (generate parse failure, preflight failure, canary failure, diagnose
-   decision point), it invokes `scripts/self_heal_validation.sh`.
+   (generate parse failure, preflight failure, template render-recovery
+   failure, canary failure, diagnose decision point), it invokes
+   `scripts/self_heal_validation.sh`. In template mode, preflight lint/syntax
+   failures first trigger one deterministic rerender + relint attempt in
+   `validate_process.sh` before terminalizing.
 2. The helper renders `prompts/mode-validate-self-heal.txt` with the full
    failure context and the current text of the four validation prompts,
    and asks the LLM to propose a minimal unified diff against exactly one
