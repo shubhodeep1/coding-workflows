@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 5\nIssues with multi-reviewer agreement: 1\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  [1] File: scripts/validate_process.sh\n      Problem: Code reference: `#   phase tag: generate|preflight|canary|runtime|diagnose|discover`; The comment documenting accepted phase-tag values for `attempt_self_heal_and_reexec` omits `render`, which is now a valid value. The companion file `scripts/self_heal_validation.sh` line 25 already documents `render` in the allowed set. The code at lines 2391\u20132398 also conditionally uses `self_heal_phase=\"render\"` based on `PRE_FLIGHT_FAILURE_KIND=\"render\"`.; Misleading documentation risks future maintenance errors \u2014 a contributor could erroneously reject or mishandle the `render` phase based on the stale comment.; **ISSUE 2 \u2014 Incorrect PRE_FLIGHT_FAILURE_REASON on successful render recovery**\n      Confidence: avg 5.0\n      Flagged by: moonshotai_kimi-k2_5, stepfun_step-3_5-flash\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [2] File: scripts/validate_process.sh\n      Problem: Code reference: Lines ~1742-1748 in `attempt_template_render_recovery_after_preflight_lint`; The code sets `PRE_FLIGHT_FAILURE_REASON=\"render_retry_recovered\"` after successful recovery in line 1745. The `run_preflight_checks` function (lines 1670-1672) already sets:; ```bash; PRE_FLIGHT_STATUS=\"pass\"; PRE_FLIGHT_FAILURE_KIND=\"none\"; PRE_FLIGHT_FAILURE_REASON=\"none\"; When recovery succeeds, these values are already set correctly by `run_preflight_checks`. The subsequent assignment to `\"render_retry_recovered\"` only affects the return path \u2014 no downstream code consumes `PRE_FLIGHT_FAILURE_REASON` after successful Phase 2 completion, and logging already captured the recovery event. This is a cosmetic state quirk that does not affect runtime behavior.; **SUMMARY:**; The implementation is correct and complete:; 1. **Template-mode lint failure recovery**: Correctly triggers only for `HARNESS_MODE=\"template_generate\"` with `PRE_FLIGHT_FAILURE_KIND=\"lint\"` failures; 2. **Rerender + relint loop**: Properly calls `run_template_validation_harness_renderer` then `run_preflight_checks` with bounded retry attempts; 3. **State transitions**: Correctly sets `PRE_FLIGHT_STATUS=\"pass\"` on recovery success (allowing normal continuation) and `PRE_FLIGHT_FAILURE_KIND=\"render\"` on recovery failure (routing to render-phase self-heal); 4. **Phase documentation**: Both `validate_process.sh` and `self_heal_validation.sh` correctly document the new \"render\" phase tag; 5. **Self-heal scope**: The prompt file correctly includes guidance that harness recovery is renderer-driven; 6. **Test coverage**: Comprehensive tests cover lint-then-pass, renderer failure, rerender still failing, and non-lint bypass scenarios; **No code changes required.**\n      Confidence: avg 1.0\n      Flagged by: moonshotai_kimi-k2_5\n\n  [3] File: scripts/validate_process.sh\n      Problem: Location: `attempt_template_render_recovery_after_preflight_lint`, around line 1743; Code reference: inside the `if run_preflight_checks; then` success branch; When render recovery succeeds, the code sets `PRE_FLIGHT_FAILURE_REASON=\"render_retry_recovered\"` after `run_preflight_checks` has already set `PRE_FLIGHT_FAILURE_REASON=\"none\"`. Overwriting it to a failure-like reason is semantically incorrect and pollutes diagnostic state.; Observability/metrics that inspect these globals after success would see a contradictory reason. Consistency dictates that a successful outcome \u2014 whether first-run or after retry \u2014 should leave `PRE_FLIGHT_FAILURE_KIND=\"none\"` and `PRE_FLIGHT_FAILURE_REASON=\"none\"`.; **Recommended minimal fixes**; 1. Update the `attempt_self_heal_and_reexec` usage comment to include `render`:; - Change line ~221 from `#   phase tag: generate|preflight|canary|runtime|diagnose|discover`; - To: `#   phase tag: generate|preflight|render|canary|runtime|diagnose|discover`; 2. Remove the redundant assignments after successful recovery (or ensure REASON stays \"none\"):; - In `attempt_template_render_recovery_after_preflight_lint`, inside the `if run_preflight_checks; then` branch:; - Either remove both `PRE_FLIGHT_FAILURE_KIND=\"none\"` and `PRE_FLIGHT_FAILURE_REASON=\"render_retry_recovered\"`; - Or keep KIND=\"none\" and set REASON=\"none\" to match the established success-state convention; The simplest and safest change is to **remove** the two assignment lines entirely, since `run_preflight_checks` already sets both to `\"none\"` on success.; HARDENING_SUGGESTIONS:\n      Confidence: avg 5.0\n      Flagged by: stepfun_step-3_5-flash\n\n  [4] File: scripts/validate_process.sh\n      Problem: Location: attempt_template_render_recovery_after_preflight_lint, success branch (~1742-1744); Issue: Overwrites successful state with contradictory failure reason; Suggested minimal fix: delete the lines `PRE_FLIGHT_FAILURE_KIND=\"none\"` and `PRE_FLIGHT_FAILURE_REASON=\"render_retry_recovered\"` within the `if run_preflight_checks; then` success block; let run_preflight_checks' own assignments stand.; Estimated lines changed: 2; HARDENING_RISK_SCORE: 3 (semantic inconsistency; could confuse diagnostics/metrics)\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\n  [5] File: scripts/validate_process.sh\n      Problem: Location: attempt_self_heal_and_reexec usage comment (~221); Issue: Missing \"render\" in documented phase-tag allow-list; Suggested minimal fix: add `render` between `preflight` and `canary`; Estimated lines changed: 1; HARDENING_RISK_SCORE: 1 (documentation bug; maintenance hazard); **Summary**; All other aspects of the last run appear correct:; - The recovery logic properly classifies failures and only triggers for template mode + lint failures; - The self-heal phase routing correctly distinguishes \"render\" from \"preflight\"; - The test suite is comprehensive and passes; - Backward compatibility is maintained (non-template modes and non-lint failures follow existing paths); The evidence for Issues 1 and 2 is concrete and directly verifiable in the current code state. No speculative issues reported by pass-1 reviewers were found; the hardening suggestions from cross-pollination were assessed and only those two items rise to the level of definite correctness concerns.\n      Confidence: avg n/a\n      Flagged by: stepfun_step-3_5-flash\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\nscripts/validate_process.sh\n\nLow confidence files (mentioned by 1 reviewer):\n(none)",
+  "fingerprint": "cff510c9cb8755b8efd78e8b1260530d10588a7dabe64aa4f01b0b336b94de29",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1371,
+    "run_id": "24622519104",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24622519104",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419063345_a156005126",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1371,
+    "run_id": "24622519104"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 high-confidence file(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T06:33:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
