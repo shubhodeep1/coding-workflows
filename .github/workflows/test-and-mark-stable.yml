@@ -125,15 +125,23 @@ jobs:
           git status 2>&1; echo "status_rc=$?"
           git log -1 --oneline 2>&1; echo "log_rc=$?"
           echo "--- simulate post-step extraheader ops ---"
-          git config --local --name-only --get-regexp 'http\..*\.extraheader' 2>&1; echo "getregexp_rc=$?"
-          EXTRAHEADER_KEYS=$(git config --local --name-only --get-regexp 'http\..*\.extraheader' 2>/dev/null || true)
-          if [ -n "$EXTRAHEADER_KEYS" ]; then
+          EXTRAHEADER_KEYS_OUTPUT=$(git config --local --name-only --get-regexp 'http\..*\.extraheader' 2>&1)
+          GETREGEXP_RC=$?
+          printf '%s\n' "$EXTRAHEADER_KEYS_OUTPUT"
+          echo "getregexp_rc=$GETREGEXP_RC"
+          if [ "$GETREGEXP_RC" -eq 0 ] && [ -n "$EXTRAHEADER_KEYS_OUTPUT" ]; then
             TEMP_GIT_CONFIG=$(mktemp)
-            cp .git/config "$TEMP_GIT_CONFIG" 2>/dev/null || true
-            while IFS= read -r EXTRAHEADER_KEY; do
-              [ -n "$EXTRAHEADER_KEY" ] || continue
-              git config --file "$TEMP_GIT_CONFIG" --unset-all "$EXTRAHEADER_KEY" 2>&1; echo "unset_rc[$EXTRAHEADER_KEY]=$?"
-            done <<< "$EXTRAHEADER_KEYS"
+            cp .git/config "$TEMP_GIT_CONFIG" 2>&1
+            CP_RC=$?
+            echo "cp_config_rc=$CP_RC"
+            if [ "$CP_RC" -eq 0 ]; then
+              while IFS= read -r EXTRAHEADER_KEY; do
+                [ -n "$EXTRAHEADER_KEY" ] || continue
+                git config --file "$TEMP_GIT_CONFIG" --unset-all "$EXTRAHEADER_KEY" 2>&1; echo "unset_rc[$EXTRAHEADER_KEY]=$?"
+              done <<< "$EXTRAHEADER_KEYS_OUTPUT"
+            else
+              echo "unset_rc=skipped (config copy failed)"
+            fi
             rm -f "$TEMP_GIT_CONFIG"
           else
             echo "unset_rc=skipped (no matching key)"
@@ -142,6 +150,8 @@ jobs:
           git submodule foreach --recursive 'echo ok' 2>&1; echo "foreach_rc=$?"
           echo "--- .git directory listing (first 40) ---"
           ls -la .git/ 2>&1 | head -n 40; echo "ls_rc=$?"
+          echo "--- lock files ---"
+          ls -l .git/*.lock 2>&1; echo "lock_ls_rc=$?"
           echo "=== end diagnostic ==="
           exit 0
 
