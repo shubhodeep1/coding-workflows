@@ -5,13 +5,22 @@
   "entry_id": "processed_command_1447_4275861496_approved",
   "issue_number": 1447,
   "metadata": {
+    "branch": "ai/issue-1447",
+    "changed_files": [
+      "scripts/validate_process.sh"
+    ],
+    "issue_number": 1447,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1447",
+    "pr_number": 1450,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1450",
+    "run_attempt": "1",
+    "run_id": "24628700163",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24628700163"
   },
   "run_attempt": 1,
   "run_id": "24628700163",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-19T12:07:37Z",
+  "status": "completed",
+  "timestamp": "2026-04-19T12:11:59Z",
   "workflow": "implement"
 }
