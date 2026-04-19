@@ -136,7 +136,13 @@ attempt_render_recovery_after_preflight_failure()
 		return 0
 	fi
 
-	classify_preflight_failure
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}"
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
 	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
 	PRE_FLIGHT_FAILURE_KIND="render"
 	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
@@ -293,7 +299,13 @@ attempt_render_recovery_after_preflight_failure()
 		return 0
 	fi
 
-	classify_preflight_failure
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}"
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
 	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
 	PRE_FLIGHT_FAILURE_KIND="render"
 	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
@@ -430,7 +442,13 @@ attempt_render_recovery_after_preflight_failure()
 		return 0
 	fi
 
-	classify_preflight_failure
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}"
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
 	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
 	PRE_FLIGHT_FAILURE_KIND="render"
 	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
@@ -584,7 +602,13 @@ attempt_render_recovery_after_preflight_failure()
 		return 0
 	fi
 
-	classify_preflight_failure
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}"
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
 	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
 	PRE_FLIGHT_FAILURE_KIND="render"
 	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
@@ -740,7 +764,13 @@ attempt_render_recovery_after_preflight_failure()
 		return 0
 	fi
 
-	classify_preflight_failure
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}"
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
 	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
 	PRE_FLIGHT_FAILURE_KIND="render"
 	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
