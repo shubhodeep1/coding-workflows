@@ -125,7 +125,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `BATCH_API_PROVIDER` | No | `auto` | workflow-log-analysis, memory_maintenance | Batch provider routing hint for OpenRouter Responses API capability checks/submission (`auto`, `openai`, `anthropic`). Unsupported hints fall back to sync with structured warnings. |
 | `BATCH_API_POLL_TIMEOUT_HOURS` | No | `24` | workflow-log-analysis, memory_maintenance | Maximum pending batch age before workflow-log-analysis falls back to synchronous generation. |
 
-**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. All phases default to `xhigh` (maximum reasoning depth). No cycle-based downgrades are applied — every phase uses the configured reasoning effort for all cycles. **E2E smoke test exception:** when an issue or PR title contains `[E2E Smoke Test]`, all phases force `low` reasoning to keep smoke runs cheap and fast.
+**Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`. Most phases default to `xhigh` (maximum reasoning depth); `THINKING_LEVEL_REVIEWER` defaults to `high` to keep the review_autofix reviewer fan-out within standard-runner capacity. No cycle-based downgrades are applied — every phase uses the configured reasoning effort for all cycles. **E2E smoke test exception:** when an issue or PR title contains `[E2E Smoke Test]`, all phases force `low` reasoning to keep smoke runs cheap and fast.
 
 | Variable | Default | Used By | Description |
 |---|---|---|---|
@@ -134,7 +134,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_PLAN` | `xhigh` | plan | Reasoning effort for the planning phase |
 | `THINKING_LEVEL_IMPLEMENT` | `xhigh` | implement | Reasoning effort for the implementation phase |
 | `THINKING_LEVEL_ANALYSIS` | `xhigh` | workflow-log-analysis | Reasoning effort for the workflow log analysis report generation. |
-| `THINKING_LEVEL_REVIEWER` | `xhigh` | review_autofix | Reasoning effort for the reviewer models (bug detection) |
+| `THINKING_LEVEL_REVIEWER` | `high` | review_autofix | Reasoning effort for the reviewer models (bug detection). Defaults to `high` (not `xhigh`) so the parallel reviewer fan-out fits within standard `ubuntu-latest` runner capacity. |
 | `THINKING_LEVEL_EDITOR` | `xhigh` | review_autofix | Reasoning effort for the editor model (applying fixes) |
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | `xhigh` | review_autofix | Reasoning effort for the review-blocked judge (non-orchestrator PRs) |
 | `THINKING_LEVEL_ORCHESTRATE` | `xhigh` | orchestrate | Reasoning effort for project decomposition |

@@ -59,7 +59,7 @@ env:
     stepfun/step-3.5-flash
     google/gemini-3-flash-preview
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.3-codex' }}
-  REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
+  REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'high' }}
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
@@ -198,7 +198,7 @@ jobs:
 
   codex-agent:
     needs: gate
-    runs-on: ubuntu-latest-4-cores
+    runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:
       # cancel-in-progress: false → new runs queue behind the running peer
