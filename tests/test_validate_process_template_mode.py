@@ -204,7 +204,7 @@ esac
 def test_render_recovery_lint_gate_contract_present() -> None:
 	text = _validate_process_text()
 	assert 'if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then' in text
-	assert 'Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}.' in text
+	assert 'Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown} kind=${PRE_FLIGHT_FAILURE_KIND:-unknown}.' in text
 
 
 def main() -> int:
