@@ -106,7 +106,9 @@ read_anchor_context()
 		sed -n "${range_start},${range_end}p" -- "${file_path}" | normalize_stream_lines "${ext}"
 		return
 	fi
-	if git cat-file -e "HEAD:${file_path}" >/dev/null 2>&1; then
+	local object_type
+	object_type="$(git cat-file -t "HEAD:${file_path}" 2>/dev/null || true)"
+	if [ "${object_type}" = "blob" ]; then
 		git show "HEAD:${file_path}" | sed -n "${range_start},${range_end}p" | normalize_stream_lines "${ext}"
 		return
 	fi

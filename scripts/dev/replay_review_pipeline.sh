@@ -113,12 +113,19 @@ if ! git -C "${workspace_dir}" rev-parse --is-inside-work-tree >/dev/null 2>&1; 
 	echo "warning: ledger/path anchoring may be incomplete in replay output" >&2
 fi
 
+# Resolve caller-provided relative prompt paths before changing directories.
+support_prompts_dir="${SUPPORT_PROMPTS_DIR:-${REPO_ROOT}/prompts}"
+case "${support_prompts_dir}" in
+	/*) ;;
+	*) support_prompts_dir="${PWD}/${support_prompts_dir}" ;;
+esac
+
 # Switch to the workspace directory so git operations resolve correctly.
 cd "${workspace_dir}"
 
 export PYTHONDONTWRITEBYTECODE=1
 export RUNTIME_DIR="${runtime_dir}"
-export SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${REPO_ROOT}/prompts}"
+export SUPPORT_PROMPTS_DIR="${support_prompts_dir}"
 export REVIEW_CONSOLIDATOR_ENABLED="${consolidator_enabled}"
 export REVIEW_PARSER_FAILOPEN="${REVIEW_PARSER_FAILOPEN:-1}"
 export PR_NUMBER="${PR_NUMBER:-0}"

@@ -73,7 +73,9 @@ validate_file_path()
 	if [[ "${file_path}" =~ [[:cntrl:]] ]]; then
 		return 1
 	fi
-	if ! git cat-file -e "HEAD:${file_path}" >/dev/null 2>&1; then
+	local object_type
+	object_type="$(git cat-file -t "HEAD:${file_path}" 2>/dev/null || true)"
+	if [ "${object_type}" != "blob" ]; then
 		return 1
 	fi
 	return 0
