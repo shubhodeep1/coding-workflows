@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:1193-1198 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, stepfun_step-3_5-flash]\n  PROBLEM: `attempt_render_recovery_after_preflight_failure()` emits the same recovery message twice, once without details and once with `kind`/`reason`.\n  WHY: This duplicates log output for every render-recovery failure without adding diagnostic value; one reviewer notes the detailed line remains and the redundant line has been removed in the working tree, while another notes the issue was originally present and is now fixed.\n- scripts/validate_process.sh | severity=low | confidence=5\n  flagged_by: [stepfun_step-3_5-flash]\n  PROBLEM: The `scripts/validate_process.sh` fix is present in the working tree but not staged or committed.\n  WHY: The reviewer reports the script modification remains uncommitted, which can leave the PR without the actual implementation fix.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/validate_process.sh | severity=low | confidence=5\n  PROBLEM: `attempt_render_recovery_after_preflight_failure()` emitted the same recovery message twice, once without details and once with `kind`/`reason`.\n  WHY: This created redundant log entries for every render recovery failure and cluttered log analysis.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No new issues found.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No additional issues identified.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/validate_process.sh:1196 | severity=low | confidence=5\n  PROBLEM: The duplicate recovery log line without `kind`/`reason` was present alongside the detailed version.\n  WHY: Two nearly identical log lines were written consecutively for every render-recovery failure, producing noisy redundant logs; the reviewer notes the redundant line has since been removed.\n- scripts/validate_process.sh | severity=low | confidence=5\n  PROBLEM: The `scripts/validate_process.sh` fix is present in the working tree but not staged or committed.\n  WHY: The reviewer reports the script change remains uncommitted, so the fix may not be recorded in the branch history or included in the PR.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "8ad9b9f23bb31d98cd60d913d1b3d876cd6102b3c71966cbb6aace7dcfbd46c8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1450,
+    "run_id": "24629473547",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24629473547",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419133056_64ac16edbd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1450,
+    "run_id": "24629473547"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T13:30:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
