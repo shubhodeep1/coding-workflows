@@ -3885,6 +3885,60 @@ COMMENT_EOF
 	fi
 }
 
+# count_noop_ancestors <issue_num> [max_depth]
+#
+# Walks the "Re-issued from #N" ancestor chain of <issue_num> up to
+# max_depth hops (default 3) and returns (echoes) the number of
+# consecutive ancestors whose issue-comments contain the implement.yml
+# no-op warning signature ("produced no repository changes").
+#
+# Input:  issue number (integer); optional max_depth (positive integer).
+# Output: integer count on stdout (0 on any failure / fail-open).
+# API cost: up to 2 * max_depth calls — one GET /issues/{n} and one
+#           GET /issues/{n}/comments per hop. Stops early on the first
+#           non-no-op ancestor or when the chain ends.
+#
+# This is an issue-local belt-and-braces cap used by all three
+# orchestrator re-issue paths (main stall, standalone stall, no-op
+# impl-failed). It catches the failure mode where the state-based
+# MAX_IMPL_NOOP_REISSUES counter is stale — tracking issue #1292
+# produced 30+ duplicate sub-issues because the wave-status iterator
+# never refreshed get_impl_noop_count.  Fails open: any API/parse
+# error aborts the walk and the partial count so far is returned,
+# so callers fall through to their existing re-issue behaviour.
+count_noop_ancestors()
+{
+	local issue_num="$1"
+	local max_depth="${2:-3}"
+	local noop_marker="produced no repository changes"
+	local count=0
+	local current="${issue_num}"
+	local hop parent_body parent_num parent_has_noop
+
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || { echo "0"; return 0; }
+	[[ "${max_depth}" =~ ^[1-9][0-9]*$ ]] || max_depth=3
+
+	for hop in $(seq 1 "${max_depth}"); do
+		parent_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${current}" --jq '.body // ""' 2>/dev/null || echo "")"
+		parent_num="$(printf '%s' "${parent_body}" | grep -oE 'Re-issued from #[0-9]+' | head -n1 | grep -oE '[0-9]+' | head -n1 || true)"
+		if [ -z "${parent_num}" ]; then
+			break
+		fi
+		[[ "${parent_num}" =~ ^[0-9]+$ ]] || break
+		parent_has_noop="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${parent_num}/comments" --paginate \
+			--jq "[.[] | select((.body // \"\") | test(\"${noop_marker}\"; \"i\"))] | length" 2>/dev/null \
+			| awk 'BEGIN{s=0} /^[0-9]+$/ {s+=$1} END{print s}' || echo "")"
+		[[ "${parent_has_noop}" =~ ^[0-9]+$ ]] || parent_has_noop=0
+		if [ "${parent_has_noop}" -eq 0 ]; then
+			break
+		fi
+		count=$((count + 1))
+		current="${parent_num}"
+	done
+
+	echo "${count}"
+}
+
 # ---------------------------------------------------------------
 # Standalone stall recovery state helpers
 # ---------------------------------------------------------------
@@ -4320,6 +4374,34 @@ STALL_EOF
       ;;
 
     close_and_reissue)
+      # Belt-and-braces ancestor-chain no-op cap.  If the
+      # "Re-issued from #N" chain already contains
+      # MAX_IMPL_NOOP_REISSUES consecutive no-op ancestors, stop
+      # spawning re-issues and let the wave-completion judge verify
+      # — the work described is almost certainly already on the
+      # integration branch.  Fails open: on any API error
+      # count_noop_ancestors returns 0 and we fall through to the
+      # legacy close+re-issue flow.
+      local stall_anc_noop_count
+      stall_anc_noop_count="$(count_noop_ancestors "${issue_num}" "${MAX_IMPL_NOOP_REISSUES}")"
+      [[ "${stall_anc_noop_count}" =~ ^[0-9]+$ ]] || stall_anc_noop_count=0
+      if [ "${stall_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+        echo "  [stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES}). Closing without re-issue — judge will verify."
+        ensure_label_exists "ai:closed"
+        close_linked_pr "${issue_num}" \
+          "Closed by orchestrator stall recovery — ancestor-chain no-op cap reached (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES})."
+        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:done' --remove-label 'ai:implementing' \
+          --remove-label 'ai:planning' --remove-label 'ai:clarification' \
+          --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
+          --add-label 'ai:closed' 2>/dev/null || true
+        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: stall recovery detected ${stall_anc_noop_count} consecutive no-op ancestor(s) in the Re-issued from chain (cap ${MAX_IMPL_NOOP_REISSUES}). The code described likely already exists on the integration branch; the wave-completion judge will verify." 2>/dev/null || true
+        tg_notify "Stall recovery: ancestor-chain no-op cap hit for issue #${issue_num} (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+        STALL_RECOVERY_SHOULD_INCREMENT="false"
+        return 0
+      fi
+
       echo "  Closing and re-issuing stalled issue #${issue_num}..."
       surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${stall_minutes}" "${recovery_count}" "main"
       close_linked_pr "${issue_num}" \
@@ -4333,7 +4415,7 @@ STALL_EOF
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --remove-label 'ai:done' --remove-label 'ai:implementing' \
         --remove-label 'ai:planning' --remove-label 'ai:clarification' \
-        --remove-label 'ai:awaiting-approval' \
+        --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
         --add-label 'ai:closed' 2>/dev/null || true
       gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         -c "Closing: orchestrator stall recovery. Issue was stuck in '${phase}' for ${stall_minutes} minutes after $((recovery_count + 1)) recovery attempt(s). Re-issuing with additional guidance." 2>/dev/null || true
@@ -5814,6 +5896,36 @@ STALL_EOF
         took_action="true"
         ;;
       close_and_reissue)
+        # Belt-and-braces ancestor-chain no-op cap. If the
+        # "Re-issued from #N" chain already contains
+        # MAX_IMPL_NOOP_REISSUES consecutive no-op ancestors, stop
+        # spawning standalone re-issues and let the wave-completion
+        # judge (or operator) decide — the work described is almost
+        # certainly already on the integration branch.  Fails open:
+        # on any API error count_noop_ancestors returns 0 and we
+        # fall through to the legacy close+re-issue flow.
+        local standalone_anc_noop_count
+        standalone_anc_noop_count="$(count_noop_ancestors "${issue_num}" "${MAX_IMPL_NOOP_REISSUES:-2}")"
+        [[ "${standalone_anc_noop_count}" =~ ^[0-9]+$ ]] || standalone_anc_noop_count=0
+        if [ "${standalone_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES:-2}" ]; then
+          echo "  [standalone-stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2}). Closing without re-issue — judge will verify."
+          ensure_label_exists "ai:closed"
+          close_linked_pr "${issue_num}" "Closed by standalone stall recovery — ancestor-chain no-op cap reached (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2})."
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+            --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
+            --add-label 'ai:closed' 2>/dev/null || true
+          gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+            -c "Closing: standalone stall recovery detected ${standalone_anc_noop_count} consecutive no-op ancestor(s) in the Re-issued from chain (cap ${MAX_IMPL_NOOP_REISSUES:-2}). The code described likely already exists on the integration branch; the wave-completion judge will verify." 2>/dev/null || true
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: ancestor-chain no-op cap hit for issue #${issue_num} (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2}). Closed — judge will verify." "WARNING"
+          took_action="true"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          # Skip the rest of this iteration's close_and_reissue
+          # logic (which would spawn a replacement issue).  The
+          # outer "took_action && action != close_and_reissue"
+          # state-write block is already skipped for close_and_reissue.
+          continue
+        fi
+
         local orig_title
         local orig_body
         local new_body
@@ -8757,21 +8869,35 @@ ${RB_FIX_DESC}
       # The current failure is itself a no-op, so the observed count
       # includes this cycle even though we haven't bumped yet.
       OBSERVED_NOOP_COUNT=$((NOOP_COUNT + 1))
+      # Belt-and-braces: also walk the "Re-issued from #N" ancestor
+      # chain on GitHub. This catches the failure mode where the
+      # state-based counter is stale — e.g. the tracking-issue state
+      # comment was truncated, or the wave iterator never refreshed
+      # this task.  That exact failure caused tracking issue #1292 to
+      # spawn 30+ duplicate sub-issues for local_id
+      # validation-render-self-heal in ~5 hours.  Fails open: on any
+      # API error count_noop_ancestors echoes 0 and this guard is a
+      # no-op relative to the state-based cap below.
+      ANCESTOR_NOOP_COUNT="$(count_noop_ancestors "${if_issue}" "${MAX_IMPL_NOOP_REISSUES}")"
+      [[ "${ANCESTOR_NOOP_COUNT}" =~ ^[0-9]+$ ]] || ANCESTOR_NOOP_COUNT=0
       # Cap semantics: MAX_IMPL_NOOP_REISSUES controls how many re-issues
-      # are allowed after prior no-op failures.
-      if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
-        echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
+      # are allowed after prior no-op failures. Either signal trips it.
+      if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ] || [ "${ANCESTOR_NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+        echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (state=${OBSERVED_NOOP_COUNT}, ancestors=${ANCESTOR_NOOP_COUNT}, cap=${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
         bump_impl_noop_count "${IF_LOCAL_ID}"
         gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:done' --remove-label 'ai:implementing' \
+          --remove-label 'ai:planning' --remove-label 'ai:clarification' \
+          --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
           --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
         gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-          -c "Closing: implementation produced no changes ${OBSERVED_NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
-        tg_notify "Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${OBSERVED_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
+          -c "Closing: implementation produced no changes (state-counter=${OBSERVED_NOOP_COUNT}, ancestor-chain=${ANCESTOR_NOOP_COUNT}, cap=${MAX_IMPL_NOOP_REISSUES}). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
+        tg_notify "Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (state=${OBSERVED_NOOP_COUNT}, ancestors=${ANCESTOR_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
         IMPL_FAILED_STATE_CHANGED=true
         continue
       fi
 
-      echo "  Issue #${if_issue} has implementation-failed (no-op ${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
+      echo "  Issue #${if_issue} has implementation-failed (no-op state=${OBSERVED_NOOP_COUNT}, ancestors=${ANCESTOR_NOOP_COUNT}, cap=${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
 
       # Increment no-op counter before re-issuing
       bump_impl_noop_count "${IF_LOCAL_ID}"
