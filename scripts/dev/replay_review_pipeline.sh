@@ -101,10 +101,18 @@ for required in \
 	fi
 done
 
+if [ ! -d "${workspace_dir}" ]; then
+	echo "error: workspace dir does not exist: ${workspace_dir}" >&2
+	exit 2
+fi
+
 if ! git -C "${workspace_dir}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 	echo "warning: workspace is not a git repository: ${workspace_dir}" >&2
 	echo "warning: ledger/path anchoring may be incomplete in replay output" >&2
 fi
+
+# Switch to the workspace directory so git operations resolve correctly.
+cd "${workspace_dir}"
 
 export PYTHONDONTWRITEBYTECODE=1
 export RUNTIME_DIR="${runtime_dir}"
