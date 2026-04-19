@@ -1504,11 +1504,44 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Commit-time touched-file detection now derives from:
-          #   - git diff --name-only HEAD (tracked paths changed vs HEAD)
-          #   - git diff --cached --diff-filter=A --name-only HEAD (staged additions)
-          #   - git ls-files --others --exclude-standard (untracked paths)
-          # in the "Commit changes" step below.
+          # On the workflow source repo, snapshot the working-tree state before
+          # the editor runs.  The "Commit changes" step below uses this snapshot
+          # to stage ONLY files the editor actually wrote to (computed by
+          # hashing each file pre/post plus executable-bit changes), instead of
+          # relying on hardcoded
+          # ':!scripts/<helper>' pathspec excludes that cannot unstage files
+          # already in the index.  This lets any script — including former
+          # "canonical helpers" like review_apply_fixes.sh — be legitimately
+          # modified, while still blocking files the editor never touched from
+          # riding along in the commit.
+          # Consumer repos use per-file exclusions from scripts/.gitignore
+          # so consumer-owned scripts (e.g. scripts/security/*.js) are staged.
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+            PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
+            : > "${PRE_EDITOR_STATE_FILE}"
+            PRE_EDITOR_DIFF_BASELINE_FILE="${RUNTIME_DIR}/pre_editor_head_diff_paths.txt"
+            git diff --name-only HEAD | sort -u > "${PRE_EDITOR_DIFF_BASELINE_FILE}" || true
+            # `sort -zu` dedupes: in an active merge state, `git ls-files -z`
+            # emits conflicted paths once per index stage (1/2/3).  The
+            # autofix step should never run in merge state, but the guard is
+            # cheap and makes the snapshot reusable from the resolver step.
+            while IFS= read -r -d '' snap_path; do
+              [ -f "${snap_path}" ] || continue
+              snap_exec=0
+              [ -x "${snap_path}" ] && snap_exec=1
+              printf 'T\t%s\t%s\t%s\n' \
+                "$(git hash-object -- "${snap_path}")" \
+                "${snap_exec}" \
+                "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
+            done < <(git ls-files -z | sort -zu)
+            while IFS= read -r snap_path; do
+              [ -n "${snap_path}" ] && \
+                printf 'U\t%s\n' "${snap_path}" >> "${PRE_EDITOR_STATE_FILE}"
+            done < <(git ls-files --others --exclude-standard)
+            echo "PRE_EDITOR_STATE_FILE=${PRE_EDITOR_STATE_FILE}" >> "$GITHUB_ENV"
+            echo "PRE_EDITOR_DIFF_BASELINE_FILE=${PRE_EDITOR_DIFF_BASELINE_FILE}" >> "$GITHUB_ENV"
+            echo "Pre-editor snapshot captured: $(wc -l < "${PRE_EDITOR_STATE_FILE}") entries"
+          fi
 
           bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"
       - name: Log token usage and Serena stats
@@ -1618,14 +1651,19 @@ jobs:
           # the staging logic below reconciles against PRE_EDITOR_STATE_FILE
           # and will only stage paths the editor actually touched, so a
           # blanket rm here would delete the editor's legitimate new files
-          # before that reconciliation runs (observed in run 24610492414 on
-          # PR #1330: new workflow-templates/validation-harness/_shared/*.j2
-          # files were deleted here, producing "Editor claimed changes but
-          # no commit was produced").
-          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            NEW_FILES_BEFORE_COMMIT_FILE="$(mktemp)"
-            git ls-files --others --exclude-standard -z > "${NEW_FILES_BEFORE_COMMIT_FILE}"
-            if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
+          # before that reconciliation runs (observed in PR #1330 where
+          # newly-created template files were deleted here, producing
+          # "Editor claimed changes but no commit was produced").
+          NEW_FILES_BEFORE_COMMIT_FILE="$(mktemp)"
+          git ls-files --others --exclude-standard -z > "${NEW_FILES_BEFORE_COMMIT_FILE}"
+          if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+              echo "Preserving newly created files in workflow source repo:"
+              while IFS= read -r -d '' created_file; do
+                [ -n "${created_file}" ] || continue
+                echo "- ${created_file}"
+              done < "${NEW_FILES_BEFORE_COMMIT_FILE}"
+            else
               echo "Removing newly created files before commit (editor may not create new files):"
               while IFS= read -r -d '' created_file; do
                 [ -n "${created_file}" ] || continue
@@ -1643,8 +1681,8 @@ jobs:
                 fi
               done < "${NEW_FILES_BEFORE_COMMIT_FILE}"
             fi
-            rm -f "${NEW_FILES_BEFORE_COMMIT_FILE}"
           fi
+          rm -f "${NEW_FILES_BEFORE_COMMIT_FILE}"
 
           if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && [ -n "$(git status --porcelain .github/workflows)" ]; then
             echo "Workflow edits are not allowed; discarding .github/workflows changes."
@@ -1659,7 +1697,7 @@ jobs:
           # conflict resolver step (codex exec needs Serena MCP + model catalog)
           # and for later notification steps (Telegram, labeling).
           # They are cleaned up in the final "Cleanup temporary artifacts" step.
-          if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
           fi
@@ -1702,9 +1740,72 @@ jobs:
             # with content the editor never touched.
             CODEX_TOUCHED_FILE="${RUNTIME_DIR}/codex_touched_autofix.txt"
             : > "${CODEX_TOUCHED_FILE}"
-            git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
-            git diff --cached --diff-filter=A --name-only HEAD >> "${CODEX_TOUCHED_FILE}" 2>/dev/null || true
-            git ls-files --others --exclude-standard -- ':!node_modules' >> "${CODEX_TOUCHED_FILE}" || true
+            if [ -f "${PRE_EDITOR_STATE_FILE:-/nonexistent}" ]; then
+              PRE_UNTRACKED_LIST="$(mktemp)"
+              POST_UNTRACKED_LIST="$(mktemp)"
+              while IFS=$'\t' read -r diff_kind diff_a diff_b diff_c; do
+                case "${diff_kind}" in
+                  T)
+                    old_sha="${diff_a}"
+                    old_exec="${diff_b}"
+                    diff_path="${diff_c}"
+                    [ -z "${diff_path}" ] && continue
+                    if [ ! -e "${diff_path}" ]; then
+                      printf '%s\n' "${diff_path}" >> "${CODEX_TOUCHED_FILE}"
+                      continue
+                    fi
+                    new_sha="$(git hash-object -- "${diff_path}" 2>/dev/null || true)"
+                    if [ -x "${diff_path}" ]; then
+                      new_exec=1
+                    else
+                      new_exec=0
+                    fi
+                    if { [ -n "${new_sha}" ] && [ "${new_sha}" != "${old_sha}" ]; } || [ "${new_exec}" != "${old_exec}" ]; then
+                      printf '%s\n' "${diff_path}" >> "${CODEX_TOUCHED_FILE}"
+                    fi
+                    ;;
+                  U)
+                    printf '%s\n' "${diff_a}" >> "${PRE_UNTRACKED_LIST}"
+                    ;;
+                esac
+              done < "${PRE_EDITOR_STATE_FILE}"
+              git ls-files --others --exclude-standard > "${POST_UNTRACKED_LIST}" || true
+              # Also capture new files the editor already staged (status `A `):
+              # `git ls-files --others` excludes cached/staged paths, so without
+              # this second source, newly-created-but-staged files are invisible
+              # to the touched-file detector and get wiped by `git read-tree HEAD`
+              # below, producing a no-op commit and a false "Editor changes lost"
+              # alert (see run 24608448620 / PR #1330).
+              git diff --cached --diff-filter=A --name-only HEAD >> "${POST_UNTRACKED_LIST}" 2>/dev/null || true
+              sort -o "${PRE_UNTRACKED_LIST}" "${PRE_UNTRACKED_LIST}"
+              sort -o "${POST_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
+              comm -13 "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}" >> "${CODEX_TOUCHED_FILE}"
+              rm -f "${PRE_UNTRACKED_LIST}" "${POST_UNTRACKED_LIST}"
+              # Safety union: never silently drop a file that is genuinely
+              # modified vs HEAD on disk at commit time.  The SHA-based
+              # loop above can miss such files when the pre-editor snapshot
+              # SHA happens to equal the post-editor SHA (e.g. the file was
+              # already in its edited state at snapshot time, or the
+              # workflow-support overlay perturbed pre-SHAs for unrelated
+              # files).  Missing a real edit surfaces as EDITOR_CHANGES_LOST
+              # even though the edit is on disk (see run 24604441953 where
+              # a script edit was modified but dropped).
+              # Exclude paths that were already dirty before the editor run
+              # (e.g. support-script overlay mode-bit flips) so this union
+              # cannot stage workflow bootstrap side-effects as editor output.
+              if [ -f "${PRE_EDITOR_DIFF_BASELINE_FILE:-/nonexistent}" ]; then
+                CURRENT_DIFF_LIST="$(mktemp "${RUNTIME_DIR}/current_diff.XXXXXX" 2>/dev/null || echo "${RUNTIME_DIR}/current_diff.$$")"
+                git diff --name-only HEAD | sort -u > "${CURRENT_DIFF_LIST}" || true
+                comm -13 "${PRE_EDITOR_DIFF_BASELINE_FILE}" "${CURRENT_DIFF_LIST}" >> "${CODEX_TOUCHED_FILE}" || true
+                rm -f "${CURRENT_DIFF_LIST}"
+              else
+                git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
+              fi
+            else
+              echo "::warning::pre-editor snapshot missing; falling back to git diff HEAD."
+              git diff --name-only HEAD >> "${CODEX_TOUCHED_FILE}" || true
+              git ls-files --others --exclude-standard >> "${CODEX_TOUCHED_FILE}" || true
+            fi
             sort -u -o "${CODEX_TOUCHED_FILE}" "${CODEX_TOUCHED_FILE}"
             touched_count="$(wc -l < "${CODEX_TOUCHED_FILE}" | tr -d '[:space:]')"
             echo "Editor-touched files (${touched_count}):"
@@ -1752,8 +1853,8 @@ jobs:
           # threw away reviewer+editor work on what is usually a recoverable
           # condition.
           PROTECTED_LEAKED=false
-          if printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
-            echo "::warning::.github/prompts or .github/scripts was staged; unstaging protected paths and continuing."
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
+            echo "::warning::.github/prompts or .github/scripts was staged in consumer repo; unstaging protected paths and continuing."
             git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
             PROTECTED_LEAKED=true
           fi
@@ -2880,7 +2981,7 @@ jobs:
           # scripts/label_helpers.sh.  prompts/ and .serena/ are excluded
           # from git add via ':!.serena', ':!prompts' patterns; fetched
           # scripts are excluded via the bootstrap-generated scripts/.gitignore.
-          if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
             rm -f ./pre_assembled_static.txt
             rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
           fi
@@ -3074,7 +3175,7 @@ jobs:
               while IFS= read -r touched_path; do
                 [ -z "${touched_path}" ] && continue
                 case "${touched_path}" in
-                  node_modules|node_modules/*) continue ;;
+                  node_modules|node_modules/*|*/node_modules|*/node_modules/*) continue ;;
                 esac
                 if [ -e "${touched_path}" ]; then
                   git add -- "${touched_path}" 2>/dev/null || true
@@ -3107,8 +3208,8 @@ jobs:
             # hard `exit 1` here silently threw away reviewer+editor work on
             # what is usually a recoverable condition.
             PROTECTED_LEAKED=false
-            if printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
-              echo "::warning::.github/prompts or .github/scripts was staged; unstaging protected paths and continuing."
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ] && printf '%s\n' "${STAGED_FILES}" | grep -Eq '^\.github/(prompts|scripts)/'; then
+              echo "::warning::.github/prompts or .github/scripts was staged in consumer repo; unstaging protected paths and continuing."
               git reset -q HEAD -- '.github/prompts' '.github/scripts' 2>/dev/null || true
               PROTECTED_LEAKED=true
             fi
@@ -4171,7 +4272,7 @@ jobs:
           # Remove workflow-fetched support files that were preserved for
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
-          if [[ "${{ github.repository }}" != *"/coding-workflows" ]]; then
+          if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
             rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/build_issue_consensus.py
             rm -rf .serena prompts
             rm -f .github/ai/orchestrate_schema.v1.json
