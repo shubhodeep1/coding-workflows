@@ -102,6 +102,9 @@ class LintContext:
 		if not path.exists() or not path.is_file():
 			self._line_cache[path] = None
 			return None
+		if path.stat().st_size > 1_000_000:
+			self._line_cache[path] = None
+			return None
 		self._line_cache[path] = path.read_text(encoding="utf-8").splitlines()
 		return self._line_cache[path]
 
@@ -269,9 +272,11 @@ def _unwrap_canary_assignment(raw: str) -> str:
 def _parse_canary_array(lines: list[str], start_idx: int) -> tuple[int, list[str]]:
 	start_line = start_idx + 1
 	line = lines[start_idx]
-	oneline_match = re.match(r"^\s*CANARY_TOOLS\s*=\s*\((?P<body>.*)\)\s*$", line)
+	# Strip inline comments before matching
+	stripped_line = _strip_inline_comment(line)
+	oneline_match = re.match(r"^\s*CANARY_TOOLS\s*=\s*\((?P<body>.*)\)\s*$", stripped_line)
 	if oneline_match:
-		body = _strip_inline_comment(oneline_match.group("body")).strip()
+		body = oneline_match.group("body").strip()
 		if not body:
 			return start_line, []
 		try:
@@ -283,9 +288,11 @@ def _parse_canary_array(lines: list[str], start_idx: int) -> tuple[int, list[str
 	idx = start_idx + 1
 	while idx < len(lines):
 		current = lines[idx]
-		if re.match(r"^\s*\)\s*$", current):
+		# Strip inline comments before checking for closing parenthesis
+		stripped_current = _strip_inline_comment(current).strip()
+		if stripped_current == ")":
 			break
-		fragment = _strip_inline_comment(current).strip()
+		fragment = stripped_current  # Already stripped and trimmed
 		if fragment:
 			try:
 				tools.extend(shlex.split(fragment))
