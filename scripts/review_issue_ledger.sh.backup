@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-export LC_ALL=C
 review_log()
 {
 	printf 'stage=ledger %s\n' "$*" >&2
@@ -69,7 +68,7 @@ read_anchor_context()
 		printf '%s\n' ""
 		return
 	fi
-	if [[ "${file_path}" == /* ]] || [[ "${file_path}" =~ (^|/)\.\.(/|$) ]] || [[ ! "${file_path}" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+	if [[ "${file_path}" == /* ]] || [[ "${file_path}" == *".."* ]] || [[ ! "${file_path}" =~ ^[A-Za-z0-9_./-]+$ ]]; then
 		printf '%s\n' ""
 		return
 	fi
@@ -578,14 +577,18 @@ else
 	ITERATION="${ITERATION_RAW}"
 fi
 
-REVIEW_ISSUES_FILE="${REVIEW_ISSUES_FILE:-${RUNTIME_DIR}/review_issues.txt}"
 REVIEW_LEDGER_ENABLED="${REVIEW_LEDGER_ENABLED:-1}"
 REVIEW_LEDGER_PERSIST_LIMIT_RAW="${REVIEW_LEDGER_PERSIST_LIMIT:-2}"
-if [[ "${REVIEW_LEDGER_PERSIST_LIMIT_RAW}" =~ ^[0-9]+$ ]] && [ "${REVIEW_LEDGER_PERSIST_LIMIT_RAW}" -ge 1 ]; then
+if [[ "${REVIEW_LEDGER_PERSIST_LIMIT_RAW}" =~ ^[0-9]+$ ]]; then
 	REVIEW_LEDGER_PERSIST_LIMIT="${REVIEW_LEDGER_PERSIST_LIMIT_RAW}"
 else
 	REVIEW_LEDGER_PERSIST_LIMIT=2
 fi
+if [ "${REVIEW_LEDGER_PERSIST_LIMIT}" -lt 1 ]; then
+	REVIEW_LEDGER_PERSIST_LIMIT=1
+fi
+
+REVIEW_ISSUES_FILE="${REVIEW_ISSUES_FILE:-${RUNTIME_DIR}/review_issues.txt}"
 LEDGER_STATUS_FILE="${LEDGER_STATUS_FILE:-${RUNTIME_DIR}/ledger_status.txt}"
 FLOOR_TAGS_FILE="${FLOOR_TAGS_FILE:-${RUNTIME_DIR}/floor_tags.txt}"
 REVIEW_LEDGER_PATH="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger.txt}"

@@ -85,13 +85,12 @@ if [ -z "${AUTOFIX_ITERATION}" ]; then
       break
     fi
     msg="$(git log -1 --format='%s' "HEAD~${autofix_count}" 2>/dev/null || true)"
+    if echo "${msg}" | grep -q '^\[ai-autofix\]'; then
+    msg="$(git log -1 --format='%s' "HEAD~${autofix_count}" 2>/dev/null || true)"
     if [ -z "${msg}" ]; then
       break
     fi
     if echo "${msg}" | grep -q '^\[ai-autofix\]'; then
-      autofix_count=$((autofix_count + 1))
-    else
-      break
     fi
   done
   AUTOFIX_ITERATION="$((autofix_count + 1))"
