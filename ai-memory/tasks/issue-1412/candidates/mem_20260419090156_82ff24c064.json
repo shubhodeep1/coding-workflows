@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `c739548b33a7682aa55f950c10d635b70fb2e777`\n- `checkout ref`: `orchestrator/project-1292`\n- `symbolic branch`: `orchestrator/project-1292`\n- Integration metadata branch: `orchestrator/project-1292` (mismatch: `false`)\n\nClarification mapping:\n- No explicit `Q<ID>` clarification questions are present in the thread.\n- Interpreted answer `/answer [auto-answered-by-orchestrator]` means clarify deemed the issue implementable without additional human inputs.\n\nFactual conflict to note before implementation:\n- The current branch already contains the requested render-phase recovery flow and related tests (deterministic rerender + relint + `render` self-heal phase routing + prompt guardrails).  \n- Implementation should be gap-audit-first and make changes only where behavior still diverges from acceptance criteria.\n\n1. Files likely to change\n- `scripts/validate_process.sh` (only if recovery/control-flow gaps are found)\n- `scripts/self_heal_validation.sh` (only if render-phase metadata/guardrails are incomplete)\n- `prompts/mode-validate-self-heal.txt` (only if instructions are missing/ambiguous)\n- `tests/test_validate_process_render_recovery.py` (add or adjust integration assertions if missing)\n- `tests/test_validate_process_template_mode.py` (contract assertions for template-mode routing, if needed)\n- `README.md` and `agents.md` only if behavior/env-var/failure-mode docs changed\n\n2. Functions/modules to implement or adjust\n- `attempt_render_recovery_after_preflight_failure` in `scripts/validate_process.sh` as the representative pattern:\n  - enforce deterministic template rerender in template mode\n  - rerun preflight checks after rerender\n  - return fail-open signal path when rerender/relint still fails\n- Preflight failure handler in `scripts/validate_process.sh`:\n  - keep `render` vs `preflight` self-heal phase selection correct\n  - ensure no freehand harness-edit path is introduced in render recovery\n- `attempt_self_heal_and_reexec` phase handling:\n  - preserve accepted phase set including `render`\n  - preserve existing allow-list and hard-fail/fail-open semantics\n- `prompts/mode-validate-self-heal.txt`:\n  - keep prompt self-heal scope limited to the four validation prompt files\n  - keep renderer-owned harness recovery guidance explicit\n\n3. Data structures affected\n- `render_recovery_exit` control contract in preflight path (`0` recovered, non-zero terminal path; `2` routes to render-phase self-heal logic)\n- `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED` flag and preflight log markers\n- Self-heal metadata field `SELF_HEAL_FAILURE_PHASE=render` and persisted ledger `failure_phase`\n- Prompt allow-list target set (four validation prompts only)\n\n4. API/interface changes\n- No external API/interface changes expected.\n- No MongoDB collections/contracts/indexes are involved.\n- Backward compatibility requirement: preserve all existing env vars and behavior in non-render phases.\n\n5. Potential risks or edge cases\n- Accidentally re-enabling freehand harness edits during template-mode render failures.\n- Misrouting failures to `preflight` instead of `render` (or vice versa), causing wrong self-heal behavior.\n- Regressing non-template (`freehand`) flow while adjusting template-mode logic.\n- Breaking fail-open behavior when renderer assets are missing or rerender fails.\n- Weakening self-heal safety constraints (allow-list/additive-only/no schema drift).\n\n6. Testing considerations\n- Keep/add integration-style tests for:\n  - rerender success then relint success continues pipeline\n  - rerender failure triggers terminal path and `render` self-heal phase\n  - rerender success but relint failure triggers terminal path and `render` self-heal phase\n  - non-template preflight failure preserves legacy/non-render path\n  - self-heal prompt still forbids harness edits and keeps prompt-only scope\n- Run targeted tests:\n  - `pytest -q tests/test_validate_process_render_recovery.py`\n  - `pytest -q tests/test_validate_process_template_mode.py`\n- If docs changed, verify wording aligns with runtime behavior (especially render-phase fail-open and scope limits).\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "95b15b5a6c3b97fe39f54bff9b7fbaa7d7ca9270a065b70c96b1c1a53620e673",
+  "lineage": {
+    "issue_number": 1412,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24625355223",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24625355223",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1412"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419090156_82ff24c064",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1412,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24625355223"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1412",
+  "timestamps": {
+    "created_at": "2026-04-19T09:01:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
