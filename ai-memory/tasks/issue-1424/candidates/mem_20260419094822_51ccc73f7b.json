@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context:\n- `HEAD`: `0e49b5e37c7b8c5f702b3d14caa23cdab3947010`\n- Checked-out branch: `orchestrator/project-1292`\n- Integration metadata branch: `orchestrator/project-1292`\n- Integration mismatch: `false`\n\nClarification mapping:\n- No Q<ID> questions were posted in this issue thread.\n- `/answer [auto-answered-by-orchestrator]` is interpretable as \u201cproceed with the issue-defined scope without extra constraints.\u201d\n\nConflict detection (important):\n- The requested render-phase behavior is already present in [scripts/validate_process.sh](scripts/validate_process.sh), [scripts/self_heal_validation.sh](scripts/self_heal_validation.sh), [prompts/mode-validate-self-heal.txt](prompts/mode-validate-self-heal.txt), and [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py).\n- Mirror drift exists: `.codex-workflow-src/scripts/validate_process.sh` appears older and lacks the render-recovery path now in root scripts. Plan should include parity verification/sync only if `.codex-workflow-src` is in-scope for this issue.\n\nImplementation plan:\n\n1. Files likely to change\n- [scripts/validate_process.sh](scripts/validate_process.sh) (only if any gap is found in render recovery entrypoint/call site).\n- [scripts/self_heal_validation.sh](scripts/self_heal_validation.sh) (only if render phase tag handling/guardrail logging needs tightening).\n- [prompts/mode-validate-self-heal.txt](prompts/mode-validate-self-heal.txt) (only if constraints need wording alignment).\n- [tests/test_validate_process_render_recovery.py](tests/test_validate_process_render_recovery.py) and [tests/test_validate_process_template_mode.py](tests/test_validate_process_template_mode.py) for integration/contract coverage.\n- Optional parity target if required by release flow: `.codex-workflow-src` equivalents of the above.\n\n2. Functions/modules to implement or verify\n- `attempt_render_recovery_after_preflight_failure` in `validate_process.sh`.\n- Preflight Phase 2 call path selecting `render` vs `preflight` self-heal phase in `validate_process.sh`.\n- `attempt_self_heal_and_reexec` phase normalization (must include `render`).\n- Self-heal safety gates in `self_heal_validation.sh` (allow-list and additive-only diff enforcement).\n- Prompt guidance/classification for `failing_phase=render` in `mode-validate-self-heal.txt`.\n\n3. Data structures affected\n- Preflight runtime state vars: `PRE_FLIGHT_*` (`PRE_FLIGHT_STATUS`, `PRE_FLIGHT_FAILURE_CLASS`, `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`, `PRE_FLIGHT_APPEND_LOG`).\n- Self-heal phase tag enum carried via `SELF_HEAL_FAILURE_PHASE` (includes `render`).\n- Self-heal decision/ledger JSON shape stays unchanged (`target_prompt`, `failure_class`, `confidence`, `rationale`, `patch`).\n\n4. API/interface changes\n- No external API/CLI contract changes.\n- Internal behavioral change (already present in root): template-mode lint preflight failure attempts deterministic rerender + relint before terminal/self-heal path.\n- Guardrail contract remains: self-heal patches can target only validation prompt files and must be additive-only.\n\n5. Risks/edge cases\n- Regressing non-template path (`HARNESS_MODE != template_generate`) must keep legacy `preflight` self-heal routing.\n- Recovery loop risk must remain bounded by single rerender attempt (`PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`).\n- Fail-open behavior on renderer failure/re-lint failure must still reach controlled terminal path without freehand harness edits.\n- If `.codex-workflow-src` is required at release time, unsynced mirror can reintroduce old behavior despite root correctness.\n\n6. Testing considerations\n- Run targeted integration tests:\n  - `pytest -q tests/test_validate_process_render_recovery.py`\n  - `pytest -q tests/test_validate_process_template_mode.py`\n- Keep existing guardrail behavior covered (no relaxations of allow-list/additive-only checks).\n- If mirror sync is in scope, run the same assertions against mirrored artifacts or add parity checks.\n\nExecution checklist:\n- [ ] Confirm whether `.codex-workflow-src` parity is in-scope for this issue.\n- [ ] Gap-audit root files against acceptance criteria (likely no-op).\n- [ ] Apply only minimal delta for any identified gaps.\n- [ ] Validate with targeted tests above.\n- [ ] If mirror parity is required, sync corresponding `.codex-workflow-src` files and re-run tests.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "dc4f2c3d848f8816b1f208b7c9bf733e3078a78b5619b271319767c77d4ac2d0",
+  "lineage": {
+    "issue_number": 1424,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24626075392",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24626075392",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1424"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419094822_51ccc73f7b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1424,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24626075392"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1424",
+  "timestamps": {
+    "created_at": "2026-04-19T09:48:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
