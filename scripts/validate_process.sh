@@ -222,6 +222,15 @@ attempt_self_heal_and_reexec()
 {
   local phase="${1:-unknown}"
 
+  case "${phase}" in
+    discover|generate|preflight|render|canary|diagnose|runtime|unknown)
+      ;;
+    *)
+      echo "::warning::self-heal invoked with unsupported phase '${phase}'; normalizing to 'unknown'." >&2
+      phase="unknown"
+      ;;
+  esac
+
   if [ "${MAX_SELF_HEAL_ATTEMPTS:-0}" -le 0 ]; then
     return 0
   fi
@@ -1140,7 +1149,6 @@ attempt_render_recovery_after_preflight_failure()
 		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
 		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
 	} >> "${PRE_FLIGHT_LOG_FILE}"
-
 	if run_template_validation_harness_renderer; then
 		renderer_exit=0
 	else
