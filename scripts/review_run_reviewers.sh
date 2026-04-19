@@ -13,6 +13,16 @@ fi
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+# Source Telegram helpers so the cross-pollination summariser can emit a
+# single aggregated admin alert when one or more pass-1 summaries fall back
+# to head-truncation (OpenRouter HTTP error, timeout, empty content).
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
+fi
+if ! command -v tg_send_msg >/dev/null 2>&1; then
+  tg_send_msg() { :; }
+fi
 
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty; using placeholder context for this run."
@@ -154,6 +164,160 @@ EOF
 mkdir -p "${PREVIOUS_REVIEWS_DIR}"
 
 run_cache_probe || true
+
+# ── Pipelined pass-1 cross-pollination summariser ─────────────────────────
+# Each pass-1 reviewer's output is summarised in-parallel with the remaining
+# pass-1 reviewers by a background OpenRouter call to a cheap summariser
+# model (default: openai/gpt-5.4-mini). This removes the summarisation wall
+# time from the critical path between pass-1 completion and pass-2 start.
+#
+# The summariser is best-effort: on any failure the source file is
+# head-truncated into a fallback summary and an aggregated Telegram alert
+# is sent at the end of pass-1. pass-2 ALWAYS receives a usable summary,
+# never a partial/missing one.
+# ─────────────────────────────────────────────────────────────────────────
+
+ENABLE_REVIEWER_XPOLL_SUMMARISER=true
+case "$(printf '%s' "${ENABLE_REVIEWER_XPOLL_SUMMARISER:-true}" | tr '[:upper:]' '[:lower:]')" in
+  0|false|no|off) ENABLE_REVIEWER_XPOLL_SUMMARISER=false ;;
+esac
+XPOLL_SUMMARISER_MODEL="${XPOLL_SUMMARISER_MODEL:-openai/gpt-5.4-mini}"
+XPOLL_SUMMARISER_REASONING="${XPOLL_SUMMARISER_REASONING:-xhigh}"
+XPOLL_SUMMARISER_LINES_PER_REVIEWER="${XPOLL_SUMMARISER_LINES_PER_REVIEWER:-160}"
+XPOLL_SUMMARISER_CALL_TIMEOUT_SECS="${XPOLL_SUMMARISER_CALL_TIMEOUT_SECS:-180}"
+XPOLL_SUMMARISER_WAIT_TIMEOUT_SECS="${XPOLL_SUMMARISER_WAIT_TIMEOUT_SECS:-300}"
+XPOLL_SUMMARISER_MAX_INPUT_LINES="${XPOLL_SUMMARISER_MAX_INPUT_LINES:-3000}"
+XPOLL_SUMMARISER_FALLBACK_LINES="${XPOLL_SUMMARISER_FALLBACK_LINES:-200}"
+
+# Tracking state: one .done sentinel per spawned summariser, one shared TSV
+# of failures appended to by the python helper. Both are created fresh on
+# every run so iteration N never reads state from iteration N-1.
+XPOLL_DONE_DIR="${PREVIOUS_REVIEWS_DIR}/xpoll_done"
+XPOLL_FAILURE_REGISTRY="${PREVIOUS_REVIEWS_DIR}/xpoll_failures.tsv"
+XPOLL_EXPECTED_DONES=0
+rm -rf "${XPOLL_DONE_DIR}" 2>/dev/null || true
+mkdir -p "${XPOLL_DONE_DIR}"
+: > "${XPOLL_FAILURE_REGISTRY}"
+
+# Resolve the summariser script once up front so run_reviewer() can fall
+# back gracefully if it is missing (e.g. consumer repo pinned to an older
+# script_refs channel that predates this helper).
+XPOLL_SUMMARISER_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/summarize_pass1_output.py"
+if [ "${ENABLE_REVIEWER_XPOLL_SUMMARISER}" = "true" ] && [ ! -f "${XPOLL_SUMMARISER_SCRIPT}" ]; then
+  echo "WARNING: xpoll summariser script not found at ${XPOLL_SUMMARISER_SCRIPT}; falling back to head-truncation for cross-pollination." >&2
+  ENABLE_REVIEWER_XPOLL_SUMMARISER=false
+fi
+
+# Spawn a background summariser call for a completed pass-1 reviewer. No-op
+# unless output_prefix == "pass1" and the feature flag is on. Returns
+# immediately; the caller continues the reviewer loop.
+_maybe_spawn_pass1_summariser() {
+  local model="$1"
+  local safe_name="$2"
+  local output_prefix="$3"
+  local output_file="$4"
+  if [ "${output_prefix}" != "pass1" ]; then
+    return 0
+  fi
+  if [ "${ENABLE_REVIEWER_XPOLL_SUMMARISER}" != "true" ]; then
+    return 0
+  fi
+  local summary_file="${PREVIOUS_REVIEWS_DIR}/summary_${safe_name}.txt"
+  local done_sentinel="${XPOLL_DONE_DIR}/${safe_name}.done"
+  local log_file="${PREVIOUS_REVIEWS_DIR}/summary_${safe_name}.log"
+  XPOLL_EXPECTED_DONES=$((XPOLL_EXPECTED_DONES + 1))
+  (
+    PYTHONDONTWRITEBYTECODE=1 python3 "${XPOLL_SUMMARISER_SCRIPT}" \
+      --input "${output_file}" \
+      --output "${summary_file}" \
+      --done-sentinel "${done_sentinel}" \
+      --failure-registry "${XPOLL_FAILURE_REGISTRY}" \
+      --source-reviewer "${model}" \
+      --model "${XPOLL_SUMMARISER_MODEL}" \
+      --target-lines "${XPOLL_SUMMARISER_LINES_PER_REVIEWER}" \
+      --reasoning-effort "${XPOLL_SUMMARISER_REASONING}" \
+      --call-timeout-secs "${XPOLL_SUMMARISER_CALL_TIMEOUT_SECS}" \
+      --max-input-lines "${XPOLL_SUMMARISER_MAX_INPUT_LINES}" \
+      --fallback-lines "${XPOLL_SUMMARISER_FALLBACK_LINES}" \
+      >"${log_file}" 2>&1 || true
+    # Safety net: the python helper itself writes the sentinel, but if the
+    # interpreter crashes before argparse runs the waiter would hang. Touch
+    # a "crashed" sentinel unconditionally when the subshell exits.
+    if [ ! -f "${done_sentinel}" ]; then
+      printf 'crashed' > "${done_sentinel}" 2>/dev/null || true
+    fi
+  ) &
+  disown 2>/dev/null || true
+}
+
+# Block until every spawned summariser writes its .done sentinel, or the
+# wait timeout elapses. On timeout, missing reviewers get a head-truncated
+# fallback synthesised here (NOT by the python helper, which never ran to
+# completion) so pass-2 still has a usable cross-pollination input.
+wait_for_pass1_summaries() {
+  if [ "${ENABLE_REVIEWER_XPOLL_SUMMARISER}" != "true" ]; then
+    return 0
+  fi
+  if [ "${XPOLL_EXPECTED_DONES}" -eq 0 ]; then
+    return 0
+  fi
+  local deadline now present
+  deadline=$(( $(date +%s) + XPOLL_SUMMARISER_WAIT_TIMEOUT_SECS ))
+  while : ; do
+    present=$(find "${XPOLL_DONE_DIR}" -maxdepth 1 -type f -name '*.done' 2>/dev/null | wc -l)
+    if [ "${present}" -ge "${XPOLL_EXPECTED_DONES}" ]; then
+      echo "xpoll summariser: ${present}/${XPOLL_EXPECTED_DONES} sentinels present — proceeding to pass 2."
+      return 0
+    fi
+    now=$(date +%s)
+    if [ "${now}" -ge "${deadline}" ]; then
+      echo "::warning::xpoll summariser wait timeout (${XPOLL_SUMMARISER_WAIT_TIMEOUT_SECS}s) with ${present}/${XPOLL_EXPECTED_DONES} sentinels present; synthesising head-truncated fallbacks for missing summaries." >&2
+      _synthesise_missing_xpoll_fallbacks
+      return 0
+    fi
+    sleep 2
+  done
+}
+
+# For each pass1_<model>.txt file that did NOT produce a summary_<model>.txt
+# (either summariser timeout or a future unexpected state), write a
+# head-truncated fallback and record the timeout in the failure registry so
+# the aggregated TG alert surfaces it.
+_synthesise_missing_xpoll_fallbacks() {
+  local pass1_file safe_name summary_file
+  for pass1_file in "${PREVIOUS_REVIEWS_DIR}"/pass1_*.txt; do
+    [ -f "${pass1_file}" ] || continue
+    safe_name="$(basename "${pass1_file}" .txt | sed 's/^pass1_//')"
+    summary_file="${PREVIOUS_REVIEWS_DIR}/summary_${safe_name}.txt"
+    if [ -f "${summary_file}" ]; then
+      continue
+    fi
+    {
+      echo "=== FINDINGS FROM ${safe_name} (TRUNCATED FALLBACK — summariser wait timeout) ==="
+      head -n "${XPOLL_SUMMARISER_FALLBACK_LINES}" "${pass1_file}" 2>/dev/null || true
+      echo "=== END FINDINGS FROM ${safe_name} ==="
+    } > "${summary_file}"
+    printf '%s\t%s\n' "${safe_name}" "summariser wait timeout after ${XPOLL_SUMMARISER_WAIT_TIMEOUT_SECS}s" >> "${XPOLL_FAILURE_REGISTRY}" 2>/dev/null || true
+  done
+}
+
+# Emit a single aggregated Telegram alert summarising every pass-1 summariser
+# failure/fallback. Called once, after wait_for_pass1_summaries. The TG call
+# is a no-op if tg_helpers.sh was not sourced (see fallback at top of file).
+drain_summariser_failures_tg() {
+  if [ "${ENABLE_REVIEWER_XPOLL_SUMMARISER}" != "true" ]; then
+    return 0
+  fi
+  if [ ! -s "${XPOLL_FAILURE_REGISTRY}" ]; then
+    return 0
+  fi
+  local failure_count first_lines msg
+  failure_count=$(wc -l < "${XPOLL_FAILURE_REGISTRY}" 2>/dev/null || echo 0)
+  first_lines=$(head -n 10 "${XPOLL_FAILURE_REGISTRY}" 2>/dev/null | sed 's/\t/: /')
+  msg="xpoll summariser degraded on PR #${PR_NUMBER:-unknown} (${REPOSITORY:-unknown}): ${failure_count} reviewer(s) fell back to head-truncation. pass-2 still received a usable summary. Details:\n${first_lines}"
+  tg_send_msg "${msg}" "WARNING" || true
+  echo "::warning::xpoll summariser: ${failure_count} fallback(s) reported via Telegram alert." >&2
+}
 
 PROMPT_ARTIFACT_PATH_HINT="$(printf '%s\n' \
   'WORKING DIRECTORY + ARTIFACT PATH (MANDATORY)' \
@@ -904,6 +1068,10 @@ run_reviewer() {
       if [ -s "${tmp_output}" ]; then
         mv "${tmp_output}" "${output_file}"
         echo "success" > "${status_file}"
+        # Pipeline the cross-pollination summariser against this reviewer's
+        # output right now — while the remaining pass-1 reviewers continue
+        # executing — so pass-2 does not pay the summarisation wall time.
+        _maybe_spawn_pass1_summariser "${model}" "${safe_name}" "${output_prefix}" "${output_file}" || true
         echo "Reviewer ${model} succeeded on attempt ${attempt}." | tee -a "${log_file}"
         rm -f "${tmp_output}" "${tmp_stderr}"
         rm -rf "${reviewer_codex_home}" 2>/dev/null || true
@@ -1020,8 +1188,11 @@ run_reviewer_pass() {
 }
 
 # Helper: build a cross-pollination summary from pass 1 reviewer outputs.
-# Extracts all issues found across pass 1 reviewers into a compact summary
-# that pass 2 reviewers receive as additional context.
+# Prefers the LLM-generated summary_<model>.txt (compact findings ledger)
+# emitted by the pipelined summariser; falls back to a head-truncated view
+# of pass1_<model>.txt when the summariser is disabled or missing for a
+# given reviewer. The full pass-1 outputs remain on disk at the path hinted
+# in the header so pass-2 can consult them if needed.
 build_cross_pollination_summary() {
   local summary_file="${RUNTIME_DIR}/cross_pollination_summary.txt"
   {
@@ -1033,20 +1204,33 @@ build_cross_pollination_summary() {
     echo "- Discover additional issues that the preliminary pass may have missed"
     echo "- Provide your own independent assessment — do not blindly adopt pass 1 findings"
     echo ""
+    echo "Each reviewer's compact findings ledger appears below. The full pass-1"
+    echo "output for reviewer <model> is available on disk at:"
+    echo "  ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt"
+    echo "Read the full file only if a ledger entry is ambiguous or lacks detail."
+    echo ""
     local reviewer_count=0
     for pass1_file in "${PREVIOUS_REVIEWS_DIR}"/pass1_*.txt; do
       [ -f "${pass1_file}" ] || continue
-      local model_name
-      model_name="$(basename "${pass1_file}" .txt | sed 's/^pass1_//')"
+      local safe_name
+      safe_name="$(basename "${pass1_file}" .txt | sed 's/^pass1_//')"
       # Skip files that contain only failure messages
       if grep -q '^.*failed after retries' "${pass1_file}" 2>/dev/null; then
         continue
       fi
       reviewer_count=$((reviewer_count + 1))
-      echo "--- Findings from ${model_name} ---"
-      # Extract a compact version: keep File/Problem/ISSUE_CONFIDENCE lines
-      # and surrounding context, capped at 200 lines per reviewer
-      head -n 200 "${pass1_file}"
+      local ledger_file="${PREVIOUS_REVIEWS_DIR}/summary_${safe_name}.txt"
+      if [ -s "${ledger_file}" ]; then
+        # LLM-generated ledger already carries its own === sentinels.
+        cat "${ledger_file}"
+      else
+        # Fallback path: summariser disabled entirely OR a sentinel arrived
+        # without a usable summary file (race / disk error). Emit a clearly
+        # labelled head-truncated view so pass-2 still gets signal.
+        echo "=== FINDINGS FROM ${safe_name} (RAW HEAD-TRUNCATED FALLBACK) ==="
+        head -n "${XPOLL_SUMMARISER_FALLBACK_LINES:-200}" "${pass1_file}"
+        echo "=== END FINDINGS FROM ${safe_name} ==="
+      fi
       echo ""
     done
     if [ "${reviewer_count}" -eq 0 ]; then
@@ -1074,6 +1258,12 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     echo "PR_CLOSED=true" >> "$GITHUB_ENV"
     exit 0
   fi
+
+  # Block until every pipelined pass-1 summariser finishes (or timeout),
+  # then emit one aggregated Telegram alert if any fell back. Both helpers
+  # are no-ops when ENABLE_REVIEWER_XPOLL_SUMMARISER=false.
+  wait_for_pass1_summaries
+  drain_summariser_failures_tg || true
 
   # ── Build cross-pollination summary ──
   CROSS_POLLINATION_FILE="$(build_cross_pollination_summary)"
