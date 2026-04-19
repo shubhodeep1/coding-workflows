@@ -762,7 +762,7 @@ attempt_render_recovery_after_preflight_failure()
 
 	local render_recovery_classification_log="${RUNTIME_DIR}/validation_preflight.render_recovery.log"
 	if awk '
-		/^Render recovery: rerender completed; re-running pre-flight checks\.$/ { capture=1; next }
+		/^Render recovery: rerender completed; re-running pre-flight checks\\.$/ { capture=1; next }
 		capture { print }
 	' "${PRE_FLIGHT_LOG_FILE}" > "${render_recovery_classification_log}" 2>/dev/null \
 		&& [ -s "${render_recovery_classification_log}" ]; then
