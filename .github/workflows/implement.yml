@@ -1891,7 +1891,7 @@ jobs:
             [ -z "${parent_num}" ] && break
             [[ "${parent_num}" =~ ^[0-9]+$ ]] || break
             parent_has_noop="$(gh_retry gh api "repos/${REPO}/issues/${parent_num}/comments" --paginate \
-              --jq "[.[] | select(.body | contains(\"${noop_marker}\"))] | length" 2>/dev/null | awk 'BEGIN{s=0} {s+=$1} END{print s}')"
+              --jq "[.[] | select((.body // \"\") | ascii_downcase | contains(\"${noop_marker}\"))] | length" 2>/dev/null | awk 'BEGIN{s=0} /^[0-9]+$/ {s+=$1} END{print s}' || echo "")"
             [[ "${parent_has_noop}" =~ ^[0-9]+$ ]] || parent_has_noop=0
             if [ "${parent_has_noop}" -eq 0 ]; then
               break
@@ -1916,6 +1916,8 @@ jobs:
               2>/dev/null || true
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
               --remove-label 'ai:done' --remove-label 'ai:implementing' \
+              --remove-label 'ai:planning' --remove-label 'ai:clarification' \
+              --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
               --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || \
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
               --add-label 'ai:closed' 2>/dev/null || true

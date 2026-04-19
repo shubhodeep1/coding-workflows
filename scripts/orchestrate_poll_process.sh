@@ -3926,8 +3926,8 @@ count_noop_ancestors()
 		fi
 		[[ "${parent_num}" =~ ^[0-9]+$ ]] || break
 		parent_has_noop="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${parent_num}/comments" --paginate \
-			--jq "[.[] | select(.body | contains(\"${noop_marker}\"))] | length" 2>/dev/null \
-			| awk 'BEGIN{s=0} /^[0-9]+$/ {s+=$1} END{print s}')"
+			--jq "[.[] | select((.body // \"\") | ascii_downcase | contains(\"${noop_marker}\"))] | length" 2>/dev/null \
+			| awk 'BEGIN{s=0} /^[0-9]+$/ {s+=$1} END{print s}' || echo "")"
 		[[ "${parent_has_noop}" =~ ^[0-9]+$ ]] || parent_has_noop=0
 		if [ "${parent_has_noop}" -eq 0 ]; then
 			break
@@ -4393,7 +4393,7 @@ STALL_EOF
         gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
           --remove-label 'ai:done' --remove-label 'ai:implementing' \
           --remove-label 'ai:planning' --remove-label 'ai:clarification' \
-          --remove-label 'ai:awaiting-approval' \
+          --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
           --add-label 'ai:closed' 2>/dev/null || true
         gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
           -c "Closing: stall recovery detected ${stall_anc_noop_count} consecutive no-op ancestor(s) in the Re-issued from chain (cap ${MAX_IMPL_NOOP_REISSUES}). The code described likely already exists on the integration branch; the wave-completion judge will verify." 2>/dev/null || true
@@ -4415,7 +4415,7 @@ STALL_EOF
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --remove-label 'ai:done' --remove-label 'ai:implementing' \
         --remove-label 'ai:planning' --remove-label 'ai:clarification' \
-        --remove-label 'ai:awaiting-approval' \
+        --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
         --add-label 'ai:closed' 2>/dev/null || true
       gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         -c "Closing: orchestrator stall recovery. Issue was stuck in '${phase}' for ${stall_minutes} minutes after $((recovery_count + 1)) recovery attempt(s). Re-issuing with additional guidance." 2>/dev/null || true
@@ -8798,6 +8798,9 @@ ${RB_FIX_DESC}
         echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (state=${OBSERVED_NOOP_COUNT}, ancestors=${ANCESTOR_NOOP_COUNT}, cap=${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
         bump_impl_noop_count "${IF_LOCAL_ID}"
         gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:done' --remove-label 'ai:implementing' \
+          --remove-label 'ai:planning' --remove-label 'ai:clarification' \
+          --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
           --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
         gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
           -c "Closing: implementation produced no changes (state-counter=${OBSERVED_NOOP_COUNT}, ancestor-chain=${ANCESTOR_NOOP_COUNT}, cap=${MAX_IMPL_NOOP_REISSUES}). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
