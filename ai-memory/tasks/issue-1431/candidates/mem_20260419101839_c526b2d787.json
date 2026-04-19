@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `HEAD`: `6c8ccc98d6a760a7c3d1558f3ebb06e1ce5da816`\n- Checked-out branch: `orchestrator/project-1292`\n- Integration branch metadata: `orchestrator/project-1292`\n- Integration mismatch: `false`\n\nClarification mapping:\n- No Q-ID clarification questions were issued for this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with the issue scope exactly as written.\u201d\n\nConflict detection (issue vs current branch state):\n- Requested behavior appears largely already implemented on this ref:\n- `scripts/validate_process.sh` already contains render-phase deterministic recovery (`attempt_render_recovery_after_preflight_failure`) and routes preflight terminalization through `attempt_self_heal_and_reexec \"render\"` when rerender/re-lint recovery fails.\n- `scripts/self_heal_validation.sh` already recognizes/logs `SELF_HEAL_FAILURE_PHASE=render` while keeping prompt-target allow-list constraints.\n- `prompts/mode-validate-self-heal.txt` already states that render-phase harness recovery is renderer-driven and forbids freehand harness edits in this path.\n- `tests/test_validate_process_render_recovery.py` already covers success, rerender fail-open, relint failure, and legacy non-template fallback paths.\n- Plan implication: implementation should be gap-driven and minimal; if verification passes, this issue may be effectively complete.\n\nImplementation plan:\n1. Verify render-phase recovery gate and retry flow in `scripts/validate_process.sh`.\n2. Confirm the render-recovery decision matrix stays strict:\n3. Template mode + lint-class preflight failure => deterministic rerender + relint.\n4. Non-template mode or non-lint preflight failure => legacy path (no render reroute).\n5. Rerender failure or relint-after-rerender failure => render-phase self-heal invocation (not freehand harness editing).\n6. Keep existing behavior unchanged for non-render phases (backward compatibility).\n7. Re-validate self-heal safety plumbing in `scripts/self_heal_validation.sh`:\n8. Ensure `render` remains accepted as a phase label for telemetry/ledger context.\n9. Preserve existing allow-list to only the four validation prompt files.\n10. Preserve additive-only patch enforcement and out-of-scope patch rejection.\n11. Re-validate prompt guardrails in `prompts/mode-validate-self-heal.txt`:\n12. Keep explicit instruction that `failing_phase=render` must not produce harness-file edits and must remain prompt-only.\n13. Ensure guidance does not expand self-heal scope beyond allowed prompt files.\n14. Update/add tests only if a verification gap is found, primarily in `tests/test_validate_process_render_recovery.py` (and related validate-process tests if needed), without unrelated refactors.\n\nFiles likely to change (only if gaps are found):\n- `scripts/validate_process.sh`\n- `scripts/self_heal_validation.sh`\n- `prompts/mode-validate-self-heal.txt`\n- `tests/test_validate_process_render_recovery.py`\n- `README.md` and/or `agents.md` only if behavior/contract text needs alignment with actual runtime behavior\n\nFunctions/modules to implement or adjust:\n- `attempt_render_recovery_after_preflight_failure` (`scripts/validate_process.sh`)\n- Phase-2 preflight failure handler around `run_preflight_checks` and `attempt_self_heal_and_reexec`\n- `attempt_self_heal_and_reexec` phase normalization/dispatch path (render vs preflight)\n- Self-heal target and patch-safety enforcement in `scripts/self_heal_validation.sh`\n\nData structures affected:\n- Shell state flags and enums:\n- `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`\n- `PRE_FLIGHT_FAILURE_CLASS` (`lint` vs `non_lint`)\n- `SELF_HEAL_FAILURE_PHASE` (including `render`)\n- Self-heal JSONL ledger entries (`failure_phase`, `target_prompt`, additive patch payload)\n- No MongoDB collections/contracts or index behavior are involved\n\nAPI/interface changes:\n- No external API or CLI contract change expected\n- No env var rename/removal expected\n- Behavior is internal to validate/self-heal flow plus structured logs/comments\n\nPotential risks and edge cases:\n- Misclassification of preflight failure class could skip valid render recovery or trigger it incorrectly\n- Double-invocation/looping if rerender guard (`PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`) regresses\n- Prompt self-heal scope creep into harness artifacts (must remain blocked)\n- Regressing legacy non-template preflight handling\n- Weakening additive-only patch constraints in self-heal\n\nTesting considerations:\n- Run targeted tests for render recovery and fail-open semantics:\n- `tests/test_validate_process_render_recovery.py`\n- `tests/test_validate_process_template_mode.py` (template-mode integration sanity)\n- Verify assertions for:\n- rerender+relint success continues pipeline\n- rerender failure triggers render-phase self-heal path\n- relint-after-rerender failure triggers render-phase self-heal path\n- non-template preflight failure remains legacy `preflight` self-heal path\n- allow-list/additive safety remains intact in self-heal plumbing\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "cf60b87f1580ad8c6ae411e28ac43ab6184000c834120a9db632f30a02871b20",
+  "lineage": {
+    "issue_number": 1431,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24626688485",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24626688485",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1431"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419101839_c526b2d787",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1431,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24626688485"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1431",
+  "timestamps": {
+    "created_at": "2026-04-19T10:18:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
