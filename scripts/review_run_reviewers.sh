@@ -259,7 +259,7 @@ if [ "${IS_FIRST_ITERATION}" != "true" ] && [ "${REVIEWER_ITERATION_SCOPING_ENAB
           next
         }
         path = $4
-        sub(/:.*/, "", path)
+        sub(/:[0-9-]+(:[0-9-]+)?$/, "", path)
         if (path != "") {
           print path
         }
