@@ -877,7 +877,10 @@ run_reviewer() {
       fi
     fi
     (
-      exec "${codex_bin}" exec --model "${model}" --full-auto < "${prompt_file}"
+      # Reviewers must not mutate the workspace: writes here pollute the pre-editor
+      # snapshot used by review_autofix.yml's touched-file detector (comm -13 safety
+      # union) and cause EDITOR_CHANGES_LOST false positives.
+      exec "${codex_bin}" exec --model "${model}" --sandbox read-only --ask-for-approval never < "${prompt_file}"
     ) > "${tmp_output}" 2> >(
       while IFS= read -r line || [ -n "$line" ]; do
         # Atomic heartbeat update: write to tmp then rename
