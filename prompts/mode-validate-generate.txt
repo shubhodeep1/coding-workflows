@@ -111,7 +111,9 @@ Test script contract (MANDATORY):
 Build verification checker routing (CRITICAL):
 - `validation/tests/01_build_verification.sh` (or the equivalent build-verification script) MUST choose syntax checkers by target file extension.
 - `*.py` targets MUST use `python3 -m py_compile <file>`.
+- `*.js` targets MUST use `node --check <file>`.
 - `*.sh` targets MUST use `bash -n <file>` (or an equivalent shell syntax checker).
+- `*.yml` / `*.yaml` targets MUST use `python3 -c "import yaml, sys; f=open(sys.argv[1], 'rb'); list(yaml.safe_load_all(f)); f.close()" <file>`.
 - Never run `python3 -m py_compile` on shell scripts. Explicitly forbidden regression: `python3 -m py_compile scripts/validate_process.sh`.
 - Keep this mapping aligned with `scripts/validate_changed_files_syntax.sh` (extension-based routing only).
 
