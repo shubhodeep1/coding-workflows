@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` questions were asked in Clarify.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as: proceed with the issue scope exactly as written, no extra scope decisions introduced.\n\nPlanning ref context:\n- `git rev-parse HEAD`: `6c8ccc98d6a760a7c3d1558f3ebb06e1ce5da816`\n- Checked-out branch: `orchestrator/project-1292`\n- Integration metadata branch: `orchestrator/project-1292`\n- Integration mismatch: `false`\n\nFactual conflict to surface:\n- The requested feature set is already present on this branch:\n  - `scripts/validate_process.sh` already has deterministic render recovery (`attempt_render_recovery_after_preflight_failure`) with rerender + relint and `render` self-heal phase routing.\n  - `scripts/self_heal_validation.sh` already accepts/logs `SELF_HEAL_FAILURE_PHASE=render` and enforces prompt-file allow-list + additive-only patch guards.\n  - `prompts/mode-validate-self-heal.txt` already constrains render-phase self-heal to prompt-only scope and forbids harness-file/freehand edits.\n  - Integration tests already exist in `tests/test_validate_process_render_recovery.py` and contract coverage in `tests/test_validate_process_template_mode.py`.\n- Implementation should therefore be verification-first, then patch only if a concrete acceptance gap is found.\n\n1. Files likely to change\n- `scripts/validate_process.sh` (only if render recovery flow or fail-open routing needs correction).\n- `scripts/self_heal_validation.sh` (only if render-phase logging/guardrail behavior is incomplete).\n- `prompts/mode-validate-self-heal.txt` (only if wording still allows non-prompt render-phase edits).\n- `tests/test_validate_process_render_recovery.py` (extend/adjust integration coverage if any missing branch found).\n- `tests/test_validate_process_template_mode.py` (contract assertions for render-phase + allow-list/additive safety).\n- `README.md` / `agents.md` only if behavior differs from currently documented contracts.\n\n2. Functions/modules to implement or adjust\n- Representative pattern to follow: existing render recovery path in `scripts/validate_process.sh`:\n  - `attempt_render_recovery_after_preflight_failure`\n  - preflight failure branch that selects `attempt_self_heal_and_reexec \"render\"` vs `\"preflight\"`\n- Self-heal plumbing:\n  - `attempt_self_heal_and_reexec` call sites in preflight handling\n  - render-phase propagation via `SELF_HEAL_FAILURE_PHASE`\n- Guardrails in `scripts/self_heal_validation.sh`:\n  - `ALLOWED_TARGETS` enforcement\n  - additive-only diff checks\n  - out-of-scope file touch rejection\n\n3. Data structures affected\n- Runtime state/env fields in validation flow:\n  - `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`\n  - `PRE_FLIGHT_FAILURE_CLASS` (`lint` gate)\n  - `SELF_HEAL_FAILURE_PHASE` (`render` path)\n- Self-heal ledger entries (`SELF_HEAL_PATCHES_FILE`) already include `failure_phase`; verify render values appear on render-path failures.\n\n4. API/interface changes\n- No external API or schema changes expected.\n- Internal behavior contract only: deterministic rerender/relint precedes terminal failure for template-mode lint preflight failures; no freehand harness edits in this phase.\n\n5. Potential risks and edge cases\n- Non-template mode must remain backward compatible (no rerender attempt).\n- Non-lint preflight failures must skip render recovery.\n- Renderer failure must fail open to existing hard-fail path, then self-heal in `render` phase only when appropriate.\n- Ensure no path regresses into freehand harness edits during render recovery.\n\n6. Testing considerations\n- Run targeted tests first:\n  - `python3 tests/test_validate_process_render_recovery.py`\n  - `python3 tests/test_validate_process_template_mode.py`\n- Validate acceptance criteria mapping:\n  - rerender + relint attempt occurs before terminal failure on lint path\n  - render-path failure routes to `SELF_HEAL_FAILURE_PHASE=render`\n  - no render-phase path permits freehand harness edits\n  - allow-list/additive-only self-heal guards still enforced\n- If all pass unchanged, treat issue as already satisfied and close with evidence; if any fail, patch only the failing contract paths above.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "896b9b7b1a826bf8b11c83eddf159007bf2b00529cab69e3e9056b01a8bccd1a",
+  "lineage": {
+    "issue_number": 1434,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24627121291",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24627121291",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1434"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419104053_629663b962",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1434,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24627121291"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1434",
+  "timestamps": {
+    "created_at": "2026-04-19T10:40:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
