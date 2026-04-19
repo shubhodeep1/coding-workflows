@@ -108,14 +108,16 @@ jobs:
 
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
-      # Runs immediately before checkout@post so the dumped state is the
-      # exact state the post-step sees. Remove after root-cause is
-      # identified and a targeted fix lands.
-      - name: git diagnostic (checkout exit-128 probe)
+      # This diagnostic runs after checkout's main step and before
+      # checkout's post-step cleanup, then re-executes the same git
+      # operations to isolate the failing command.
+      # Remove after root-cause is identified and a targeted fix lands.
+      - &git-checkout-diag
+        name: git diagnostic (checkout exit-128 probe)
         if: always()
         run: |
           set +e
-          echo "=== git diagnostic: state before checkout post-step ==="
+          echo "=== git diagnostic: simulating checkout post-step operations ==="
           git --version
           echo "--- config (first 200) ---"
           git config --list --show-origin 2>&1 | head -n 200
@@ -124,10 +126,21 @@ jobs:
           git log -1 --oneline 2>&1; echo "log_rc=$?"
           echo "--- simulate post-step extraheader ops ---"
           git config --local --name-only --get-regexp 'http\..*\.extraheader' 2>&1; echo "getregexp_rc=$?"
-          git config --local --unset-all 'http.https://github.com/.extraheader' 2>&1; echo "unset_rc=$?"
+          EXTRAHEADER_KEYS=$(git config --local --name-only --get-regexp 'http\..*\.extraheader' 2>/dev/null || true)
+          if [ -n "$EXTRAHEADER_KEYS" ]; then
+            TEMP_GIT_CONFIG=$(mktemp)
+            cp .git/config "$TEMP_GIT_CONFIG" 2>/dev/null || true
+            while IFS= read -r EXTRAHEADER_KEY; do
+              [ -n "$EXTRAHEADER_KEY" ] || continue
+              git config --file "$TEMP_GIT_CONFIG" --unset-all "$EXTRAHEADER_KEY" 2>&1; echo "unset_rc[$EXTRAHEADER_KEY]=$?"
+            done <<< "$EXTRAHEADER_KEYS"
+            rm -f "$TEMP_GIT_CONFIG"
+          else
+            echo "unset_rc=skipped (no matching key)"
+          fi
           echo "--- simulate post-step submodule foreach ---"
           git submodule foreach --recursive 'echo ok' 2>&1; echo "foreach_rc=$?"
-          echo "--- .git listing (first 40) ---"
+          echo "--- .git directory listing (first 40) ---"
           ls -la .git/ 2>&1 | head -n 40; echo "ls_rc=$?"
           echo "=== end diagnostic ==="
           exit 0
@@ -1631,26 +1644,7 @@ jobs:
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
       # Remove after root-cause is identified and a targeted fix lands.
-      - name: git diagnostic (checkout exit-128 probe)
-        if: always()
-        run: |
-          set +e
-          echo "=== git diagnostic: state before checkout post-step ==="
-          git --version
-          echo "--- config (first 200) ---"
-          git config --list --show-origin 2>&1 | head -n 200
-          echo "--- status / head ---"
-          git status 2>&1; echo "status_rc=$?"
-          git log -1 --oneline 2>&1; echo "log_rc=$?"
-          echo "--- simulate post-step extraheader ops ---"
-          git config --local --name-only --get-regexp 'http\..*\.extraheader' 2>&1; echo "getregexp_rc=$?"
-          git config --local --unset-all 'http.https://github.com/.extraheader' 2>&1; echo "unset_rc=$?"
-          echo "--- simulate post-step submodule foreach ---"
-          git submodule foreach --recursive 'echo ok' 2>&1; echo "foreach_rc=$?"
-          echo "--- .git listing (first 40) ---"
-          ls -la .git/ 2>&1 | head -n 40; echo "ls_rc=$?"
-          echo "=== end diagnostic ==="
-          exit 0
+      - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1b: Script correctness validation — runs parallel with E2E
@@ -1783,26 +1777,7 @@ jobs:
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
       # Remove after root-cause is identified and a targeted fix lands.
-      - name: git diagnostic (checkout exit-128 probe)
-        if: always()
-        run: |
-          set +e
-          echo "=== git diagnostic: state before checkout post-step ==="
-          git --version
-          echo "--- config (first 200) ---"
-          git config --list --show-origin 2>&1 | head -n 200
-          echo "--- status / head ---"
-          git status 2>&1; echo "status_rc=$?"
-          git log -1 --oneline 2>&1; echo "log_rc=$?"
-          echo "--- simulate post-step extraheader ops ---"
-          git config --local --name-only --get-regexp 'http\..*\.extraheader' 2>&1; echo "getregexp_rc=$?"
-          git config --local --unset-all 'http.https://github.com/.extraheader' 2>&1; echo "unset_rc=$?"
-          echo "--- simulate post-step submodule foreach ---"
-          git submodule foreach --recursive 'echo ok' 2>&1; echo "foreach_rc=$?"
-          echo "--- .git listing (first 40) ---"
-          ls -la .git/ 2>&1 | head -n 40; echo "ls_rc=$?"
-          echo "=== end diagnostic ==="
-          exit 0
+      - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
@@ -1859,26 +1834,7 @@ jobs:
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
       # Remove after root-cause is identified and a targeted fix lands.
-      - name: git diagnostic (checkout exit-128 probe)
-        if: always()
-        run: |
-          set +e
-          echo "=== git diagnostic: state before checkout post-step ==="
-          git --version
-          echo "--- config (first 200) ---"
-          git config --list --show-origin 2>&1 | head -n 200
-          echo "--- status / head ---"
-          git status 2>&1; echo "status_rc=$?"
-          git log -1 --oneline 2>&1; echo "log_rc=$?"
-          echo "--- simulate post-step extraheader ops ---"
-          git config --local --name-only --get-regexp 'http\..*\.extraheader' 2>&1; echo "getregexp_rc=$?"
-          git config --local --unset-all 'http.https://github.com/.extraheader' 2>&1; echo "unset_rc=$?"
-          echo "--- simulate post-step submodule foreach ---"
-          git submodule foreach --recursive 'echo ok' 2>&1; echo "foreach_rc=$?"
-          echo "--- .git listing (first 40) ---"
-          ls -la .git/ 2>&1 | head -n 40; echo "ls_rc=$?"
-          echo "=== end diagnostic ==="
-          exit 0
+      - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
   # Job 3: Create release (same as mark-stable.yml)
@@ -1986,26 +1942,7 @@ jobs:
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
       # Remove after root-cause is identified and a targeted fix lands.
-      - name: git diagnostic (checkout exit-128 probe)
-        if: always()
-        run: |
-          set +e
-          echo "=== git diagnostic: state before checkout post-step ==="
-          git --version
-          echo "--- config (first 200) ---"
-          git config --list --show-origin 2>&1 | head -n 200
-          echo "--- status / head ---"
-          git status 2>&1; echo "status_rc=$?"
-          git log -1 --oneline 2>&1; echo "log_rc=$?"
-          echo "--- simulate post-step extraheader ops ---"
-          git config --local --name-only --get-regexp 'http\..*\.extraheader' 2>&1; echo "getregexp_rc=$?"
-          git config --local --unset-all 'http.https://github.com/.extraheader' 2>&1; echo "unset_rc=$?"
-          echo "--- simulate post-step submodule foreach ---"
-          git submodule foreach --recursive 'echo ok' 2>&1; echo "foreach_rc=$?"
-          echo "--- .git listing (first 40) ---"
-          ls -la .git/ 2>&1 | head -n 40; echo "ls_rc=$?"
-          echo "=== end diagnostic ==="
-          exit 0
+      - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
   # Job 4: Combined Telegram notification (runs after ALL jobs)
