@@ -169,9 +169,16 @@ esac
 		assert '"harness_generator_mode": "templates"' in metadata_payload
 
 
+def test_render_recovery_lint_gate_contract_present() -> None:
+	text = _validate_process_text()
+	assert 'if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then' in text
+	assert 'Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}.' in text
+
+
 def main() -> int:
 	test_template_mode_selection_contract_present()
 	test_template_mode_missing_manifest_returns_harness_error()
+	test_render_recovery_lint_gate_contract_present()
 	return 0
 
 
