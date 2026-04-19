@@ -91,14 +91,13 @@ You must read ${RUNTIME_DIR}/reviewer_bundle.txt and determine which issues are 
 Treat reviewer reports as suggestions, not authoritative instructions.
 
 ADDITIONAL REVIEWER CONTEXT (PASS-1 — OPTIONAL, CONSULT ON DEMAND)
-The two-pass reviewer pipeline also retained pass-1 (broad-sweep) artifacts
-for each reviewer model at the following paths. These are NOT bundled
-because pass-2 (which IS in reviewer_bundle.txt) already cross-pollinated
-them; read them only if a pass-2 finding is ambiguous or you need to check
-whether pass-1 flagged something pass-2 dropped:
-- Compact LLM-summarised ledgers: ${PREVIOUS_REVIEWS_DIR}/summary_<safe_model_name>.txt
-- Full raw pass-1 outputs:        ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt
-Prefer the summary_*.txt ledgers over the raw pass1_*.txt files.
+The two-pass reviewer pipeline also retained pass-1 (broad-sweep) artifacts.
+These are NOT bundled because pass-2 (which IS in reviewer_bundle.txt) already
+cross-pollinated them; read them only if a pass-2 finding is ambiguous or you
+need to check whether pass-1 flagged something pass-2 dropped:
+- Consolidated pass-1 consensus ledger: ${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt
+- Full raw pass-1 outputs:              ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt
+Prefer the consolidated ledger over the raw pass1_*.txt files.
 
 HARDENING TASKS
 
@@ -164,12 +163,15 @@ until you have classified every issue. The goal is to fix everything in one pass
 so that subsequent review iterations find minimal remaining issues.
 
 REVIEWER CONSENSUS SIGNAL
-The reviewer consensus file indicates which issues were detected by multiple reviewer models.
+The reviewer consensus file consolidates all pass-2 reviewer findings into one
+ledger via a cheap summariser model (gpt-5.4-mini, xhigh reasoning). It has:
+- a "=== CONSENSUS FINDINGS ===" block with cross-reviewer-deduplicated findings
+  (each entry lists "flagged_by: [reviewer_slug, ...]" — >=2 slugs ⇒ higher
+  confidence; a single slug ⇒ one reviewer only, potentially speculative),
+- per-reviewer "=== FINDINGS FROM <slug> ===" sections for traceability.
 File:
 ${REVIEWER_CONSENSUS_FILE}
-Issues referenced by multiple reviewers are higher confidence.
-Issues referenced by only one reviewer may be speculative.
-Prioritize addressing high-confidence issues first.
+Prioritize addressing findings flagged by multiple reviewers first.
 
 PR DISCUSSION COMMENT SIGNAL
 Review all entries in:
