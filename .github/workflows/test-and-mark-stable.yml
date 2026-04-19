@@ -125,24 +125,41 @@ jobs:
           git status 2>&1; echo "status_rc=$?"
           git log -1 --oneline 2>&1; echo "log_rc=$?"
           echo "--- simulate post-step extraheader ops ---"
-          EXTRAHEADER_KEYS_OUTPUT=$(git config --local --name-only --get-regexp 'http\..*\.extraheader' 2>&1)
+          # Capture stdout (keys) and stderr (diagnostics) separately
+          EXTRAHEADER_STDERR_FILE=$(mktemp)
+          EXTRAHEADER_KEYS_STDOUT=$(git config --local --name-only --get-regexp 'http\..*\.extraheader' 2>"$EXTRAHEADER_STDERR_FILE")
           GETREGEXP_RC=$?
-          printf '%s\n' "$EXTRAHEADER_KEYS_OUTPUT"
+          EXTRAHEADER_KEYS_STDERR=$(cat "$EXTRAHEADER_STDERR_FILE" 2>/dev/null || true)
+          rm -f "$EXTRAHEADER_STDERR_FILE"
+          printf '%s\n' "$EXTRAHEADER_KEYS_STDOUT"
+          [ -n "$EXTRAHEADER_KEYS_STDERR" ] && printf 'stderr: %s\n' "$EXTRAHEADER_KEYS_STDERR" || true
           echo "getregexp_rc=$GETREGEXP_RC"
-          if [ "$GETREGEXP_RC" -eq 0 ] && [ -n "$EXTRAHEADER_KEYS_OUTPUT" ]; then
+          if [ "$GETREGEXP_RC" -eq 0 ] && [ -n "$EXTRAHEADER_KEYS_STDOUT" ]; then
             TEMP_GIT_CONFIG=$(mktemp)
-            cp .git/config "$TEMP_GIT_CONFIG" 2>&1
-            CP_RC=$?
-            echo "cp_config_rc=$CP_RC"
-            if [ "$CP_RC" -eq 0 ]; then
-              while IFS= read -r EXTRAHEADER_KEY; do
-                [ -n "$EXTRAHEADER_KEY" ] || continue
-                git config --file "$TEMP_GIT_CONFIG" --unset-all "$EXTRAHEADER_KEY" 2>&1; echo "unset_rc[$EXTRAHEADER_KEY]=$?"
-              done <<< "$EXTRAHEADER_KEYS_OUTPUT"
+            # Ensure temp file cleanup on any exit
+            trap 'rm -f "$TEMP_GIT_CONFIG"' EXIT
+            # Copy .git/config carefully; if missing, skip unset simulation
+            if [ -f .git/config ]; then
+              CP_STDERR_FILE=$(mktemp)
+              cp .git/config "$TEMP_GIT_CONFIG" 2>"$CP_STDERR_FILE"
+              CP_RC=$?
+              [ -s "$CP_STDERR_FILE" ] && printf 'cp_stderr: %s\n' "$(cat "$CP_STDERR_FILE")" || true
+              rm -f "$CP_STDERR_FILE"
+              echo "cp_config_rc=$CP_RC"
+              if [ "$CP_RC" -eq 0 ]; then
+                while IFS= read -r EXTRAHEADER_KEY; do
+                  [ -n "$EXTRAHEADER_KEY" ] || continue
+                  git config --file "$TEMP_GIT_CONFIG" --unset-all "$EXTRAHEADER_KEY" 2>&1
+                  echo "unset_rc[$EXTRAHEADER_KEY]=$?"
+                done <<< "$EXTRAHEADER_KEYS_STDOUT"
+              else
+                echo "unset_rc=skipped (config copy failed)"
+              fi
             else
-              echo "unset_rc=skipped (config copy failed)"
+              echo "config file .git/config missing — skipping unset simulation"
             fi
-            rm -f "$TEMP_GIT_CONFIG"
+          elif [ "$GETREGEXP_RC" -ne 0 ]; then
+            echo "unset_rc=skipped (git config --get-regexp failed with rc=$GETREGEXP_RC)"
           else
             echo "unset_rc=skipped (no matching key)"
           fi
