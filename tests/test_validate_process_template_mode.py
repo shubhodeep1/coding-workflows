@@ -11,10 +11,20 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 VALIDATE_PROCESS_PATH = REPO_ROOT / "scripts" / "validate_process.sh"
+SELF_HEAL_SCRIPT_PATH = REPO_ROOT / "scripts" / "self_heal_validation.sh"
+SELF_HEAL_PROMPT_PATH = REPO_ROOT / "prompts" / "mode-validate-self-heal.txt"
 
 
 def _validate_process_text() -> str:
 	return VALIDATE_PROCESS_PATH.read_text(encoding="utf-8")
+
+
+def _self_heal_script_text() -> str:
+	return SELF_HEAL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+
+def _self_heal_prompt_text() -> str:
+	return SELF_HEAL_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def test_template_mode_selection_contract_present() -> None:
@@ -31,6 +41,28 @@ def test_template_mode_selection_contract_present() -> None:
 	assert 'attempt_self_heal_and_reexec "render"' in text
 	assert 'elif [ "${VALIDATION_CYCLE}" -gt 1 ] \\' in text
 	assert 'HARNESS_GENERATOR_MODE="freehand"' in text
+
+
+def test_render_recovery_contract_and_prompt_only_self_heal_scope() -> None:
+	validate_text = _validate_process_text()
+	assert 'Render recovery: deterministic template rerender triggered after pre-flight failure.' in validate_text
+	assert 'Render recovery: rerender completed; re-running pre-flight checks.' in validate_text
+	assert 'Render recovery: pre-flight checks still failing after deterministic rerender.' in validate_text
+	assert 'PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"' in validate_text
+	assert 'if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then' in validate_text
+	assert 'if [ "${render_recovery_exit}" -eq 2 ]; then' in validate_text
+
+	script_text = _self_heal_script_text()
+	assert '"mode-validate-discover.txt"' in script_text
+	assert '"mode-validate-generate.txt"' in script_text
+	assert '"mode-validate-fix-harness.txt"' in script_text
+	assert '"mode-validate-diagnose.txt"' in script_text
+	assert "self-heal: refusing — target_prompt '" in script_text
+	assert 'self-heal: refusing — patch contains deletion lines; self-heal patches must be additive-only' in script_text
+
+	prompt_text = _self_heal_prompt_text()
+	assert 'For `failing_phase=render` or deterministic template rerender/lint recovery failures, keep self-heal scope prompt-only:' in prompt_text
+	assert 'Do not propose harness-file edits, renderer-script edits, or workflow changes.' in prompt_text
 
 
 def test_template_mode_missing_manifest_returns_harness_error() -> None:
@@ -177,6 +209,7 @@ def test_render_recovery_lint_gate_contract_present() -> None:
 
 def main() -> int:
 	test_template_mode_selection_contract_present()
+	test_render_recovery_contract_and_prompt_only_self_heal_scope()
 	test_template_mode_missing_manifest_returns_harness_error()
 	test_render_recovery_lint_gate_contract_present()
 	return 0
