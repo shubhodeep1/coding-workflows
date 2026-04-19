@@ -70,7 +70,7 @@ validate_file_path()
 	if [[ "${file_path}" == *".."* ]]; then
 		return 1
 	fi
-	if [[ ! "${file_path}" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+	if [[ "${file_path}" =~ [[:cntrl:]] ]]; then
 		return 1
 	fi
 	if ! git cat-file -e "HEAD:${file_path}" >/dev/null 2>&1; then
@@ -240,7 +240,7 @@ passthrough_file="${tmp_dir}/passthrough_blocks.txt"
 : > "${uncovered_anchors_file}"
 : > "${passthrough_file}"
 
-awk '
+gawk '
 function emit_anchor(file, line, excerpt, key) {
 	key = file ":" line
 	if (seen[key]) {

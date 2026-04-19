@@ -69,7 +69,7 @@ read_anchor_context()
 		printf '%s\n' ""
 		return
 	fi
-	if [[ "${file_path}" == /* ]] || [[ "${file_path}" =~ (^|/)\.\.(/|$) ]] || [[ ! "${file_path}" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+	if [[ "${file_path}" == /* ]] || [[ "${file_path}" =~ (^|/)\.\.(/|$) ]] || [[ "${file_path}" =~ [[:cntrl:]] ]]; then
 		printf '%s\n' ""
 		return
 	fi
@@ -186,7 +186,7 @@ parse_review_issues()
 	if [ ! -s "${review_issues_file}" ]; then
 		return
 	fi
-	awk -v out_file="${out_file}" '
+	gawk -v out_file="${out_file}" '
 		function trim(s) {
 			sub(/^[[:space:]]+/, "", s)
 			sub(/[[:space:]]+$/, "", s)
@@ -320,6 +320,7 @@ format_editor_outcomes_for_status()
 	local editor_outcomes="$1"
 	printf '%s\n' "${editor_outcomes}" | awk '
 		{
+			gsub(/\t/, " ", $0)
 			gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
 			if ($0 == "") {
 				next
@@ -566,7 +567,7 @@ rewrite_review_issues_without_residuals()
 	local keep_ids_file="$2"
 	local residual_ids_file="$3"
 	local out_file="$4"
-	awk -v keep_file="${keep_ids_file}" -v residual_file="${residual_ids_file}" '
+	gawk -v keep_file="${keep_ids_file}" -v residual_file="${residual_ids_file}" '
 		function trim(s) {
 			sub(/^[[:space:]]+/, "", s)
 			sub(/[[:space:]]+$/, "", s)
