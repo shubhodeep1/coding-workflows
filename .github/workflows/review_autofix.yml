@@ -2250,24 +2250,27 @@ jobs:
           raw_bundle_size="$(wc -c < "${REVIEWER_BUNDLE_FILE:-/dev/null}" 2>/dev/null | tr -d '[:space:]' || echo 0)"
           floor_tags_count="${REVIEW_FLOOR_TAGS_COUNT:-0}"
           consolidator_model="${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.4-mini}"
-          consolidator_invoked="${REVIEW_CONSOLIDATOR_STAGE_STATUS:-no}"
+          consolidator_invoked="${REVIEW_CONSOLIDATOR_STAGE_STATUS:-yes}"
           consolidator_output_bytes="${REVIEW_CONSOLIDATOR_OUTPUT_BYTES:-0}"
 
           parser_stats_parsed_blocks="0"
           parser_stats_passthrough_blocks="0"
           parser_stats_line_unverified="0"
-          parser_failed_metric="${REVIEW_PARSER_FAILED:-1}"
+          parser_failed_metric="${REVIEW_PARSER_FAILED:-0}"
           if [ -s "${PARSER_STATS_FILE:-}" ]; then
             parser_stats_parsed_blocks="$(awk -F '=' '$1=="parsed_blocks" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
             parser_stats_passthrough_blocks="$(awk -F '=' '$1=="passthrough_blocks" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
             parser_stats_line_unverified="$(awk -F '=' '$1=="line_unverified" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
             parser_failed_metric="$(awk -F '=' '$1=="parse_failed" { print $2 }' "${PARSER_STATS_FILE}" | tail -n 1 | tr -d '[:space:]')"
           fi
-          for v in parser_stats_parsed_blocks parser_stats_passthrough_blocks parser_stats_line_unverified parser_failed_metric; do
+          for v in parser_stats_parsed_blocks parser_stats_passthrough_blocks parser_stats_line_unverified; do
             if ! [[ "${!v}" =~ ^[0-9]+$ ]]; then
               printf -v "$v" '%s' "0"
             fi
           done
+          if ! [[ "${parser_failed_metric}" =~ ^[01]$ ]]; then
+            parser_failed_metric="1"
+          fi
 
           ledger_entries_total="${REVIEW_LEDGER_ENTRIES_TOTAL:-0}"
           ledger_new="0"
