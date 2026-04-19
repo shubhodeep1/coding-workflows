@@ -47,7 +47,7 @@ def test_render_recovery_contract_and_prompt_only_self_heal_scope() -> None:
 	validate_text = _validate_process_text()
 	assert 'Render recovery: deterministic template rerender triggered after pre-flight failure.' in validate_text
 	assert 'Render recovery: rerender completed; re-running pre-flight checks.' in validate_text
-	assert 'Render recovery: pre-flight checks still failing after deterministic rerender.' in validate_text
+	assert 'Render recovery: pre-flight checks still failing after deterministic rerender' in validate_text
 	assert 'PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"' in validate_text
 	assert 'if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then' in validate_text
 	assert 'if [ "${render_recovery_exit}" -eq 2 ]; then' in validate_text
