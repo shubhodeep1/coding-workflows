@@ -125,6 +125,7 @@ HARNESS_GENERATOR_MODE="freehand"
 PRE_FLIGHT_STATUS="not_run"
 PRE_FLIGHT_FAILURE_KIND="none"
 PRE_FLIGHT_FAILURE_REASON="not_run"
+PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 GENERATED_VALIDATE_SCRIPT_PATH=""
 CANONICAL_VALIDATE_DRIVER_REL="scripts/validate_process.sh"
 CANONICAL_VALIDATE_HARNESS_REL="validation/validate.sh"
@@ -218,7 +219,7 @@ fi
 # returns and the caller proceeds with its normal hard-fail path.
 #
 # Usage: attempt_self_heal_and_reexec "<failure-phase-tag>"
-#   phase tag: generate|preflight|canary|runtime|diagnose|discover|render
+#   phase tag: generate|preflight|render|canary|runtime|diagnose|discover
 attempt_self_heal_and_reexec()
 {
   local phase="${1:-unknown}"
@@ -1125,12 +1126,53 @@ run_template_validation_harness_renderer()
 	return 0
 }
 
+attempt_render_recovery_after_preflight_failure()
+{
+	local renderer_exit=0
+
+	if [ "${HARNESS_MODE}" != "template_generate" ] || [ "${HARNESS_GENERATOR_MODE}" != "templates" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+
+	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
+	{
+		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
+		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
+	} >> "${PRE_FLIGHT_LOG_FILE}"
+
+	if run_template_validation_harness_renderer; then
+		renderer_exit=0
+	else
+		renderer_exit=$?
+	fi
+
+	if [ "${renderer_exit}" -ne 0 ]; then
+		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 2
+	fi
+
+	echo "Render recovery: rerender completed; re-running pre-flight checks." >> "${PRE_FLIGHT_LOG_FILE}"
+	local PRE_FLIGHT_APPEND_LOG="true"
+	if run_preflight_checks; then
+		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 0
+	fi
+
+	echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+	return 2
+}
+
 run_preflight_checks()
 {
 	PRE_FLIGHT_STATUS="running"
 	PRE_FLIGHT_FAILURE_KIND="unknown"
 	PRE_FLIGHT_FAILURE_REASON="running"
-	: > "${PRE_FLIGHT_LOG_FILE}"
+	if [ "${PRE_FLIGHT_APPEND_LOG:-false}" != "true" ]; then
+		: > "${PRE_FLIGHT_LOG_FILE}"
+	fi
 
 	# Emit the tail of the pre-flight log to stderr so that the failing command's
 	# output is visible directly in the GitHub Actions job log, without requiring
@@ -2386,37 +2428,37 @@ fi
 # Phase 2: Pre-flight checks for generated harness
 # ---------------------------------------------------------------
 if ! run_preflight_checks; then
-  classify_preflight_failure
-  if [ "${HARNESS_MODE}" = "template_generate" ] && [ "${PRE_FLIGHT_FAILURE_KIND}" = "lint" ]; then
-    if attempt_template_render_recovery_after_preflight_lint; then
-      :
+  render_recovery_exit=1
+  if attempt_render_recovery_after_preflight_failure; then
+    render_recovery_exit=0
+  else
+    render_recovery_exit=$?
+  fi
+
+  if [ "${render_recovery_exit}" -ne 0 ]; then
+    failure_summary="Validation pre-flight checks failed. See validation_preflight.log artifact."
+    jq -n \
+      --arg diagnosis "Pre-flight validation failed before test execution." \
+      --arg harness_fixes "$(tail -n 120 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true)" \
+      '{
+        status: "harness_error",
+        diagnosis: $diagnosis,
+        fix_issues: [],
+        harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix validation/docker-compose.test.yml, shell syntax, or build context/dockerfile paths." end)
+      }' > "${DIAGNOSE_RESULT_FILE}"
+
+    # Self-heal interception: bad harness is often a prompt-wording defect.
+    if [ "${render_recovery_exit}" -eq 2 ]; then
+      attempt_self_heal_and_reexec "render"
+    else
+      attempt_self_heal_and_reexec "preflight"
     fi
+    post_tracking_comment "## ❌ Runtime validation harness pre-flight failed\n\n${failure_summary}\n\n\`docker compose config\`, shell syntax, or build context/dockerfile path checks failed."
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "fail" "Validation failed due to harness pre-flight error" "${failure_summary}" "harness_error"
+    tg_notify "Validation pre-flight failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    exit 0
   fi
-fi
-
-if [ "${PRE_FLIGHT_STATUS}" != "pass" ]; then
-  failure_summary="Validation pre-flight checks failed. See validation_preflight.log artifact. (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})"
-  jq -n \
-    --arg diagnosis "Pre-flight validation failed before test execution." \
-    --arg harness_fixes "$(tail -n 120 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true)" \
-    '{
-      status: "harness_error",
-      diagnosis: $diagnosis,
-      fix_issues: [],
-      harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix validation/docker-compose.test.yml, shell syntax, or build context/dockerfile paths." end)
-    }' > "${DIAGNOSE_RESULT_FILE}"
-
-  # Self-heal interception: bad harness is often a prompt-wording defect.
-  self_heal_phase="preflight"
-  if [ "${PRE_FLIGHT_FAILURE_KIND}" = "render" ]; then
-    self_heal_phase="render"
-  fi
-  attempt_self_heal_and_reexec "${self_heal_phase}"
-  post_tracking_comment "## ❌ Runtime validation harness pre-flight failed\n\n${failure_summary}\n\n\`docker compose config\`, shell syntax, or build context/dockerfile path checks failed."
-  set_tracking_phase_label "ai:validation-failed"
-  write_result_files "fail" "Validation failed due to harness pre-flight error" "${failure_summary}" "harness_error"
-  tg_notify "Validation pre-flight failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
-  exit 0
 fi
 
 
