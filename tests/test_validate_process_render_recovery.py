@@ -31,6 +31,7 @@ set -euo pipefail
 
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="lint"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 HARNESS_MODE="template_generate"
 HARNESS_GENERATOR_MODE="templates"
@@ -93,6 +94,10 @@ attempt_render_recovery_after_preflight_failure()
 		return 1
 	fi
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 1
 	fi
 
@@ -183,6 +188,7 @@ set -euo pipefail
 
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="lint"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 HARNESS_MODE="template_generate"
 HARNESS_GENERATOR_MODE="templates"
@@ -245,6 +251,10 @@ attempt_render_recovery_after_preflight_failure()
 		return 1
 	fi
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 1
 	fi
 
@@ -334,6 +344,7 @@ set -euo pipefail
 
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="lint"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 HARNESS_MODE="template_generate"
 HARNESS_GENERATOR_MODE="templates"
@@ -377,6 +388,10 @@ attempt_render_recovery_after_preflight_failure()
 		return 1
 	fi
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 1
 	fi
 
@@ -471,6 +486,7 @@ set -euo pipefail
 
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="lint"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 HARNESS_MODE="generate"
 HARNESS_GENERATOR_MODE="freehand"
@@ -526,6 +542,10 @@ attempt_render_recovery_after_preflight_failure()
 		return 1
 	fi
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 1
 	fi
 
@@ -613,6 +633,7 @@ set -euo pipefail
 
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="lint"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 HARNESS_MODE="template_generate"
 HARNESS_GENERATOR_MODE="templates"
@@ -677,6 +698,10 @@ attempt_render_recovery_after_preflight_failure()
 		return 1
 	fi
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
 		return 1
 	fi
 
