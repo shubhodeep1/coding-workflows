@@ -1781,21 +1781,157 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.commit_changes.outputs.destructive_commit_blocked == ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           REMAINING_CHANGES: ${{ steps.commit_changes.outputs.remaining_changes }}
+          IMPL_NOOP_ANCESTRY_THRESHOLD: ${{ vars.IMPL_NOOP_ANCESTRY_THRESHOLD || '2' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
-          # A no-op implementation is almost always a bug — the plan approved
-          # changes but codex produced none (or they were stripped, e.g.
-          # workflow edits without ALLOW_WORKFLOW_EDITS).  Label the issue so
-          # the orchestrator poller can detect and re-issue instead of silently
-          # treating this as success.
-          echo "::warning::Implementation produced no repository changes. Labeling issue #${ISSUE_NUMBER} as ai:implementation-failed."
-
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           remaining_changes="${REMAINING_CHANGES:-}"
+          REPO="${{ github.repository }}"
+
+          # -------------------------------------------------------------
+          # Guard 1 (Q2): pathspec hard-fail.
+          # When Codex wrote changes into the runtime-fetched support
+          # checkout (.codex-workflow-src / .codex-workflow-src-main),
+          # the commit step's pathspec exclusions silently stripped
+          # them.  Treating this as a normal no-op sent the task into
+          # an infinite re-issue loop (observed: tracking issue #1292
+          # produced 30+ duplicate sub-issues in ~5 hours, each hitting
+          # the same " M .codex-workflow-src" filter).  Escalate to
+          # ai:needs-human with a CRITICAL Telegram alert so a human
+          # reviews the pathspec exclusions before automation resumes.
+          # -------------------------------------------------------------
+          if printf '%s' "${remaining_changes}" | grep -qE '\.codex-workflow-src(-main)?\b'; then
+            echo "::error::Implementation produced edits inside the runtime-fetched support checkout (.codex-workflow-src*) which the commit pathspec excludes. This is the known silent-filter bug — escalating to ai:needs-human instead of re-issuing."
+
+            pathspec_body="$(printf '%s\n' \
+              '🚨 **Implementation halted: pathspec filter stripped legitimate changes.**' \
+              '' \
+              "Codex edited files inside the runtime-fetched support checkout (\`.codex-workflow-src\` / \`.codex-workflow-src-main\`), which the commit step unconditionally excludes. As a result, no changes landed in the commit even though the model did produce edits." \
+              '' \
+              '**Filtered worktree paths:**' \
+              '```' \
+              "${remaining_changes}" \
+              '```' \
+              '' \
+              "Labeling \`ai:needs-human\`. Automation will **not** re-issue this task until a human reviews the pathspec exclusions in \`.github/workflows/implement.yml\` (around the \`add_u_excludes\` / \`add_o_excludes\` arrays) and either:" \
+              '  1. Re-runs the task with a prompt that steers Codex to the top-level tree, or' \
+              '  2. Adjusts the exclusions so legitimate self-repo edits are staged.' \
+              '' \
+              "Run: ${RUN_URL}")"
+            gh_retry gh label create 'ai:needs-human' --repo "${REPO}" \
+              --color 'b60205' --description 'Automation halted — human review required before re-dispatch' \
+              2>/dev/null || true
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+              --remove-label 'ai:done' --remove-label 'ai:implementing' \
+              --add-label 'ai:needs-human' 2>/dev/null || \
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+              --add-label 'ai:needs-human' 2>/dev/null || true
+            gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+              -f body="${pathspec_body}" >/dev/null 2>&1 || true
+
+            # CRITICAL Telegram alert so an operator sees this in real time.
+            # Inline curl — tg_helpers.sh may have been cleaned up by the
+            # fetched-manifest step in consumer-repo runs.
+            if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
+              TG_MSG="$(printf '%s\n' \
+                "🚨 CRITICAL: pathspec filter stripped Codex changes" \
+                "repo: ${REPO}" \
+                "issue: #${ISSUE_NUMBER}" \
+                "filtered: .codex-workflow-src*" \
+                "run: ${RUN_URL}" \
+                "" \
+                "Issue is now ai:needs-human. Automation will not re-issue until a human adjusts the implement.yml exclusions.")"
+              curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+                -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+                -d "disable_web_page_preview=true" \
+                --data-urlencode "text=${TG_MSG}" >/dev/null 2>&1 || \
+                echo "::warning::Telegram alert send failed for pathspec hard-fail on issue #${ISSUE_NUMBER}"
+            fi
+
+            # Hard-fail the job so the red X surfaces in the Actions UI
+            # and downstream steps (Push branch, Create PR) are skipped.
+            exit 1
+          fi
+
+          # -------------------------------------------------------------
+          # Guard 2 (Q1): ancestor-chain no-op cap.
+          # Walk the "Re-issued from #N" chain up to
+          # IMPL_NOOP_ANCESTRY_THRESHOLD hops.  For each ancestor, look
+          # for the no-op warning-comment signature emitted by this
+          # very step (the string below appears in the comment body).
+          # If the current no-op is the (threshold+1)th in an unbroken
+          # chain, close the issue with ai:closed and let the wave-
+          # completion judge verify whether the requested work is
+          # already present on the integration branch.
+          #
+          # This is an issue-local belt-and-braces check that replaces
+          # the state-file counter when the tracking issue's state
+          # comment is stale or missing — which is the exact failure
+          # mode that caused tracking issue #1292's 30+ duplicate
+          # sub-issues: MAX_IMPL_NOOP_REISSUES never triggered because
+          # the state iterator never saw the task.
+          # API cost: up to 2 * threshold calls per invocation.
+          # Fails open — on any API error we break and fall through to
+          # the normal ai:implementation-failed path.
+          # -------------------------------------------------------------
+          noop_marker="produced no repository changes"
+          threshold="${IMPL_NOOP_ANCESTRY_THRESHOLD:-2}"
+          [[ "${threshold}" =~ ^[1-9][0-9]*$ ]] || threshold=2
+          ancestor_noop_count=0
+          current="${ISSUE_NUMBER}"
+          for hop in $(seq 1 "${threshold}"); do
+            parent_body="$(gh_retry gh api "repos/${REPO}/issues/${current}" --jq '.body // ""' 2>/dev/null || echo "")"
+            parent_num="$(printf '%s' "${parent_body}" | grep -oE 'Re-issued from #[0-9]+' | head -n1 | grep -oE '[0-9]+' | head -n1 || true)"
+            [ -z "${parent_num}" ] && break
+            [[ "${parent_num}" =~ ^[0-9]+$ ]] || break
+            parent_has_noop="$(gh_retry gh api "repos/${REPO}/issues/${parent_num}/comments" --paginate \
+              --jq "[.[] | select((.body // \"\") | test(\"${noop_marker}\"; \"i\"))] | length" 2>/dev/null | awk 'BEGIN{s=0} /^[0-9]+$/ {s+=$1} END{print s}' || echo "")"
+            [[ "${parent_has_noop}" =~ ^[0-9]+$ ]] || parent_has_noop=0
+            if [ "${parent_has_noop}" -eq 0 ]; then
+              break
+            fi
+            ancestor_noop_count=$((ancestor_noop_count + 1))
+            current="${parent_num}"
+          done
+          echo "Ancestor no-op count for #${ISSUE_NUMBER}: ${ancestor_noop_count} (threshold=${threshold})"
+
+          if [ "${ancestor_noop_count}" -ge "${threshold}" ]; then
+            echo "::warning::Ancestor-chain no-op cap reached (${ancestor_noop_count} >= ${threshold}). Closing #${ISSUE_NUMBER} with ai:closed instead of ai:implementation-failed."
+            closed_body="$(printf '%s\n' \
+              '🛑 **Suspected already-implemented — closing without re-issue.**' \
+              '' \
+              "This is the $((ancestor_noop_count + 1))th consecutive implementation attempt for this task that produced no repository changes. The \`Re-issued from #N\` ancestor chain contains ${ancestor_noop_count} prior no-op(s), which matches the cap \`IMPL_NOOP_ANCESTRY_THRESHOLD=${threshold}\`." \
+              '' \
+              "The most likely explanation is that the code described here already exists on the integration branch (a sibling sub-task merged the same functionality). Closing with \`ai:closed\` instead of re-issuing; the wave-completion judge will verify and re-open if the work is genuinely missing." \
+              '' \
+              "Run: ${RUN_URL}")"
+            gh_retry gh label create 'ai:closed' --repo "${REPO}" \
+              --color '6b7280' --description 'Issue closed by automation (superseded, duplicated, or already complete)' \
+              2>/dev/null || true
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+              --remove-label 'ai:done' --remove-label 'ai:implementing' \
+              --remove-label 'ai:planning' --remove-label 'ai:clarification' \
+              --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
+              --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || \
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+              --add-label 'ai:closed' 2>/dev/null || true
+            gh_retry gh issue close "${ISSUE_NUMBER}" --repo "${REPO}" \
+              --comment "${closed_body}" 2>/dev/null || \
+            gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+              -f body="${closed_body}" >/dev/null 2>&1 || true
+            exit 0
+          fi
+
+          # -------------------------------------------------------------
+          # Fall-through: existing ai:implementation-failed behavior.
+          # -------------------------------------------------------------
+          echo "::warning::Implementation produced no repository changes. Labeling issue #${ISSUE_NUMBER} as ai:implementation-failed."
           noop_body="⚠️ AI implementation produced no repository changes despite an approved plan."
           if [ -n "${remaining_changes}" ]; then
             noop_body="${noop_body}
