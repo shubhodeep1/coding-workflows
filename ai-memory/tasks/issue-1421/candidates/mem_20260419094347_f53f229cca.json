@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- `git rev-parse HEAD`: `df7fa001abf2a14ca96928febb3528918f3181fb`\n- Checked out ref: `orchestrator/project-1299`\n- Integration metadata ref: `orchestrator/project-1299`\n- Integration mismatch: `false`\n\nClarification interpretation\n- No Q1/Q2/Q3 were issued for this issue.\n- `/answer [auto-answered-by-orchestrator]` indicates scope is already actionable without additional clarification.\n\nConflict detection (explicit)\n- Issue text says to include files from `ledger_status.txt` in `open/persisting/resurgent` states, but current ledger producer uses `NEW|PERSISTING|FIXED|RESURGENT|accepted-residual`.  \n- Plan will treat \u201copen\u201d as active unresolved findings and map it to `NEW` (and include `PERSISTING`/`RESURGENT`), unless you want strict-token matching to only `OPEN`.\n\nImplementation plan\n\n1. Files likely to change\n- `prompts/review-reviewer-checklist.txt` (new)\n- `scripts/review_run_reviewers.sh`\n\n2. Functions/modules to implement\n- In `scripts/review_run_reviewers.sh`, add small helper logic for:\n  - feature-flag normalization for `REVIEW_REVIEWER_CHECKLIST_ENABLED` and `REVIEW_REVIEWER_ITERATION_SCOPING`\n  - scoped file set construction for iteration `N>1`\n  - ledger-status parsing to extract active issue file paths\n- Extend prompt assembly path (current heredoc + `assemble_reviewer_prompt`) to:\n  - append checklist block when checklist flag is enabled\n  - inject scoped-review block only when scoping is enabled and eligible\n- Keep `run_reviewer_pass`, `run_reviewer`, two-pass orchestration, model roster, watchdog, and output artifact contract unchanged.\n\n3. Data structures affected\n- New prompt text block variable for checklist content.\n- New scoped-file union set (deduped):\n  - set A: files from last editor commit (`HEAD~1..HEAD`) only when commit context matches autofix intent\n  - set B: files from `ledger_status.txt` with active statuses (`NEW`/`PERSISTING`/`RESURGENT`, with optional compatibility for `OPEN`)\n- Optional runtime temp artifact for the union list (sorted unique) used only for prompt context.\n\n4. API/interface changes\n- Script-level env toggles consumed:\n  - `REVIEW_REVIEWER_CHECKLIST_ENABLED` (expected default `1`)\n  - `REVIEW_REVIEWER_ITERATION_SCOPING` (expected default `1`)\n- New prompt contract file:\n  - `prompts/review-reviewer-checklist.txt` containing the seven-lens checklist block from the design contract.\n- No workflow YAML changes.\n\n5. Potential risks/edge cases\n- `HEAD~1` unavailable or non-autofix head commit: must fail open to existing full-diff behavior.\n- Missing/empty `ledger_status.txt`: must fail open.\n- Status token drift (`OPEN` vs `NEW`): handle compatibly to avoid dropping scope files.\n- File-path parsing robustness (spaces/special chars): ensure union generation is safe and deduped.\n- Prompt growth from checklist: keep additive only; no structural prompt contract breakage.\n\n6. Testing considerations\n- Validate behavior matrix with env toggles:\n  - both disabled => baseline behavior (no checklist, full-diff focus unchanged)\n  - checklist enabled only => checklist appended in both pass-1 and pass-2 prompts\n  - scoping enabled, iteration 1 => full-diff behavior preserved\n  - scoping enabled, iteration >1 with valid inputs => scoped union block present\n  - scoping enabled but missing commit/ledger artifacts => explicit fail-open to full diff\n- Verify invariants unchanged:\n  - reviewer model list/parallel fan-out unchanged\n  - watchdog behavior unchanged\n  - output files (`review_*.txt`, status/log files, consensus artifacts) unchanged\n- Run shell validation (`bash -n`) for `scripts/review_run_reviewers.sh` after edits.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "eeb6743edb5a6caed2d95850b80ee41abf914a02446c044f044eb8153ee1a251",
+  "lineage": {
+    "issue_number": 1421,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24626069595",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24626069595",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1421"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419094347_f53f229cca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1421,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24626069595"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1421",
+  "timestamps": {
+    "created_at": "2026-04-19T09:43:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
