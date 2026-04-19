@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context:\n- `git rev-parse HEAD`: `39d52ba62db40fb6dab764952cf883e5620df269`\n- Checked out branch: `orchestrator/project-1292`\n- Integration metadata branch: `orchestrator/project-1292`\n- Mismatch: `false`\n\nClarification mapping:\n- No explicit `Q<ID>` clarification set exists in the thread.\n- `/answer [auto-answered-by-orchestrator]` indicates proceed with the original issue scope without extra constraints.\n\nConflict detection (issue vs current code):\n- The requested behavior is already present on this ref:\n  - `scripts/validate_process.sh`: preflight failure path already performs deterministic template rerender + relint (`attempt_render_recovery_after_preflight_failure`) and routes self-heal with `phase=render` on rerender-path failure.\n  - `scripts/self_heal_validation.sh`: render phase is already logged in `failing_phase`, while target edits remain restricted to the 4 prompt allow-list and additive-only patch checks.\n  - `prompts/mode-validate-self-heal.txt`: already states render-phase recovery is renderer-driven and forbids harness-file/workflow/script edits in self-heal.\n  - `tests/test_validate_process_render_recovery.py`: already includes success + fail-open + relint-failure coverage for render recovery.\n- This means issue scope appears functionally implemented already on `39d52ba...`.\n\nImplementation plan:\n\n1. Verify scope completion and keep change-set minimal\n- Re-validate acceptance criteria against the current implementation (no speculative refactors).\n- If all checks pass, treat as no-op implementation and document that the issue is already satisfied on this branch.\n\n2. Files likely to change (only if verification finds a concrete gap)\n- `scripts/validate_process.sh`\n- `scripts/self_heal_validation.sh`\n- `prompts/mode-validate-self-heal.txt`\n- `tests/test_validate_process_render_recovery.py`\n- `tests/test_validate_process_template_mode.py`\n- `README.md` and `agents.md` (only if behavior/env contract changes)\n\n3. Functions/modules to implement or adjust (gap-only)\n- `attempt_render_recovery_after_preflight_failure` in `scripts/validate_process.sh`\n- Preflight failure dispatch block in `scripts/validate_process.sh` (render vs preflight self-heal phase routing)\n- `attempt_self_heal_and_reexec` phase normalization (`render` support) in `scripts/validate_process.sh`\n- Allow-list and additive patch guard path in `scripts/self_heal_validation.sh` (must remain unchanged except logging/phase handling)\n\n4. Data structures affected\n- Preflight runtime state vars in `validate_process.sh`:\n  - `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`\n  - `PRE_FLIGHT_FAILURE_KIND`\n  - `PRE_FLIGHT_FAILURE_REASON`\n- Self-heal patch ledger entries:\n  - `failure_phase` (must include `render` where applicable)\n- No MongoDB/data-contract impact.\n\n5. API/interface changes\n- No external API changes expected.\n- No env var renames/removals.\n- No schema contract changes in validation prompt JSON outputs.\n- Logging contract stability should be preserved (render recovery diagnostics and self-heal phase tags).\n\n6. Risks and edge cases to guard\n- Avoid fallback to freehand harness edits during render-phase recovery.\n- Prevent rerender loops (single deterministic rerender + relint attempt).\n- Preserve non-template behavior (`preflight` path unchanged).\n- Preserve self-heal safety guardrails: 4-file allow-list + additive-only patch enforcement + no identifier/schema mutation.\n\n7. Testing considerations\n- Run targeted tests:\n  - `python3 tests/test_validate_process_render_recovery.py`\n  - `python3 tests/test_validate_process_template_mode.py`\n- Confirm render-phase fail-open behavior routes to `attempt_self_heal_and_reexec \"render\"` only for rerender-path failures.\n- Confirm no tests/regressions indicate harness freehand edits in render-phase paths.\n\nRepresentative existing pattern to follow (if any gap is found):\n- `scripts/validate_process.sh` render-recovery flow + `tests/test_validate_process_render_recovery.py` end-to-end harnessed scenarios.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "aef43f114adebe1d555978a993b8621dbd0219f6522b6f66f164ffa2a95880b0",
+  "lineage": {
+    "issue_number": 1410,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24625219823",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24625219823",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1410"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419090352_98b095a9c6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1410,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24625219823"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1410",
+  "timestamps": {
+    "created_at": "2026-04-19T09:03:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
