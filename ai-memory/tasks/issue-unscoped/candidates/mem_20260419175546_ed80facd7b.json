@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/review_issue_ledger.txt:2 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The ledger records `PR_NUMBER: 1455`, but the actual PR being reviewed is #1454.\n  WHY: The ledger is used for lifecycle tracking and auditing, so an incorrect PR number breaks correlation between persisted review state and the actual PR; one reviewer assigned confidence 4, but the highest confidence is 5.\n- README.md:358 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: README.md lists `consolidator_raw.txt` as advisory context for the editor stage instead of `floor_tags.txt`.\n  WHY: The documentation conflicts with the actual editor-stage inputs referenced by `scripts/review_apply_fixes.sh` and `agents.md`, which can mislead operators and maintainers; reviewers agreed this is documentation-only, so severity is lower than the ledger issue.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .ai/review_issue_ledger.txt:PR_NUMBER: 1455 (should be 1454) | severity=high | confidence=5\n  PROBLEM: Ledger records wrong PR number (1455) but PR title and branch indicate this is PR #1454\n  WHY: Ledger tracks issue persistence across review iterations; wrong PR number breaks cross-PR lifecycle tracking and causes incorrect correlation between ledger state and actual PR\n- README.md:Line 358 | severity=medium | confidence=5\n  PROBLEM: Documentation incorrectly lists consolidator_raw.txt as advisory input instead of floor_tags.txt\n  WHY: Documentation inconsistency causes confusion; actual code (`review_apply_fixes.sh` line 196) and `agents.md` line 480 correctly list `floor_tags.txt` as advisory context\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .ai/review_issue_ledger.txt:Line 2 (PR_NUMBER: 1455) | severity=high | confidence=5\n  PROBLEM: The PR_NUMBER in the ledger (1455) does not match the actual pull request being reviewed (1454).\n  WHY: The ledger header is used for tracking and auditing review state across iterations; a mismatch in the PR identification can lead to incorrect state tracking, unnecessary resets, and broken correlation for automated analysis and logging.\n- README.md:Line 358 | severity=medium | confidence=5\n  PROBLEM: Documentation lists `consolidator_raw.txt` as advisory input for the editor stage instead of `floor_tags.txt`.\n  WHY: This is a documentation-to-code inconsistency; the actual prompt logic in `scripts/review_apply_fixes.sh` and the corresponding contract in `agents.md` correctly reference `floor_tags.txt`, so the README misleads developers and operators.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .ai/review_issue_ledger.txt:2 | severity=high | confidence=5\n  PROBLEM: The ledger records `PR_NUMBER: 1455` but the actual PR being reviewed is #1454.\n  WHY: The ledger is used for lifecycle tracking and auditing; a mismatched PR number breaks downstream correlation and can cause review state corruption, duplicate processing, or lost tracking data.\n- README.md:358 | severity=medium | confidence=5\n  PROBLEM: The README states that `consolidator_raw.txt` is advisory context for the editor stage, but the actual implementation in `scripts/review_apply_fixes.sh` uses `floor_tags.txt` as advisory.\n  WHY: Documentation inconsistency can mislead operators about which files are relevant for debugging or understanding the review pipeline, though it does not cause runtime failure.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .ai/review_issue_ledger.txt:Line 2, `PR_NUMBER: 1455` changed from `PR_NUMBER: 1452` | severity=high | confidence=4\n  PROBLEM: The ledger PR_NUMBER was incremented from 1452 to 1455, but neither value matches the actual PR number this review run is processing.\n  WHY: The review issue ledger is used for tracking review lifecycle and persistence across autofix iterations; recording an incorrect PR number breaks correlation between persisted ledger state and the actual PR being reviewed, though this reviewer reported lower confidence than the others.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- README.md:358 | severity=medium | confidence=5\n  PROBLEM: Documentation incorrectly lists `consolidator_raw.txt` as an advisory input to the editor stage; the correct advisory input is `floor_tags.txt`.\n  WHY: Operators or downstream tooling consulting the README may treat `consolidator_raw.txt` as an editor input and overlook `floor_tags.txt`, which could cause confusion during manual inspection or automated fixes.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "2cfe5132c1459ba4230542bf478556cb198c18906647c8a1964034bdc15f24e6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1455,
+    "run_id": "24635087467",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24635087467",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419175546_ed80facd7b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1455,
+    "run_id": "24635087467"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T17:55:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
