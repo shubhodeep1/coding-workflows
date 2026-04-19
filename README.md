@@ -1329,24 +1329,29 @@ editing the prompt and re-running.
 
 **How it works**
 
-1. When any phase of `scripts/validate_process.sh` is about to fail hard
-   (generate parse failure, preflight failure, canary failure, diagnose
-   decision point), it invokes `scripts/self_heal_validation.sh`.
-2. The helper renders `prompts/mode-validate-self-heal.txt` with the full
+1. When `run_preflight_checks` fails in template mode (`HARNESS_MODE=template_generate`),
+   `scripts/validate_process.sh` first runs bounded deterministic recovery:
+   re-render via `run_template_validation_harness_renderer` then re-run
+   preflight checks. This rerender/re-lint loop happens before prompt self-heal
+   and has no freehand harness-edit path.
+2. When a phase is about to fail hard after deterministic recovery
+   (generate parse failure, template-render preflight failure, canary failure,
+   diagnose decision point), it invokes `scripts/self_heal_validation.sh`.
+3. The helper renders `prompts/mode-validate-self-heal.txt` with the full
    failure context and the current text of the four validation prompts,
    and asks the LLM to propose a minimal unified diff against exactly one
    of those four files — or an empty patch if the failure is a real app
    bug, real infrastructure bug, or otherwise not prompt-attributable.
-3. If a patch is proposed, it is validated (allow-list of target files,
+4. If a patch is proposed, it is validated (allow-list of target files,
    clean apply) and applied to the runtime copy of `prompts/`. The helper
    appends the patch to `${RUNTIME_DIR}/self_heal_patches.jsonl` and
    `validate_process.sh` re-execs itself with `SELF_HEAL_ATTEMPT`
    incremented — the validation cycle counter is not touched.
-4. Self-heal attempts are capped at `MAX_SELF_HEAL_ATTEMPTS` (default 2)
+5. Self-heal attempts are capped at `MAX_SELF_HEAL_ATTEMPTS` (default 2)
    per `validate_process.sh` invocation. After that, the original failure
    falls through to the normal hard-fail path and burns a validation
    cycle as today.
-5. If the pipeline eventually passes after one or more successful self-
+6. If the pipeline eventually passes after one or more successful self-
    heal attempts, `validate_process.sh` sends a `repository_dispatch`
    event of type `validation-prompt-self-heal` to
    `shubhodeep1/coding-workflows` carrying the accumulated patches and

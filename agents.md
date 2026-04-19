@@ -346,7 +346,8 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 
 ## 16. Validation Self-Healing
 
-- `scripts/validate_process.sh` attempts to self-heal prompt-wording defects in the four validation prompts (`mode-validate-{discover,generate,fix-harness,diagnose}.txt`) before burning a `MAX_VALIDATE_CYCLES` cycle. The self-heal flow is driven by `prompts/mode-validate-self-heal.txt` and `scripts/self_heal_validation.sh`.
+- `scripts/validate_process.sh` attempts deterministic template-mode preflight recovery before prompt self-heal: on template-mode preflight failure, it re-renders via `run_template_validation_harness_renderer` and re-runs preflight checks in a bounded loop, then falls through to prompt self-heal only if rerender/re-lint does not recover.
+- `scripts/validate_process.sh` then attempts to self-heal prompt-wording defects in the four validation prompts (`mode-validate-{discover,generate,fix-harness,diagnose}.txt`) before burning a `MAX_VALIDATE_CYCLES` cycle. The self-heal flow is driven by `prompts/mode-validate-self-heal.txt` and `scripts/self_heal_validation.sh`.
 - The budget is `MAX_SELF_HEAL_ATTEMPTS` (default `2`) per `validate_process.sh` invocation. Self-heal re-execs do NOT increment `VALIDATION_CYCLE`.
 - Self-heal is ONLY permitted to edit the four validation prompt files. Do not extend it to scripts, workflow YAML, or other prompts without a new ask-first decision.
 - On a successful healed pass, `validate_process.sh` POSTs `repository_dispatch` (event type `validation-prompt-self-heal`) to `shubhodeep1/coding-workflows` with the accumulated patches. The intake workflow `.github/workflows/validation-improvements-intake.yml` opens a **draft** PR with the `[skip ai]` title token and label `ai:needs-prompt-review`, and appends a ledger entry to `docs/validation-improvements.md`.
