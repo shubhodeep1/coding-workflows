@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `d935bec81e5d223572bd71914b84c657c5d834e4`\n- Checked-out ref: `orchestrator/project-1292`\n- `git symbolic-ref --short -q HEAD`: `orchestrator/project-1292`\n- Integration metadata ref: `orchestrator/project-1292` (mismatch: `false`)\n\nClarification interpretation:\n- No explicit Q-ID clarification questions were present in context.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as: proceed with issue scope/constraints as written.\n\nFactual conflict with codebase (must surface):\n- The requested render-phase recovery behavior appears to already exist in `scripts/validate_process.sh`:\n  - `attempt_render_recovery_after_preflight_failure`\n  - render-phase routing to `attempt_self_heal_and_reexec \"render\"` on fail-open\n- Prompt guidance in `prompts/mode-validate-self-heal.txt` already includes render-phase restrictions.\n- Tests for render recovery already exist in `tests/test_validate_process_render_recovery.py`.\n- Potential inconsistency to resolve: `attempt_template_render_recovery_after_preflight_lint` exists but appears unused from the main Phase-2 flow.\n\n1) Files likely to change\n- `scripts/validate_process.sh`\n- `scripts/self_heal_validation.sh` (only if phase logging/plumbing needs tightening)\n- `prompts/mode-validate-self-heal.txt` (only additive guidance updates if needed)\n- `tests/test_validate_process_render_recovery.py`\n- `tests/test_validate_process_template_mode.py`\n- `README.md` and `agents.md` only if runtime behavior is changed beyond current documented behavior\n\n2) Functions/modules to implement or adjust\n- Representative pattern to follow: existing Phase-2 preflight failure routing and self-heal dispatch in `scripts/validate_process.sh` (current preflight vs render phase split).\n- `attempt_render_recovery_after_preflight_failure`:\n  - Ensure deterministic rerender + relint semantics are the only recovery path for template-mode render/lint failures.\n- Phase-2 preflight branch:\n  - Keep non-template behavior backward-compatible.\n  - Ensure render failures continue to route to render-phase self-heal (prompt-only scope), never freehand harness edits.\n- Optional cleanup/alignment:\n  - Either wire `attempt_template_render_recovery_after_preflight_lint` into the main flow or remove/retire it if redundant, with no behavior regression.\n\n3) Data structures affected\n- Shell state vars:\n  - `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`\n  - `PRE_FLIGHT_FAILURE_KIND`\n  - `PRE_FLIGHT_FAILURE_REASON`\n- Self-heal phase enum/path:\n  - `SELF_HEAL_FAILURE_PHASE=render` handling in orchestration + ledger records\n- No MongoDB collection/index contract changes expected.\n\n4) API/interface changes\n- No external API changes expected.\n- Internal operational interface/logging to preserve:\n  - Render recovery log markers (e.g., `PRE_FLIGHT_RENDER_RECOVERY ...`)\n  - Self-heal phase routing (`render` vs `preflight`)\n- No env var rename/removal; no backward-incompatible interface change.\n\n5) Potential risks or edge cases\n- Infinite/duplicate recovery attempts if render-attempt guard is bypassed.\n- Accidental fallback to freehand harness edits would violate acceptance criteria.\n- Misclassification of preflight failure type (lint vs non-lint) could trigger wrong recovery path.\n- Drift between test harness snippets and actual `validate_process.sh` behavior if tests don\u2019t validate real flow.\n- If docs are not updated when behavior changes, ops guidance becomes inconsistent.\n\n6) Testing considerations\n- Keep/add deterministic tests for:\n  - Template mode: preflight fail -> rerender succeeds -> relint passes -> pipeline continues.\n  - Template mode: rerender fails -> fail-open terminal path -> self-heal invoked with `render`.\n  - Template mode: rerender succeeds but relint fails -> fail-open terminal path -> self-heal invoked with `render`.\n  - Non-template mode: legacy path preserved -> no render recovery call -> self-heal phase remains `preflight`.\n- Run targeted tests:\n  - `tests/test_validate_process_render_recovery.py`\n  - `tests/test_validate_process_template_mode.py`\n- If implementation changes runtime behavior, update `README.md` and `agents.md` in the same change set.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7d7bbeac1628937227d7b8f41c05593ab5625dfc4c484844b3771f3f815cc072",
+  "lineage": {
+    "issue_number": 1401,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24624682269",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24624682269",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1401"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419082551_3c587e67ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1401,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24624682269"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1401",
+  "timestamps": {
+    "created_at": "2026-04-19T08:25:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
