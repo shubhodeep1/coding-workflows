@@ -571,6 +571,12 @@ if is_truthy "${ENABLE_VALIDATION_RAW}"; then
   ENABLE_VALIDATION="true"
 fi
 
+if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
+  ALLOW_WORKFLOW_EDITS="true"
+else
+  ALLOW_WORKFLOW_EDITS="false"
+fi
+
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
   echo "::warning::MAX_VALIDATE_CYCLES must be a positive integer; defaulting to 3"
@@ -6274,12 +6280,20 @@ _dispatch_review_for_conflicts()
 
 	echo "  ${log_prefix} Dispatching review workflow for conflict resolution..."
 
+	# Forward ALLOW_WORKFLOW_EDITS so the dispatched review run respects the
+	# repo-level opt-out semantics (vars.ALLOW_WORKFLOW_EDITS != 'false').
+	# Without this flag the dispatched workflow falls back to its own
+	# workflow_dispatch input default, which silently suppresses workflow
+	# edits even when the repo variable allows them. See
+	# review_autofix.yml:51 and internal-review.yml:15.
+	local allow_workflow_edits_flag="${ALLOW_WORKFLOW_EDITS:-true}"
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
 		if gh_retry gh workflow run "${wf_candidate}" \
 			--repo "${GITHUB_REPOSITORY}" \
 			--ref "${head_ref}" \
-			-f pr_number="${pr_number}" 2>/dev/null; then
-			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref}."
+			-f pr_number="${pr_number}" \
+			-f allow_workflow_edits="${allow_workflow_edits_flag}" 2>/dev/null; then
+			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref} (allow_workflow_edits=${allow_workflow_edits_flag})."
 			# Record in cycle-local tracker to prevent duplicate dispatches
 			echo "${pr_number}" >> "${_CONFLICT_DISPATCH_TRACKER}"
 			return 0
@@ -8227,7 +8241,7 @@ sys.exit(1)
               if [ -n "$(git status --porcelain)" ]; then
                 git config user.name "codex-bot"
                 git config user.email "codex@users.noreply.github.com"
-                if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
+                if [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ]; then
                   # Use a single add call so empty/minimal repos do not fail on
                   # exclude-only pathspecs.
                   # NOTE: do not list .gitignored directories (node_modules, .serena)
@@ -8247,7 +8261,7 @@ sys.exit(1)
                 fi
                 echo "Staged files before commit:"
                 git diff --cached --name-only | sed 's/^/ - /' || true
-                if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then
+                if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then
                   echo "Error: scripts/, prompts/, .github/ai/, or .github/workflows is staged while ALLOW_WORKFLOW_EDITS=false"
                   exit 1
                 fi
