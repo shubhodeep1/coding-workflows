@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "ISSUE-LEVEL CONSENSUS SUMMARY\nTotal unique issues: 6\nIssues with multi-reviewer agreement: 0\n\nHIGH CONFIDENCE (flagged by >=2 reviewers):\n  (none)\n\nLOW CONFIDENCE (flagged by 1 reviewer only):\n  [1] File: scripts/validate_process.sh (line ~219)\n      Problem: Comment documenting valid phase tags doesn't mention that 'unknown' is the default value when no phase is provided; No runtime failure - documentation clarity issue only\n      Confidence: avg 1.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [2] File: tests/test_validate_process_render_recovery.py (line ~1)\n      Problem: Test file lacks shebang (`#!/usr/bin/env python3`) unlike most other test files in the repository; No runtime failure - style inconsistency with repository conventions; **FINAL ASSESSMENT:**; The implementation of template-mode render recovery for validation preflight failures is functionally correct and safe. The changes implement a deterministic render recovery loop as intended, with proper error handling, logging, and backward compatibility. No critical runtime issues were found. The minor documentation and style issues identified do not affect functionality or safety.; Based on my comprehensive review, I find the implementation to be functionally correct and safe. The changes implement a deterministic render recovery loop for validation self-heal as intended, with proper error handling, logging, and backward compatibility.; No critical runtime issues were found. The implementation follows the repository's coding standards and safety requirements.; **HARDENING_SUGGESTIONS:**; None - the implementation already includes appropriate defensive coding practices.\n      Confidence: avg 2.0\n      Flagged by: deepseek_deepseek-v3_2\n\n  [3] File: `scripts/validate_process.sh` (line ~1135)\n      Problem: Unguarded log file redirection.; If `GENERATE_LOG_FILE` is unset, redirects like `>> \"${GENERATE_LOG_FILE}\"` can fail or cause unexpected behavior. Added a defensive check to skip recovery if the log path is missing.\n      Confidence: avg 4.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [4] File: `scripts/validate_process.sh` (line ~219)\n      Problem: Outdated phase tag list in the comment.; Maintainability issue; developers might overlook the `render` phase due to inaccurate documentation.\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\n  [5] File: `scripts/validate_process.sh`\n      Problem: Location: `run_preflight_render_recovery()`; Issue: Potential for silent failures if logging fails.; Suggested minimal fix: The added check for `GENERATE_LOG_FILE` already addresses this by providing a warning and exiting early if the required environment is not ready.; Estimated lines changed: 5; HARDENING_RISK_SCORE: 1\n      Confidence: avg n/a\n      Flagged by: google_gemini-3-flash-preview\n\n  [6] File: `tests/test_validate_process_render_recovery.py` (line ~1)\n      Problem: Misleading shebang in a pytest file.; Not a functional failure, but inconsistent with repository style for test files.; ### Hardening Suggestions; **HARDENING_SUGGESTIONS:**\n      Confidence: avg 5.0\n      Flagged by: google_gemini-3-flash-preview\n\nFILE-LEVEL SUMMARY (backward compatible):\nHigh confidence files (mentioned by >=2 reviewers):\n(none)\n\nLow confidence files (mentioned by 1 reviewer):\n`scripts/validate_process.sh`\n`tests/test_validate_process_render_recovery.py`\nscripts/validate_process.sh\ntests/test_validate_process_render_recovery.py",
+  "fingerprint": "b20da043f0937289659bd8703485d3521c13f1ada74c7c5437fa08daa2cbeda7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1373,
+    "run_id": "24622630443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24622630443",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419063220_8ae54873f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1373,
+    "run_id": "24622630443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus found no high-confidence file-level findings",
+  "timestamps": {
+    "created_at": "2026-04-19T06:32:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
