@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:28-32,48-52 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5]\n  PROBLEM: `allow_workflow_edits` has inconsistent defaults between `workflow_call` and `workflow_dispatch`.\n  WHY: The `workflow_call` input defaults to `true` while `workflow_dispatch` defaults to `false`, so manual dispatches behave differently from automated runs and from the repository-wide `true` default.\n- scripts/orchestrate_poll_process.sh:6288 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5]\n  PROBLEM: `_dispatch_review_for_conflicts` reapplies a redundant `ALLOW_WORKFLOW_EDITS` default.\n  WHY: The variable is already normalized earlier in the script, so the local `:-true` fallback is unnecessary and creates maintenance drift risk.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:28-32,48-52 | severity=medium | confidence=5\n  PROBLEM: `allow_workflow_edits` has inconsistent defaults between `workflow_call` and `workflow_dispatch`.\n  WHY: `workflow_call` defaults to `true` while `workflow_dispatch` defaults to `false`, creating inconsistent behavior for the same workflow.\n- scripts/orchestrate_poll_process.sh:6289 | severity=low | confidence=3\n  PROBLEM: `ALLOW_WORKFLOW_EDITS` is defaulted twice in `_dispatch_review_for_conflicts`.\n  WHY: The script already normalizes `ALLOW_WORKFLOW_EDITS` earlier, so the later `${ALLOW_WORKFLOW_EDITS:-true}` is redundant and risks drift.\n- scripts/orchestrate_poll_process.sh:8244,8264 | severity=low | confidence=3\n  PROBLEM: Redundant `${ALLOW_WORKFLOW_EDITS:-true}` defaults remain in inner checks.\n  WHY: These expansions repeat the same default after normalization, which is unnecessary and could diverge from the global handling.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- tests/test_validate_process_template_mode.py:52 | severity=high | confidence=5\n  PROBLEM: The test still expects the old render-recovery log message.\n  WHY: The script now emits `Render recovery: pre-flight checks passed after deterministic rerender.`, but the test expects `Render recovery: rerender completed; re-running pre-flight checks.`\n- .github/workflows/review_autofix.yml:51,227,1669 | severity=medium | confidence=4\n  PROBLEM: `review_autofix.yml` mixes inconsistent defaults and forced false normalization for `allow_workflow_edits`.\n  WHY: The workflow_dispatch input still defaults to `false`, the env expression can force `false` when the input is missing/null, and the shell check uses a hardcoded false fallback.\n- .github/workflows/implement.yml:78,1425,1612 | severity=medium | confidence=4\n  PROBLEM: `implement.yml` still has inconsistent defaults and hardcoded shell fallbacks for `allow_workflow_edits`.\n  WHY: The workflow input defaults to `false`, and shell guards use `${ALLOW_WORKFLOW_EDITS:-false}`, which can override the intended repository default of `true` when unset.\n- scripts/orchestrate_poll_process.sh:6288 | severity=low | confidence=3\n  PROBLEM: `_dispatch_review_for_conflicts` repeats the global defaulting logic.\n  WHY: The local `ALLOW_WORKFLOW_EDITS:-true` fallback duplicates startup normalization and is only a maintenance hazard.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:28-32,48-52 | severity=medium | confidence=4\n  PROBLEM: `allow_workflow_edits` has inconsistent defaults between `workflow_call` and `workflow_dispatch`.\n  WHY: `workflow_call` defaults to `true` while `workflow_dispatch` defaults to `false`, so manual runs get different behavior from automated runs.\n- scripts/orchestrate_poll_process.sh:6288 | severity=low | confidence=3\n  PROBLEM: `_dispatch_review_for_conflicts` redundantly re-defaults `ALLOW_WORKFLOW_EDITS`.\n  WHY: `ALLOW_WORKFLOW_EDITS` is already normalized at startup, so the later `:-true` expansion is unnecessary and only adds maintenance risk.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "91da91c13b70f2ff088e9c4528466950c35b6be78e85eb8516231b01ddc9c27c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1402,
+    "run_id": "24628221424",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24628221424",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419120342_0cc4ced8e3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1402,
+    "run_id": "24628221424"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T12:03:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
