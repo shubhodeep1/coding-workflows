@@ -330,6 +330,21 @@ jobs:
 > `AUTOFIX_PEER_CHECK` / `AUTOFIX_DISPATCH_SKIPPED` / `AUTOFIX_DISPATCH_ISSUED`
 > lines when auditing collision behaviour in Actions logs.
 
+### Local replay helper for review artifacts
+
+Use `scripts/dev/replay_review_pipeline.sh` to replay the review artifact chain locally without dispatching any GitHub workflow.
+
+- Stage order is fixed to `review_floor_rules.sh` -> `review_consolidate.sh` -> `review_parse_consolidator.sh` -> `review_issue_ledger.sh`.
+- The helper is non-invasive: it only runs local scripts against a provided runtime bundle and prints an artifact summary.
+- `--runtime-dir` is required and must contain `reviewer_bundle.txt`.
+
+Examples:
+
+```bash
+scripts/dev/replay_review_pipeline.sh --runtime-dir /tmp/review-runtime
+scripts/dev/replay_review_pipeline.sh --runtime-dir /tmp/review-runtime --disable-consolidator
+```
+
 > **Bootstrap fail-fast + resolver hallucination guard** — The
 > `review_autofix.yml` script-bootstrap loop classifies helpers as
 > `REQUIRED_BOOTSTRAP_SCRIPTS` (missing from both `${script_ref}` and
