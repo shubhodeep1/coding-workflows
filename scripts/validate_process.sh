@@ -1170,8 +1170,24 @@ attempt_render_recovery_after_preflight_failure()
 		return 0
 	fi
 
+	local render_recovery_classification_log="${RUNTIME_DIR}/validation_preflight.render_recovery.log"
+	if awk '
+		/^Render recovery: rerender completed; re-running pre-flight checks\.$/ { capture=1; next }
+		capture { print }
+	' "${PRE_FLIGHT_LOG_FILE}" > "${render_recovery_classification_log}" 2>/dev/null \
+		&& [ -s "${render_recovery_classification_log}" ]; then
+		classify_preflight_failure "${render_recovery_classification_log}"
+	else
+		classify_preflight_failure
+	fi
 	echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
-	return 2
+	echo "Render recovery: rerun failure classification kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}." >> "${PRE_FLIGHT_LOG_FILE}"
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" = "lint" ]; then
+		return 2
+	fi
+
+	echo "Render recovery: rerun failure classified as non-lint; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
+	return 1
 }
 
 run_preflight_checks()
@@ -1725,40 +1741,42 @@ PY3
 
 classify_preflight_failure()
 {
+	local classification_log_file="${1:-${PRE_FLIGHT_LOG_FILE}}"
+
 	PRE_FLIGHT_FAILURE_KIND="non_lint"
 	PRE_FLIGHT_FAILURE_REASON="preflight_failure_other"
 
-	if [ ! -s "${PRE_FLIGHT_LOG_FILE}" ]; then
+	if [ ! -s "${classification_log_file}" ]; then
 		PRE_FLIGHT_FAILURE_REASON="preflight_log_empty"
 		echo "PRE_FLIGHT_CLASSIFICATION kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}" >&2
 		return 0
 	fi
 
-	if grep -Fq "Embedded Python F-code lint violations in generated harness scripts:" "${PRE_FLIGHT_LOG_FILE}"; then
+	if grep -Fq "Embedded Python F-code lint violations in generated harness scripts:" "${classification_log_file}"; then
 		PRE_FLIGHT_FAILURE_KIND="lint"
 		PRE_FLIGHT_FAILURE_REASON="embedded_python_fcode_lint"
-	elif grep -Fq "Embedded Python syntax errors in generated harness scripts:" "${PRE_FLIGHT_LOG_FILE}"; then
+	elif grep -Fq "Embedded Python syntax errors in generated harness scripts:" "${classification_log_file}"; then
 		PRE_FLIGHT_FAILURE_KIND="lint"
 		PRE_FLIGHT_FAILURE_REASON="embedded_python_syntax"
-	elif grep -Fq "Compose syntax/validation check failed." "${PRE_FLIGHT_LOG_FILE}"; then
+	elif grep -Fq "Compose syntax/validation check failed." "${classification_log_file}"; then
 		PRE_FLIGHT_FAILURE_KIND="lint"
 		PRE_FLIGHT_FAILURE_REASON="compose_schema_lint"
-	elif grep -Fq "Shell syntax check failed:" "${PRE_FLIGHT_LOG_FILE}"; then
+	elif grep -Fq "Shell syntax check failed:" "${classification_log_file}"; then
 		PRE_FLIGHT_FAILURE_KIND="lint"
 		PRE_FLIGHT_FAILURE_REASON="shell_syntax_lint"
-	elif grep -Fq "validation/tests/00_canary.sh CANARY_TOOLS references service-side CLI(s)" "${PRE_FLIGHT_LOG_FILE}"; then
+	elif grep -Fq "validation/tests/00_canary.sh CANARY_TOOLS references service-side CLI(s)" "${classification_log_file}"; then
 		PRE_FLIGHT_FAILURE_KIND="lint"
 		PRE_FLIGHT_FAILURE_REASON="canary_tools_scope_lint"
-	elif grep -Fq "references 'mongosh'/'mongodb-mongosh' but does not add MongoDB's official apt repo" "${PRE_FLIGHT_LOG_FILE}"; then
+	elif grep -Fq "references 'mongosh'/'mongodb-mongosh' but does not add MongoDB's official apt repo" "${classification_log_file}"; then
 		PRE_FLIGHT_FAILURE_KIND="lint"
 		PRE_FLIGHT_FAILURE_REASON="dockerfile_package_lint"
-	elif grep -Fq "missing build context:" "${PRE_FLIGHT_LOG_FILE}" \
-		|| grep -Fq "missing dockerfile:" "${PRE_FLIGHT_LOG_FILE}"; then
+	elif grep -Fq "missing build context:" "${classification_log_file}" \
+		|| grep -Fq "missing dockerfile:" "${classification_log_file}"; then
 		PRE_FLIGHT_FAILURE_KIND="lint"
 		PRE_FLIGHT_FAILURE_REASON="compose_build_path_lint"
-	elif grep -Fq "Missing validation/docker-compose.test.yml" "${PRE_FLIGHT_LOG_FILE}" \
-		|| grep -Fq "Missing validation/validate.env" "${PRE_FLIGHT_LOG_FILE}" \
-		|| grep -Fq "Missing validation/tests/00_canary.sh" "${PRE_FLIGHT_LOG_FILE}"; then
+	elif grep -Fq "Missing validation/docker-compose.test.yml" "${classification_log_file}" \
+		|| grep -Fq "Missing validation/validate.env" "${classification_log_file}" \
+		|| grep -Fq "Missing validation/tests/00_canary.sh" "${classification_log_file}"; then
 		PRE_FLIGHT_FAILURE_KIND="non_lint"
 		PRE_FLIGHT_FAILURE_REASON="missing_validation_artifact"
 	fi

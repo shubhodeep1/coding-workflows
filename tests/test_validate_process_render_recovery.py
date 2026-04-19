@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+VALIDATE_PROCESS_PATH = REPO_ROOT / "scripts" / "validate_process.sh"
 
 
 def _run_script(script: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -23,6 +27,10 @@ def _run_script(script: str, env: dict[str, str]) -> subprocess.CompletedProcess
 			capture_output=True,
 			timeout=60,
 		)
+
+
+def _validate_process_text() -> str:
+	return VALIDATE_PROCESS_PATH.read_text(encoding="utf-8")
 
 
 def test_render_recovery_success_continues_pipeline() -> None:
@@ -655,12 +663,188 @@ echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
 		assert "Render recovery: pre-flight checks still failing after deterministic rerender." in log
 
 
+
+def test_render_recovery_relint_non_lint_fail_open_uses_preflight_phase_self_heal() -> None:
+	script = """#!/usr/bin/env bash
+set -euo pipefail
+
+PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
+PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_KIND="none"
+PRE_FLIGHT_FAILURE_REASON="none"
+PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
+HARNESS_MODE="template_generate"
+HARNESS_GENERATOR_MODE="templates"
+SELF_HEAL_PHASE_LOG="${RUNTIME_DIR}/self_heal_phase.log"
+PRECHECK_CALLS=0
+
+run_template_validation_harness_renderer() {
+	return 0
+}
+
+run_preflight_checks() {
+	PRE_FLIGHT_STATUS="running"
+	PRECHECK_CALLS=$((PRECHECK_CALLS + 1))
+	if [ "${PRE_FLIGHT_APPEND_LOG:-false}" != "true" ]; then
+		: > "${PRE_FLIGHT_LOG_FILE}"
+	fi
+	echo "preflight-fail-${PRECHECK_CALLS}" >> "${PRE_FLIGHT_LOG_FILE}"
+	PRE_FLIGHT_STATUS="fail"
+	if [ "${PRECHECK_CALLS}" -eq 1 ]; then
+		echo "Shell syntax check failed: validation/tests/00_canary.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+	else
+		echo "Missing validation/validate.env" >> "${PRE_FLIGHT_LOG_FILE}"
+	fi
+	return 1
+}
+
+classify_preflight_failure() {
+	local classification_log_file="${1:-${PRE_FLIGHT_LOG_FILE}}"
+
+	PRE_FLIGHT_FAILURE_KIND="non_lint"
+	PRE_FLIGHT_FAILURE_REASON="preflight_failure_other"
+
+	if [ ! -s "${classification_log_file}" ]; then
+		PRE_FLIGHT_FAILURE_REASON="preflight_log_empty"
+		return 0
+	fi
+
+	if grep -Fq "Shell syntax check failed:" "${classification_log_file}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="shell_syntax_lint"
+	elif grep -Fq "Missing validation/validate.env" "${classification_log_file}"; then
+		PRE_FLIGHT_FAILURE_KIND="non_lint"
+		PRE_FLIGHT_FAILURE_REASON="missing_validation_artifact"
+	fi
+
+	return 0
+}
+
+attempt_self_heal_and_reexec() {
+	printf '%s\n' "$1" >> "${SELF_HEAL_PHASE_LOG}"
+	return 0
+}
+
+attempt_render_recovery_after_preflight_failure()
+{
+	local renderer_exit=0
+
+	if [ "${HARNESS_MODE}" != "template_generate" ] || [ "${HARNESS_GENERATOR_MODE}" != "templates" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+
+	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
+	{
+		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
+		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
+	} >> "${PRE_FLIGHT_LOG_FILE}"
+
+	if run_template_validation_harness_renderer; then
+		renderer_exit=0
+	else
+		renderer_exit=$?
+	fi
+
+	if [ "${renderer_exit}" -ne 0 ]; then
+		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 2
+	fi
+
+	echo "Render recovery: rerender completed; re-running pre-flight checks." >> "${PRE_FLIGHT_LOG_FILE}"
+	local PRE_FLIGHT_APPEND_LOG="true"
+	if run_preflight_checks; then
+		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 0
+	fi
+
+	local render_recovery_classification_log="${RUNTIME_DIR}/validation_preflight.render_recovery.log"
+	if awk '
+		/^Render recovery: rerender completed; re-running pre-flight checks\.$/ { capture=1; next }
+		capture { print }
+	' "${PRE_FLIGHT_LOG_FILE}" > "${render_recovery_classification_log}" 2>/dev/null \
+		&& [ -s "${render_recovery_classification_log}" ]; then
+		classify_preflight_failure "${render_recovery_classification_log}"
+	else
+		classify_preflight_failure
+	fi
+	echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+	echo "Render recovery: rerun failure classification kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}." >> "${PRE_FLIGHT_LOG_FILE}"
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" = "lint" ]; then
+		return 2
+	fi
+
+	echo "Render recovery: rerun failure classified as non-lint; fail-open to legacy pre-flight failure handling." >> "${PRE_FLIGHT_LOG_FILE}"
+	return 1
+}
+
+if ! run_preflight_checks; then
+	render_recovery_exit=1
+	if attempt_render_recovery_after_preflight_failure; then
+		render_recovery_exit=0
+	else
+		render_recovery_exit=$?
+	fi
+
+	if [ "${render_recovery_exit}" -ne 0 ]; then
+		if [ "${render_recovery_exit}" -eq 2 ]; then
+			attempt_self_heal_and_reexec "render"
+		else
+			attempt_self_heal_and_reexec "preflight"
+		fi
+		echo "terminal-failure" > "${RUNTIME_DIR}/terminal.txt"
+		exit 0
+	fi
+fi
+
+echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
+"""
+
+	with tempfile.TemporaryDirectory(prefix="validate-render-recovery-relint-non-lint-") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		env = os.environ.copy()
+		env["RUNTIME_DIR"] = str(runtime_dir)
+		proc = _run_script(script, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		phase_log = (runtime_dir / "self_heal_phase.log").read_text(encoding="utf-8").strip().splitlines()
+		assert phase_log == ["preflight"]
+		assert (runtime_dir / "terminal.txt").read_text(encoding="utf-8").strip() == "terminal-failure"
+		log = (runtime_dir / "validation_preflight.log").read_text(encoding="utf-8")
+		assert "Render recovery: rerun failure classification kind=non_lint reason=missing_validation_artifact." in log
+		assert "Render recovery: rerun failure classified as non-lint; fail-open to legacy pre-flight failure handling." in log
+
+
+
+def test_render_recovery_helper_classifies_rerun_failure_before_phase_routing() -> None:
+	text = _validate_process_text()
+	pattern = re.compile(
+		r"attempt_render_recovery_after_preflight_failure\(\).*?validation_preflight\.render_recovery\.log.*?classify_preflight_failure \"\$\{render_recovery_classification_log\}\".*?Render recovery: rerun failure classification kind=\$\{PRE_FLIGHT_FAILURE_KIND\} reason=\$\{PRE_FLIGHT_FAILURE_REASON\}\..*?if \[ \"\$\{PRE_FLIGHT_FAILURE_KIND\}\" = \"lint\" \]; then.*?return 2.*?return 1",
+		re.DOTALL,
+	)
+	assert pattern.search(text), (
+		"expected render recovery helper to classify rerun failures and route lint failures to render phase while failing open for non-lint failures"
+	)
+
+
+def test_classify_preflight_failure_accepts_optional_log_override() -> None:
+	text = _validate_process_text()
+	assert "local classification_log_file=\"${1:-${PRE_FLIGHT_LOG_FILE}}\"" in text
+	assert "grep -Fq \"Missing validation/validate.env\" \"${classification_log_file}\"" in text
+
+
 def main() -> int:
 	test_render_recovery_success_continues_pipeline()
 	test_render_recovery_fail_open_uses_render_phase_self_heal()
 	test_render_recovery_relint_failure_uses_render_phase_self_heal()
 	test_non_template_preflight_failure_preserves_legacy_path()
 	test_render_recovery_relint_fail_open_uses_render_phase_self_heal()
+	test_render_recovery_relint_non_lint_fail_open_uses_preflight_phase_self_heal()
+	test_render_recovery_helper_classifies_rerun_failure_before_phase_routing()
+	test_classify_preflight_failure_accepts_optional_log_override()
 	return 0
 
 
