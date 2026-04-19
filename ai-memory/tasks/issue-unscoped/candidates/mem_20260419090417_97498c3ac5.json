@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6101 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The fallback value for `ALLOW_WORKFLOW_EDITS` uses `false` instead of the documented default `true`.\n  WHY: This forwards `allow_workflow_edits=false` when the variable is unset, which suppresses workflow edits contrary to the repository\u2019s documented opt-out semantics.\n- .github/workflows/review_autofix.yml:51 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5]\n  PROBLEM: The `workflow_dispatch` default for `allow_workflow_edits` is `false` while the related workflow default was changed to `true`.\n  WHY: Manual or alternative dispatch paths will default to blocking workflow edits, creating inconsistent behavior across review entry points.\n- scripts/orchestrate_poll_process.sh:6097-6101 | severity=low | confidence=3\n  flagged_by: [google_gemini-3-flash-preview, deepseek_deepseek-v3_2, moonshotai_kimi-k2_5]\n  PROBLEM: The comment references specific workflow line numbers and is brittle.\n  WHY: Line-number references will drift over time and can become misleading, though this is documentation-only.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:6103 | severity=medium | confidence=5\n  PROBLEM: The fallback has been correctly changed from `:-false` to `:-true` to match the repository default.\n  WHY: This ensures that when `ALLOW_WORKFLOW_EDITS` is unset, the orchestrator forwards `true` to dispatched workflows, respecting the repository's permissive default semantics.\n- scripts/orchestrate_poll_process.sh:6097-6101 (comment) | severity=low | confidence=5\n  PROBLEM: The comment has been updated from referencing specific line numbers to generic descriptions.\n  WHY: This avoids brittleness from line number drift and improves documentation clarity.\n- .github/workflows/internal-review.yml:15 | severity=medium | confidence=5\n  PROBLEM: The `workflow_dispatch` input default has been changed from `false` to `true`.\n  WHY: This aligns with the repository default and ensures consistent behavior across review workflows.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/orchestrate_poll_process.sh | severity=high | confidence=5\n  PROBLEM: The fallback value `false` is incorrect and contradicts the repository's documented behavior.\n  WHY: According to `README.md` and `agents.md`, `ALLOW_WORKFLOW_EDITS` defaults to `true`; using `:-false` forwards `\"false\"` when the variable is unset and silently disables AI edits to `.github/workflows`.\n- .github/workflows/review_autofix.yml | severity=medium | confidence=5\n  PROBLEM: The `workflow_dispatch` input default for `allow_workflow_edits` is `false`, which is inconsistent with the changes made to `internal-review.yml` and the global documentation.\n  WHY: If the workflow is dispatched without an explicit flag, it defaults to `false`, creating fragmented behavior between review workflows.\n- scripts/orchestrate_poll_process.sh | severity=low | confidence=3\n  PROBLEM: Brittle documentation.\n  WHY: The comment hardcodes line numbers that will become stale as workflows evolve, though this does not affect runtime behavior.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_process.sh | severity=medium | confidence=4\n  PROBLEM: The fallback value uses `:-false` but should use `:-true` to match the documented default behavior in `README.md` which states \"default: true\" for ALLOW_WORKFLOW_EDITS.\n  WHY: When the orchestrator runs without `ALLOW_WORKFLOW_EDITS` configured, it falls back to `false` and passes `-f allow_workflow_edits=false` to dispatched workflows, silently disabling workflow edits.\n- .github/workflows/review_autofix.yml | severity=medium | confidence=5\n  PROBLEM: The `workflow_dispatch` input default for `allow_workflow_edits` is `false`, which contradicts the change made to internal-review.yml and the PR's stated goal of aligning defaults with documented behavior.\n  WHY: When dispatched without an explicit value, it defaults to `false`, potentially blocking intended workflow edits and creating inconsistent behavior across review entry points.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:6101 | severity=medium | confidence=4\n  PROBLEM: The fallback value `false` contradicts the documented default behavior in README.md.\n  WHY: According to the README, `ALLOW_WORKFLOW_EDITS` defaults to `true` with opt-out semantics, so the current code forwards `false` when the environment variable is unset and incorrectly suppresses workflow edits.\n- scripts/orchestrate_poll_process.sh:6097 (comment) | severity=low | confidence=2\n  PROBLEM: The comment references specific line numbers which are brittle.\n  WHY: Line-number references will drift and may mislead readers, though this has no runtime impact.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/orchestrate_poll_process.sh | severity=medium | confidence=4\n  PROBLEM: `local allow_workflow_edits_flag=\"${ALLOW_WORKFLOW_EDITS:-false}\"` uses `false` as the fallback, contradicting the repository's documented default of `true`.\n  WHY: When the variable is unset, the code forwards `allow_workflow_edits=false`, which blocks AI edits to `.github/workflows` contrary to the repo's permissive default.\n- scripts/orchestrate_poll_process.sh | severity=low | confidence=2\n  PROBLEM: The inline comment points to `review_autofix.yml:51 and internal-review.yml:15`, which are prone to drift and don't explain the differing defaults.\n  WHY: This is documentation-only, but the references may become stale and confuse maintainers.\n- .github/workflows/internal-review.yml | severity=medium | confidence=5\n  PROBLEM: The `workflow_dispatch` default for `allow_workflow_edits` was changed from `false` to `true`.\n  WHY: This aligns the workflow with the repository default and is the correct behavior.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "13bd62bf3f03d89e35f58a3edad9232cbb11a2c46e73efe7c6991ddd592c714a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1409,
+    "run_id": "24625171902",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24625171902",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260419090417_97498c3ac5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1409,
+    "run_id": "24625171902"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-19T09:04:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
