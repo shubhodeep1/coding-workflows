@@ -315,6 +315,29 @@ normalize_ledger_status()
 	esac
 }
 
+format_editor_outcomes_for_status()
+{
+	local editor_outcomes="$1"
+	printf '%s\n' "${editor_outcomes}" | awk '
+		{
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+			if ($0 == "") {
+				next
+			}
+			if (count > 0) {
+				printf ", "
+			}
+			printf "%s", $0
+			count++
+		}
+		END {
+			if (count == 0) {
+				printf "none"
+			}
+		}
+	'
+}
+
 write_current_entry()
 {
 	local entry_file="$1"
@@ -338,7 +361,10 @@ write_current_entry()
 		echo "FIRST_SEEN_ITERATION: ${first_seen}"
 		echo "LAST_SEEN_ITERATION: ${last_seen}"
 		echo "PERSIST_COUNT: ${persist_count}"
-		echo "EDITOR_OUTCOMES: ${editor_outcomes}"
+		echo "EDITOR_OUTCOMES:"
+		while IFS= read -r outcome_line || [ -n "${outcome_line}" ]; do
+			echo "  ${outcome_line}"
+		done < <(printf '%s\n' "${editor_outcomes}" | sed '/^[[:space:]]*$/d')
 		echo "=== END ENTRY ==="
 	} >> "${entry_file}"
 }
@@ -359,7 +385,7 @@ parse_prior_ledger()
 			sub(/[[:space:]]+$/, "", s)
 			return s
 		}
-		function flush_entry() {
+		function flush_entry(    encoded_outcomes) {
 			if (entry_id == "") {
 				return
 			}
@@ -367,11 +393,17 @@ parse_prior_ledger()
 				err = 1
 				return
 			}
-			print entry_id "\t" file "\t" lines "\t" lens "\t" severity "\t" status "\t" first_seen "\t" last_seen "\t" persist_count "\t" editor_outcomes >> out_file
+			encoded_outcomes = editor_outcomes
+			gsub(/\r/, "", encoded_outcomes)
+			gsub(/\\/, "\\\\", encoded_outcomes)
+			gsub(/\t/, "\\t", encoded_outcomes)
+			gsub(/\n/, "\\n", encoded_outcomes)
+			print entry_id "\t" file "\t" lines "\t" lens "\t" severity "\t" status "\t" first_seen "\t" last_seen "\t" persist_count "\t" encoded_outcomes >> out_file
 		}
 		BEGIN {
 			err = 0
 			state = "start"
+			in_editor_outcomes = 0
 			entry_id = ""
 			file = ""
 			lines = ""
@@ -436,11 +468,13 @@ parse_prior_ledger()
 				last_seen = ""
 				persist_count = ""
 				editor_outcomes = ""
+				in_editor_outcomes = 0
 				next
 			}
 			if (line ~ /^=== END ENTRY ===$/) {
 				flush_entry()
 				entry_id = ""
+				in_editor_outcomes = 0
 				next
 			}
 			if (entry_id == "") {
@@ -480,12 +514,29 @@ parse_prior_ledger()
 			}
 			if (line ~ /^PERSIST_COUNT:[[:space:]]*/) {
 				persist_count = trim(substr(line, index(line, ":") + 1))
+				in_editor_outcomes = 0
+				next
+			}
+			if (line ~ /^EDITOR_OUTCOMES:[[:space:]]*$/) {
+				editor_outcomes = ""
+				in_editor_outcomes = 1
 				next
 			}
 			if (line ~ /^EDITOR_OUTCOMES:[[:space:]]*/) {
 				editor_outcomes = trim(substr(line, index(line, ":") + 1))
+				in_editor_outcomes = 0
 				next
 			}
+			if (in_editor_outcomes && line ~ /^  /) {
+				line = substr(line, 3)
+				if (editor_outcomes == "") {
+					editor_outcomes = line
+				} else {
+					editor_outcomes = editor_outcomes "\n" line
+				}
+				next
+			}
+			in_editor_outcomes = 0
 			if (trim(line) == "") {
 				next
 			}
@@ -513,12 +564,40 @@ rewrite_review_issues_without_residuals()
 {
 	local review_issues_file="$1"
 	local keep_ids_file="$2"
-	local out_file="$3"
-	awk -v keep_file="${keep_ids_file}" '
+	local residual_ids_file="$3"
+	local out_file="$4"
+	awk -v keep_file="${keep_ids_file}" -v residual_file="${residual_ids_file}" '
 		function trim(s) {
 			sub(/^[[:space:]]+/, "", s)
 			sub(/[[:space:]]+$/, "", s)
 			return s
+		}
+		function reset_block_meta() {
+			file_value = ""
+			lines_value = ""
+			lens_value = ""
+		}
+		function emit_residual_stub(    issue_id) {
+			issue_id = residual[block_id]
+			if (issue_id == "") {
+				return
+			}
+			if (file_value == "") {
+				file_value = "unknown"
+			}
+			if (lines_value == "") {
+				lines_value = "unknown"
+			}
+			if (lens_value == "") {
+				lens_value = "UNKNOWN_LENS"
+			}
+			printf "=== RESIDUAL ISSUE %s ===\n", block_id
+			printf "FILE: %s\n", file_value
+			printf "LINES: %s\n", lines_value
+			printf "LENS: %s\n", lens_value
+			print "STATUS: accepted-residual"
+			printf "LEDGER_ISSUE_ID: %s\n", issue_id
+			printf "=== END RESIDUAL ISSUE %s ===\n", block_id
 		}
 		BEGIN {
 			while ((getline line < keep_file) > 0) {
@@ -528,9 +607,21 @@ rewrite_review_issues_without_residuals()
 				}
 			}
 			close(keep_file)
+			while ((getline line < residual_file) > 0) {
+				n = split(line, fields, "\t")
+				if (n >= 2) {
+					block = trim(fields[1])
+					issue_id = trim(fields[2])
+					if (block != "" && issue_id != "") {
+						residual[block] = issue_id
+					}
+				}
+			}
+			close(residual_file)
 			in_block = 0
 			buffer = ""
 			block_id = ""
+			reset_block_meta()
 		}
 		function flush_block() {
 			if (block_id == "") {
@@ -538,6 +629,8 @@ rewrite_review_issues_without_residuals()
 			}
 			if (keep[block_id]) {
 				printf "%s", buffer
+			} else if (residual[block_id] != "") {
+				emit_residual_stub()
 			}
 		}
 		{
@@ -547,15 +640,24 @@ rewrite_review_issues_without_residuals()
 				in_block = 1
 				block_id = trim(m[1])
 				buffer = line "\n"
+				reset_block_meta()
 				next
 			}
 			if (in_block) {
 				buffer = buffer line "\n"
+				if (line ~ /^FILE:[[:space:]]*/) {
+					file_value = trim(substr(line, index(line, ":") + 1))
+				} else if (line ~ /^LINES:[[:space:]]*/) {
+					lines_value = trim(substr(line, index(line, ":") + 1))
+				} else if (line ~ /^LENS:[[:space:]]*/) {
+					lens_value = trim(substr(line, index(line, ":") + 1))
+				}
 				if (line ~ /^=== END ISSUE[[:space:]]+/) {
 					flush_block()
 					in_block = 0
 					block_id = ""
 					buffer = ""
+					reset_block_meta()
 				}
 				next
 			}
@@ -618,6 +720,7 @@ current_with_ids_file="${tmp_dir}/current_with_ids.tsv"
 new_entries_file="${tmp_dir}/new_entries.txt"
 status_tmp_file="${tmp_dir}/ledger_status.txt"
 keep_block_ids_file="${tmp_dir}/keep_block_ids.txt"
+residual_block_ids_file="${tmp_dir}/residual_block_ids.tsv"
 filtered_review_issues_file="${tmp_dir}/review_issues.filtered.txt"
 
 parse_review_issues "${REVIEW_ISSUES_FILE}" "${parsed_current_file}"
@@ -647,6 +750,11 @@ if [ -s "${prior_header_file}" ]; then
 				;;
 		esac
 	done < "${prior_header_file}"
+fi
+
+repo_ignorecase=false
+if git config --bool core.ignorecase >/dev/null 2>&1; then
+	repo_ignorecase="$(git config --bool core.ignorecase 2>/dev/null || echo false)"
 fi
 
 awk -F '\t' -v floor_file="${floor_map_file}" -v out_file="${current_with_ids_file}" '
@@ -694,6 +802,7 @@ awk -F '\t' -v floor_file="${floor_map_file}" -v out_file="${current_with_ids_fi
 : > "${new_entries_file}"
 : > "${status_tmp_file}"
 : > "${keep_block_ids_file}"
+: > "${residual_block_ids_file}"
 
 declare -A PRIOR_FILE=()
 declare -A PRIOR_LINES=()
@@ -728,6 +837,9 @@ if [ -s "${prior_entries_file}" ]; then
 		else
 			PRIOR_PERSIST["${issue_id}"]="0"
 		fi
+		editor_outcomes="${editor_outcomes//\\t/$'\t'}"
+		editor_outcomes="${editor_outcomes//\\n/$'\n'}"
+		editor_outcomes="${editor_outcomes//\\\\/\\}"
 		PRIOR_OUTCOMES["${issue_id}"]="${editor_outcomes}"
 	done < "${prior_entries_file}"
 fi
@@ -751,7 +863,7 @@ if [ -s "${current_with_ids_file}" ]; then
 		current_code="${current_code//\\t/$'\t'}"
 		current_code="${current_code//$'\x1f'/\\}"
 		canonical_path="${file_path}"
-		if [ -n "${OSTYPE:-}" ] && [[ "${OSTYPE}" =~ (msys|cygwin|win32) ]]; then
+		if [ "${repo_ignorecase}" = "true" ]; then
 			canonical_path="$(printf '%s' "${canonical_path}" | tr '[:upper:]' '[:lower:]')"
 		fi
 		ext="$(lower_file_ext "${file_path}")"
@@ -868,11 +980,10 @@ for issue_id in "${!CURRENT_PRESENT[@]}"; do
 	SEEN_FINAL["${issue_id}"]=1
 	if [ "${status}" != "accepted-residual" ] && [ -n "${CURRENT_BLOCK_ID["${issue_id}"]:-}" ]; then
 		printf '%s\n' "${CURRENT_BLOCK_ID["${issue_id}"]}" >> "${keep_block_ids_file}"
+	elif [ "${status}" = "accepted-residual" ] && [ -n "${CURRENT_BLOCK_ID["${issue_id}"]:-}" ]; then
+		printf '%s\t%s\n' "${CURRENT_BLOCK_ID["${issue_id}"]}" "${issue_id}" >> "${residual_block_ids_file}"
 	fi
-	display_outcomes="${FINAL_OUTCOMES["${issue_id}"]}"
-	if [ -z "${display_outcomes}" ]; then
-		display_outcomes="none"
-	fi
+	display_outcomes="$(format_editor_outcomes_for_status "${FINAL_OUTCOMES["${issue_id}"]}")"
 	printf '%s\t%s\t%s\t%s:%s\t%s\t%s\n' \
 		"${issue_id}" "${status}" "${persist_count}" \
 		"${CURRENT_FILE["${issue_id}"]}" "${CURRENT_LINES["${issue_id}"]}" \
@@ -904,10 +1015,7 @@ for issue_id in "${!PRIOR_STATUS[@]}"; do
 	FINAL_PERSIST["${issue_id}"]="${persist_count}"
 	FINAL_OUTCOMES["${issue_id}"]="${PRIOR_OUTCOMES["${issue_id}"]}"
 	SEEN_FINAL["${issue_id}"]=1
-	display_outcomes="${PRIOR_OUTCOMES["${issue_id}"]}"
-	if [ -z "${display_outcomes}" ]; then
-		display_outcomes="none"
-	fi
+	display_outcomes="$(format_editor_outcomes_for_status "${PRIOR_OUTCOMES["${issue_id}"]}")"
 	printf '%s\t%s\t%s\t%s:%s\t%s\t%s\n' \
 		"${issue_id}" "${status}" "${persist_count}" \
 		"${PRIOR_FILE["${issue_id}"]}" "${PRIOR_LINES["${issue_id}"]}" \
@@ -947,7 +1055,7 @@ else
 	: > "${LEDGER_STATUS_FILE}"
 fi
 
-rewrite_review_issues_without_residuals "${REVIEW_ISSUES_FILE}" "${keep_block_ids_file}" "${filtered_review_issues_file}"
+rewrite_review_issues_without_residuals "${REVIEW_ISSUES_FILE}" "${keep_block_ids_file}" "${residual_block_ids_file}" "${filtered_review_issues_file}"
 mv "${filtered_review_issues_file}" "${REVIEW_ISSUES_FILE}"
 
 review_log "pr=${PR_NUMBER} iteration=${ITERATION} ledger_prior_entries=${prior_entries_count} transitions=NEW:${COUNT_TRANSITIONS[NEW]},PERSISTING:${COUNT_TRANSITIONS[PERSISTING]},FIXED:${COUNT_TRANSITIONS[FIXED]},RESURGENT:${COUNT_TRANSITIONS[RESURGENT]},accepted-residual:${COUNT_TRANSITIONS[accepted-residual]} accepted_residual_added=${accepted_residual_added} ledger_reset=${ledger_reset} hash_collision=${auto_collision_count}"

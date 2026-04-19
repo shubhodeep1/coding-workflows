@@ -78,18 +78,44 @@ def _parse_ledger_entries(ledger_path: Path) -> dict[str, dict[str, str]]:
 	if not ledger_path.exists():
 		return entries
 	current_id = ""
+	in_editor_outcomes = False
+	editor_outcome_lines: list[str] = []
 	for raw in ledger_path.read_text(encoding="utf-8").splitlines():
 		line = raw.strip("\n")
 		if line.startswith("=== ENTRY ") and line.endswith(" ==="):
 			current_id = line[len("=== ENTRY ") : -len(" ===")]
 			entries[current_id] = {}
+			in_editor_outcomes = False
+			editor_outcome_lines = []
 			continue
 		if line == "=== END ENTRY ===":
+			if current_id and in_editor_outcomes:
+				entries[current_id]["EDITOR_OUTCOMES"] = "\n".join(editor_outcome_lines)
 			current_id = ""
+			in_editor_outcomes = False
+			editor_outcome_lines = []
 			continue
-		if current_id and ":" in line:
+		if not current_id:
+			continue
+		if in_editor_outcomes:
+			if line.startswith("  "):
+				editor_outcome_lines.append(line[2:])
+				continue
+			entries[current_id]["EDITOR_OUTCOMES"] = "\n".join(editor_outcome_lines)
+			in_editor_outcomes = False
+		if line.startswith("EDITOR_OUTCOMES:"):
+			payload = line.split(":", 1)[1].strip()
+			if payload:
+				entries[current_id]["EDITOR_OUTCOMES"] = payload
+			else:
+				in_editor_outcomes = True
+				editor_outcome_lines = []
+			continue
+		if ":" in line:
 			k, v = line.split(":", 1)
 			entries[current_id][k.strip()] = v.strip()
+	if current_id and in_editor_outcomes:
+		entries[current_id]["EDITOR_OUTCOMES"] = "\n".join(editor_outcome_lines)
 	return entries
 
 
@@ -139,6 +165,8 @@ def test_lifecycle_and_persist_limit_transition() -> None:
 		assert status_rows[0][2] == "2"
 		filtered_review_issues = (workspace / "runtime" / "review_issues.txt").read_text(encoding="utf-8")
 		assert "=== ISSUE 001 ===" not in filtered_review_issues
+		assert "=== RESIDUAL ISSUE 001 ===" in filtered_review_issues
+		assert f"LEDGER_ISSUE_ID: {issue_id}" in filtered_review_issues
 
 
 
@@ -356,6 +384,139 @@ def test_multiline_current_code_round_trip() -> None:
 		assert len(status_rows) == 1
 		assert status_rows[0][1] == "NEW"
 
+
+def test_multiline_editor_outcomes_parse_and_status_render() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		_seed_repo(
+			workspace,
+			[
+				"def sample(a, b):",
+				"    total = a + b",
+				"    return total",
+			],
+		)
+
+		ledger_path = workspace / ".ai" / "review_issue_ledger.txt"
+		ledger_path.parent.mkdir(parents=True, exist_ok=True)
+		ledger_path.write_text(
+			"\n".join(
+				[
+					"=== LEDGER v1 ===",
+					"PR_NUMBER: 4242",
+					"FIRST_SEEN_ITERATION: 1",
+					"LAST_UPDATED_ITERATION: 1",
+					"=== END HEADER ===",
+					"",
+					"=== ENTRY iss_seed ===",
+					"FILE: src/module.py",
+					"LINES: 2",
+					"LENS: SECURITY",
+					"SEVERITY: high",
+					"STATUS: NEW",
+					"FIRST_SEEN_ITERATION: 1",
+					"LAST_SEEN_ITERATION: 1",
+					"PERSIST_COUNT: 1",
+					"EDITOR_OUTCOMES:",
+					"  iter1> WILL_FIX",
+					"  iter2> RETRY",
+					"=== END ENTRY ===",
+				],
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		result = _run_ledger(
+			workspace,
+			"review_issues_single_security.txt",
+			2,
+			persist_limit=5,
+			ledger_path=str(ledger_path),
+		)
+		assert result.returncode == 0, result.stderr
+		status_rows = _parse_status_rows(workspace / "runtime" / "ledger_status.txt")
+		assert len(status_rows) == 2
+		prior_row = next(row for row in status_rows if row[0] == "iss_seed")
+		assert prior_row[5] == "iter1> WILL_FIX, iter2> RETRY"
+		entries = _parse_ledger_entries(ledger_path)
+		assert entries["iss_seed"]["EDITOR_OUTCOMES"] == "iter1> WILL_FIX\niter2> RETRY"
+
+
+def test_hash_uses_repo_ignorecase_setting() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		_seed_repo(
+			workspace,
+			[
+				"def sample(a, b):",
+				"    total = a + b",
+				"    return total",
+			],
+		)
+		subprocess.run(["git", "config", "core.ignorecase", "true"], cwd=workspace, check=True)
+
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+
+		def _write_issue(file_value: str) -> None:
+			(runtime_dir / "review_issues.txt").write_text(
+				"\n".join(
+					[
+						"=== ISSUE 001 ===",
+						f"FILE: {file_value}",
+						"LINES: 2",
+						"LENS: SECURITY",
+						"SEVERITY: high",
+						"CLASSIFICATION: actionable",
+						"CURRENT_CODE:",
+						"  def sample(a, b):",
+						"      total = a + b",
+						"      return total",
+						"=== END ISSUE 001 ===",
+					],
+				)
+				+ "\n",
+				encoding="utf-8",
+			)
+
+		env = os.environ.copy()
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env["RUNTIME_DIR"] = str(runtime_dir)
+		env["PR_NUMBER"] = "4242"
+		env["AUTOFIX_ITERATION"] = "1"
+		env["REVIEW_LEDGER_PERSIST_LIMIT"] = "5"
+		env["REVIEW_LEDGER_PATH"] = ".ai/review_issue_ledger.txt"
+		env["REVIEW_LEDGER_ENABLED"] = "1"
+		env["REVIEW_ISSUES_FILE"] = str(runtime_dir / "review_issues.txt")
+		env["LEDGER_STATUS_FILE"] = str(runtime_dir / "ledger_status.txt")
+		env["FLOOR_TAGS_FILE"] = str(runtime_dir / "floor_tags.txt")
+
+		_write_issue("src/module.py")
+		lower = subprocess.run(
+			["bash", str(LEDGER_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		assert lower.returncode == 0, lower.stderr
+		lower_entries = _parse_ledger_entries(workspace / ".ai" / "review_issue_ledger.txt")
+		lower_id = _first_issue_id(lower_entries)
+
+		env["AUTOFIX_ITERATION"] = "2"
+		_write_issue("SRC/module.py")
+		upper = subprocess.run(
+			["bash", str(LEDGER_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		assert upper.returncode == 0, upper.stderr
+		upper_entries = _parse_ledger_entries(workspace / ".ai" / "review_issue_ledger.txt")
+		assert lower_id in upper_entries
+		assert upper_entries[lower_id]["STATUS"] == "PERSISTING"
 
 
 def main() -> int:
