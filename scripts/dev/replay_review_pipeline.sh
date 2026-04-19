@@ -90,6 +90,8 @@ if ! [[ "${consolidator_enabled}" =~ ^[01]$ ]]; then
 	exit 2
 fi
 
+# Convert runtime_dir to an absolute path so it remains valid after cd.
+runtime_dir="$(cd "${runtime_dir}" && pwd)"
 for required in \
 	"${REPO_ROOT}/scripts/review_floor_rules.sh" \
 	"${REPO_ROOT}/scripts/review_consolidate.sh" \
