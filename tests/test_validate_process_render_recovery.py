@@ -302,7 +302,7 @@ PRECHECK_SEQUENCE="fail,fail"
 PRECHECK_CALLS=0
 
 run_template_validation_harness_renderer() {
-	echo "render-call" >> "${RENDER_CALLS_FILE}"
+	echo "called" >> "${RENDER_CALLS_FILE}"
 	local next="${RENDER_EXIT_SEQUENCE%%,*}"
 	if [[ "${RENDER_EXIT_SEQUENCE}" == *,* ]]; then
 		RENDER_EXIT_SEQUENCE="${RENDER_EXIT_SEQUENCE#*,}"
@@ -417,7 +417,7 @@ echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
 		phase_log = (runtime_dir / "self_heal_phase.log").read_text(encoding="utf-8").strip().splitlines()
 		assert phase_log == ["render"]
 		render_calls = (runtime_dir / "render_calls.txt").read_text(encoding="utf-8").strip().splitlines()
-		assert render_calls == ["render-call"]
+		assert render_calls == ["called"]
 		log = (runtime_dir / "validation_preflight.log").read_text(encoding="utf-8")
 		assert "preflight-fail-1" in log
 		assert "preflight-fail-2" in log
