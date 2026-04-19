@@ -296,9 +296,11 @@ PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
 HARNESS_MODE="template_generate"
 HARNESS_GENERATOR_MODE="templates"
 SELF_HEAL_PHASE_LOG="${RUNTIME_DIR}/self_heal_phase.log"
+RENDER_CALLS_FILE="${RUNTIME_DIR}/render_calls.txt"
 PRECHECK_CALLS=0
 
 run_template_validation_harness_renderer() {
+	echo "render-call" >> "${RENDER_CALLS_FILE}"
 	return 0
 }
 
@@ -391,6 +393,8 @@ echo "continued" > "${RUNTIME_DIR}/pipeline.txt"
 		assert not (runtime_dir / "pipeline.txt").exists()
 		phase_log = (runtime_dir / "self_heal_phase.log").read_text(encoding="utf-8").strip().splitlines()
 		assert phase_log == ["render"]
+		render_calls = (runtime_dir / "render_calls.txt").read_text(encoding="utf-8").strip().splitlines()
+		assert render_calls == ["render-call"]
 		log = (runtime_dir / "validation_preflight.log").read_text(encoding="utf-8")
 		assert "preflight-fail-1" in log
 		assert "preflight-fail-2" in log
