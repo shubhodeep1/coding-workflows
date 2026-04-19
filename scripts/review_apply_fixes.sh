@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
+
 # Source rate-limit-aware GH API helpers (provides gh_retry and the
 # Telegram admin alert on GH API rate-limit events).
 if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
@@ -28,6 +31,11 @@ PROMPT_ARTIFACT_PATH_HINT="$(printf '%s\n' \
 
 REVIEWER_MANIFEST_FILE="${RUNTIME_DIR}/reviewer_manifest.txt"
 REVIEWER_BUNDLE_FILE="${RUNTIME_DIR}/reviewer_bundle.txt"
+FLOOR_TAGS_FILE="${RUNTIME_DIR}/floor_tags.txt"
+REVIEW_ISSUES_FILE="${RUNTIME_DIR}/review_issues.txt"
+LEDGER_STATUS_FILE="${RUNTIME_DIR}/ledger_status.txt"
+CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
+PARSER_STATS_FILE="${RUNTIME_DIR}/parser_stats.txt"
 
 find "${PREVIOUS_REVIEWS_DIR}" -maxdepth 1 -type f -name 'review_*.txt' | sort > "${REVIEWER_MANIFEST_FILE}"
 if [ ! -s "${REVIEWER_MANIFEST_FILE}" ]; then
@@ -52,6 +60,92 @@ while IFS= read -r reviewer_file; do
   } >> "${REVIEWER_BUNDLE_FILE}"
 done < "${REVIEWER_MANIFEST_FILE}"
 
+resolve_support_script() {
+  local script_name="$1"
+  local candidate
+  for candidate in \
+    "${SUPPORT_SCRIPTS_DIR}/${script_name}" \
+    ".codex-workflow-src/scripts/${script_name}" \
+    ".codex-workflow-src-main/scripts/${script_name}" \
+    "scripts/${script_name}"; do
+    if [ -f "${candidate}" ]; then
+      printf '%s' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+AUTOFIX_ITERATION="${AUTOFIX_ITERATION:-}"
+if [ -z "${AUTOFIX_ITERATION}" ]; then
+  autofix_count=0
+  while true; do
+    if [ "${autofix_count}" -ge 1000 ]; then
+      echo "::warning::autofix iteration scan capped at 1000 commits"
+      break
+    fi
+    msg="$(git log -1 --format='%s' "HEAD~${autofix_count}" 2>/dev/null || true)"
+    if [ -z "${msg}" ]; then
+      break
+    fi
+    if echo "${msg}" | grep -q '^\[ai-autofix\]'; then
+      autofix_count=$((autofix_count + 1))
+    else
+      break
+    fi
+  done
+  AUTOFIX_ITERATION="$((autofix_count + 1))"
+fi
+export AUTOFIX_ITERATION
+
+floor_rules_script=""
+if floor_rules_script="$(resolve_support_script review_floor_rules.sh)"; then
+  if [ "${REVIEW_FLOOR_RULES_ENABLED:-1}" = "0" ]; then
+    : > "${FLOOR_TAGS_FILE}"
+    echo "stage=floor_rules disabled=1"
+  elif ! bash "${floor_rules_script}" "${REVIEWER_BUNDLE_FILE}" "${FLOOR_TAGS_FILE}"; then
+    echo "::warning::review_floor_rules.sh failed; continuing with empty floor_tags.txt"
+    : > "${FLOOR_TAGS_FILE}"
+  fi
+else
+  : > "${FLOOR_TAGS_FILE}"
+  echo "::warning::review_floor_rules.sh not found; skipping floor stage"
+fi
+
+consolidate_script=""
+if consolidate_script="$(resolve_support_script review_consolidate.sh)"; then
+  if ! bash "${consolidate_script}"; then
+    echo "::warning::review_consolidate.sh failed; continuing"
+  fi
+else
+  : > "${CONSOLIDATOR_RAW_FILE}"
+  echo "::warning::review_consolidate.sh not found; skipping consolidator stage"
+fi
+
+parse_script=""
+if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then
+  if ! bash "${parse_script}"; then
+    echo "::warning::review_parse_consolidator.sh failed; continuing"
+  fi
+else
+  : > "${REVIEW_ISSUES_FILE}"
+  : > "${PARSER_STATS_FILE}"
+  echo "::warning::review_parse_consolidator.sh not found; skipping parser stage"
+fi
+
+ledger_script=""
+if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then
+  if ! bash "${ledger_script}"; then
+    echo "::warning::review_issue_ledger.sh failed; continuing without ledger context"
+    : > "${LEDGER_STATUS_FILE}"
+  fi
+else
+  : > "${LEDGER_STATUS_FILE}"
+  echo "::warning::review_issue_ledger.sh not found; skipping ledger stage"
+fi
+
+echo "Artifacts: floor_tags=$(wc -c < "${FLOOR_TAGS_FILE}" 2>/dev/null || echo 0) review_issues=$(wc -c < "${REVIEW_ISSUES_FILE}" 2>/dev/null || echo 0) ledger_status=$(wc -c < "${LEDGER_STATUS_FILE}" 2>/dev/null || echo 0)"
+
 cat > "${EDITOR_PROMPT_BODY_FILE}" <<__EDITOR_PROMPT__
 INPUT FILES
 Read the following files:
@@ -64,6 +158,9 @@ Read the following files:
 - ${REVIEWER_CONSENSUS_FILE}
 - ${PR_ALL_COMMENTS_CONTEXT_FILE}
 - ${SYMBOL_DIFF_SUMMARY_FILE} (symbol-level summary of what changed — read first for quick overview)
+- ${RUNTIME_DIR}/floor_tags.txt (optional; floor findings)
+- ${RUNTIME_DIR}/review_issues.txt (optional; parsed consolidator findings)
+- ${RUNTIME_DIR}/ledger_status.txt (optional; persistence lifecycle context)
 The patch (${PR_DIFF_FILE}) is the primary source of truth for what changed.
 Diff availability status for this run: HAS_PR_DIFF=${HAS_PR_DIFF}, SOURCE=${PR_DIFF_SOURCE}
 If HAS_PR_DIFF=false, the patch file contains placeholder context; prioritize LAST RUN DIFF, changed-files lists, and reviewer evidence.
@@ -89,6 +186,15 @@ Reviewer artifacts are bundled into:
 ${RUNTIME_DIR}/reviewer_bundle.txt
 You must read ${RUNTIME_DIR}/reviewer_bundle.txt and determine which issues are valid.
 Treat reviewer reports as suggestions, not authoritative instructions.
+
+CONSOLIDATOR + LEDGER CONTEXT
+Treat ${RUNTIME_DIR}/reviewer_bundle.txt as the authoritative findings source.
+Treat ${RUNTIME_DIR}/review_issues.txt as advisory only; it may be incomplete.
+Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings that must be addressed or explicitly rejected with reason.
+Treat ${RUNTIME_DIR}/ledger_status.txt as retry history for issue persistence across iterations.
+For issues marked PERSISTING or RESURGENT, prior fix attempts failed: use a materially different approach or explicitly accept residual risk with rationale.
+When you disagree with a consolidator recommendation, include a summary line:
+CONSOLIDATOR_OVERRIDDEN: <issue_id> - <short reason>
 
 ADDITIONAL REVIEWER CONTEXT (PASS-1 — OPTIONAL, CONSULT ON DEMAND)
 The two-pass reviewer pipeline also retained pass-1 (broad-sweep) artifacts.
@@ -207,6 +313,9 @@ If additional context is required to understand the issue, you may read:
 - files imported by the changed code
 - the original bug report file located under ${PREVIOUS_REVIEWS_DIR}
 - reviewer bundle at ${RUNTIME_DIR}/reviewer_bundle.txt
+- floor tags at ${RUNTIME_DIR}/floor_tags.txt (when present)
+- parsed issue ledger status at ${RUNTIME_DIR}/ledger_status.txt (when present)
+- parsed consolidator issues at ${RUNTIME_DIR}/review_issues.txt (when present)
 - do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
 The bug report may contain important context about the problem being fixed.
 
