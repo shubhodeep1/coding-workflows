@@ -123,6 +123,7 @@ HINTS_SOURCE="none"
 HARNESS_MODE="generate"
 HARNESS_GENERATOR_MODE="freehand"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="none"
 PRE_FLIGHT_FAILURE_KIND="none"
 PRE_FLIGHT_FAILURE_REASON="not_run"
 PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
@@ -1146,6 +1147,10 @@ attempt_render_recovery_after_preflight_failure()
 	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
 		return 1
 	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
 
 	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
 	{
@@ -1177,6 +1182,7 @@ attempt_render_recovery_after_preflight_failure()
 run_preflight_checks()
 {
 	PRE_FLIGHT_STATUS="running"
+	PRE_FLIGHT_FAILURE_CLASS="none"
 	PRE_FLIGHT_FAILURE_KIND="unknown"
 	PRE_FLIGHT_FAILURE_REASON="running"
 	if [ "${PRE_FLIGHT_APPEND_LOG:-false}" != "true" ]; then
@@ -1201,6 +1207,7 @@ run_preflight_checks()
 	if [ ! -f validation/docker-compose.test.yml ]; then
 		echo "Missing validation/docker-compose.test.yml" >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
 		_emit_preflight_tail "validation/docker-compose.test.yml missing"
 		return 1
 	fi
@@ -1211,6 +1218,7 @@ run_preflight_checks()
 		if ! bash -n validation/validate.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 			echo "Shell syntax check failed: validation/validate.sh" >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="lint"
 			_emit_preflight_tail "bash -n failed for validation/validate.sh"
 			return 1
 		fi
@@ -1218,6 +1226,7 @@ run_preflight_checks()
 		if ! grep -q 'scripts/validate_driver.sh' validation/validate.sh; then
 			echo "validation/validate.sh must delegate to scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="non_lint"
 			_emit_preflight_tail "validation/validate.sh is not a thin wrapper"
 			return 1
 		fi
@@ -1226,6 +1235,7 @@ run_preflight_checks()
 			if ! bash -n scripts/validate_driver.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 				echo "Shell syntax check failed: scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
 				PRE_FLIGHT_STATUS="fail"
+				PRE_FLIGHT_FAILURE_CLASS="lint"
 				_emit_preflight_tail "bash -n failed for scripts/validate_driver.sh"
 				return 1
 			fi
@@ -1237,6 +1247,7 @@ run_preflight_checks()
 	if [ ! -f validation/validate.env ]; then
 		echo "Missing validation/validate.env" >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
 		_emit_preflight_tail "validation/validate.env missing"
 		return 1
 	fi
@@ -1244,6 +1255,7 @@ run_preflight_checks()
 	if [ ! -f validation/tests/00_canary.sh ]; then
 		echo "Missing validation/tests/00_canary.sh" >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
 		_emit_preflight_tail "validation/tests/00_canary.sh missing"
 		return 1
 	fi
@@ -1251,6 +1263,7 @@ run_preflight_checks()
 	if ! docker compose -f validation/docker-compose.test.yml config --quiet >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 		echo "Compose syntax/validation check failed." >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="lint"
 		_emit_preflight_tail "docker compose config failed (YAML/schema invalid). Common cause: YAML must use space indentation, not tabs."
 		return 1
 	fi
@@ -1260,6 +1273,7 @@ run_preflight_checks()
 	if [ "${shell_count}" -eq 0 ]; then
 		echo "No shell scripts found under validation/." >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
 		_emit_preflight_tail "no shell scripts found under validation/"
 		return 1
 	fi
@@ -1268,6 +1282,7 @@ run_preflight_checks()
 		if ! bash -n "${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 			echo "Shell syntax check failed: ${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="lint"
 			_emit_preflight_tail "bash -n failed for ${shell_file}"
 			return 1
 		fi
@@ -1334,6 +1349,7 @@ print("Build context and dockerfile path checks passed.")
 PY
 	then
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
 		_emit_preflight_tail "build context / dockerfile path resolution failed"
 		return 1
 	fi
@@ -1431,6 +1447,7 @@ print("Embedded Python heredoc syntax checks passed.")
 PY2
 	then
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="lint"
 		_emit_preflight_tail "embedded Python syntax check failed in validation/**/*.sh"
 		return 1
 	fi
@@ -1612,6 +1629,7 @@ print("Embedded Python F-code lint (pyflakes + ruff) passed.")
 PY3
 		then
 			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="lint"
 			_emit_preflight_tail "embedded Python F-code lint failed in validation/**/*.sh (pyflakes/ruff)"
 			return 1
 		fi
@@ -1636,6 +1654,7 @@ PY3
 		   | grep -qi 'repo\.mongodb\.org'; then
 			echo "${dockerfile} references 'mongosh'/'mongodb-mongosh' but does not add MongoDB's official apt repo (no 'repo.mongodb.org' reference). mongosh is NOT in Debian/Ubuntu default repos and will fail the compose build with 'E: Unable to locate package mongosh' or 'E: Unable to locate package mongodb-mongosh'. Prefer pymongo, or add the MongoDB apt source + GPG key to the Dockerfile. See mode-validate-generate.txt: 'installing mongosh in validation/Dockerfile.app'." >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="non_lint"
 			_emit_preflight_tail "mongosh installation in ${dockerfile} requires official MongoDB apt repo"
 			return 1
 		fi
@@ -1711,6 +1730,7 @@ PY3
 					echo "  2) Install the tool in validation/Dockerfile.app via apt (plus any required repo/GPG plumbing, e.g. MongoDB official apt repo for mongosh) and leave CANARY_TOOLS unchanged."
 				} >> "${PRE_FLIGHT_LOG_FILE}"
 				PRE_FLIGHT_STATUS="fail"
+				PRE_FLIGHT_FAILURE_CLASS="non_lint"
 				_emit_preflight_tail "CANARY_TOOLS scope violation: service-side CLI(s) referenced in app canary but not installed in app image: ${_offenders}"
 				return 1
 			fi
