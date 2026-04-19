@@ -1178,10 +1178,24 @@ run_reviewer_pass() {
   done
 
   local pass_successful=0
+  local sf_idx=0
   for sf in "${pass_status_files[@]}"; do
-    if [ -f "${sf}" ] && [ "$(cat "${sf}")" = "success" ]; then
-      pass_successful=$((pass_successful + 1))
+    local sf_model="${pass_models[$sf_idx]}"
+    sf_idx=$((sf_idx + 1))
+    if [ ! -f "${sf}" ]; then
+      echo "::warning::Reviewer ${sf_model} (${pass_prefix}): no status file written — worker exited without recording outcome (silent drop). See ${pass_log_files[$((sf_idx - 1))]} for per-reviewer log." >&2
+      continue
     fi
+    local sf_status
+    sf_status="$(cat "${sf}" 2>/dev/null || true)"
+    case "${sf_status}" in
+      success)
+        pass_successful=$((pass_successful + 1))
+        ;;
+      *)
+        echo "::warning::Reviewer ${sf_model} (${pass_prefix}): status='${sf_status:-<empty>}' — not counted as success. See ${pass_log_files[$((sf_idx - 1))]} for per-reviewer log." >&2
+        ;;
+    esac
   done
 
   echo "${pass_successful}"
