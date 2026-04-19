@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Ref Context**\n- `git rev-parse HEAD`: `6c8ccc98d6a760a7c3d1558f3ebb06e1ce5da816`\n- `git symbolic-ref --short -q HEAD`: `orchestrator/project-1292`\n- Integration metadata branch: `orchestrator/project-1292` (match, no block)\n\n**Clarification Mapping**\n- No `Q*` clarification items were issued; `/answer [auto-answered-by-orchestrator]` confirms proceeding with the stated scope.\n\n**Conflict Detection**\n- The requested behavior appears already implemented on this branch:\n- [`scripts/validate_process.sh` lines around render recovery and preflight dispatch](scripts/validate_process.sh:1139) and [call site](scripts/validate_process.sh:2371) already do deterministic rerender + relint and route render failures to `attempt_self_heal_and_reexec \"render\"`.\n- [`scripts/self_heal_validation.sh`](scripts/self_heal_validation.sh:25) already includes `render` phase in phase docs/logging and keeps strict prompt-target constraints.\n- [`prompts/mode-validate-self-heal.txt`](prompts/mode-validate-self-heal.txt:27) already states render-phase failures are prompt-only self-heal (no harness/workflow edits).\n- Existing integration tests already cover this path in [`tests/test_validate_process_render_recovery.py`](tests/test_validate_process_render_recovery.py:27) and contract checks in [`tests/test_validate_process_template_mode.py`](tests/test_validate_process_template_mode.py:45).\n\n**Implementation Plan**\n\n1. Files likely to change\n- [`scripts/validate_process.sh`](scripts/validate_process.sh) only if any acceptance-gap is found in render-phase branching/logging.\n- [`scripts/self_heal_validation.sh`](scripts/self_heal_validation.sh) only if render-phase log/recognition gaps are found.\n- [`prompts/mode-validate-self-heal.txt`](prompts/mode-validate-self-heal.txt) only if wording needs tightening.\n- [`tests/test_validate_process_render_recovery.py`](tests/test_validate_process_render_recovery.py) and [`tests/test_validate_process_template_mode.py`](tests/test_validate_process_template_mode.py) only if a missing edge-case assertion is discovered.\n\n2. Functions/modules to implement or verify\n- `attempt_render_recovery_after_preflight_failure` in `validate_process.sh`.\n- Phase-2 preflight failure routing block that sets `render_recovery_exit` and chooses `\"render\"` vs `\"preflight\"` self-heal phase.\n- `attempt_self_heal_and_reexec` phase normalization path (`render` must remain accepted).\n- `self_heal_validation.sh` prompt-target allow-list and additive-only patch guardrails.\n\n3. Data structures affected\n- Shell state vars only: `PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED`, `PRE_FLIGHT_FAILURE_CLASS`, `PRE_FLIGHT_APPEND_LOG`, `HARNESS_MODE`, `HARNESS_GENERATOR_MODE`, `SELF_HEAL_FAILURE_PHASE`.\n- `DIAGNOSE_RESULT_FILE` shape remains unchanged (`status: harness_error`, etc.); no schema/interface migration.\n\n4. API/interface changes\n- No external API changes.\n- Internal behavior contract to preserve:\n- Template-mode lint failures: rerender + relint first.\n- Render-recovery failure path: self-heal phase is `render`.\n- Non-template preflight failure path: existing `preflight` behavior unchanged.\n- No freehand harness edits introduced by render-phase recovery.\n\n5. Risks/edge cases\n- Accidentally allowing more than one rerender attempt (loop risk).\n- Misclassifying non-lint failures as lint and triggering incorrect rerender.\n- Regression where render recovery falls through to freehand harness editing.\n- Any expansion of self-heal target files or weakening additive-only patch checks (must not happen).\n\n6. Testing considerations\n- Run targeted tests:\n- `python3 -m pytest tests/test_validate_process_render_recovery.py -q`\n- `python3 -m pytest tests/test_validate_process_template_mode.py -q`\n- Verify logs/assertions for:\n- successful rerender+relint continuation,\n- renderer fail-open fallback with `render` phase tagging,\n- relint-failure path using `render`,\n- non-template path remaining `preflight`.\n- If all pass without edits, close as already satisfied on this integration branch with evidence from the above files/tests.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2586582da7f78b12bfa19f7c7c12459e6590feecf8d2b90dcc4db7d33c66ba5b",
+  "lineage": {
+    "issue_number": 1435,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24627273688",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24627273688",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1435"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260419105044_aa3afa7b05",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1435,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24627273688"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1435",
+  "timestamps": {
+    "created_at": "2026-04-19T10:50:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
