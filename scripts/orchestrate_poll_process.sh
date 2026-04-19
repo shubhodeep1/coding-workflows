@@ -3926,7 +3926,7 @@ count_noop_ancestors()
 		fi
 		[[ "${parent_num}" =~ ^[0-9]+$ ]] || break
 		parent_has_noop="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${parent_num}/comments" --paginate \
-			--jq "[.[] | select((.body // \"\") | ascii_downcase | contains(\"${noop_marker}\"))] | length" 2>/dev/null \
+			--jq "[.[] | select((.body // \"\") | test(\"${noop_marker}\"; \"i\"))] | length" 2>/dev/null \
 			| awk 'BEGIN{s=0} /^[0-9]+$/ {s+=$1} END{print s}' || echo "")"
 		[[ "${parent_has_noop}" =~ ^[0-9]+$ ]] || parent_has_noop=0
 		if [ "${parent_has_noop}" -eq 0 ]; then
