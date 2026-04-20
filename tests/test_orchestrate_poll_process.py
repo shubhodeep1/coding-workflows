@@ -3584,8 +3584,12 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	so the surfacing lands on an open issue with the re-issue body
 	still accessible."""
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	# Main-poll path.
-	main_anchor = '    close_and_reissue)\n      echo "  Closing and re-issuing stalled issue #${issue_num}..."'
+	# Main-poll path.  The ancestor-chain no-op cap (#1452) now sits
+	# between the ``close_and_reissue)`` case label and the legacy
+	# fallback echo, so anchor on the legacy-fallback echo directly —
+	# that is the point at which the surface/close ordering contract
+	# kicks in.
+	main_anchor = '      echo "  Closing and re-issuing stalled issue #${issue_num}..."'
 	assert main_anchor in script, "Could not locate main close_and_reissue"
 	main_window = script[script.index(main_anchor):script.index(main_anchor) + 600]
 	assert 'surface_reissue_closed_without_pr "${issue_num}"' in main_window
@@ -3593,8 +3597,13 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 		"surface must run before close_linked_pr so the comment lands on an open issue"
 	)
 	assert '"main"' in main_window
-	# Standalone path.
-	standalone_anchor = 'close_linked_pr "${issue_num}" "Closed by standalone stall recovery'
+	# Standalone path.  The ancestor-chain cap (#1452) introduced
+	# additional ``close_linked_pr "...Closed by standalone stall
+	# recovery...` call sites; the legacy close+re-issue path is the
+	# only one that carries the distinctive ``was stuck in`` phrasing,
+	# so anchor on it explicitly to avoid latching on the cap path
+	# (which legitimately does not surface, by design).
+	standalone_anchor = 'close_linked_pr "${issue_num}" "Closed by standalone stall recovery — issue #${issue_num} was stuck'
 	assert standalone_anchor in script
 	idx = script.index(standalone_anchor)
 	pre = script[max(0, idx - 400):idx]
