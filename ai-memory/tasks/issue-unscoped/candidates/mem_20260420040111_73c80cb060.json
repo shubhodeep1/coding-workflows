@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:1196-1197 | severity=low | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: Redundant logging statements append two nearly identical failure messages to `${PRE_FLIGHT_LOG_FILE}`.\n  WHY: The second echo already includes the base message plus `kind` and `reason` context, so the first echo adds duplicate noise without diagnostic value.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/validate_process.sh:1196-1197 | severity=low | confidence=5\n  PROBLEM: Redundant logging statements in `attempt_render_recovery_after_preflight_failure` emit two nearly identical failure messages to `${PRE_FLIGHT_LOG_FILE}`.\n  WHY: The script executes two `echo` commands sequentially; the first is a subset of the second, so it only increases log noise.\n- tests/test_validate_process_template_mode.py:50 | severity=low | confidence=1\n  PROBLEM: Test assertion uses unexpanded shell variable syntax in a string comparison.\n  WHY: If `_validate_process_text()` returns runtime logs rather than script text, the current assertion may not match the expanded values.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_process.sh:1196-1197 | severity=low | confidence=5\n  PROBLEM: The newly added log line is redundant because the next line already includes the same base message plus `kind` and `reason` context.\n  WHY: Writing both lines creates duplicate, noisy log output in `${PRE_FLIGHT_LOG_FILE}` without adding diagnostic value.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_process.sh:1196-1197 | severity=low | confidence=5\n  PROBLEM: Two nearly identical `echo` statements both append to `PRE_FLIGHT_LOG_FILE` when render recovery fails.\n  WHY: The first line adds no diagnostic value beyond the enriched second line, so the log output is duplicated and bloated.\n- tests/test_validate_process_template_mode.py:50-52 | severity=low | confidence=4\n  PROBLEM: The test checks for a literal shell-variable string in the source-file content.\n  WHY: If the code and test drift, the assertion may fail because it expects the enriched message while the source still contains the redundant simple message.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "d362e2efb5a79b541c5f0c8c0342575105a4209a8d81e8c653b8a9c31a8bf85f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1350,
+    "run_id": "24630388256",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24630388256",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420040111_73c80cb060",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1350,
+    "run_id": "24630388256"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T04:01:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
