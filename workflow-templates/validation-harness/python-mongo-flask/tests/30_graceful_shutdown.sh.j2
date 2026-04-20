@@ -11,11 +11,12 @@ APP_URL="${APP_URL:-http://127.0.0.1:${APP_PORT}${HEALTH_PATH}}"
 SHUTDOWN_TIMEOUT_SECONDS="${SHUTDOWN_TIMEOUT_SECONDS:-30}"
 SHUTDOWN_POLL_SECONDS="${SHUTDOWN_POLL_SECONDS:-1}"
 GRACEFUL_SHUTDOWN_LOG_TAIL_LINES="${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES:-40}"
+COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
 
 echo "1..1"
 
 set +e
-app_pid="$(docker compose -f validation/docker-compose.test.yml exec -T app /bin/sh -c 'cat /tmp/flask-app.pid 2>/dev/null' 2>/dev/null | tr -d '\r' | tail -n 1)"
+app_pid="$(docker compose -f "${COMPOSE_FILE}" exec -T app /bin/sh -c 'cat /tmp/flask-app.pid 2>/dev/null' 2>/dev/null | tr -d '\r' | tail -n 1)"
 set -e
 
 if ! printf '%s' "${app_pid}" | grep -Eq '^[0-9]+$'; then
@@ -29,6 +30,7 @@ python3 "${SCRIPT_DIR}/_lib/graceful_shutdown.py" \
 	--pid "${app_pid}" \
 	--url "${APP_URL}" \
 	--host-header "${TEST_HOST_HEADER}" \
+	--compose-file "${COMPOSE_FILE}" \
 	--timeout-seconds "${SHUTDOWN_TIMEOUT_SECONDS}" \
 	--poll-seconds "${SHUTDOWN_POLL_SECONDS}" \
 	--log-tail-lines "${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES}"

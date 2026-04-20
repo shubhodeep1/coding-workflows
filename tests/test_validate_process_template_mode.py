@@ -39,6 +39,8 @@ def test_template_mode_selection_contract_present() -> None:
 	assert 'attempt_render_recovery_after_preflight_failure()' in text
 	assert 'if attempt_render_recovery_after_preflight_failure; then' in text
 	assert 'attempt_self_heal_and_reexec "render"' in text
+	assert "if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then" in text
+	assert 'Template renderer requires python3 >= 3.9' in text
 	assert 'elif [ "${VALIDATION_CYCLE}" -gt 1 ] \\' in text
 	assert 'HARNESS_GENERATOR_MODE="freehand"' in text
 
@@ -94,6 +96,16 @@ run_template_validation_harness_renderer() {
 	fi
 	if [ ! -d "${templates_root}" ]; then
 		return 13
+	fi
+	if [ ! -f "${templates_root}/_shared/_lib/tap_helpers.sh.j2" ] \
+		|| [ ! -f "${templates_root}/_shared/tests/00_canary.sh.j2" ] \
+		|| [ ! -f "${templates_root}/_shared/tests/90_tap_report.sh.j2" ]; then
+		return 15
+	fi
+
+	if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $(python3 -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
+		return 14
 	fi
 
 	if ! renderer_summary="$(python3 "${renderer_script}" \
@@ -201,6 +213,16 @@ esac
 		assert '"harness_generator_mode": "templates"' in metadata_payload
 
 
+def test_template_mode_harness_contract_accepts_missing_validate_env() -> None:
+	text = _validate_process_text()
+	assert 'if [ "${HARNESS_GENERATOR_MODE:-freehand}" = "templates" ]; then' in text
+	assert '&& [ -f validation/tests/00_canary.sh ]' in text
+	assert '&& [ -f validation/validate.env ]' in text
+	assert 'if [ ! -f validation/tests/00_canary.sh ]; then' in text
+	assert 'if [ "${HARNESS_GENERATOR_MODE:-freehand}" != "templates" ] && [ ! -f validation/validate.env ]; then' in text
+	assert 'Template renderer completed but produced non-runnable validation assets (validation/docker-compose.test.yml and validation/tests/00_canary.sh at minimum).' in text
+
+
 def test_render_recovery_lint_gate_contract_present() -> None:
 	text = _validate_process_text()
 	assert 'if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then' in text
@@ -211,6 +233,7 @@ def main() -> int:
 	test_template_mode_selection_contract_present()
 	test_render_recovery_contract_and_prompt_only_self_heal_scope()
 	test_template_mode_missing_manifest_returns_harness_error()
+	test_template_mode_harness_contract_accepts_missing_validate_env()
 	test_render_recovery_lint_gate_contract_present()
 	return 0
 

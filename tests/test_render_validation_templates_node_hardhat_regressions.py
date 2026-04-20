@@ -71,6 +71,21 @@ def test_log7_foundry_path_persists_in_non_login_shells() -> None:
         assert "ENV PATH=/root/.foundry/bin:${PATH}" in dockerfile_text
 
 
+def test_node_compose_pins_foundry_image_version() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+        assert "image: ghcr.io/foundry-rs/foundry:v1.3.1" in compose_text
+        assert "ghcr.io/foundry-rs/foundry:latest" not in compose_text
+
+
 def test_log8_rpc_probe_requires_object_result() -> None:
     with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
         temp_root = Path(td)

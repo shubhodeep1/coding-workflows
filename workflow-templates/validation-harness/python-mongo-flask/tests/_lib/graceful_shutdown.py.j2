@@ -17,6 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--pid", type=int, required=True)
 	parser.add_argument("--url", required=True)
 	parser.add_argument("--host-header", default="app.local.test")
+	parser.add_argument("--compose-file", default="validation/docker-compose.test.yml")
 	parser.add_argument("--timeout-seconds", type=int, default=30)
 	parser.add_argument("--poll-seconds", type=float, default=1.0)
 	parser.add_argument("--log-tail-lines", type=int, default=40)
@@ -32,13 +33,13 @@ def http_ok(url: str, host_header: str) -> bool:
 		return False
 
 
-def send_sigterm_to_container(pid: int) -> tuple[bool, str]:
+def send_sigterm_to_container(pid: int, compose_file: str) -> tuple[bool, str]:
 	proc = subprocess.run(
 		[
 			"docker",
 			"compose",
 			"-f",
-			"validation/docker-compose.test.yml",
+			compose_file,
 			"exec",
 			"-T",
 			"app",
@@ -56,9 +57,9 @@ def send_sigterm_to_container(pid: int) -> tuple[bool, str]:
 	return True, ""
 
 
-def bounded_compose_logs_tail(lines: int) -> str:
+def bounded_compose_logs_tail(lines: int, compose_file: str) -> str:
 	proc = subprocess.run(
-		["docker", "compose", "-f", "validation/docker-compose.test.yml", "logs", "--no-color", "app"],
+		["docker", "compose", "-f", compose_file, "logs", "--no-color", "app"],
 		text=True,
 		capture_output=True,
 		check=False,
@@ -78,7 +79,7 @@ def main() -> int:
 		print("# graceful_shutdown precondition failed: service not healthy before SIGTERM", file=sys.stderr)
 		return 1
 
-	ok, message = send_sigterm_to_container(args.pid)
+	ok, message = send_sigterm_to_container(args.pid, args.compose_file)
 	if not ok:
 		print(
 			f"# graceful_shutdown failed to send SIGTERM to container pid={args.pid} error={message}",
@@ -93,7 +94,7 @@ def main() -> int:
 			return 0
 		time.sleep(max(0.1, args.poll_seconds))
 
-	tail = bounded_compose_logs_tail(args.log_tail_lines)
+	tail = bounded_compose_logs_tail(args.log_tail_lines, args.compose_file)
 	payload = {
 		"reason": "timeout_waiting_for_shutdown",
 		"url": args.url,

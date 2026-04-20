@@ -138,6 +138,11 @@ def test_python_mongo_flask_invariants_regression_guards() -> None:
 		shutdown_py = (output_root / "tests" / "_lib" / "graceful_shutdown.py").read_text(encoding="utf-8")
 		assert "SHUTDOWN_TIMEOUT_SECONDS" in shutdown_shell
 		assert "--log-tail-lines" in shutdown_shell
+		assert 'COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"' in shutdown_shell
+		assert 'docker compose -f "${COMPOSE_FILE}" exec -T app' in shutdown_shell
+		assert 'compose_file,' in shutdown_py
+		assert '"exec",' in shutdown_py
+		assert '"logs", "--no-color", "app"' in shutdown_py
 		assert "tail = bounded_compose_logs_tail" in shutdown_py
 		assert "timeout_waiting_for_shutdown" in shutdown_py
 

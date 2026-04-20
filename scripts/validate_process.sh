@@ -669,12 +669,21 @@ PY
 
 is_validation_harness_runnable()
 {
-	if [ -f validation/docker-compose.test.yml ] \
-		&& [ -f validation/validate.env ] \
-		&& [ -f validation/tests/00_canary.sh ] \
-		&& find validation/tests -maxdepth 1 -type f -name '*.sh' -print -quit | grep -q .; then
-		GENERATED_VALIDATE_SCRIPT_PATH=""
-		return 0
+	if [ "${HARNESS_GENERATOR_MODE:-freehand}" = "templates" ]; then
+		if [ -f validation/docker-compose.test.yml ] \
+			&& [ -f validation/tests/00_canary.sh ] \
+			&& find validation/tests -maxdepth 1 -type f -name '*.sh' -print -quit | grep -q .; then
+			GENERATED_VALIDATE_SCRIPT_PATH=""
+			return 0
+		fi
+	else
+		if [ -f validation/docker-compose.test.yml ] \
+			&& [ -f validation/validate.env ] \
+			&& [ -f validation/tests/00_canary.sh ] \
+			&& find validation/tests -maxdepth 1 -type f -name '*.sh' -print -quit | grep -q .; then
+			GENERATED_VALIDATE_SCRIPT_PATH=""
+			return 0
+		fi
 	fi
 
 	GENERATED_VALIDATE_SCRIPT_PATH=""
@@ -1117,6 +1126,11 @@ run_template_validation_harness_renderer()
 		return 15
 	fi
 
+	if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $(python3 -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+
 	if ! renderer_summary="$(python3 "${renderer_script}" \
 		--manifest "${manifest_path}" \
 		--schema "${schema_path}" \
@@ -1232,8 +1246,9 @@ run_preflight_checks()
 		return 1
 	fi
 
-	# Validate legacy wrapper only if it exists. Canonical artifact mode
-	# (validate.env + tests/00_canary.sh + compose) does not require it.
+	# Validate legacy wrapper only if it exists. In template mode the harness
+	# may intentionally omit validate.env (for example python-mongo-flask), while
+	# freehand mode keeps the legacy validate.env + tests/00_canary.sh + compose contract.
 	if [ -f validation/validate.sh ]; then
 		if ! bash -n validation/validate.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 			echo "Shell syntax check failed: validation/validate.sh" >> "${PRE_FLIGHT_LOG_FILE}"
@@ -1264,7 +1279,7 @@ run_preflight_checks()
 		fi
 	fi
 
-	if [ ! -f validation/validate.env ]; then
+	if [ "${HARNESS_GENERATOR_MODE:-freehand}" != "templates" ] && [ ! -f validation/validate.env ]; then
 		echo "Missing validation/validate.env" >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
 		PRE_FLIGHT_FAILURE_CLASS="non_lint"
@@ -2233,7 +2248,7 @@ if [ "${HARNESS_MODE}" = "template_generate" ]; then
 	case "${renderer_exit}" in
 		0)
 			if ! is_validation_harness_runnable; then
-				local_failure_summary="Template renderer completed but produced non-runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum)."
+				local_failure_summary="Template renderer completed but produced non-runnable validation assets (validation/docker-compose.test.yml and validation/tests/00_canary.sh at minimum)."
 				post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for renderer logs."
 				set_tracking_phase_label "ai:validation-failed"
 				write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
@@ -2392,7 +2407,7 @@ else
 	done
 
 	if [ "${GENERATE_SUCCESS}" != "true" ]; then
-	  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum); mode=${GENERATE_FAILURE_MODE:-unknown}; attempts=${GENERATE_ATTEMPTS_USED}/${MAX_CODEX_ATTEMPTS}."
+	  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml and validation/tests/00_canary.sh at minimum); mode=${GENERATE_FAILURE_MODE:-unknown}; attempts=${GENERATE_ATTEMPTS_USED}/${MAX_CODEX_ATTEMPTS}."
 	  # Self-heal interception: if the generate/fix-harness prompt is at fault,
 	  # patch it and re-exec before burning a validation cycle.
 	  attempt_self_heal_and_reexec "generate"

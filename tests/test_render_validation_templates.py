@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import tempfile
@@ -36,7 +37,13 @@ def _manifest_payload(manifest_type: str) -> dict:
 	}
 
 
-def _run_renderer(manifest_path: Path, output_root: Path) -> subprocess.CompletedProcess[str]:
+def _run_renderer(
+	manifest_path: Path,
+	output_root: Path,
+	*,
+	schema_path: Path = SCHEMA_PATH,
+	templates_root: Path = TEMPLATES_ROOT,
+) -> subprocess.CompletedProcess[str]:
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	return subprocess.run(
@@ -46,9 +53,9 @@ def _run_renderer(manifest_path: Path, output_root: Path) -> subprocess.Complete
 			"--manifest",
 			str(manifest_path),
 			"--schema",
-			str(SCHEMA_PATH),
+			str(schema_path),
 			"--templates-root",
-			str(TEMPLATES_ROOT),
+			str(templates_root),
 			"--output-root",
 			str(output_root),
 		],
@@ -174,6 +181,33 @@ def test_renderer_reports_parent_dir_creation_error_cleanly() -> None:
 		result = _run_renderer(manifest_path, output_root)
 		assert result.returncode != 0
 		assert "ERROR: Failed creating parent directory" in result.stderr
+
+
+def test_renderer_rejects_oversized_manifest_and_schema_inputs() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		schema_path = temp_root / "schema.json"
+		output_root = temp_root / "out"
+
+		manifest_payload = _manifest_payload("python-mongo-flask")
+		manifest_payload["slots"]["project_name"] = "x" * (2 * 1024 * 1024)
+		_write_yaml(manifest_path, manifest_payload)
+		schema_path.write_text(SCHEMA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+
+		manifest_result = _run_renderer(manifest_path, output_root, schema_path=schema_path)
+		assert manifest_result.returncode != 0
+		assert "Manifest file" in manifest_result.stderr
+		assert "is too large" in manifest_result.stderr
+
+		_write_yaml(manifest_path, _manifest_payload("python-mongo-flask"))
+		large_schema_payload = {"blob": "x" * (2 * 1024 * 1024)}
+		schema_path.write_text(json.dumps(large_schema_payload), encoding="utf-8")
+
+		schema_result = _run_renderer(manifest_path, output_root, schema_path=schema_path)
+		assert schema_result.returncode != 0
+		assert "Schema file" in schema_result.stderr
+		assert "is too large" in schema_result.stderr
 
 
 def test_renderer_json_pointer_escapes_special_characters() -> None:

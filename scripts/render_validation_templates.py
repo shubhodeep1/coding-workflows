@@ -97,6 +97,9 @@ FAMILY_REGISTRY: dict[str, FamilySpec] = {
 	"node-hardhat-solidity": FamilySpec(name="node-hardhat-solidity", relative_dir="node-hardhat-solidity"),
 }
 
+MAX_MANIFEST_BYTES = 2 * 1024 * 1024
+MAX_SCHEMA_BYTES = 2 * 1024 * 1024
+
 
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description="Render validation harness templates from .ai/validate.yml")
@@ -161,6 +164,14 @@ def load_manifest(manifest_path: Path) -> dict[str, Any]:
 	if not manifest_path.exists():
 		raise ManifestLoadError(f"Manifest file not found: {manifest_path}")
 	try:
+		manifest_size = manifest_path.stat().st_size
+	except OSError as exc:
+		raise ManifestLoadError(f"Unable to read manifest '{manifest_path}': {exc}") from exc
+	if manifest_size > MAX_MANIFEST_BYTES:
+		raise ManifestLoadError(
+			f"Manifest file '{manifest_path}' is too large ({manifest_size} bytes > {MAX_MANIFEST_BYTES} bytes)"
+		)
+	try:
 		manifest_raw = manifest_path.read_text(encoding="utf-8")
 	except OSError as exc:
 		raise ManifestLoadError(f"Unable to read manifest '{manifest_path}': {exc}") from exc
@@ -186,6 +197,14 @@ def load_manifest(manifest_path: Path) -> dict[str, Any]:
 def load_schema(schema_path: Path) -> dict[str, Any]:
 	if not schema_path.exists():
 		raise SchemaLoadError(f"Schema file not found: {schema_path}")
+	try:
+		schema_size = schema_path.stat().st_size
+	except OSError as exc:
+		raise SchemaLoadError(f"Unable to read schema '{schema_path}': {exc}") from exc
+	if schema_size > MAX_SCHEMA_BYTES:
+		raise SchemaLoadError(
+			f"Schema file '{schema_path}' is too large ({schema_size} bytes > {MAX_SCHEMA_BYTES} bytes)"
+		)
 	try:
 		schema = json.loads(schema_path.read_text(encoding="utf-8"))
 	except json.JSONDecodeError as exc:
