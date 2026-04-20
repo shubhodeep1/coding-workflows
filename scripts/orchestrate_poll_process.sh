@@ -3885,6 +3885,60 @@ COMMENT_EOF
 	fi
 }
 
+# count_noop_ancestors <issue_num> [max_depth]
+#
+# Walks the "Re-issued from #N" ancestor chain of <issue_num> up to
+# max_depth hops (default 3) and returns (echoes) the number of
+# consecutive ancestors whose issue-comments contain the implement.yml
+# no-op warning signature ("produced no repository changes").
+#
+# Input:  issue number (integer); optional max_depth (positive integer).
+# Output: integer count on stdout (0 on any failure / fail-open).
+# API cost: up to 2 * max_depth calls — one GET /issues/{n} and one
+#           GET /issues/{n}/comments per hop. Stops early on the first
+#           non-no-op ancestor or when the chain ends.
+#
+# This is an issue-local belt-and-braces cap used by all three
+# orchestrator re-issue paths (main stall, standalone stall, no-op
+# impl-failed). It catches the failure mode where the state-based
+# MAX_IMPL_NOOP_REISSUES counter is stale — tracking issue #1292
+# produced 30+ duplicate sub-issues because the wave-status iterator
+# never refreshed get_impl_noop_count.  Fails open: any API/parse
+# error aborts the walk and the partial count so far is returned,
+# so callers fall through to their existing re-issue behaviour.
+count_noop_ancestors()
+{
+	local issue_num="$1"
+	local max_depth="${2:-3}"
+	local noop_marker="produced no repository changes"
+	local count=0
+	local current="${issue_num}"
+	local hop parent_body parent_num parent_has_noop
+
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || { echo "0"; return 0; }
+	[[ "${max_depth}" =~ ^[1-9][0-9]*$ ]] || max_depth=3
+
+	for hop in $(seq 1 "${max_depth}"); do
+		parent_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${current}" --jq '.body // ""' 2>/dev/null || echo "")"
+		parent_num="$(printf '%s' "${parent_body}" | grep -oE 'Re-issued from #[0-9]+' | head -n1 | grep -oE '[0-9]+' | head -n1 || true)"
+		if [ -z "${parent_num}" ]; then
+			break
+		fi
+		[[ "${parent_num}" =~ ^[0-9]+$ ]] || break
+		parent_has_noop="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${parent_num}/comments" --paginate \
+			--jq "[.[] | select((.body // \"\") | test(\"${noop_marker}\"; \"i\"))] | length" 2>/dev/null \
+			| awk 'BEGIN{s=0} /^[0-9]+$/ {s+=$1} END{print s}' || echo "")"
+		[[ "${parent_has_noop}" =~ ^[0-9]+$ ]] || parent_has_noop=0
+		if [ "${parent_has_noop}" -eq 0 ]; then
+			break
+		fi
+		count=$((count + 1))
+		current="${parent_num}"
+	done
+
+	echo "${count}"
+}
+
 # ---------------------------------------------------------------
 # Standalone stall recovery state helpers
 # ---------------------------------------------------------------
@@ -4320,6 +4374,34 @@ STALL_EOF
       ;;
 
     close_and_reissue)
+      # Belt-and-braces ancestor-chain no-op cap.  If the
+      # "Re-issued from #N" chain already contains
+      # MAX_IMPL_NOOP_REISSUES consecutive no-op ancestors, stop
+      # spawning re-issues and let the wave-completion judge verify
+      # — the work described is almost certainly already on the
+      # integration branch.  Fails open: on any API error
+      # count_noop_ancestors returns 0 and we fall through to the
+      # legacy close+re-issue flow.
+      local stall_anc_noop_count
+      stall_anc_noop_count="$(count_noop_ancestors "${issue_num}" "${MAX_IMPL_NOOP_REISSUES}")"
+      [[ "${stall_anc_noop_count}" =~ ^[0-9]+$ ]] || stall_anc_noop_count=0
+      if [ "${stall_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+        echo "  [stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES}). Closing without re-issue — judge will verify."
+        ensure_label_exists "ai:closed"
+        close_linked_pr "${issue_num}" \
+          "Closed by orchestrator stall recovery — ancestor-chain no-op cap reached (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES})."
+        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:done' --remove-label 'ai:implementing' \
+          --remove-label 'ai:planning' --remove-label 'ai:clarification' \
+          --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
+          --add-label 'ai:closed' 2>/dev/null || true
+        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+          -c "Closing: stall recovery detected ${stall_anc_noop_count} consecutive no-op ancestor(s) in the Re-issued from chain (cap ${MAX_IMPL_NOOP_REISSUES}). The code described likely already exists on the integration branch; the wave-completion judge will verify." 2>/dev/null || true
+        tg_notify "Stall recovery: ancestor-chain no-op cap hit for issue #${issue_num} (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES}). Closed — judge will verify."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+        STALL_RECOVERY_SHOULD_INCREMENT="false"
+        return 0
+      fi
+
       echo "  Closing and re-issuing stalled issue #${issue_num}..."
       surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${stall_minutes}" "${recovery_count}" "main"
       close_linked_pr "${issue_num}" \
@@ -4333,7 +4415,7 @@ STALL_EOF
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --remove-label 'ai:done' --remove-label 'ai:implementing' \
         --remove-label 'ai:planning' --remove-label 'ai:clarification' \
-        --remove-label 'ai:awaiting-approval' \
+        --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
         --add-label 'ai:closed' 2>/dev/null || true
       gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         -c "Closing: orchestrator stall recovery. Issue was stuck in '${phase}' for ${stall_minutes} minutes after $((recovery_count + 1)) recovery attempt(s). Re-issuing with additional guidance." 2>/dev/null || true
@@ -5524,22 +5606,96 @@ PY
     # retrigger-style recovery allowance.
     if [ "${action}" = "retrigger_review" ]; then
       local _std_conflict_linked="${_std_linked_json}"
-      if [ -z "${_std_conflict_linked}" ] || [ "${_std_conflict_linked}" = "null" ]; then
-        local _std_conflict_pr_num _std_conflict_pr_json
-        _std_conflict_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
-        if [[ "${_std_conflict_pr_num}" =~ ^[0-9]+$ ]]; then
-          _std_conflict_pr_json="$(_fetch_pr_json "${_std_conflict_pr_num}")"
-          if [ -n "${_std_conflict_pr_json}" ] && [ "${_std_conflict_pr_json}" != "{}" ]; then
-            _std_conflict_linked="$(printf '%s' "${_std_conflict_pr_json}" | jq -c '{
-              number: (.number // null),
-              state: (.state // null),
-              head_ref: (.head.ref // null),
-              mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
-              merge_state_status: (.mergeable_state // null)
-            }' 2>/dev/null || echo "null")"
-          fi
+      # Cycle-local PR-JSON cache for this iteration.  When the REST
+      # fallback below fetches the PR payload, stash it here so the
+      # downstream retrigger_review case (when the guard fails open)
+      # can reuse the JSON instead of issuing a second gh api call —
+      # matches CLAUDE.md §15 GitHub API hygiene.
+      local _STD_ITER_PR_NUM_CACHED=""
+      local _STD_ITER_PR_JSON_CACHED=""
+      _STD_ITER_PR_NUM_CACHED="$(printf '%s' "${_std_conflict_linked}" | jq -r '.number // empty' 2>/dev/null || echo "")"
+      # API hygiene: when GraphQL already gave us PR number + head ref,
+      # seed a minimal JSON payload so retrigger_review can skip a
+      # redundant gh api pulls/{n} fetch on the non-retry fast path.
+      local _std_cached_head_ref=""
+      _std_cached_head_ref="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_ref // .head.ref // .headRefName // empty)' 2>/dev/null || echo "")"
+      if [[ "${_STD_ITER_PR_NUM_CACHED}" =~ ^[0-9]+$ ]] && [ -n "${_std_cached_head_ref}" ] && [ "${_std_cached_head_ref}" != "null" ]; then
+        _STD_ITER_PR_JSON_CACHED="$(jq -cn --argjson n "${_STD_ITER_PR_NUM_CACHED}" --arg hr "${_std_cached_head_ref}" '{number: $n, head: {ref: $hr}}' 2>/dev/null || echo "")"
+      fi
+
+      # Widen the REST-fallback trigger: GitHub computes mergeability
+      # asynchronously — a push kicks off a background job and the API
+      # briefly returns mergeable=null / mergeable_state=unknown (REST)
+      # or mergeable=UNKNOWN / mergeStateStatus=UNKNOWN (GraphQL).  If
+      # the cache shows UNKNOWN we treat it as a cache miss and hit
+      # REST with retries so we get a definitive signal before
+      # deciding.  Without this widening, the guard fails open on
+      # UNKNOWN and the legacy empty-commit dispatch runs — which
+      # itself triggers another mergeable recomputation, perpetuating
+      # the loop (observed for PR #1375/#1380 vs. settled PR #1413).
+      local _std_conflict_should_retry="false"
+      if [ -z "${_std_conflict_linked}" ] || [ "${_std_conflict_linked}" = "null" ] || [ "${_std_conflict_linked}" = "{}" ]; then
+        _std_conflict_should_retry="true"
+      else
+        local _std_cache_mergeable _std_cache_merge_state
+        _std_cache_mergeable="$(printf '%s' "${_std_conflict_linked}" | jq -r '.mergeable // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+        _std_cache_merge_state="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.merge_state_status // .mergeable_state // empty)' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+        if [ -z "${_std_cache_mergeable}" ] || [ "${_std_cache_mergeable}" = "unknown" ] || [ -z "${_std_cache_merge_state}" ] || [ "${_std_cache_merge_state}" = "unknown" ]; then
+          _std_conflict_should_retry="true"
         fi
       fi
+
+      if [ "${_std_conflict_should_retry}" = "true" ]; then
+        # Retry schedule per Q1:A + Q3:A (user-adjusted backoffs):
+        # 5 attempts total (initial + 4 retries), sleeping 5,10,15,20s
+        # between retries (50s worst case).  GitHub's API contract is
+        # that a GET /pulls/{n} request kicks off mergeability
+        # recomputation, so the subsequent retries are likely to
+        # return the definitive state.  On all-attempts-still-unknown
+        # we fail open and the legacy retrigger_review case fires,
+        # reusing the cached PR JSON (no duplicate gh api call).
+        local _std_conflict_pr_num_try _std_conflict_pr_json_try _std_attempt
+        local _std_backoff_sleeps=(5 10 15 20)
+        _std_conflict_pr_num_try="${_STD_ITER_PR_NUM_CACHED:-}"
+        if ! [[ "${_std_conflict_pr_num_try}" =~ ^[0-9]+$ ]]; then
+          _std_conflict_pr_num_try="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+        fi
+        if [[ "${_std_conflict_pr_num_try}" =~ ^[0-9]+$ ]]; then
+          for _std_attempt in 0 1 2 3 4; do
+            _std_conflict_pr_json_try="$(_fetch_pr_json "${_std_conflict_pr_num_try}")"
+            if [ -n "${_std_conflict_pr_json_try}" ] && [ "${_std_conflict_pr_json_try}" != "{}" ]; then
+              _STD_ITER_PR_NUM_CACHED="${_std_conflict_pr_num_try}"
+              _STD_ITER_PR_JSON_CACHED="${_std_conflict_pr_json_try}"
+              _std_conflict_linked="$(printf '%s' "${_std_conflict_pr_json_try}" | jq -c '{
+                number: (.number // null),
+                state: (.state // null),
+                head_ref: (.head.ref // null),
+                mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
+                merge_state_status: (.mergeable_state // null)
+              }' 2>/dev/null || echo "null")"
+              local _std_attempt_mergeable _std_attempt_merge_state
+              _std_attempt_mergeable="$(printf '%s' "${_std_conflict_linked}" | jq -r '.mergeable // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+              _std_attempt_merge_state="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.merge_state_status // .mergeable_state // empty)' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+              # Settled when either merge_state is already DIRTY
+              # (conflict known even while mergeable is UNKNOWN) OR
+              # mergeable is definitive (true|false) with a settled
+              # merge_state_status (non-empty and non-unknown).
+              if [ "${_std_attempt_merge_state}" = "dirty" ] || { { [ "${_std_attempt_mergeable}" = "true" ] || [ "${_std_attempt_mergeable}" = "false" ]; } && [ -n "${_std_attempt_merge_state}" ] && [ "${_std_attempt_merge_state}" != "unknown" ]; }; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${_std_conflict_pr_num_try} mergeability settled on attempt $((_std_attempt + 1)): mergeable=${_std_attempt_mergeable} state=${_std_attempt_merge_state}"
+                break
+              fi
+              echo "  [standalone-stall] Issue #${issue_num} PR #${_std_conflict_pr_num_try} mergeability still unsettled on attempt $((_std_attempt + 1)) (mergeable=${_std_attempt_mergeable:-null} state=${_std_attempt_merge_state:-unknown}); retrying..."
+            else
+              echo "  [standalone-stall] Issue #${issue_num} PR #${_std_conflict_pr_num_try} fetch failed on attempt $((_std_attempt + 1)); failing open."
+              break
+            fi
+            if [ "${_std_attempt}" -lt 4 ]; then
+              sleep "${_std_backoff_sleeps[${_std_attempt}]}"
+            fi
+          done
+        fi
+      fi
+
       if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
         local _std_conflict_rc=0
         _dispatch_review_for_conflicts "${STALL_CONFLICT_PR_NUM}" "${STALL_CONFLICT_HEAD_REF}" || _std_conflict_rc=$?
@@ -5658,13 +5814,27 @@ STALL_EOF
         local pr_lookup_ok="false"
         local head_ref
         local pr_json
-        if pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null)"; then
+        if [[ "${_STD_ITER_PR_NUM_CACHED:-}" =~ ^[0-9]+$ ]]; then
+          pr_num="${_STD_ITER_PR_NUM_CACHED}"
+          pr_lookup_ok="true"
+        elif pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null)"; then
           pr_lookup_ok="true"
         else
           pr_lookup_ok="false"
         fi
         if [ "${pr_lookup_ok}" = "true" ] && [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
-          pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" 2>/dev/null || echo "")"
+          # API hygiene (CLAUDE.md §15): if the merge-conflict guard
+          # above fetched the same PR's JSON during its retry loop,
+          # reuse that payload instead of issuing a redundant gh api
+          # call.  _STD_ITER_PR_NUM_CACHED/_JSON_CACHED are iteration-
+          # scoped and reset at the top of each iteration's guard
+          # block, so stale cache carryover across issues cannot
+          # happen.
+          if [ "${_STD_ITER_PR_NUM_CACHED:-}" = "${pr_num}" ] && [ -n "${_STD_ITER_PR_JSON_CACHED:-}" ] && [ "${_STD_ITER_PR_JSON_CACHED}" != "{}" ]; then
+            pr_json="${_STD_ITER_PR_JSON_CACHED}"
+          else
+            pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" 2>/dev/null || echo "")"
+          fi
           head_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
           if [ -n "${head_ref}" ] && git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && git checkout "origin/${head_ref}" 2>/dev/null; then
             git config user.name "codex-bot"
@@ -5726,6 +5896,36 @@ STALL_EOF
         took_action="true"
         ;;
       close_and_reissue)
+        # Belt-and-braces ancestor-chain no-op cap. If the
+        # "Re-issued from #N" chain already contains
+        # MAX_IMPL_NOOP_REISSUES consecutive no-op ancestors, stop
+        # spawning standalone re-issues and let the wave-completion
+        # judge (or operator) decide — the work described is almost
+        # certainly already on the integration branch.  Fails open:
+        # on any API error count_noop_ancestors returns 0 and we
+        # fall through to the legacy close+re-issue flow.
+        local standalone_anc_noop_count
+        standalone_anc_noop_count="$(count_noop_ancestors "${issue_num}" "${MAX_IMPL_NOOP_REISSUES:-2}")"
+        [[ "${standalone_anc_noop_count}" =~ ^[0-9]+$ ]] || standalone_anc_noop_count=0
+        if [ "${standalone_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES:-2}" ]; then
+          echo "  [standalone-stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2}). Closing without re-issue — judge will verify."
+          ensure_label_exists "ai:closed"
+          close_linked_pr "${issue_num}" "Closed by standalone stall recovery — ancestor-chain no-op cap reached (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2})."
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+            --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
+            --add-label 'ai:closed' 2>/dev/null || true
+          gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+            -c "Closing: standalone stall recovery detected ${standalone_anc_noop_count} consecutive no-op ancestor(s) in the Re-issued from chain (cap ${MAX_IMPL_NOOP_REISSUES:-2}). The code described likely already exists on the integration branch; the wave-completion judge will verify." 2>/dev/null || true
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: ancestor-chain no-op cap hit for issue #${issue_num} (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2}). Closed — judge will verify." "WARNING"
+          took_action="true"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          # Skip the rest of this iteration's close_and_reissue
+          # logic (which would spawn a replacement issue).  The
+          # outer "took_action && action != close_and_reissue"
+          # state-write block is already skipped for close_and_reissue.
+          continue
+        fi
+
         local orig_title
         local orig_body
         local new_body
@@ -8669,21 +8869,35 @@ ${RB_FIX_DESC}
       # The current failure is itself a no-op, so the observed count
       # includes this cycle even though we haven't bumped yet.
       OBSERVED_NOOP_COUNT=$((NOOP_COUNT + 1))
+      # Belt-and-braces: also walk the "Re-issued from #N" ancestor
+      # chain on GitHub. This catches the failure mode where the
+      # state-based counter is stale — e.g. the tracking-issue state
+      # comment was truncated, or the wave iterator never refreshed
+      # this task.  That exact failure caused tracking issue #1292 to
+      # spawn 30+ duplicate sub-issues for local_id
+      # validation-render-self-heal in ~5 hours.  Fails open: on any
+      # API error count_noop_ancestors echoes 0 and this guard is a
+      # no-op relative to the state-based cap below.
+      ANCESTOR_NOOP_COUNT="$(count_noop_ancestors "${if_issue}" "${MAX_IMPL_NOOP_REISSUES}")"
+      [[ "${ANCESTOR_NOOP_COUNT}" =~ ^[0-9]+$ ]] || ANCESTOR_NOOP_COUNT=0
       # Cap semantics: MAX_IMPL_NOOP_REISSUES controls how many re-issues
-      # are allowed after prior no-op failures.
-      if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
-        echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
+      # are allowed after prior no-op failures. Either signal trips it.
+      if [ "${NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ] || [ "${ANCESTOR_NOOP_COUNT}" -ge "${MAX_IMPL_NOOP_REISSUES}" ]; then
+        echo "  Issue #${if_issue} (${IF_LOCAL_ID}) hit implementation no-op cap (state=${OBSERVED_NOOP_COUNT}, ancestors=${ANCESTOR_NOOP_COUNT}, cap=${MAX_IMPL_NOOP_REISSUES}). Closing as likely already resolved — judge will verify."
         bump_impl_noop_count "${IF_LOCAL_ID}"
         gh_retry gh issue edit "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
+          --remove-label 'ai:done' --remove-label 'ai:implementing' \
+          --remove-label 'ai:planning' --remove-label 'ai:clarification' \
+          --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
           --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
         gh_retry gh issue close "${if_issue}" --repo "${GITHUB_REPOSITORY}" \
-          -c "Closing: implementation produced no changes ${OBSERVED_NOOP_COUNT} time(s). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
-        tg_notify "Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (${OBSERVED_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
+          -c "Closing: implementation produced no changes (state-counter=${OBSERVED_NOOP_COUNT}, ancestor-chain=${ANCESTOR_NOOP_COUNT}, cap=${MAX_IMPL_NOOP_REISSUES}). The code described in this issue likely already exists on the default branch. The wave-completion judge will verify." 2>/dev/null || true
+        tg_notify "Issue #${if_issue} (${IF_LOCAL_ID}) hit impl no-op cap (state=${OBSERVED_NOOP_COUNT}, ancestors=${ANCESTOR_NOOP_COUNT}). Closed as likely already resolved — judge will verify."$'\n'"Issue: $(_gh_url "issues/${if_issue}")" "WARNING"
         IMPL_FAILED_STATE_CHANGED=true
         continue
       fi
 
-      echo "  Issue #${if_issue} has implementation-failed (no-op ${OBSERVED_NOOP_COUNT}/${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
+      echo "  Issue #${if_issue} has implementation-failed (no-op state=${OBSERVED_NOOP_COUNT}, ancestors=${ANCESTOR_NOOP_COUNT}, cap=${MAX_IMPL_NOOP_REISSUES}). Closing and re-issuing..."
 
       # Increment no-op counter before re-issuing
       bump_impl_noop_count "${IF_LOCAL_ID}"
