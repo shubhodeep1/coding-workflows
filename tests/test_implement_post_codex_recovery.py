@@ -916,6 +916,94 @@ def test_out_of_scope_noop_when_capture_file_missing():
 		assert state.get("created_issues", []) == []
 
 
+def test_codex_pre_baseline_captured_before_retry_loop() -> None:
+	codex_block = _step_block_text("Run Codex implementation")
+	assert 'CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"' in codex_block, (
+		"Pre-Codex baseline snapshot must be captured so detection/retry-nudge/no-op "
+		"handlers can diff only real Codex-produced deltas"
+	)
+	assert 'git status --porcelain -uall > "${CODEX_PRE_BASELINE}"' in codex_block, (
+		"Baseline must be written with --porcelain -uall so untracked directories "
+		"expand to stable per-file lines"
+	)
+	# The baseline must be captured before the retry loop so it doesn't drift
+	# between attempts.
+	baseline_idx = codex_block.find('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
+	loop_idx = codex_block.find('for attempt in $(seq 1 "${max_attempts}"); do')
+	assert baseline_idx != -1 and loop_idx != -1 and baseline_idx < loop_idx, (
+		"CODEX_PRE_BASELINE must be captured BEFORE the attempt loop"
+	)
+
+
+def test_success_noop_flag_cleared_before_retry_loop() -> None:
+	codex_block = _step_block_text("Run Codex implementation")
+	# Proactive cleanup prevents a stale flag from a prior run_attempt (which
+	# shares GITHUB_RUN_ID and therefore RUNTIME_DIR) from tricking Guard 0
+	# into closing an issue this attempt never classified as success-no-op.
+	assert 'rm -f "${RUNTIME_DIR}/codex_success_noop.flag"' in codex_block, (
+		"Stale success-no-op flag must be cleared before the retry loop so a "
+		"rerun on a non-ephemeral runner cannot falsely trigger Guard 0"
+	)
+	cleanup_idx = codex_block.find('rm -f "${RUNTIME_DIR}/codex_success_noop.flag"')
+	loop_idx = codex_block.find('for attempt in $(seq 1 "${max_attempts}"); do')
+	assert cleanup_idx != -1 and loop_idx != -1 and cleanup_idx < loop_idx, (
+		"Success-no-op flag cleanup must happen BEFORE the attempt loop"
+	)
+
+
+def test_codex_success_detection_uses_baseline_diff() -> None:
+	codex_block = _step_block_text("Run Codex implementation")
+	# Retry-nudge check must use baseline-filtered delta, not raw porcelain.
+	assert 'codex_retry_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
+		"Retry-nudge must use baseline-filtered delta so workflow bootstrap artifacts "
+		"(.codex-workflow-src*) don't falsely trigger the 'modify files' nudge"
+	)
+	# Success detection must also use baseline-filtered delta.
+	assert 'codex_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
+		"Success-detection must use baseline-filtered delta so bootstrap artifacts "
+		"don't produce a false-positive 'Codex changed files' signal"
+	)
+	# Success-no-op flag must be written when delta is empty and output matches
+	# an 'already implemented' pattern.
+	assert ': > "${RUNTIME_DIR}/codex_success_noop.flag"' in codex_block, (
+		"Success-no-op branch must touch the flag file so Handle no-op "
+		"implementation can short-circuit to ai:closed instead of re-issuing"
+	)
+	assert 'no file changes were made|nothing to change|already' in codex_block, (
+		"Success-no-op detection must match Codex's explicit 'already implemented' signals"
+	)
+	# The regex must cover multiple common completion phrasings so robustness
+	# doesn't depend on a single LLM wording.
+	for phrase in ("implemented", "done", "exists", "present", "complete"):
+		assert phrase in codex_block, (
+			f"Success-no-op regex should include the '{phrase}' completion signal"
+		)
+
+
+def test_handle_noop_guard_zero_closes_with_ai_closed() -> None:
+	noop_block = _step_block_text("Handle no-op implementation")
+	# Guard 0 must run BEFORE Guard 1 (pathspec hard-fail) and Guard 2
+	# (ancestor-chain cap); otherwise surviving .codex-workflow-src* paths
+	# in remaining_changes would falsely trip Guard 1.
+	g0_idx = noop_block.find('codex_success_noop.flag')
+	g1_idx = noop_block.find("Guard 1 (Q2): pathspec hard-fail")
+	g2_idx = noop_block.find("Guard 2 (Q1): ancestor-chain no-op cap")
+	assert g0_idx != -1, "Guard 0 (success-no-op) flag check must be present"
+	assert g1_idx != -1 and g0_idx < g1_idx, "Guard 0 must run before Guard 1"
+	assert g2_idx != -1 and g0_idx < g2_idx, "Guard 0 must run before Guard 2"
+	# Guard 0 closes with ai:closed (not ai:implementation-failed, not ai:needs-human).
+	guard_zero_region = noop_block[g0_idx:g1_idx]
+	assert "--add-label 'ai:closed'" in guard_zero_region, (
+		"Guard 0 must apply ai:closed so the orchestrator treats it as terminal "
+		"and the wave-completion judge verifies"
+	)
+	assert "gh issue close" in guard_zero_region, "Guard 0 must close the issue"
+	assert "exit 0" in guard_zero_region, (
+		"Guard 0 must exit 0 to prevent falling through to Guards 1/2 or the "
+		"legacy ai:implementation-failed path"
+	)
+
+
 def test_review_pipeline_integration_chain_module_runs_clean() -> None:
 	integration_test = REPO_ROOT / "tests" / "test_review_pipeline_integration.py"
 	env = os.environ.copy()

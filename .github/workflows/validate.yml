@@ -253,6 +253,61 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          if [ ! -f "scripts/render_validation_templates.py" ]; then
+            if copy_from_ref_or_local "scripts/render_validation_templates.py" "scripts/render_validation_templates.py.tmp" "false" "true"; then
+              mv "scripts/render_validation_templates.py.tmp" "scripts/render_validation_templates.py"
+              chmod +x "scripts/render_validation_templates.py"
+              _fetched_scripts+=(render_validation_templates.py)
+            else
+              rm -f "scripts/render_validation_templates.py.tmp"
+              echo "Template renderer not on ${script_ref} yet; template mode may not be available."
+            fi
+          else
+            chmod +x "scripts/render_validation_templates.py"
+            _fetched_scripts+=(render_validation_templates.py)
+          fi
+
+          if [ ! -f "scripts/templates/slot_manifest.schema.json" ]; then
+            mkdir -p scripts/templates
+            if copy_from_ref_or_local "scripts/templates/slot_manifest.schema.json" "scripts/templates/slot_manifest.schema.json.tmp" "false" "true"; then
+              mv "scripts/templates/slot_manifest.schema.json.tmp" "scripts/templates/slot_manifest.schema.json"
+            else
+              rm -f "scripts/templates/slot_manifest.schema.json.tmp"
+              echo "Validation slot manifest schema not on ${script_ref} yet; template mode may not be available."
+            fi
+          fi
+
+          if [ ! -d "workflow-templates/validation-harness" ]; then
+            mkdir -p workflow-templates/validation-harness
+          fi
+          while IFS= read -r template_path; do
+            [ -z "${template_path}" ] && continue
+            copy_from_ref_or_local "${template_path}" "${template_path}" "false" "true" || true
+          done <<'EOF_TEMPLATE_FILES'
+          workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2
+          workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2
+          workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2
+          workflow-templates/validation-harness/node-hardhat-solidity/Dockerfile.app.j2
+          workflow-templates/validation-harness/node-hardhat-solidity/_lib/graceful_shutdown.sh.j2
+          workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2
+          workflow-templates/validation-harness/node-hardhat-solidity/tests/00_canary.sh.j2
+          workflow-templates/validation-harness/node-hardhat-solidity/tests/10_family_marker.sh.j2
+          workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2
+          workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2
+          workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2
+          workflow-templates/validation-harness/python-mongo-flask/Dockerfile.app.j2
+          workflow-templates/validation-harness/python-mongo-flask/docker-compose.test.yml.j2
+          workflow-templates/validation-harness/python-mongo-flask/tests/00_canary.sh.j2
+          workflow-templates/validation-harness/python-mongo-flask/tests/10_family_marker.sh.j2
+          workflow-templates/validation-harness/python-mongo-flask/tests/10_http_smoke.sh.j2
+          workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2
+          workflow-templates/validation-harness/python-mongo-flask/tests/30_graceful_shutdown.sh.j2
+          workflow-templates/validation-harness/python-mongo-flask/tests/90_tap_report.sh.j2
+          workflow-templates/validation-harness/python-mongo-flask/tests/_lib/graceful_shutdown.py.j2
+          workflow-templates/validation-harness/python-mongo-flask/tests/_lib/http_smoke.py.j2
+          workflow-templates/validation-harness/python-mongo-flask/tests/_lib/import_audit.py.j2
+          EOF_TEMPLATE_FILES
+
           require_remote_canonical_scripts=false
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             require_remote_canonical_scripts=true
@@ -414,6 +469,27 @@ jobs:
             --actor "${{ github.actor }}" \
             --metadata-json "${metadata_json}"
 
+      - name: Install Python dependencies for template mode
+        continue-on-error: true
+        env:
+          VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'false' }}
+        run: |
+          set -euo pipefail
+
+          template_mode_enabled="$(printf '%s' "${VALIDATION_USE_TEMPLATES}" | tr '[:upper:]' '[:lower:]')"
+          case "${template_mode_enabled}" in
+            1|true|yes|on)
+              if [ -f "scripts/render_validation_templates.py" ]; then
+                python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
+              else
+                echo "::warning::VALIDATION_USE_TEMPLATES is enabled but scripts/render_validation_templates.py is unavailable; skipping template dependency installation."
+              fi
+              ;;
+            *)
+              echo "Template mode not enabled; skipping template dependency installation."
+              ;;
+          esac
+
       - name: Run validation process
         id: validate_run
         continue-on-error: true
@@ -431,6 +507,7 @@ jobs:
           MODEL_EDITOR: ${{ env.MODEL_EDITOR }}
           MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
           MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
+          VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'false' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
