@@ -19,6 +19,16 @@ LAST_RUN_DIFF_STAT_FILE="${LAST_RUN_DIFF_STAT_FILE:-${RUNTIME_DIR}/last_run_diff
 CONSOLIDATOR_PROMPT_FILE="${RUNTIME_DIR}/review_consolidator_prompt.txt"
 CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
 
+# Validate REVIEW_CONSOLIDATOR_REASONING is a known reasoning level.
+# Prevent invalid values from breaking TOML config or shell quoting.
+case "${REVIEW_CONSOLIDATOR_REASONING}" in
+	xhigh|high|medium|low) ;;
+	*)
+		review_log "invalid_reasoning=1 value='${REVIEW_CONSOLIDATOR_REASONING}' fallback=medium"
+		REVIEW_CONSOLIDATOR_REASONING="medium"
+		;;
+esac
+
 if [ "${REVIEW_CONSOLIDATOR_ENABLED:-1}" = "0" ]; then
 	: > "${CONSOLIDATOR_RAW_FILE}"
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} disabled=1 failopen=0 output_bytes=0"
@@ -67,8 +77,9 @@ start_epoch="$(date +%s)"
 tmp_out="$(mktemp)"
 tmp_err="$(mktemp)"
 tmp_cap="$(mktemp)"
+consolidator_codex_root=""
 consolidator_codex_home=""
-trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"' EXIT INT TERM
+trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; if [ -n "${consolidator_codex_home}" ]; then rm -rf "${consolidator_codex_home}"; fi; if [ -n "${consolidator_codex_root}" ]; then rmdir "${consolidator_codex_root}" 2>/dev/null || true; fi' EXIT INT TERM
 
 # Isolated CODEX_HOME overlay so consolidator reasoning effort can be set
 # without mutating the shared editor CODEX_HOME. Mirrors the pattern in
@@ -86,7 +97,6 @@ fi
 consolidator_codex_root="${RUNNER_TEMP:-${RUNTIME_DIR}}/codex_home_consolidator"
 mkdir -p "${consolidator_codex_root}"
 consolidator_codex_home="$(mktemp -d "${consolidator_codex_root}/consolidator.XXXXXX")"
-trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; if [ -n "${consolidator_codex_home}" ]; then rm -rf "${consolidator_codex_home}"; fi; rmdir "${consolidator_codex_root}" 2>/dev/null || true' EXIT INT TERM
 
 if [ -d "${CODEX_HOME:-}" ]; then
 	cp -r "${CODEX_HOME}/." "${consolidator_codex_home}/" || review_log "cp_failed=1 source_codex_home=${CODEX_HOME}"
