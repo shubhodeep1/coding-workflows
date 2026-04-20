@@ -68,6 +68,7 @@ tmp_out="$(mktemp)"
 tmp_err="$(mktemp)"
 tmp_cap="$(mktemp)"
 consolidator_codex_home=""
+trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"' EXIT INT TERM
 
 # Isolated CODEX_HOME overlay so consolidator reasoning effort can be set
 # without mutating the shared editor CODEX_HOME. Mirrors the pattern in
@@ -92,18 +93,25 @@ if [ -d "${CODEX_HOME:-}" ]; then
 fi
 mkdir -p "${consolidator_codex_home}/bin"
 
+escaped_reasoning="$(printf '%s' "${REVIEW_CONSOLIDATOR_REASONING}" | sed 's/[\\/&]/\\&/g')"
+reasoning_config_applied=0
 for cfg in "${consolidator_codex_home}/config.toml" "${consolidator_codex_home}/.codex/config.toml"; do
 	if [ -f "${cfg}" ]; then
+		reasoning_config_applied=1
 		if ! grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${cfg}"; then
 			printf 'model_reasoning_effort = "%s"\n' "${REVIEW_CONSOLIDATOR_REASONING}" >> "${cfg}"
 		else
 			sed -i \
-				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${REVIEW_CONSOLIDATOR_REASONING}\"/" \
-				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${REVIEW_CONSOLIDATOR_REASONING}\"/" \
+				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${escaped_reasoning}\"/" \
+				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${escaped_reasoning}\"/" \
 				"${cfg}" 2>/dev/null || true
 		fi
 	fi
 done
+if [ "${reasoning_config_applied}" -eq 0 ]; then
+	printf 'model_reasoning_effort = "%s"\n' "${REVIEW_CONSOLIDATOR_REASONING}" > "${consolidator_codex_home}/config.toml"
+	review_log "reasoning_config_created=1 target=${consolidator_codex_home}/config.toml"
+fi
 
 cmd_rc=0
 

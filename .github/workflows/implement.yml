@@ -1100,7 +1100,7 @@ jobs:
                 # The success-no-op path leaves a flag file for the
                 # "Handle no-op implementation" step so it can close the
                 # issue with ai:closed instead of re-issuing it.
-                if grep -qEi 'no file changes were made|nothing to change|already (aligned|implemented|up[- ]to[- ]date|done|exists|present|complete)|no changes needed' "${CODEX_OUTPUT_FILE}"; then
+                if grep -qE '^([[:space:]]*(?:-\s*)?)?(no file changes were made|nothing to change|already (aligned|implemented|up[- ]to[- ]date|done|exists|present|complete)|no changes needed)([[:space:]]*[.!?])?[[:space:]]*$' "${CODEX_OUTPUT_FILE}"; then
                   echo "Codex implement reported success-no-op on attempt ${attempt} (model says the requested work is already present)."
                   : > "${RUNTIME_DIR}/codex_success_noop.flag"
                   implement_succeeded=true
