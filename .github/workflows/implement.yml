@@ -939,6 +939,25 @@ jobs:
 
           max_attempts=5
           implement_succeeded=false
+
+          # ────────────────────────────────────────────────────────────────
+          # Pre-Codex worktree baseline.
+          # The workflow's setup steps check out runtime support trees
+          # (.codex-workflow-src*, .serena, ai-memory/schemas, …) into the
+          # job workspace BEFORE this step runs.  A raw `git status
+          # --porcelain` therefore always reports those artifacts as
+          # untracked, producing a false-positive "Codex changed files"
+          # signal on every attempt (see analyze-log #141).  Snapshot the
+          # baseline once here so the detection / retry-nudge / no-op
+          # handlers can diff against it and only react to deltas that
+          # Codex itself produced.  `-uall` expands untracked directories
+          # so per-file lines are stable across attempts.
+          # ────────────────────────────────────────────────────────────────
+          CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"
+          git status --porcelain -uall > "${CODEX_PRE_BASELINE}" 2>/dev/null || : > "${CODEX_PRE_BASELINE}"
+          echo "Pre-Codex worktree baseline ($(wc -l < "${CODEX_PRE_BASELINE}" | tr -d ' ') line(s)):"
+          sed 's/^/  /' "${CODEX_PRE_BASELINE}" || true
+
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
 
@@ -963,9 +982,14 @@ jobs:
 
             # On retries after a no-op (Codex succeeded but made no file
             # changes), prepend a nudge so the model knows it must actually
-            # modify files this time.
+            # modify files this time.  The delta check subtracts the
+            # pre-Codex baseline (workflow bootstrap artifacts such as
+            # .codex-workflow-src*) so the nudge only fires when Codex
+            # itself produced no changes, not when the untouched support
+            # checkout shows up as untracked.
             PROMPT_FILE_TO_USE="${CODEX_PROMPT_FILE}"
-            if [ "${attempt}" -gt 1 ] && [ -z "$(git status --porcelain)" ]; then
+            codex_retry_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
+            if [ "${attempt}" -gt 1 ] && [ -z "${codex_retry_delta}" ]; then
               PROMPT_FILE_TO_USE="${RUNTIME_DIR}/codex_prompt_retry.txt"
               {
                 cat <<'RETRY_EOF'
@@ -1049,8 +1073,25 @@ jobs:
             if [ "${cmd_rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 # Codex returned output — check if it actually changed files.
-                if [ -n "$(git status --porcelain)" ]; then
+                # Diff against the pre-Codex baseline so untouched workflow
+                # bootstrap artifacts (.codex-workflow-src*, etc.) don't
+                # count as a false-positive Codex change.
+                codex_delta="$(git status --porcelain -uall | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
+                if [ -n "${codex_delta}" ]; then
                   echo "Codex implement succeeded with file changes on attempt ${attempt}."
+                  implement_succeeded=true
+                  break
+                fi
+                # Baseline-relative delta is empty — Codex produced no new
+                # changes.  Distinguish an intentional success-no-op (model
+                # explicitly reports the work is already done) from an
+                # ambiguous no-op (output without an "already done" signal).
+                # The success-no-op path leaves a flag file for the
+                # "Handle no-op implementation" step so it can close the
+                # issue with ai:closed instead of re-issuing it.
+                if grep -qEi 'no file changes were made|nothing to change|already (aligned|implemented|up[- ]to[- ]date)|no changes needed|already complete' "${CODEX_OUTPUT_FILE}"; then
+                  echo "Codex implement reported success-no-op on attempt ${attempt} (model says the requested work is already present)."
+                  : > "${RUNTIME_DIR}/codex_success_noop.flag"
                   implement_succeeded=true
                   break
                 fi
@@ -1793,6 +1834,49 @@ jobs:
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           remaining_changes="${REMAINING_CHANGES:-}"
           REPO="${{ github.repository }}"
+
+          # -------------------------------------------------------------
+          # Guard 0: success-no-op (Codex reported "already implemented").
+          # The "Run Codex implementation" step writes
+          # ${RUNTIME_DIR}/codex_success_noop.flag when the model's
+          # output explicitly states the requested work is already
+          # present on the branch AND the worktree delta against the
+          # pre-Codex baseline is empty.  This is a LEGITIMATE success
+          # case (a sibling sub-task already merged the functionality,
+          # or the plan was based on stale analysis) and must NOT be
+          # funneled through the re-issue loop.  Close with ai:closed
+          # and let the wave-completion judge verify.
+          # This guard runs BEFORE the pathspec / ancestor-chain guards
+          # because the surviving `remaining_changes` in this path is
+          # baseline workflow artifacts (.codex-workflow-src*), which
+          # would otherwise falsely trip Guard 1.
+          # -------------------------------------------------------------
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/codex_success_noop.flag" ]; then
+            echo "Codex success-no-op flag detected; closing #${ISSUE_NUMBER} with ai:closed (no re-issue)."
+            success_noop_body="$(printf '%s\n' \
+              '✅ **Already implemented — closing without changes.**' \
+              '' \
+              'The implementation model reported that the requested work is already present on the target branch (typical when a sibling sub-task merged the same functionality, or when the plan was based on stale repository state). The worktree delta against the pre-Codex baseline was empty, so no commit was produced.' \
+              '' \
+              "Closing with \`ai:closed\` instead of re-issuing. The wave-completion judge will verify and re-open this issue if the requested functionality is genuinely missing from the integration branch." \
+              '' \
+              "Run: ${RUN_URL}")"
+            gh_retry gh label create 'ai:closed' --repo "${REPO}" \
+              --color '6a737d' --description 'Linked PR closed without merge' \
+              2>/dev/null || true
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+              --remove-label 'ai:done' --remove-label 'ai:implementing' \
+              --remove-label 'ai:planning' --remove-label 'ai:clarification' \
+              --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
+              --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || \
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
+              --add-label 'ai:closed' 2>/dev/null || true
+            gh_retry gh issue close "${ISSUE_NUMBER}" --repo "${REPO}" \
+              --comment "${success_noop_body}" 2>/dev/null || \
+            gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
+              -f body="${success_noop_body}" >/dev/null 2>&1 || true
+            exit 0
+          fi
 
           # -------------------------------------------------------------
           # Guard 1 (Q2): pathspec hard-fail.
