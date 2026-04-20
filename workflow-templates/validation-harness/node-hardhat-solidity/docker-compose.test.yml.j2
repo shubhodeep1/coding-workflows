@@ -1,0 +1,32 @@
+services:
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:v1.3.1
+    init: true
+    command: >-
+      sh -c "anvil --host 0.0.0.0 --port ${ANVIL_PORT:-8545}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          cast block-number --rpc-url http://127.0.0.1:${ANVIL_PORT:-8545} >/dev/null 2>&1
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+
+  app:
+    build:
+      context: ..
+      dockerfile: {{ output_root_name }}/Dockerfile.app
+    init: true
+    working_dir: /workspace
+    env_file:
+      - validate.env
+    environment:
+      APP_SERVICE: "${APP_SERVICE:-app}"
+      RPC_URL: "${RPC_URL:-http://anvil:${ANVIL_PORT:-8545}}"
+      HARDHAT_NETWORK: "${HARDHAT_NETWORK:-localhost}"
+      HARDHAT_TEST_CMD: "${HARDHAT_TEST_CMD:-npx hardhat test --network localhost}"
+    depends_on:
+      anvil:
+        condition: service_healthy

@@ -218,6 +218,24 @@ class TestHardhatRpcProbe(unittest.TestCase):
         for key in coverage_keys:
             self.assertIn(key, content, f"mode-validate-generate.txt must preserve coverage key {key}")
 
+    def test_node_hardhat_template_rpc_probe_uses_result_field(self) -> None:
+        """Node-hardhat RPC probe template must require object payload and .result."""
+        from pathlib import Path
+
+        template_file = (
+            Path(__file__).resolve().parent.parent
+            / "workflow-templates"
+            / "validation-harness"
+            / "node-hardhat-solidity"
+            / "tests"
+            / "20_rpc_probe.sh.j2"
+        )
+        content = template_file.read_text(encoding="utf-8")
+
+        self.assertIn('type == "object"', content)
+        self.assertIn('has("result") and (.result != null) and (.result | type == "string") and (.result | length > 0)', content)
+        self.assertNotIn("jq -e '.'", content)
+
 
 # ---------------------------------------------------------------------------
 # Standalone runner (matches CI convention: python3 tests/test_*.py)

@@ -8,7 +8,7 @@
 #   TRACKING_ISSUE, VALIDATION_TIMEOUT, TOOL_CALL_BUDGET_VALIDATE,
 #   MODEL_EDITOR, MODEL_REASONING_EFFORT,
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID,
-#   VALIDATION_COMPOSE_FILE,
+#   VALIDATION_COMPOSE_FILE, VALIDATION_USE_TEMPLATES,
 #   VALIDATION_TEST_USERNAME, VALIDATION_TEST_PASSWORD, VALIDATION_TEST_API_KEY,
 #   SERENA_VERSION, SERENA_LANGUAGES, SERENA_DISABLED, SERENA_IGNORED_DIRS,
 #   CONTEXT7_DISABLED, GIT_MCP_DISABLED,
@@ -58,6 +58,13 @@ VALIDATION_COMPOSE_FILE="${VALIDATION_COMPOSE_FILE:-docker-compose.yml}"
 VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-test-user}"
 VALIDATION_TEST_PASSWORD="${VALIDATION_TEST_PASSWORD:-test-password}"
 VALIDATION_TEST_API_KEY="${VALIDATION_TEST_API_KEY:-test-api-key}"
+VALIDATION_USE_TEMPLATES="${VALIDATION_USE_TEMPLATES:-false}"
+VALIDATION_USE_TEMPLATES_ENABLED="false"
+case "$(printf '%s' "${VALIDATION_USE_TEMPLATES}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    VALIDATION_USE_TEMPLATES_ENABLED="true"
+    ;;
+esac
 VALIDATION_CYCLE="${VALIDATION_CYCLE:-1}"
 if ! [[ "${VALIDATION_CYCLE}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_CYCLE}" -lt 1 ]; then
   echo "::warning::VALIDATION_CYCLE must be a positive integer (got: ${VALIDATION_CYCLE}); defaulting to 1."
@@ -114,7 +121,13 @@ VALIDATION_RUNNER_FILE="${RUNTIME_DIR}/validation_runtime_driver.sh"
 
 HINTS_SOURCE="none"
 HARNESS_MODE="generate"
+HARNESS_GENERATOR_MODE="freehand"
 PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="none"
+PRE_FLIGHT_FAILURE_KIND="none"
+PRE_FLIGHT_FAILURE_REASON="not_run"
+PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
+PRE_FLIGHT_APPEND_LOG="false"
 GENERATED_VALIDATE_SCRIPT_PATH=""
 CANONICAL_VALIDATE_DRIVER_REL="scripts/validate_process.sh"
 CANONICAL_VALIDATE_HARNESS_REL="validation/validate.sh"
@@ -208,10 +221,19 @@ fi
 # returns and the caller proceeds with its normal hard-fail path.
 #
 # Usage: attempt_self_heal_and_reexec "<failure-phase-tag>"
-#   phase tag: generate|preflight|canary|runtime|diagnose|discover
+#   phase tag: generate|preflight|render|canary|runtime|diagnose|discover
 attempt_self_heal_and_reexec()
 {
   local phase="${1:-unknown}"
+
+  case "${phase}" in
+    discover|generate|preflight|render|canary|diagnose|runtime|unknown)
+      ;;
+    *)
+      echo "::warning::self-heal invoked with unsupported phase '${phase}'; normalizing to 'unknown'." >&2
+      phase="unknown"
+      ;;
+  esac
 
   if [ "${MAX_SELF_HEAL_ATTEMPTS:-0}" -le 0 ]; then
     return 0
@@ -647,12 +669,21 @@ PY
 
 is_validation_harness_runnable()
 {
-	if [ -f validation/docker-compose.test.yml ] \
-		&& [ -f validation/validate.env ] \
-		&& [ -f validation/tests/00_canary.sh ] \
-		&& find validation/tests -maxdepth 1 -type f -name '*.sh' -print -quit | grep -q .; then
-		GENERATED_VALIDATE_SCRIPT_PATH=""
-		return 0
+	if [ "${HARNESS_GENERATOR_MODE:-freehand}" = "templates" ]; then
+		if [ -f validation/docker-compose.test.yml ] \
+			&& [ -f validation/tests/00_canary.sh ] \
+			&& find validation/tests -maxdepth 1 -type f -name '*.sh' -print -quit | grep -q .; then
+			GENERATED_VALIDATE_SCRIPT_PATH=""
+			return 0
+		fi
+	else
+		if [ -f validation/docker-compose.test.yml ] \
+			&& [ -f validation/validate.env ] \
+			&& [ -f validation/tests/00_canary.sh ] \
+			&& find validation/tests -maxdepth 1 -type f -name '*.sh' -print -quit | grep -q .; then
+			GENERATED_VALIDATE_SCRIPT_PATH=""
+			return 0
+		fi
 	fi
 
 	GENERATED_VALIDATE_SCRIPT_PATH=""
@@ -892,6 +923,7 @@ write_metadata_file()
     --arg failure_summary "${failure_summary}" \
     --arg hints_source "${HINTS_SOURCE}" \
     --arg harness_mode "${HARNESS_MODE}" \
+    --arg harness_generator_mode "${HARNESS_GENERATOR_MODE}" \
     --arg pre_flight_status "${PRE_FLIGHT_STATUS}" \
     --arg repository "${GITHUB_REPOSITORY}" \
     --arg tracking_issue "${TRACKING_ISSUE_RAW}" \
@@ -912,6 +944,7 @@ write_metadata_file()
       failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
       hints_source: $hints_source,
       harness_mode: $harness_mode,
+      harness_generator_mode: $harness_generator_mode,
       pre_flight_status: $pre_flight_status,
       repository: $repository,
       tracking_issue: $tracking_issue,
@@ -1065,10 +1098,132 @@ EOF
 	chmod +x validation/validate.sh
 }
 
+run_template_validation_harness_renderer()
+{
+	local manifest_path=".ai/validate.yml"
+	local renderer_script="scripts/render_validation_templates.py"
+	local schema_path="scripts/templates/slot_manifest.schema.json"
+	local templates_root="workflow-templates/validation-harness"
+	local renderer_summary=""
+	local python3_bin="python3"
+
+	HARNESS_GENERATOR_MODE="templates"
+
+	if [ ! -f "${manifest_path}" ]; then
+		return 10
+	fi
+	if [ ! -f "${renderer_script}" ]; then
+		return 11
+	fi
+	if [ ! -f "${schema_path}" ]; then
+		return 12
+	fi
+	if [ ! -d "${templates_root}" ]; then
+		return 13
+	fi
+	if [ ! -f "${templates_root}/_shared/_lib/tap_helpers.sh.j2" ] \
+		|| [ ! -f "${templates_root}/_shared/tests/00_canary.sh.j2" ] \
+		|| [ ! -f "${templates_root}/_shared/tests/90_tap_report.sh.j2" ]; then
+		return 15
+	fi
+
+	python3_bin="$(command -v python3 2>/dev/null || printf '%s' 'python3')"
+	if ! "${python3_bin}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $("${python3_bin}" -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+
+	if ! renderer_summary="$("${python3_bin}" "${renderer_script}" \
+		--manifest "${manifest_path}" \
+		--schema "${schema_path}" \
+		--templates-root "${templates_root}" \
+		--output-root validation 2>&1)"; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+
+	if [ -n "${renderer_summary}" ]; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+	fi
+
+	if [ -d validation/tests ]; then
+		find validation/tests -type f -name '*.sh' -exec chmod +x {} +
+	fi
+
+	return 0
+}
+
+attempt_render_recovery_after_preflight_failure()
+{
+	local renderer_exit=0
+
+	if [ "${HARNESS_MODE}" != "template_generate" ] || [ "${HARNESS_GENERATOR_MODE}" != "templates" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
+
+	classify_preflight_failure
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
+		echo "Render recovery: skipped because pre-flight failure was classified as kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
+
+	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
+	{
+		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
+		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
+		echo "Render recovery: classification kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}."
+	} >> "${PRE_FLIGHT_LOG_FILE}"
+	if run_template_validation_harness_renderer; then
+		renderer_exit=0
+	else
+		renderer_exit=$?
+	fi
+
+	if [ "${renderer_exit}" -ne 0 ]; then
+		PRE_FLIGHT_FAILURE_KIND="render"
+		PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_${renderer_exit}"
+		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to render-phase self-heal." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 2
+	fi
+
+	echo "Render recovery: rerender completed; re-running pre-flight checks." >> "${PRE_FLIGHT_LOG_FILE}"
+	local PRE_FLIGHT_APPEND_LOG="true"
+	if run_preflight_checks; then
+		PRE_FLIGHT_FAILURE_KIND="none"
+		PRE_FLIGHT_FAILURE_REASON="none"
+		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 0
+	fi
+
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}" || true
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
+	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
+	PRE_FLIGHT_FAILURE_KIND="render"
+	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
+	return 2
+}
+
 run_preflight_checks()
 {
 	PRE_FLIGHT_STATUS="running"
-	: > "${PRE_FLIGHT_LOG_FILE}"
+	PRE_FLIGHT_FAILURE_CLASS="none"
+	PRE_FLIGHT_FAILURE_KIND="unknown"
+	PRE_FLIGHT_FAILURE_REASON="running"
+	if [ "${PRE_FLIGHT_APPEND_LOG:-false}" != "true" ]; then
+		: > "${PRE_FLIGHT_LOG_FILE}"
+	fi
 
 	# Emit the tail of the pre-flight log to stderr so that the failing command's
 	# output is visible directly in the GitHub Actions job log, without requiring
@@ -1088,16 +1243,19 @@ run_preflight_checks()
 	if [ ! -f validation/docker-compose.test.yml ]; then
 		echo "Missing validation/docker-compose.test.yml" >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
 		_emit_preflight_tail "validation/docker-compose.test.yml missing"
 		return 1
 	fi
 
-	# Validate legacy wrapper only if it exists. Canonical artifact mode
-	# (validate.env + tests/00_canary.sh + compose) does not require it.
+	# Validate legacy wrapper only if it exists. In template mode the harness
+	# may intentionally omit validate.env (for example python-mongo-flask), while
+	# freehand mode keeps the legacy validate.env + tests/00_canary.sh + compose contract.
 	if [ -f validation/validate.sh ]; then
 		if ! bash -n validation/validate.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 			echo "Shell syntax check failed: validation/validate.sh" >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="lint"
 			_emit_preflight_tail "bash -n failed for validation/validate.sh"
 			return 1
 		fi
@@ -1105,6 +1263,7 @@ run_preflight_checks()
 		if ! grep -q 'scripts/validate_driver.sh' validation/validate.sh; then
 			echo "validation/validate.sh must delegate to scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="non_lint"
 			_emit_preflight_tail "validation/validate.sh is not a thin wrapper"
 			return 1
 		fi
@@ -1113,6 +1272,7 @@ run_preflight_checks()
 			if ! bash -n scripts/validate_driver.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 				echo "Shell syntax check failed: scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
 				PRE_FLIGHT_STATUS="fail"
+				PRE_FLIGHT_FAILURE_CLASS="lint"
 				_emit_preflight_tail "bash -n failed for scripts/validate_driver.sh"
 				return 1
 			fi
@@ -1121,9 +1281,10 @@ run_preflight_checks()
 		fi
 	fi
 
-	if [ ! -f validation/validate.env ]; then
+	if [ "${HARNESS_GENERATOR_MODE:-freehand}" != "templates" ] && [ ! -f validation/validate.env ]; then
 		echo "Missing validation/validate.env" >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
 		_emit_preflight_tail "validation/validate.env missing"
 		return 1
 	fi
@@ -1131,6 +1292,7 @@ run_preflight_checks()
 	if [ ! -f validation/tests/00_canary.sh ]; then
 		echo "Missing validation/tests/00_canary.sh" >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
 		_emit_preflight_tail "validation/tests/00_canary.sh missing"
 		return 1
 	fi
@@ -1138,6 +1300,7 @@ run_preflight_checks()
 	if ! docker compose -f validation/docker-compose.test.yml config --quiet >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 		echo "Compose syntax/validation check failed." >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="lint"
 		_emit_preflight_tail "docker compose config failed (YAML/schema invalid). Common cause: YAML must use space indentation, not tabs."
 		return 1
 	fi
@@ -1147,6 +1310,7 @@ run_preflight_checks()
 	if [ "${shell_count}" -eq 0 ]; then
 		echo "No shell scripts found under validation/." >> "${PRE_FLIGHT_LOG_FILE}"
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
 		_emit_preflight_tail "no shell scripts found under validation/"
 		return 1
 	fi
@@ -1155,6 +1319,7 @@ run_preflight_checks()
 		if ! bash -n "${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
 			echo "Shell syntax check failed: ${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="lint"
 			_emit_preflight_tail "bash -n failed for ${shell_file}"
 			return 1
 		fi
@@ -1221,6 +1386,7 @@ print("Build context and dockerfile path checks passed.")
 PY
 	then
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
 		_emit_preflight_tail "build context / dockerfile path resolution failed"
 		return 1
 	fi
@@ -1318,6 +1484,7 @@ print("Embedded Python heredoc syntax checks passed.")
 PY2
 	then
 		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="lint"
 		_emit_preflight_tail "embedded Python syntax check failed in validation/**/*.sh"
 		return 1
 	fi
@@ -1499,6 +1666,7 @@ print("Embedded Python F-code lint (pyflakes + ruff) passed.")
 PY3
 		then
 			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="lint"
 			_emit_preflight_tail "embedded Python F-code lint failed in validation/**/*.sh (pyflakes/ruff)"
 			return 1
 		fi
@@ -1523,6 +1691,7 @@ PY3
 		   | grep -qi 'repo\.mongodb\.org'; then
 			echo "${dockerfile} references 'mongosh'/'mongodb-mongosh' but does not add MongoDB's official apt repo (no 'repo.mongodb.org' reference). mongosh is NOT in Debian/Ubuntu default repos and will fail the compose build with 'E: Unable to locate package mongosh' or 'E: Unable to locate package mongodb-mongosh'. Prefer pymongo, or add the MongoDB apt source + GPG key to the Dockerfile. See mode-validate-generate.txt: 'installing mongosh in validation/Dockerfile.app'." >> "${PRE_FLIGHT_LOG_FILE}"
 			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="non_lint"
 			_emit_preflight_tail "mongosh installation in ${dockerfile} requires official MongoDB apt repo"
 			return 1
 		fi
@@ -1598,6 +1767,7 @@ PY3
 					echo "  2) Install the tool in validation/Dockerfile.app via apt (plus any required repo/GPG plumbing, e.g. MongoDB official apt repo for mongosh) and leave CANARY_TOOLS unchanged."
 				} >> "${PRE_FLIGHT_LOG_FILE}"
 				PRE_FLIGHT_STATUS="fail"
+				PRE_FLIGHT_FAILURE_CLASS="non_lint"
 				_emit_preflight_tail "CANARY_TOOLS scope violation: service-side CLI(s) referenced in app canary but not installed in app image: ${_offenders}"
 				return 1
 			fi
@@ -1605,6 +1775,52 @@ PY3
 	fi
 
 	PRE_FLIGHT_STATUS="pass"
+	PRE_FLIGHT_FAILURE_KIND="none"
+	PRE_FLIGHT_FAILURE_REASON="none"
+	return 0
+}
+
+classify_preflight_failure()
+{
+	PRE_FLIGHT_FAILURE_KIND="non_lint"
+	PRE_FLIGHT_FAILURE_REASON="preflight_failure_other"
+
+	if [ ! -s "${PRE_FLIGHT_LOG_FILE}" ]; then
+		PRE_FLIGHT_FAILURE_REASON="preflight_log_empty"
+		echo "PRE_FLIGHT_CLASSIFICATION kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}" >&2
+		return 0
+	fi
+
+	if grep -Fq "Embedded Python F-code lint violations in generated harness scripts:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="embedded_python_fcode_lint"
+	elif grep -Fq "Embedded Python syntax errors in generated harness scripts:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="embedded_python_syntax"
+	elif grep -Fq "Compose syntax/validation check failed." "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="compose_schema_lint"
+	elif grep -Fq "Shell syntax check failed:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="shell_syntax_lint"
+	elif grep -Fq "validation/tests/00_canary.sh CANARY_TOOLS references service-side CLI(s)" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="canary_tools_scope_lint"
+	elif grep -Fq "references 'mongosh'/'mongodb-mongosh' but does not add MongoDB's official apt repo" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="dockerfile_package_lint"
+	elif grep -Fq "missing build context:" "${PRE_FLIGHT_LOG_FILE}" \
+		|| grep -Fq "missing dockerfile:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="compose_build_path_lint"
+	elif grep -Fq "Missing validation/docker-compose.test.yml" "${PRE_FLIGHT_LOG_FILE}" \
+		|| grep -Fq "Missing validation/validate.env" "${PRE_FLIGHT_LOG_FILE}" \
+		|| grep -Fq "Missing validation/tests/00_canary.sh" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="non_lint"
+		PRE_FLIGHT_FAILURE_REASON="missing_validation_artifact"
+	fi
+
+	echo "PRE_FLIGHT_CLASSIFICATION kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}" >&2
 	return 0
 }
 
@@ -1959,15 +2175,27 @@ if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then
 	exit 1
 fi
 
-if [ "${VALIDATION_CYCLE}" -gt 1 ] \
+if [ "${VALIDATION_USE_TEMPLATES_ENABLED}" = "true" ]; then
+	HARNESS_MODE="template_generate"
+	HARNESS_GENERATOR_MODE="templates"
+	if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
+		echo "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." >&2
+		exit 1
+	fi
+	rm -rf validation
+	mkdir -p validation/logs
+	touch validation/.ai-validation-owned
+elif [ "${VALIDATION_CYCLE}" -gt 1 ] \
 	&& [ -d validation ] \
 	&& [ -f validation/.ai-validation-owned ] \
 	&& is_validation_harness_runnable; then
 	HARNESS_MODE="fix"
+	HARNESS_GENERATOR_MODE="freehand"
 	mkdir -p validation/logs
 	find validation/logs -mindepth 1 -delete 2>/dev/null || true
 else
 	HARNESS_MODE="generate"
+	HARNESS_GENERATOR_MODE="freehand"
 	if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
 		echo "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." >&2
 		exit 1
@@ -2012,112 +2240,181 @@ if [ "${VALIDATION_CYCLE}" -gt 1 ] && is_tracking_run; then
   fi
 fi
 
-HARNESS_PROMPT_SOURCE="prompts/mode-validate-generate.txt"
-if [ "${HARNESS_MODE}" = "fix" ]; then
-	HARNESS_PROMPT_SOURCE="prompts/mode-validate-fix-harness.txt"
-fi
+if [ "${HARNESS_MODE}" = "template_generate" ]; then
+	echo "Validation harness template render mode is enabled (VALIDATION_USE_TEMPLATES=${VALIDATION_USE_TEMPLATES})."
+	if run_template_validation_harness_renderer; then
+		renderer_exit=0
+	else
+		renderer_exit=$?
+	fi
+	case "${renderer_exit}" in
+		0)
+			if ! is_validation_harness_runnable; then
+				local_failure_summary="Template renderer completed but produced non-runnable validation assets (validation/docker-compose.test.yml and validation/tests/00_canary.sh at minimum)."
+				post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for renderer logs."
+				set_tracking_phase_label "ai:validation-failed"
+				write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+				tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+				exit 1
+			fi
+			;;
+		10)
+			local_failure_summary="Template mode requires ${PWD}/.ai/validate.yml but it is missing. Add manifest config or disable VALIDATION_USE_TEMPLATES."
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+			;;
+		11)
+			local_failure_summary="Template mode requires scripts/render_validation_templates.py but it is missing. Ensure workflow bootstrap fetched renderer assets."
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+			;;
+		12)
+			local_failure_summary="Template mode requires scripts/templates/slot_manifest.schema.json but it is missing. Ensure workflow bootstrap fetched schema assets."
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+			;;
+		13)
+			local_failure_summary="Template mode requires workflow-templates/validation-harness directory but it is missing. Ensure workflow bootstrap fetched template assets."
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+			;;
+		15)
+			local_failure_summary="Template mode requires essential shared templates (_shared/_lib/tap_helpers.sh.j2, _shared/tests/00_canary.sh.j2, _shared/tests/90_tap_report.sh.j2) plus family-specific templates; ensure workflow bootstrap fetched all required template assets under workflow-templates/validation-harness/."
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+			;;
+		*)
+			local_failure_summary="Template renderer failed while generating validation assets. Check validate_generate.log for dependency or manifest errors from scripts/render_validation_templates.py."
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+			;;
+	esac
+else
+	HARNESS_PROMPT_SOURCE="prompts/mode-validate-generate.txt"
+	if [ "${HARNESS_MODE}" = "fix" ]; then
+		HARNESS_PROMPT_SOURCE="prompts/mode-validate-fix-harness.txt"
+	fi
 
-{
-  cat "${STATIC_CONTEXT_FILE}"
-  echo
-  echo "=== IMPLEMENTATION TASK ==="
-  echo
-  bash scripts/render_prompt.sh "${HARNESS_PROMPT_SOURCE}"
-  echo
-  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
-  echo
-  if [ -s "${PRIOR_FAILURE_CONTEXT_FILE}" ]; then
-    echo "=== PRIOR VALIDATION FAILURES (DO NOT REPEAT) ==="
-    cat "${PRIOR_FAILURE_CONTEXT_FILE}"
-    echo
-  fi
-  if [ -s "${PRIOR_RESULT_JSON_FILE}" ]; then
-    echo "=== PRIOR STRUCTURED VALIDATION FAILURE JSON ==="
-    cat "${PRIOR_RESULT_JSON_FILE}"
-    echo
-  fi
-  if [ -s "${PRIOR_CONTAINER_LOGS_FILE}" ]; then
-    echo "=== PRIOR CONTAINER LOG TAILS ==="
-    cat "${PRIOR_CONTAINER_LOGS_FILE}"
-    echo
-  fi
-  if [ "${HARNESS_MODE}" = "fix" ]; then
-    echo "=== EXISTING HARNESS FILES ==="
-    while IFS= read -r harness_file; do
-      harness_size_bytes="$(wc -c < "${harness_file}" | tr -d ' ')"
-      if [ "${harness_size_bytes}" -gt 200000 ]; then
-        echo "----- ${harness_file} (skipped: file too large for prompt context) -----"
-        echo
-        continue
-      fi
-      if [ -s "${harness_file}" ] && ! grep -Iq . "${harness_file}"; then
-        echo "----- ${harness_file} (skipped: non-text file) -----"
-        echo
-        continue
-      fi
-      echo "----- ${harness_file} -----"
-      cat "${harness_file}"
-      echo
-    done < <(find validation -type f -not -path 'validation/logs/*' | sort)
-  fi
-  echo "=== PROJECT SPEC ==="
-  cat "${PROJECT_SPEC_FILE}"
-  echo
-  echo "=== VALIDATION HINTS ==="
-  cat "${VALIDATE_HINTS_FILE}"
-  echo
-  echo "=== RUNNER VALIDATION CONFIG ==="
-  echo "TRACKING_ISSUE: ${TRACKING_ISSUE_RAW}"
-  echo "VALIDATION_TIMEOUT_MINUTES: ${VALIDATION_TIMEOUT}"
-  echo "PREFERRED_COMPOSE_FILE: ${VALIDATION_COMPOSE_FILE}"
-  echo "VALIDATION_CYCLE: ${VALIDATION_CYCLE}"
-  echo "HARNESS_MODE: ${HARNESS_MODE}"
-  echo "SYNTHETIC_TEST_USERNAME_ENV_VAR: VALIDATION_TEST_USERNAME"
-  echo "SYNTHETIC_TEST_PASSWORD_ENV_VAR: VALIDATION_TEST_PASSWORD"
-  echo "SYNTHETIC_TEST_API_KEY_ENV_VAR: VALIDATION_TEST_API_KEY"
-  echo
-  if [ "${HARNESS_MODE}" = "fix" ]; then
-    echo "Fix the existing harness directly in the repository workspace. Keep passing tests/config unchanged."
-  else
-    echo "Generate the harness directly in the repository workspace for immediate execution."
-  fi
-} > "${GENERATE_PROMPT_FILE}"
+	{
+	  cat "${STATIC_CONTEXT_FILE}"
+	  echo
+	  echo "=== IMPLEMENTATION TASK ==="
+	  echo
+	  bash scripts/render_prompt.sh "${HARNESS_PROMPT_SOURCE}"
+	  echo
+	  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
+	  echo
+	  if [ -s "${PRIOR_FAILURE_CONTEXT_FILE}" ]; then
+	    echo "=== PRIOR VALIDATION FAILURES (DO NOT REPEAT) ==="
+	    cat "${PRIOR_FAILURE_CONTEXT_FILE}"
+	    echo
+	  fi
+	  if [ -s "${PRIOR_RESULT_JSON_FILE}" ]; then
+	    echo "=== PRIOR STRUCTURED VALIDATION FAILURE JSON ==="
+	    cat "${PRIOR_RESULT_JSON_FILE}"
+	    echo
+	  fi
+	  if [ -s "${PRIOR_CONTAINER_LOGS_FILE}" ]; then
+	    echo "=== PRIOR CONTAINER LOG TAILS ==="
+	    cat "${PRIOR_CONTAINER_LOGS_FILE}"
+	    echo
+	  fi
+	  if [ "${HARNESS_MODE}" = "fix" ]; then
+	    echo "=== EXISTING HARNESS FILES ==="
+	    while IFS= read -r harness_file; do
+	      harness_size_bytes="$(wc -c < "${harness_file}" | tr -d ' ')"
+	      if [ "${harness_size_bytes}" -gt 200000 ]; then
+	        echo "----- ${harness_file} (skipped: file too large for prompt context) -----"
+	        echo
+	        continue
+	      fi
+	      if [ -s "${harness_file}" ] && ! grep -Iq . "${harness_file}"; then
+	        echo "----- ${harness_file} (skipped: non-text file) -----"
+	        echo
+	        continue
+	      fi
+	      echo "----- ${harness_file} -----"
+	      cat "${harness_file}"
+	      echo
+	    done < <(find validation -type f -not -path 'validation/logs/*' | sort)
+	  fi
+	  echo "=== PROJECT SPEC ==="
+	  cat "${PROJECT_SPEC_FILE}"
+	  echo
+	  echo "=== VALIDATION HINTS ==="
+	  cat "${VALIDATE_HINTS_FILE}"
+	  echo
+	  echo "=== RUNNER VALIDATION CONFIG ==="
+	  echo "TRACKING_ISSUE: ${TRACKING_ISSUE_RAW}"
+	  echo "VALIDATION_TIMEOUT_MINUTES: ${VALIDATION_TIMEOUT}"
+	  echo "PREFERRED_COMPOSE_FILE: ${VALIDATION_COMPOSE_FILE}"
+	  echo "VALIDATION_CYCLE: ${VALIDATION_CYCLE}"
+	  echo "HARNESS_MODE: ${HARNESS_MODE}"
+	  echo "SYNTHETIC_TEST_USERNAME_ENV_VAR: VALIDATION_TEST_USERNAME"
+	  echo "SYNTHETIC_TEST_PASSWORD_ENV_VAR: VALIDATION_TEST_PASSWORD"
+	  echo "SYNTHETIC_TEST_API_KEY_ENV_VAR: VALIDATION_TEST_API_KEY"
+	  echo
+	  if [ "${HARNESS_MODE}" = "fix" ]; then
+	    echo "Fix the existing harness directly in the repository workspace. Keep passing tests/config unchanged."
+	  else
+	    echo "Generate the harness directly in the repository workspace for immediate execution."
+	  fi
+	} > "${GENERATE_PROMPT_FILE}"
 
-GENERATE_SUCCESS=false
-GENERATE_FAILURE_MODE=""
-GENERATE_ATTEMPTS_USED=0
-for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
-  GENERATE_ATTEMPTS_USED="${attempt}"
-  echo "Validation harness ${HARNESS_MODE} attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
-  set +e
-  cat "${GENERATE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${GENERATE_OUTPUT_FILE}" 2> >(tee -a "${GENERATE_LOG_FILE}" >&2)
-  GENERATE_EXIT=$?
-  set -e
+	GENERATE_SUCCESS=false
+	GENERATE_FAILURE_MODE=""
+	GENERATE_ATTEMPTS_USED=0
+	for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
+	  GENERATE_ATTEMPTS_USED="${attempt}"
+	  echo "Validation harness ${HARNESS_MODE} attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
+	  set +e
+	  cat "${GENERATE_PROMPT_FILE}" | codex exec --model "${MODEL_EDITOR}" --full-auto > "${GENERATE_OUTPUT_FILE}" 2> >(tee -a "${GENERATE_LOG_FILE}" >&2)
+	  GENERATE_EXIT=$?
+	  set -e
 
-  if [ "${GENERATE_EXIT}" -ne 0 ]; then
-    GENERATE_FAILURE_MODE="codex_rc_nonzero"
-  elif ! grep -q '[^[:space:]]' "${GENERATE_OUTPUT_FILE}"; then
-    GENERATE_FAILURE_MODE="codex_empty_output"
-  else
-    ensure_validate_wrapper
-    if is_validation_harness_runnable; then
-      GENERATE_SUCCESS=true
-      break
-    fi
-    GENERATE_FAILURE_MODE="validator_rejected"
-  fi
+	  if [ "${GENERATE_EXIT}" -ne 0 ]; then
+	    GENERATE_FAILURE_MODE="codex_rc_nonzero"
+	  elif ! grep -q '[^[:space:]]' "${GENERATE_OUTPUT_FILE}"; then
+	    GENERATE_FAILURE_MODE="codex_empty_output"
+	  else
+	    ensure_validate_wrapper
+	    if is_validation_harness_runnable; then
+	      GENERATE_SUCCESS=true
+	      break
+	    fi
+	    GENERATE_FAILURE_MODE="validator_rejected"
+	  fi
 
-  if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then
-    sleep $((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
-  fi
-done
+	  if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then
+	    sleep $((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
+	  fi
+	done
 
-if [ "${GENERATE_SUCCESS}" != "true" ]; then
-  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, validation/tests/00_canary.sh at minimum); mode=${GENERATE_FAILURE_MODE:-unknown}; attempts=${GENERATE_ATTEMPTS_USED}/${MAX_CODEX_ATTEMPTS}."
-  # Self-heal interception: if the generate/fix-harness prompt is at fault,
-  # patch it and re-exec before burning a validation cycle.
-  attempt_self_heal_and_reexec "generate"
-  fail_validate_codex_phase "validation_harness_generation" "${GENERATE_FAILURE_MODE:-validator_rejected}" "${GENERATE_ATTEMPTS_USED:-${MAX_CODEX_ATTEMPTS}}" "${local_failure_summary}"
+	if [ "${GENERATE_SUCCESS}" != "true" ]; then
+	  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, and validation/tests/00_canary.sh at minimum); mode=${GENERATE_FAILURE_MODE:-unknown}; attempts=${GENERATE_ATTEMPTS_USED}/${MAX_CODEX_ATTEMPTS}."
+	  # Self-heal interception: if the generate/fix-harness prompt is at fault,
+	  # patch it and re-exec before burning a validation cycle.
+	  attempt_self_heal_and_reexec "generate"
+	  fail_validate_codex_phase "validation_harness_generation" "${GENERATE_FAILURE_MODE:-validator_rejected}" "${GENERATE_ATTEMPTS_USED:-${MAX_CODEX_ATTEMPTS}}" "${local_failure_summary}"
+	fi
 fi
 
 if command -v git >/dev/null 2>&1; then
@@ -2153,24 +2450,37 @@ fi
 # Phase 2: Pre-flight checks for generated harness
 # ---------------------------------------------------------------
 if ! run_preflight_checks; then
-  failure_summary="Validation pre-flight checks failed. See validation_preflight.log artifact."
-  jq -n \
-    --arg diagnosis "Pre-flight validation failed before test execution." \
-    --arg harness_fixes "$(tail -n 120 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true)" \
-    '{
-      status: "harness_error",
-      diagnosis: $diagnosis,
-      fix_issues: [],
-      harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix validation/docker-compose.test.yml, shell syntax, or build context/dockerfile paths." end)
-    }' > "${DIAGNOSE_RESULT_FILE}"
+  render_recovery_exit=1
+  if attempt_render_recovery_after_preflight_failure; then
+    render_recovery_exit=0
+  else
+    render_recovery_exit=$?
+  fi
 
-  # Self-heal interception: bad harness is often a prompt-wording defect.
-  attempt_self_heal_and_reexec "preflight"
-  post_tracking_comment "## ❌ Runtime validation harness pre-flight failed\n\n${failure_summary}\n\n\`docker compose config\`, shell syntax, or build context/dockerfile path checks failed."
-  set_tracking_phase_label "ai:validation-failed"
-  write_result_files "fail" "Validation failed due to harness pre-flight error" "${failure_summary}" "harness_error"
-  tg_notify "Validation pre-flight failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
-  exit 0
+  if [ "${render_recovery_exit}" -ne 0 ]; then
+    failure_summary="Validation pre-flight checks failed. See validation_preflight.log artifact."
+    jq -n \
+      --arg diagnosis "Pre-flight validation failed before test execution." \
+      --arg harness_fixes "$(tail -n 120 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true)" \
+      '{
+        status: "harness_error",
+        diagnosis: $diagnosis,
+        fix_issues: [],
+        harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix validation/docker-compose.test.yml, shell syntax, or build context/dockerfile paths." end)
+      }' > "${DIAGNOSE_RESULT_FILE}"
+
+    # Self-heal interception: bad harness is often a prompt-wording defect.
+    if [ "${render_recovery_exit}" -eq 2 ]; then
+      attempt_self_heal_and_reexec "render"
+    else
+      attempt_self_heal_and_reexec "preflight"
+    fi
+    post_tracking_comment "## ❌ Runtime validation harness pre-flight failed\n\n${failure_summary}\n\n\`docker compose config\`, shell syntax, or build context/dockerfile path checks failed."
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "fail" "Validation failed due to harness pre-flight error" "${failure_summary}" "harness_error"
+    tg_notify "Validation pre-flight failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    exit 0
+  fi
 fi
 
 
