@@ -95,6 +95,7 @@ jobs:
           PR_TITLE: ${{ inputs.pr_title }}
           PR_BODY: ${{ inputs.pr_body }}
           AUTOFIX_SKIP_SELF_TRIGGERED: ${{ vars.AUTOFIX_SKIP_SELF_TRIGGERED }}
+          AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
         run: |
           set -euo pipefail
 
@@ -156,9 +157,15 @@ jobs:
           #     commits still run the verification pass so post-resolution
           #     reviewer coverage is preserved (conflict-resolved code is
           #     higher-risk than a vanilla autofix edit).
-          #   * Author email must match codex@users.noreply.github.com so
-          #     hand-crafted commits with the same prefix are not silently
-          #     skipped.
+          #   * Identity guard is based on GitHub-attributed identity:
+          #     .author.login or .committer.login on the commit API response
+          #     must equal AUTOFIX_BOT_LOGIN (default "codex"). These fields
+          #     are resolved server-side by GitHub from the push credentials
+          #     and are NOT user-controlled — unlike .commit.author.email,
+          #     which is spoofable. If both logins are empty (e.g. an
+          #     unauthenticated mirror push or a commit whose author email
+          #     is not linked to any GitHub account), the gate fails open
+          #     and runs review normally.
           #
           # Safety net:
           #   If a [ai-autofix] commit is incomplete or regresses the tree,
@@ -167,6 +174,7 @@ jobs:
           #   bypasses this skip. Worst-case window: ~30 min.
           #
           # Opt-out: set repository variable AUTOFIX_SKIP_SELF_TRIGGERED=false.
+          # Override bot login: set repository variable AUTOFIX_BOT_LOGIN.
           if [ "${SHOULD_RUN}" = "true" ] \
             && [ "${EVENT_NAME}" = "pull_request" ] \
             && [ "${EVENT_ACTION}" = "synchronize" ] \
@@ -174,7 +182,7 @@ jobs:
             && [ -n "${PR_HEAD_SHA}" ]; then
             head_meta=""
             if ! head_meta="$(gh api "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}" \
-              --jq '[(.commit.message // "" | split("\n")[0]), (.commit.author.email // "")] | @tsv' \
+              --jq '[(.commit.message // "" | split("\n")[0]), (.author.login // ""), (.committer.login // "")] | @tsv' \
               2>/dev/null)"; then
               # Fail open — API error falls through to normal run so the
               # cycle is never silently broken.
@@ -182,15 +190,20 @@ jobs:
               head_meta=""
             fi
             if [ -n "${head_meta}" ]; then
-              head_msg_line="${head_meta%%$'\t'*}"
-              head_author_email="${head_meta#*$'\t'}"
-              [ "${head_author_email}" = "${head_meta}" ] && head_author_email=""
+              head_msg_line="$(printf '%s' "${head_meta}" | cut -f1)"
+              head_author_login="$(printf '%s' "${head_meta}" | cut -f2)"
+              head_committer_login="$(printf '%s' "${head_meta}" | cut -f3)"
+              bot_login="${AUTOFIX_BOT_LOGIN:-codex}"
               case "${head_msg_line}" in
                 "[ai-autofix]"*)
-                  if [ "${head_author_email}" = "codex@users.noreply.github.com" ]; then
+                  if [ -n "${bot_login}" ] \
+                    && { [ "${head_author_login}" = "${bot_login}" ] \
+                      || [ "${head_committer_login}" = "${bot_login}" ]; }; then
                     SHOULD_RUN="false"
                     SKIP_REASON="self_triggered_autofix"
-                    echo "AUTOFIX_GATE_SKIP reason=self_triggered_autofix pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} head_prefix=[ai-autofix]"
+                    echo "AUTOFIX_GATE_SKIP reason=self_triggered_autofix pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} head_prefix=[ai-autofix] author_login=${head_author_login} committer_login=${head_committer_login} bot_login=${bot_login}"
+                  else
+                    echo "AUTOFIX_GATE_NO_SKIP_IDENTITY pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} head_prefix=[ai-autofix] author_login=${head_author_login} committer_login=${head_committer_login} bot_login=${bot_login}"
                   fi
                   ;;
               esac
