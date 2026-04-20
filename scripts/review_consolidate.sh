@@ -67,10 +67,42 @@ start_epoch="$(date +%s)"
 tmp_out="$(mktemp)"
 tmp_err="$(mktemp)"
 tmp_cap="$(mktemp)"
-trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"' EXIT INT TERM
+
+# Isolated CODEX_HOME overlay so consolidator reasoning effort can be set
+# without mutating the shared editor CODEX_HOME. Mirrors the pattern in
+# scripts/summarize_reviewer_consensus.sh (copy base CODEX_HOME, sed-patch
+# model_reasoning_effort in config.toml). codex exec does not accept a
+# --reasoning CLI flag, so the overlay is the supported mechanism.
+codex_bin="$(command -v codex || true)"
+if [ -z "${codex_bin}" ]; then
+	: > "${CONSOLIDATOR_RAW_FILE}"
+	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} missing=codex_bin failopen=1 output_bytes=0"
+	rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"
+	exit 0
+fi
+
+consolidator_codex_root="${RUNNER_TEMP:-${RUNTIME_DIR}}/codex_home_consolidator"
+mkdir -p "${consolidator_codex_root}"
+consolidator_codex_home="$(mktemp -d "${consolidator_codex_root}/consolidator.XXXXXX")"
+trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; rm -rf "${consolidator_codex_home}"' EXIT INT TERM
+
+if [ -d "${CODEX_HOME:-}" ]; then
+	cp -r "${CODEX_HOME}/." "${consolidator_codex_home}/"
+fi
+mkdir -p "${consolidator_codex_home}/bin"
+
+for cfg in "${consolidator_codex_home}/config.toml" "${consolidator_codex_home}/.codex/config.toml"; do
+	if [ -f "${cfg}" ]; then
+		sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${REVIEW_CONSOLIDATOR_REASONING}\"/" "${cfg}" 2>/dev/null || true
+	fi
+done
+
 cmd_rc=0
 
-if ! timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" codex exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --full-auto --reasoning "${REVIEW_CONSOLIDATOR_REASONING}" < "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
+if ! CODEX_HOME="${consolidator_codex_home}" \
+	timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+	"${codex_bin}" exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --full-auto \
+	< "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
 	cmd_rc=$?
 fi
 
