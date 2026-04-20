@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_consolidate.sh:93-97 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The `sed` override only replaces an existing `model_reasoning_effort` entry, so a missing key leaves the consolidator on the base configuration\u2019s default reasoning level.\n  WHY: Four reviewers reported this same root cause; severity stays medium because it degrades intended behavior rather than breaking execution.\n- scripts/review_consolidate.sh:94-96 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The `sed` pattern only matches double-quoted TOML strings, so single-quoted `model_reasoning_effort` values are not updated.\n  WHY: Three reviewers independently identified the same pattern-mismatch bug, which can leave the override unapplied.\n- scripts/review_consolidate.sh:80-82 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The missing-`codex` early-exit path cleans temporary files but leaves the newly created `consolidator_codex_root` directory behind.\n  WHY: Single-reviewer finding; kept separate because no other reviewer confirmed the root-directory leak.\n- scripts/review_consolidate.sh:87 | severity=medium | confidence=3\n  flagged_by: [google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: The cleanup trap can run before `consolidator_codex_home` is assigned, creating a narrow unset-variable race window under signal delivery.\n  WHY: Two reviewers reported the same race; severity uses the highest stated concern and remains medium because it is a narrow signal window.\n- scripts/review_consolidate.sh:90-91 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `cp -r` is not checked for failure, so a partial or failed copy can leave the overlay in an incomplete state.\n  WHY: Three reviewers flagged the same fail-open copy path; severity remains medium because the script continues with potentially incomplete input.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/review_consolidate.sh:93-97 | severity=medium | confidence=4\n  PROBLEM: The sed pattern only updates existing `model_reasoning_effort` entries and does not add the line when it is missing.\n  WHY: If `CODEX_HOME` config omits `model_reasoning_effort`, the consolidator uses the default reasoning level instead of `REVIEW_CONSOLIDATOR_REASONING`.\n- scripts/review_consolidate.sh:88-91 | severity=medium | confidence=3\n  PROBLEM: `cp -r` may fail partially, but the script continues with a potentially incomplete `CODEX_HOME` overlay.\n  WHY: A partial overlay can cause `codex` to behave unexpectedly because required config files or binaries may be missing.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/review_consolidate.sh:93-97 | severity=medium | confidence=5\n  PROBLEM: The `sed` command only performs an in-place replacement of an existing `model_reasoning_effort` key, so a missing key silently prevents the override from applying.\n  WHY: The consolidator then runs using the base configuration\u2019s default reasoning level instead of `REVIEW_CONSOLIDATOR_REASONING`.\n- scripts/review_consolidate.sh:80-82 | severity=medium | confidence=5\n  PROBLEM: The fail-open path for a missing `codex` binary cleans temporary files but fails to remove the `consolidator_codex_root` directory created on line 83.\n  WHY: This leaves orphaned directories in `RUNNER_TEMP` or `RUNTIME_DIR` whenever `codex` is unavailable.\n- scripts/review_consolidate.sh:94-96 | severity=medium | confidence=4\n  PROBLEM: The `sed` regex only matches double-quoted values, so single-quoted TOML strings are not patched.\n  WHY: If `model_reasoning_effort` is written with single quotes, the reasoning level override will not apply.\n- scripts/review_consolidate.sh:87 | severity=medium | confidence=3\n  PROBLEM: The `trap` is configured before `consolidator_codex_home` is assigned a value.\n  WHY: A signal in that narrow window can trigger cleanup while the variable is still unset, which is unsafe under `set -u`.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_consolidate.sh:94-96 | severity=medium | confidence=4\n  PROBLEM: The sed pattern only replaces an existing `model_reasoning_effort` key with a double-quoted value, so missing keys are not created.\n  WHY: Minimal `CODEX_HOME` configs that omit the key will keep the codex default reasoning level instead of `REVIEW_CONSOLIDATOR_REASONING`.\n- scripts/review_consolidate.sh:94-96 | severity=medium | confidence=3\n  PROBLEM: The sed pattern only matches double-quoted TOML values, so single-quoted values remain unpatched.\n  WHY: `model_reasoning_effort = 'high'` is not matched by the replacement and the override fails to apply.\n- scripts/review_consolidate.sh:90 | severity=medium | confidence=3\n  PROBLEM: `cp -r` lacks error handling, so a partial copy can leave an incomplete overlay directory.\n  WHY: Disk, permission, or I/O failures can produce unpredictable behavior because the script continues after the copy attempt.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_consolidate.sh:93-97 | severity=medium | confidence=4\n  PROBLEM: The sed patch only replaces existing `model_reasoning_effort` entries and does not create one when the config file lacks it.\n  WHY: In fresh or minimal environments, the reasoning override silently fails and the consolidator runs with the base default.\n- scripts/review_consolidate.sh:94 | severity=medium | confidence=4\n  PROBLEM: The sed pattern only matches double-quoted TOML values, so single-quoted values are not replaced.\n  WHY: A base config using single quotes for `model_reasoning_effort` will keep its original reasoning level instead of `REVIEW_CONSOLIDATOR_REASONING`.\n- scripts/review_consolidate.sh:85-89 and trap at line 87 | severity=medium | confidence=3\n  PROBLEM: The trap cleanup removes `consolidator_codex_home` but not `consolidator_codex_root`, leaving the parent directory behind on each run.\n  WHY: `mkdir -p` creates the root directory, and only the unique subdirectory is removed at exit, so empty parent directories accumulate over time.\n- scripts/review_consolidate.sh:87 | severity=medium | confidence=2\n  PROBLEM: The trap references `consolidator_codex_home` before it is assigned.\n  WHY: A signal between trap setup and assignment can hit `rm -rf \"${consolidator_codex_home}\"` while the variable is unset, which is unsafe under `set -u`.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "fbcb6b895185fea24e04a93c99f348a07af28be744e7099a3b2730ec80911cd4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1463,
+    "run_id": "24657998666",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24657998666",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420092832_445d9b79a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1463,
+    "run_id": "24657998666"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T09:28:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
