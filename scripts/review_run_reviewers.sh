@@ -137,8 +137,8 @@ EOF
   fi
   export CODEX_HOME="${probe_home}"
 
-  codex exec --model "${probe_model}" --full-auto < "${probe_out}" >/dev/null 2>"${probe_log_one}" || true
-  codex exec --model "${probe_model}" --full-auto < "${probe_out}" >/dev/null 2>"${probe_log_two}" || true
+  codex --ask-for-approval never exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_one}" || true
+  codex --ask-for-approval never exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_two}" || true
 
   normalize_openrouter_usage "${probe_log_one}" "1" "${probe_model}" || true
   normalize_openrouter_usage "${probe_log_two}" "2" "${probe_model}" || true
@@ -877,7 +877,10 @@ run_reviewer() {
       fi
     fi
     (
-      exec "${codex_bin}" exec --model "${model}" --full-auto < "${prompt_file}"
+      # Reviewers must not mutate the workspace: writes here pollute the pre-editor
+      # snapshot used by review_autofix.yml's touched-file detector (comm -13 safety
+      # union) and cause EDITOR_CHANGES_LOST false positives.
+      exec "${codex_bin}" --ask-for-approval never exec --model "${model}" --sandbox read-only < "${prompt_file}"
     ) > "${tmp_output}" 2> >(
       while IFS= read -r line || [ -n "$line" ]; do
         # Atomic heartbeat update: write to tmp then rename

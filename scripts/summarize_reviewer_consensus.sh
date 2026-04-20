@@ -240,7 +240,7 @@ while [ "${attempt}" -le 3 ]; do
 	last_rc=0
 	CODEX_HOME="${summariser_codex_home}" \
 		timeout --signal=KILL "${SUMMARISER_CALL_TIMEOUT}" \
-		"${codex_bin}" exec --model "${SUMMARISER_MODEL}" --full-auto < "${prompt_file}" \
+		"${codex_bin}" --ask-for-approval never exec --model "${SUMMARISER_MODEL}" --sandbox read-only < "${prompt_file}" \
 		> "${tmp_stdout}" 2> "${tmp_stderr}" \
 		|| last_rc=$?
 
