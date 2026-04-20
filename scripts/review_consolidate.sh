@@ -100,6 +100,7 @@ consolidator_codex_home="$(mktemp -d "${consolidator_codex_root}/consolidator.XX
 
 if [ -d "${CODEX_HOME:-}" ]; then
 	cp -r "${CODEX_HOME}/." "${consolidator_codex_home}/" || review_log "cp_failed=1 source_codex_home=${CODEX_HOME}"
+	chmod -R u+w "${consolidator_codex_home}" 2>/dev/null || true
 fi
 mkdir -p "${consolidator_codex_home}/bin"
 
