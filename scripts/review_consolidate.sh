@@ -67,6 +67,7 @@ start_epoch="$(date +%s)"
 tmp_out="$(mktemp)"
 tmp_err="$(mktemp)"
 tmp_cap="$(mktemp)"
+consolidator_codex_home=""
 
 # Isolated CODEX_HOME overlay so consolidator reasoning effort can be set
 # without mutating the shared editor CODEX_HOME. Mirrors the pattern in
@@ -84,16 +85,23 @@ fi
 consolidator_codex_root="${RUNNER_TEMP:-${RUNTIME_DIR}}/codex_home_consolidator"
 mkdir -p "${consolidator_codex_root}"
 consolidator_codex_home="$(mktemp -d "${consolidator_codex_root}/consolidator.XXXXXX")"
-trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; rm -rf "${consolidator_codex_home}"' EXIT INT TERM
+trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; if [ -n "${consolidator_codex_home}" ]; then rm -rf "${consolidator_codex_home}"; fi; rmdir "${consolidator_codex_root}" 2>/dev/null || true' EXIT INT TERM
 
 if [ -d "${CODEX_HOME:-}" ]; then
-	cp -r "${CODEX_HOME}/." "${consolidator_codex_home}/"
+	cp -r "${CODEX_HOME}/." "${consolidator_codex_home}/" || review_log "cp_failed=1 source_codex_home=${CODEX_HOME}"
 fi
 mkdir -p "${consolidator_codex_home}/bin"
 
 for cfg in "${consolidator_codex_home}/config.toml" "${consolidator_codex_home}/.codex/config.toml"; do
 	if [ -f "${cfg}" ]; then
-		sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${REVIEW_CONSOLIDATOR_REASONING}\"/" "${cfg}" 2>/dev/null || true
+		if ! grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${cfg}"; then
+			printf 'model_reasoning_effort = "%s"\n' "${REVIEW_CONSOLIDATOR_REASONING}" >> "${cfg}"
+		else
+			sed -i \
+				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${REVIEW_CONSOLIDATOR_REASONING}\"/" \
+				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${REVIEW_CONSOLIDATOR_REASONING}\"/" \
+				"${cfg}" 2>/dev/null || true
+		fi
 	fi
 done
 
