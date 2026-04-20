@@ -743,12 +743,18 @@ if [ -s "${prior_entries_file}" ]; then
 fi
 
 header_first_seen="${ITERATION}"
+header_last_updated="${ITERATION}"
 if [ -s "${prior_header_file}" ]; then
 	while IFS='=' read -r key value; do
 		case "${key}" in
 			FIRST_SEEN_ITERATION)
 				if [[ "${value}" =~ ^[0-9]+$ ]]; then
 					header_first_seen="${value}"
+				fi
+				;;
+			LAST_UPDATED_ITERATION)
+				if [[ "${value}" =~ ^[0-9]+$ ]] && [ "${value}" -gt "${header_last_updated}" ]; then
+					header_last_updated="${value}"
 				fi
 				;;
 		esac
@@ -977,7 +983,12 @@ for issue_id in "${!CURRENT_PRESENT[@]}"; do
 	FINAL_SEVERITY["${issue_id}"]="${CURRENT_SEVERITY["${issue_id}"]}"
 	FINAL_STATUS["${issue_id}"]="${status}"
 	FINAL_FIRST_SEEN["${issue_id}"]="${first_seen}"
-	FINAL_LAST_SEEN["${issue_id}"]="${ITERATION}"
+	last_seen="${ITERATION}"
+	prior_last_seen="${PRIOR_LAST_SEEN["${issue_id}"]:-0}"
+	if [[ "${prior_last_seen}" =~ ^[0-9]+$ ]] && [ "${prior_last_seen}" -gt "${last_seen}" ]; then
+		last_seen="${prior_last_seen}"
+	fi
+	FINAL_LAST_SEEN["${issue_id}"]="${last_seen}"
 	FINAL_PERSIST["${issue_id}"]="${persist_count}"
 	FINAL_OUTCOMES["${issue_id}"]="${PRIOR_OUTCOMES["${issue_id}"]:-}"
 	SEEN_FINAL["${issue_id}"]=1
@@ -1014,7 +1025,12 @@ for issue_id in "${!PRIOR_STATUS[@]}"; do
 	FINAL_SEVERITY["${issue_id}"]="${PRIOR_SEVERITY["${issue_id}"]}"
 	FINAL_STATUS["${issue_id}"]="${status}"
 	FINAL_FIRST_SEEN["${issue_id}"]="${PRIOR_FIRST_SEEN["${issue_id}"]}"
-	FINAL_LAST_SEEN["${issue_id}"]="${ITERATION}"
+	last_seen="${ITERATION}"
+	prior_last_seen="${PRIOR_LAST_SEEN["${issue_id}"]:-0}"
+	if [[ "${prior_last_seen}" =~ ^[0-9]+$ ]] && [ "${prior_last_seen}" -gt "${last_seen}" ]; then
+		last_seen="${prior_last_seen}"
+	fi
+	FINAL_LAST_SEEN["${issue_id}"]="${last_seen}"
 	FINAL_PERSIST["${issue_id}"]="${persist_count}"
 	FINAL_OUTCOMES["${issue_id}"]="${PRIOR_OUTCOMES["${issue_id}"]}"
 	SEEN_FINAL["${issue_id}"]=1
@@ -1029,7 +1045,7 @@ done
 	echo "=== LEDGER v1 ==="
 	echo "PR_NUMBER: ${PR_NUMBER}"
 	echo "FIRST_SEEN_ITERATION: ${header_first_seen}"
-	echo "LAST_UPDATED_ITERATION: ${ITERATION}"
+	echo "LAST_UPDATED_ITERATION: ${header_last_updated}"
 	echo "=== END HEADER ==="
 	echo
 } > "${new_entries_file}"
