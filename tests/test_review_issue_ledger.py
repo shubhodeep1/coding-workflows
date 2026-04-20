@@ -519,6 +519,62 @@ def test_hash_uses_repo_ignorecase_setting() -> None:
 		assert upper_entries[lower_id]["STATUS"] == "PERSISTING"
 
 
+def test_prior_iteration_rollback_preserves_last_seen_and_last_updated() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		_seed_repo(
+			workspace,
+			[
+				"def sample(a, b):",
+				"    total = a + b",
+				"    return total",
+			],
+		)
+
+		ledger_path = workspace / ".ai" / "review_issue_ledger.txt"
+		ledger_path.parent.mkdir(parents=True, exist_ok=True)
+		ledger_path.write_text(
+			"\n".join(
+				[
+					"=== LEDGER v1 ===",
+					"PR_NUMBER: 4242",
+					"FIRST_SEEN_ITERATION: 1",
+					"LAST_UPDATED_ITERATION: 2",
+					"=== END HEADER ===",
+					"",
+					"=== ENTRY iss_existing ===",
+					"FILE: src/module.py",
+					"LINES: 2",
+					"LENS: SECURITY",
+					"SEVERITY: high",
+					"STATUS: NEW",
+					"FIRST_SEEN_ITERATION: 1",
+					"LAST_SEEN_ITERATION: 2",
+					"PERSIST_COUNT: 1",
+					"EDITOR_OUTCOMES:",
+					"=== END ENTRY ===",
+				],
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		result = _run_ledger(
+			workspace,
+			"review_issues_single_security.txt",
+			1,
+			persist_limit=5,
+			ledger_path=str(ledger_path),
+		)
+		assert result.returncode == 0, result.stderr
+
+		ledger_text = ledger_path.read_text(encoding="utf-8")
+		assert "LAST_UPDATED_ITERATION: 2" in ledger_text
+
+		entries = _parse_ledger_entries(ledger_path)
+		assert entries["iss_existing"]["LAST_SEEN_ITERATION"] == "2"
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
