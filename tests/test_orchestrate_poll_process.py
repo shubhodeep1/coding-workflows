@@ -3612,7 +3612,7 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	assert 'close_linked_pr "${issue_num}"' in main_window, (
 		"close_linked_pr call missing in main_window"
 	)
-	assert main_window.index('surface_reissue_closed_without_pr') < main_window.index('close_linked_pr "${issue_num}"'), (
+	assert main_window.index('surface_reissue_closed_without_pr "${issue_num}"') < main_window.index('close_linked_pr "${issue_num}"'), (
 		"surface must run before close_linked_pr so the comment lands on an open issue"
 	)
 	assert '"main"' in main_window
