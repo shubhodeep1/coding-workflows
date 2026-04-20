@@ -39,7 +39,8 @@ def test_template_mode_selection_contract_present() -> None:
 	assert 'attempt_render_recovery_after_preflight_failure()' in text
 	assert 'if attempt_render_recovery_after_preflight_failure; then' in text
 	assert 'attempt_self_heal_and_reexec "render"' in text
-	assert "if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then" in text
+	assert "python3_bin=\"$(command -v python3 2>/dev/null || printf '%s' 'python3')\"" in text
+	assert "if ! \"${python3_bin}\" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then" in text
 	assert 'Template renderer requires python3 >= 3.9' in text
 	assert 'elif [ "${VALIDATION_CYCLE}" -gt 1 ] \\' in text
 	assert 'HARNESS_GENERATOR_MODE="freehand"' in text

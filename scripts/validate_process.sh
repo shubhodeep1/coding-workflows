@@ -1105,6 +1105,7 @@ run_template_validation_harness_renderer()
 	local schema_path="scripts/templates/slot_manifest.schema.json"
 	local templates_root="workflow-templates/validation-harness"
 	local renderer_summary=""
+	local python3_bin="python3"
 
 	HARNESS_GENERATOR_MODE="templates"
 
@@ -1126,12 +1127,13 @@ run_template_validation_harness_renderer()
 		return 15
 	fi
 
-	if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
-		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $(python3 -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
+	python3_bin="$(command -v python3 2>/dev/null || printf '%s' 'python3')"
+	if ! "${python3_bin}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $("${python3_bin}" -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
 		return 14
 	fi
 
-	if ! renderer_summary="$(python3 "${renderer_script}" \
+	if ! renderer_summary="$("${python3_bin}" "${renderer_script}" \
 		--manifest "${manifest_path}" \
 		--schema "${schema_path}" \
 		--templates-root "${templates_root}" \
@@ -2407,7 +2409,7 @@ else
 	done
 
 	if [ "${GENERATE_SUCCESS}" != "true" ]; then
-	  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml and validation/tests/00_canary.sh at minimum); mode=${GENERATE_FAILURE_MODE:-unknown}; attempts=${GENERATE_ATTEMPTS_USED}/${MAX_CODEX_ATTEMPTS}."
+	  local_failure_summary="Codex did not generate runnable validation assets (validation/docker-compose.test.yml, validation/validate.env, and validation/tests/00_canary.sh at minimum); mode=${GENERATE_FAILURE_MODE:-unknown}; attempts=${GENERATE_ATTEMPTS_USED}/${MAX_CODEX_ATTEMPTS}."
 	  # Self-heal interception: if the generate/fix-harness prompt is at fault,
 	  # patch it and re-exec before burning a validation cycle.
 	  attempt_self_heal_and_reexec "generate"
