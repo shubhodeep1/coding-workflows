@@ -953,6 +953,11 @@ jobs:
           # Codex itself produced.  `-uall` expands untracked directories
           # so per-file lines are stable across attempts.
           # ────────────────────────────────────────────────────────────────
+          # Proactively clear the success-no-op flag so a stale marker from a
+          # prior run_attempt sharing the same RUNTIME_DIR (GITHUB_RUN_ID is
+          # stable across reruns) cannot trick Guard 0 into closing an issue
+          # that this attempt never classified as success-no-op.
+          rm -f "${RUNTIME_DIR}/codex_success_noop.flag"
           CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"
           git status --porcelain -uall > "${CODEX_PRE_BASELINE}" 2>/dev/null || : > "${CODEX_PRE_BASELINE}"
           codex_pre_baseline_lines="$(wc -l < "${CODEX_PRE_BASELINE}" | tr -d ' ')"

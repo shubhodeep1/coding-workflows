@@ -935,6 +935,22 @@ def test_codex_pre_baseline_captured_before_retry_loop() -> None:
 	)
 
 
+def test_success_noop_flag_cleared_before_retry_loop() -> None:
+	codex_block = _step_block_text("Run Codex implementation")
+	# Proactive cleanup prevents a stale flag from a prior run_attempt (which
+	# shares GITHUB_RUN_ID and therefore RUNTIME_DIR) from tricking Guard 0
+	# into closing an issue this attempt never classified as success-no-op.
+	assert 'rm -f "${RUNTIME_DIR}/codex_success_noop.flag"' in codex_block, (
+		"Stale success-no-op flag must be cleared before the retry loop so a "
+		"rerun on a non-ephemeral runner cannot falsely trigger Guard 0"
+	)
+	cleanup_idx = codex_block.find('rm -f "${RUNTIME_DIR}/codex_success_noop.flag"')
+	loop_idx = codex_block.find('for attempt in $(seq 1 "${max_attempts}"); do')
+	assert cleanup_idx != -1 and loop_idx != -1 and cleanup_idx < loop_idx, (
+		"Success-no-op flag cleanup must happen BEFORE the attempt loop"
+	)
+
+
 def test_codex_success_detection_uses_baseline_diff() -> None:
 	codex_block = _step_block_text("Run Codex implementation")
 	# Retry-nudge check must use baseline-filtered delta, not raw porcelain.
