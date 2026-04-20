@@ -956,6 +956,12 @@ def test_codex_success_detection_uses_baseline_diff() -> None:
 	assert 'no file changes were made|nothing to change|already' in codex_block, (
 		"Success-no-op detection must match Codex's explicit 'already implemented' signals"
 	)
+	# The regex must cover multiple common completion phrasings so robustness
+	# doesn't depend on a single LLM wording.
+	for phrase in ("implemented", "done", "exists", "present", "complete"):
+		assert phrase in codex_block, (
+			f"Success-no-op regex should include the '{phrase}' completion signal"
+		)
 
 
 def test_handle_noop_guard_zero_closes_with_ai_closed() -> None:

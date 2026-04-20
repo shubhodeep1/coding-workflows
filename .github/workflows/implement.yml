@@ -955,8 +955,14 @@ jobs:
           # ────────────────────────────────────────────────────────────────
           CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"
           git status --porcelain -uall > "${CODEX_PRE_BASELINE}" 2>/dev/null || : > "${CODEX_PRE_BASELINE}"
-          echo "Pre-Codex worktree baseline ($(wc -l < "${CODEX_PRE_BASELINE}" | tr -d ' ') line(s)):"
-          sed 's/^/  /' "${CODEX_PRE_BASELINE}" || true
+          codex_pre_baseline_lines="$(wc -l < "${CODEX_PRE_BASELINE}" | tr -d ' ')"
+          echo "Pre-Codex worktree baseline (${codex_pre_baseline_lines} line(s)):"
+          if [ "${codex_pre_baseline_lines}" -gt 0 ]; then
+            head -n 50 "${CODEX_PRE_BASELINE}" | sed 's/^/  /' || true
+            if [ "${codex_pre_baseline_lines}" -gt 50 ]; then
+              echo "  … truncated; showing first 50 of ${codex_pre_baseline_lines} line(s)"
+            fi
+          fi
 
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
@@ -1089,7 +1095,7 @@ jobs:
                 # The success-no-op path leaves a flag file for the
                 # "Handle no-op implementation" step so it can close the
                 # issue with ai:closed instead of re-issuing it.
-                if grep -qEi 'no file changes were made|nothing to change|already (aligned|implemented|up[- ]to[- ]date)|no changes needed|already complete' "${CODEX_OUTPUT_FILE}"; then
+                if grep -qEi 'no file changes were made|nothing to change|already (aligned|implemented|up[- ]to[- ]date|done|exists|present|complete)|no changes needed' "${CODEX_OUTPUT_FILE}"; then
                   echo "Codex implement reported success-no-op on attempt ${attempt} (model says the requested work is already present)."
                   : > "${RUNTIME_DIR}/codex_success_noop.flag"
                   implement_succeeded=true
@@ -1862,7 +1868,7 @@ jobs:
               '' \
               "Run: ${RUN_URL}")"
             gh_retry gh label create 'ai:closed' --repo "${REPO}" \
-              --color '6a737d' --description 'Linked PR closed without merge' \
+              --color '6b7280' --description 'Issue closed by automation (superseded, duplicated, or already complete)' \
               2>/dev/null || true
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO}" \
               --remove-label 'ai:done' --remove-label 'ai:implementing' \
