@@ -3585,7 +3585,10 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	still accessible."""
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	# Main-poll path.
-	main_anchor = '    close_and_reissue)\n      echo "  Closing and re-issuing stalled issue #${issue_num}..."'
+	# Anchor on the echo line only. PR #1452 inserted an ancestor-chain
+	# no-op cap block between the `close_and_reissue)` case label and
+	# the echo, so the two lines are no longer adjacent.
+	main_anchor = '      echo "  Closing and re-issuing stalled issue #${issue_num}..."'
 	assert main_anchor in script, "Could not locate main close_and_reissue"
 	main_window = script[script.index(main_anchor):script.index(main_anchor) + 600]
 	assert 'surface_reissue_closed_without_pr "${issue_num}"' in main_window
