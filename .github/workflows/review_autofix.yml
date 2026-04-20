@@ -4240,7 +4240,12 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          rm -rf .codex-workflow-src-main
+          # Remove both nested support-source checkouts so the post-job
+          # actions/checkout teardown doesn't recurse into them via
+          # `git submodule foreach --recursive` and emit a noisy
+          # "fatal: No url found for submodule path '.codex-workflow-src'
+          # in .gitmodules" warning. Both dirs are throwaway after staging.
+          rm -rf .codex-workflow-src .codex-workflow-src-main
 
           # Guard: RUNTIME_DIR is only written to $GITHUB_ENV by the
           # Create runtime workspace step.  If an earlier step failed
