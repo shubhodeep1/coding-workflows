@@ -3593,16 +3593,21 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	main_case_open = '\n    close_and_reissue)\n'
 	assert main_case_open in script, "Could not locate main close_and_reissue"
 	main_start = script.index(main_case_open) + len(main_case_open)
-	main_end = script.find('\n      ;;\n', main_start)
-	assert main_end >= 0, (
+	main_case_tail = script[main_start:]
+	main_end_match = re.search(r'\n[ \t]+;;\n', main_case_tail)
+	assert main_end_match is not None, (
 		"Could not bound main close_and_reissue case block: missing terminating ';;'"
 	)
+	main_end = main_start + main_end_match.start()
 	main_case_body = script[main_start:main_end]
-	legacy_echo = 'echo "  Closing and re-issuing stalled issue #${issue_num}..."'
-	assert legacy_echo in main_case_body, (
-		"main close_and_reissue legacy re-issue echo missing"
+	legacy_flow_match = re.search(
+		r'echo "  Closing and re-issuing stalled issue #\$\{issue_num\}\.\.\."\n[ \t]+surface_reissue_closed_without_pr "\$\{issue_num\}"',
+		main_case_body,
 	)
-	main_window = main_case_body[main_case_body.index(legacy_echo):]
+	assert legacy_flow_match is not None, (
+		"main close_and_reissue legacy flow anchor missing"
+	)
+	main_window = main_case_body[legacy_flow_match.start():]
 	assert 'surface_reissue_closed_without_pr "${issue_num}"' in main_window
 	assert 'close_linked_pr "${issue_num}"' in main_window, (
 		"close_linked_pr call missing in main_window"
