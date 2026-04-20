@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:140-141 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The OpenRouter usage-probe calls were changed from `--full-auto` to `--ask-for-approval never --sandbox read-only` even though the PR description says those lines were intentionally left untouched.\n  WHY: This is a concrete documentation/implementation mismatch; reviewers disagree only on whether it is merely misleading or a scope-creep bug, but all agree the stated intent and code do not match.\n- tests/test_orchestrate_poll_process.py:3603 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The new standalone-path anchor string is overly specific and brittle, so minor wording or punctuation changes in the poller log message can break the test.\n  WHY: Multiple reviewers identified the same maintenance risk; severity remains low because this affects test robustness rather than production behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/review_run_reviewers.sh:140-141 | severity=low | confidence=2\n  PROBLEM: Implementation differs from documented intent in PR description\n  WHY: No runtime failure, but creates documentation inconsistency\n- tests/test_orchestrate_poll_process.py:3603 | severity=low | confidence=4\n  PROBLEM: Extremely specific test anchor string prone to break on minor formatting changes\n  WHY: Test failures on unrelated formatting changes increase maintenance burden\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/review_run_reviewers.sh:140-141 | severity=medium | confidence=5\n  PROBLEM: The usage-probe calls were changed from `--full-auto` to `--sandbox read-only`, despite the PR description stating: \"The OpenRouter usage-probe calls at lines 140-141 run with different prompts and serve a different purpose, so they are intentionally left untouched.\"\n  WHY: While the change to read-only sandbox is logically safe for a probe, the implementation contradicts the explicit design intent documented in the PR. This inconsistency suggests the flags were applied via a search-and-replace that exceeded the planned scope.\n- tests/test_orchestrate_poll_process.py:3603 (standalone_anchor) | severity=low | confidence=3\n  PROBLEM: The new anchor string for the standalone path is extremely specific and contains many literal characters ('Closed by standalone stall recovery \u2014 issue #${issue_num} was stuck').\n  WHY: This test is highly brittle. Any minor change in the poller script's log message or whitespace (e.g., changing \"\u2014\" to \"-\" or \"was stuck\" to \"is stuck\") will cause the lint/test gate to fail. The anchor should ideally target a more stable symbol or a shorter unique substring if the intent is just to distinguish it from the new ancestor-cap path.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_run_reviewers.sh:140-141 | severity=medium | confidence=5\n  PROBLEM: The PR description explicitly states \"The OpenRouter usage-probe calls at lines 140-141 run with different prompts and serve a different purpose, so they are intentionally left untouched.\" However, the actual code diff shows these lines WERE changed from `--full-auto` to `codex --ask-for-approval never exec --model ... --sandbox read-only`.\n  WHY: The PR description and implementation are inconsistent. Either the documentation is wrong, or the implementation should be reverted.\n- tests/test_orchestrate_poll_process.py:3603 | severity=low | confidence=3\n  PROBLEM: The standalone anchor string is extremely specific and may break on minor formatting changes in the underlying script.\n  WHY: The test could fail on minor script edits unrelated to the actual functionality being tested.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_run_reviewers.sh:140-141 | severity=medium | confidence=5\n  PROBLEM: The PR description explicitly states \"The OpenRouter usage-probe calls at lines 140-141 run with different prompts and serve a different purpose, so they are intentionally left untouched.\" However, the code change at these lines WAS modified from `--full-auto` to `--sandbox read-only`.\n  WHY: This is not a runtime failure but a documentation/implementation inconsistency. The change itself is technically correct (the cache probe doesn't need write access), but the PR description misleads readers about what was changed. Future maintainers relying on the PR description may be confused about which lines were actually modified.\n- tests/test_orchestrate_poll_process.py:3603 | severity=low | confidence=3\n  PROBLEM: The standalone anchor string is extremely specific and may break on minor formatting changes in the underlying script.\n  WHY: This is a maintainability issue, not an immediate runtime failure. The long literal match includes punctuation (em-dash), variable interpolation, and specific phrasing. If the underlying shell script's echo message changes even slightly (whitespace, punctuation, wording), this test will fail. The previous anchor was already broken by PR #1452's insertion of the ancestor-chain no-op cap block, indicating this pattern is fragile.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/review_run_reviewers.sh:140-141 | severity=medium | confidence=5\n  PROBLEM: The last autofix run modified the OpenRouter usage-probe calls, changing them from `--full-auto` to `--ask-for-approval never --sandbox read-only`.\n  WHY: The PR description explicitly states these lines are \"intentionally left untouched\" and \"serve a different purpose.\" This is a scope-creep error \u2014 the usage probes are not part of the workspace-pollution bug being fixed.\n- tests/test_orchestrate_poll_process.py:3600-3606 | severity=low | confidence=3\n  PROBLEM: The new `standalone_anchor` string is long and tightly couples the test to a specific message format.\n  WHY: While currently correct, small wording/whitespace changes in the poller could break the test. Impact is test-only; no runtime impact for production workflows.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "e66c64cbc2a11966d12d62962e74b9fc02c1f0f3ecda550609487fba75af1832",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1449,
+    "run_id": "24654418696",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24654418696",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420075609_7dd42c9cee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1449,
+    "run_id": "24654418696"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T07:56:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
