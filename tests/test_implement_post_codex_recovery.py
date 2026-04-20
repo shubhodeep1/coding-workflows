@@ -915,6 +915,25 @@ def test_out_of_scope_noop_when_capture_file_missing():
 		assert _read_file(paths["calls_file"]).strip() == ""
 		assert state.get("created_issues", []) == []
 
+
+def test_review_pipeline_integration_chain_module_runs_clean() -> None:
+	integration_test = REPO_ROOT / "tests" / "test_review_pipeline_integration.py"
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	result = subprocess.run(
+		["python3", str(integration_test)],
+		cwd=str(REPO_ROOT),
+		env=env,
+		capture_output=True,
+		text=True,
+		timeout=180,
+	)
+	assert result.returncode == 0, (
+		"review pipeline integration test failed\n"
+		f"stdout:\n{result.stdout}\n"
+		f"stderr:\n{result.stderr}"
+	)
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
