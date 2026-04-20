@@ -3585,7 +3585,10 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	still accessible."""
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	# Main-poll path.
-	main_anchor = '    close_and_reissue)\n      echo "  Closing and re-issuing stalled issue #${issue_num}..."'
+	# Anchor on the echo line only. PR #1452 inserted an ancestor-chain
+	# no-op cap block between the `close_and_reissue)` case label and
+	# the echo, so the two lines are no longer adjacent.
+	main_anchor = '      echo "  Closing and re-issuing stalled issue #${issue_num}..."'
 	assert main_anchor in script, "Could not locate main close_and_reissue"
 	main_window = script[script.index(main_anchor):script.index(main_anchor) + 600]
 	assert 'surface_reissue_closed_without_pr "${issue_num}"' in main_window
@@ -3594,7 +3597,13 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	)
 	assert '"main"' in main_window
 	# Standalone path.
-	standalone_anchor = 'close_linked_pr "${issue_num}" "Closed by standalone stall recovery'
+	# Narrow the anchor to the legacy re-issue branch. PR #1452 added
+	# an earlier `close_linked_pr "… Closed by standalone stall recovery
+	# — ancestor-chain no-op cap reached …"` inside the new cap block;
+	# that cap path deliberately does not re-issue and so legitimately
+	# omits surface_reissue_closed_without_pr. Matching the "was stuck"
+	# suffix locks onto the re-issue path this test is guarding.
+	standalone_anchor = 'close_linked_pr "${issue_num}" "Closed by standalone stall recovery — issue #${issue_num} was stuck'
 	assert standalone_anchor in script
 	idx = script.index(standalone_anchor)
 	pre = script[max(0, idx - 400):idx]
