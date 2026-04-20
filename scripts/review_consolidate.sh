@@ -19,6 +19,16 @@ LAST_RUN_DIFF_STAT_FILE="${LAST_RUN_DIFF_STAT_FILE:-${RUNTIME_DIR}/last_run_diff
 CONSOLIDATOR_PROMPT_FILE="${RUNTIME_DIR}/review_consolidator_prompt.txt"
 CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
 
+# Validate REVIEW_CONSOLIDATOR_REASONING is a known reasoning level.
+# Prevent invalid values from breaking TOML config or shell quoting.
+case "${REVIEW_CONSOLIDATOR_REASONING}" in
+	xhigh|high|medium|low) ;;
+	*)
+		review_log "invalid_reasoning=1 value='${REVIEW_CONSOLIDATOR_REASONING}' fallback=medium"
+		REVIEW_CONSOLIDATOR_REASONING="medium"
+		;;
+esac
+
 if [ "${REVIEW_CONSOLIDATOR_ENABLED:-1}" = "0" ]; then
 	: > "${CONSOLIDATOR_RAW_FILE}"
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} disabled=1 failopen=0 output_bytes=0"
@@ -67,10 +77,59 @@ start_epoch="$(date +%s)"
 tmp_out="$(mktemp)"
 tmp_err="$(mktemp)"
 tmp_cap="$(mktemp)"
-trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"' EXIT INT TERM
+consolidator_codex_root=""
+consolidator_codex_home=""
+trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; if [ -n "${consolidator_codex_home}" ]; then rm -rf "${consolidator_codex_home}"; fi; if [ -n "${consolidator_codex_root}" ]; then rmdir "${consolidator_codex_root}" 2>/dev/null || true; fi' EXIT INT TERM
+
+# Isolated CODEX_HOME overlay so consolidator reasoning effort can be set
+# without mutating the shared editor CODEX_HOME. Mirrors the pattern in
+# scripts/summarize_reviewer_consensus.sh (copy base CODEX_HOME, sed-patch
+# model_reasoning_effort in config.toml). codex exec does not accept a
+# --reasoning CLI flag, so the overlay is the supported mechanism.
+codex_bin="$(command -v codex || true)"
+if [ -z "${codex_bin}" ]; then
+	: > "${CONSOLIDATOR_RAW_FILE}"
+	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} missing=codex_bin failopen=1 output_bytes=0"
+	rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"
+	exit 0
+fi
+
+consolidator_codex_root="${RUNNER_TEMP:-${RUNTIME_DIR}}/codex_home_consolidator"
+mkdir -p "${consolidator_codex_root}"
+consolidator_codex_home="$(mktemp -d "${consolidator_codex_root}/consolidator.XXXXXX")"
+
+if [ -d "${CODEX_HOME:-}" ]; then
+	cp -r "${CODEX_HOME}/." "${consolidator_codex_home}/" || review_log "cp_failed=1 source_codex_home=${CODEX_HOME}"
+	chmod -R u+w "${consolidator_codex_home}" 2>/dev/null || true
+fi
+mkdir -p "${consolidator_codex_home}/bin"
+
+escaped_reasoning="$(printf '%s' "${REVIEW_CONSOLIDATOR_REASONING}" | sed 's/[\\/&]/\\&/g')"
+reasoning_config_applied=0
+for cfg in "${consolidator_codex_home}/config.toml" "${consolidator_codex_home}/.codex/config.toml"; do
+	if [ -f "${cfg}" ]; then
+		reasoning_config_applied=1
+		if ! grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${cfg}"; then
+			printf 'model_reasoning_effort = "%s"\n' "${REVIEW_CONSOLIDATOR_REASONING}" >> "${cfg}"
+		else
+			sed -i \
+				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${escaped_reasoning}\"/" \
+				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${escaped_reasoning}\"/" \
+				"${cfg}" 2>/dev/null || true
+		fi
+	fi
+done
+if [ "${reasoning_config_applied}" -eq 0 ]; then
+	printf 'model_reasoning_effort = "%s"\n' "${REVIEW_CONSOLIDATOR_REASONING}" > "${consolidator_codex_home}/config.toml"
+	review_log "reasoning_config_created=1 target=${consolidator_codex_home}/config.toml"
+fi
+
 cmd_rc=0
 
-if ! timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" codex exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --full-auto --reasoning "${REVIEW_CONSOLIDATOR_REASONING}" < "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
+if ! CODEX_HOME="${consolidator_codex_home}" \
+	timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+	"${codex_bin}" exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --full-auto \
+	< "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
 	cmd_rc=$?
 fi
 
