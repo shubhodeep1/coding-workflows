@@ -3584,18 +3584,36 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	so the surfacing lands on an open issue with the re-issue body
 	still accessible."""
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	# Main-poll path.
-	main_anchor = '    close_and_reissue)\n      echo "  Closing and re-issuing stalled issue #${issue_num}..."'
-	assert main_anchor in script, "Could not locate main close_and_reissue"
-	main_window = script[script.index(main_anchor):script.index(main_anchor) + 600]
+	# Main-poll path. The case label is indented 4 spaces (the standalone
+	# path uses 6 spaces, so this anchor is unambiguous). The case body
+	# may contain pre-checks (e.g. the ancestor-chain no-op cap added in
+	# PR #1452) before the legacy close+re-issue flow; what matters for
+	# this regression guard is that *within* the legacy flow,
+	# surface_reissue_closed_without_pr fires before close_linked_pr.
+	main_case_open = '\n    close_and_reissue)\n'
+	assert main_case_open in script, "Could not locate main close_and_reissue"
+	main_start = script.index(main_case_open) + len(main_case_open)
+	main_end = script.index('\n      ;;\n', main_start)
+	main_case_body = script[main_start:main_end]
+	legacy_echo = 'echo "  Closing and re-issuing stalled issue #${issue_num}..."'
+	assert legacy_echo in main_case_body, (
+		"main close_and_reissue legacy re-issue echo missing"
+	)
+	main_window = main_case_body[main_case_body.index(legacy_echo):]
 	assert 'surface_reissue_closed_without_pr "${issue_num}"' in main_window
 	assert main_window.index('surface_reissue_closed_without_pr') < main_window.index('close_linked_pr'), (
 		"surface must run before close_linked_pr so the comment lands on an open issue"
 	)
 	assert '"main"' in main_window
-	# Standalone path.
-	standalone_anchor = 'close_linked_pr "${issue_num}" "Closed by standalone stall recovery'
-	assert standalone_anchor in script
+	# Standalone path. Use the legacy-flow close message (which mentions
+	# the issue being stuck) so we don't collide with the ancestor-chain
+	# no-op cap short-circuit — that short-circuit intentionally does
+	# *not* re-issue, and therefore must not call
+	# surface_reissue_closed_without_pr.
+	standalone_anchor = 'close_linked_pr "${issue_num}" "Closed by standalone stall recovery — issue #${issue_num} was stuck'
+	assert standalone_anchor in script, (
+		"Could not locate standalone close_and_reissue legacy close call"
+	)
 	idx = script.index(standalone_anchor)
 	pre = script[max(0, idx - 400):idx]
 	assert 'surface_reissue_closed_without_pr "${issue_num}"' in pre, (
