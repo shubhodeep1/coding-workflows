@@ -200,7 +200,10 @@ fi
 
 summariser_codex_root="${RUNNER_TEMP:-${HOME}/.cache}/codex_home_summariser"
 mkdir -p "${summariser_codex_root}"
-summariser_codex_home="$(mktemp -d "${summariser_codex_root}/${PREFIX}.XXXXXX")"
+summariser_codex_home="$(mktemp -d "${summariser_codex_root}/${PREFIX}.XXXXXX")" || {
+	echo "summariser (${PREFIX}): FATAL — failed to create temp codex home." >&2
+	exit 1
+}
 trap 'rm -rf "${summariser_codex_home}" "${prompt_file}" 2>/dev/null || true' EXIT
 
 if [ -d "${CODEX_HOME:-}" ]; then

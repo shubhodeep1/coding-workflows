@@ -96,7 +96,11 @@ fi
 
 consolidator_codex_root="${RUNNER_TEMP:-${RUNTIME_DIR}}/codex_home_consolidator"
 mkdir -p "${consolidator_codex_root}"
-consolidator_codex_home="$(mktemp -d "${consolidator_codex_root}/consolidator.XXXXXX")"
+consolidator_codex_home="$(mktemp -d "${consolidator_codex_root}/consolidator.XXXXXX")" || {
+	review_log "mktemp_failed=1"
+	rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"
+	exit 1
+}
 
 if [ -d "${CODEX_HOME:-}" ]; then
 	cp -r "${CODEX_HOME}/." "${consolidator_codex_home}/" || review_log "cp_failed=1 source_codex_home=${CODEX_HOME}"
