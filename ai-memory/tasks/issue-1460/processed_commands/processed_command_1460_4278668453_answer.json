@@ -8,7 +8,7 @@
   "run_attempt": 1,
   "run_id": "24654104512",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-20T07:31:34Z",
+  "status": "completed",
+  "timestamp": "2026-04-20T07:33:01Z",
   "workflow": "plan"
 }
