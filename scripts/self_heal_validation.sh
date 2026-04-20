@@ -22,7 +22,7 @@
 #   SELF_HEAL_ATTEMPT          — current attempt count (0-based, pre-increment)
 #   MAX_SELF_HEAL_ATTEMPTS     — budget for this validate_process.sh invocation
 #   SELF_HEAL_PATCHES_FILE     — JSONL ledger of accumulated patches
-#   SELF_HEAL_FAILURE_PHASE    — string tag ("generate"|"preflight"|"canary"|"diagnose"|"runtime"|"discover")
+#   SELF_HEAL_FAILURE_PHASE    — string tag ("generate"|"preflight"|"render"|"canary"|"diagnose"|"runtime"|"discover")
 #   MODEL_EDITOR               — OpenRouter model slug for the self-heal LLM call
 #   OPENROUTER_API_KEY         — for codex exec
 # Optional:

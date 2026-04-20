@@ -1,0 +1,24 @@
+FROM node:20-bookworm
+
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends curl ca-certificates jq git \
+	&& rm -rf /var/lib/apt/lists/*
+
+RUN curl -L https://foundry.paradigm.xyz | bash \
+	&& /root/.foundry/bin/foundryup
+
+ENV PATH=/root/.foundry/bin:${PATH}
+
+WORKDIR /workspace
+
+COPY . /workspace
+
+RUN if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then \
+		npm ci; \
+	elif [ -f package.json ]; then \
+		npm install; \
+	else \
+		echo "package.json not found; skipping npm install"; \
+	fi
+
+CMD ["sh", "-c", "while :; do sleep 3600; done"]
