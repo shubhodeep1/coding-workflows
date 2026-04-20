@@ -3597,7 +3597,13 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	)
 	assert '"main"' in main_window
 	# Standalone path.
-	standalone_anchor = 'close_linked_pr "${issue_num}" "Closed by standalone stall recovery'
+	# Narrow the anchor to the legacy re-issue branch. PR #1452 added
+	# an earlier `close_linked_pr "… Closed by standalone stall recovery
+	# — ancestor-chain no-op cap reached …"` inside the new cap block;
+	# that cap path deliberately does not re-issue and so legitimately
+	# omits surface_reissue_closed_without_pr. Matching the "was stuck"
+	# suffix locks onto the re-issue path this test is guarding.
+	standalone_anchor = 'close_linked_pr "${issue_num}" "Closed by standalone stall recovery — issue #${issue_num} was stuck'
 	assert standalone_anchor in script
 	idx = script.index(standalone_anchor)
 	pre = script[max(0, idx - 400):idx]
