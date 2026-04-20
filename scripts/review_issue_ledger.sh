@@ -988,6 +988,9 @@ for issue_id in "${!CURRENT_PRESENT[@]}"; do
 	if [[ "${prior_last_seen}" =~ ^[0-9]+$ ]] && [ "${prior_last_seen}" -gt "${last_seen}" ]; then
 		last_seen="${prior_last_seen}"
 	fi
+	if [[ "${first_seen}" =~ ^[0-9]+$ ]] && [ "${first_seen}" -gt "${last_seen}" ]; then
+		last_seen="${first_seen}"
+	fi
 	FINAL_LAST_SEEN["${issue_id}"]="${last_seen}"
 	FINAL_PERSIST["${issue_id}"]="${persist_count}"
 	FINAL_OUTCOMES["${issue_id}"]="${PRIOR_OUTCOMES["${issue_id}"]:-}"
@@ -1029,6 +1032,10 @@ for issue_id in "${!PRIOR_STATUS[@]}"; do
 	prior_last_seen="${PRIOR_LAST_SEEN["${issue_id}"]:-0}"
 	if [[ "${prior_last_seen}" =~ ^[0-9]+$ ]] && [ "${prior_last_seen}" -gt "${last_seen}" ]; then
 		last_seen="${prior_last_seen}"
+	fi
+	prior_first_seen="${PRIOR_FIRST_SEEN["${issue_id}"]:-0}"
+	if [[ "${prior_first_seen}" =~ ^[0-9]+$ ]] && [ "${prior_first_seen}" -gt "${last_seen}" ]; then
+		last_seen="${prior_first_seen}"
 	fi
 	FINAL_LAST_SEEN["${issue_id}"]="${last_seen}"
 	FINAL_PERSIST["${issue_id}"]="${persist_count}"
