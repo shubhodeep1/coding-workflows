@@ -3593,7 +3593,10 @@ def test_close_and_reissue_sites_surface_reissue_without_pr():
 	main_case_open = '\n    close_and_reissue)\n'
 	assert main_case_open in script, "Could not locate main close_and_reissue"
 	main_start = script.index(main_case_open) + len(main_case_open)
-	main_end = script.index('\n      ;;\n', main_start)
+	main_end = script.find('\n      ;;\n', main_start)
+	assert main_end >= 0, (
+		"Could not bound main close_and_reissue case block: missing terminating ';;'"
+	)
 	main_case_body = script[main_start:main_end]
 	legacy_echo = 'echo "  Closing and re-issuing stalled issue #${issue_num}..."'
 	assert legacy_echo in main_case_body, (
