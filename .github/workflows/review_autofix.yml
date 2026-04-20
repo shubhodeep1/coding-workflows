@@ -138,8 +138,9 @@ jobs:
 
           # Self-triggered autofix skip:
           # When a pull_request.synchronize event was fired by the autofix's
-          # own [ai-autofix] commit push (author = codex-bot), the follow-up
-          # "verification" run re-executes the full reviewer panel + editor
+          # own [ai-autofix] commit push (GitHub-attributed .author.login or
+          # .committer.login equals AUTOFIX_BOT_LOGIN, default "codex"), the
+          # follow-up "verification" run re-executes the full reviewer panel + editor
           # pass on the tree that was just committed. In the common case
           # every reviewer finding has already been applied or classified in
           # the preceding fix run, so this pass returns Change status:
