@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/review_issue_ledger.txt:2-10 | severity=high | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, stepfun_step-3_5-flash]\n  PROBLEM: The review run modified `.ai/review_issue_ledger.txt`, changing `PR_NUMBER` and deleting the canary issue entry.\n  WHY: Both reviewers report the same out-of-scope ledger edit; the metadata drift and removed entry break traceability and issue deduplication, and both give confidence 5.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .ai/review_issue_ledger.txt:2 | severity=high | confidence=5\n  PROBLEM: The most recent AI run changed PR_NUMBER from 1461 to 1350 and deleted multiple ledger entries unrelated to the current task.\n  WHY: This causes metadata drift and loss of issue tracking history for the repository's AI review pipeline. It also violates the task's strict constraint to \"Only modify tests/e2e_smoke_canary.txt\".\n- .ai/review_issue_ledger.txt:10 | severity=high | confidence=5\n  PROBLEM: The ENTRY for tests/e2e_smoke_canary.txt (iss_a31b3f1df662a634) was deleted.\n  WHY: The review pipeline uses this ledger to suppress repeated issues across iterations. Deleting the entry while the file is still being modified (or reviewed) disrupts the deduplication logic.\n- tests/e2e_smoke_canary.txt:End of file | severity=low | confidence=1\n  PROBLEM: Potential missing trailing newline depending on how the editor handles the write.\n  WHY: The file may not end with a single newline character, which would deviate from standard POSIX text file conventions.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .ai/review_issue_ledger.txt:2 | severity=high | confidence=5\n  PROBLEM: Last run modified this file (2 insertions, 13 deletions), changing `PR_NUMBER` and removing the canary-file entry.\n  WHY: The file drift breaks traceability for workflows that correlate issues to PRs, and the deletion removes the ledger record needed for automated tracking and roll-up reporting.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "44d9307dc4ac298adf78015f8b87138994416857f04047f2f8d4e55985b8746a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1461,
+    "run_id": "24655344046",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24655344046",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260420080602_bb9bba3f9d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1461,
+    "run_id": "24655344046"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-20T08:06:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
