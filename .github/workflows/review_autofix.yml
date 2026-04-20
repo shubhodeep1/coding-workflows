@@ -198,8 +198,8 @@ jobs:
               case "${head_msg_line}" in
                 "[ai-autofix]"*)
                   if [ -n "${bot_login}" ] \
-                    && { [ "${head_author_login}" = "${bot_login}" ] \
-                      || [ "${head_committer_login}" = "${bot_login}" ]; }; then
+                    && { [ "${head_author_login,,}" = "${bot_login,,}" ] \
+                      || [ "${head_committer_login,,}" = "${bot_login,,}" ]; }; then
                     SHOULD_RUN="false"
                     SKIP_REASON="self_triggered_autofix"
                     echo "AUTOFIX_GATE_SKIP reason=self_triggered_autofix pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} head_prefix=[ai-autofix] author_login=${head_author_login} committer_login=${head_committer_login} bot_login=${bot_login}"
