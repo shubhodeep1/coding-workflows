@@ -1193,7 +1193,6 @@ attempt_render_recovery_after_preflight_failure()
 	else
 		classify_preflight_failure
 	fi
-	echo "Render recovery: pre-flight checks still failing after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
 	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
 	PRE_FLIGHT_FAILURE_KIND="render"
 	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
