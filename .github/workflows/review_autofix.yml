@@ -3839,13 +3839,20 @@ jobs:
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
-          # Self-triggered autofix skip (mirrors gate-job filter):
-          # The gate job filters out pull_request.synchronize events whose
-          # HEAD is a codex-bot [ai-autofix] commit. That filter does not
-          # catch workflow_dispatch events, so without this guard the
-          # dispatch below would spawn a verification run that bypasses
-          # the gate. Skip dispatch when the just-pushed change is a pure
-          # [ai-autofix] edit (DID_COMMIT=true and CONFLICT_RESOLVED!=true).
+          # Self-triggered autofix skip (mirrors gate-job behavior):
+          # The gate job suppresses self-triggered autofix follow-up runs for
+          # pull_request.synchronize events (by matching subject [ai-autofix]
+          # against AUTOFIX_BOT_LOGIN-attributed .author.login/.committer.login),
+          # but workflow_dispatch does not go through that same event filter.
+          # Without this guard, the dispatch below could spawn a verification
+          # run for the autofix we just pushed and effectively bypass that
+          # suppression.
+          #
+          # This guard keys off this run's outcome flags, not commit identity:
+          # skip dispatch when the just-pushed change is a pure [ai-autofix]
+          # edit (DID_COMMIT=true and CONFLICT_RESOLVED!=true). Since these
+          # flags are set by the step that just performed the push, there is
+          # no spoofing vector here — no commit-API identity check required.
           # [ai-merge-resolve] / conflict-resolved pushes still dispatch so
           # the post-resolution reviewer pass runs (conflict-resolved code
           # is higher-risk than a vanilla autofix edit).
