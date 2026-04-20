@@ -468,6 +468,42 @@ Operational rules:
 - Per CLAUDE.md §15 audit: the prior retrigger path issued no `gh` call, so there was no existing invocation to extend. The single added list-runs call replaces a guaranteed-wasted `gh workflow run` dispatch on the collision path; net API cost is negative when a peer is found and neutral otherwise. The helper is **not** a candidate for cycle-local caching because it is called at most twice per run and the in-flight run set is mutable between calls.
 - The helper is bootstrap-safe: `gh_helpers.sh` is already in `REQUIRED_BOOTSTRAP_SCRIPTS`, so the symbol is available from the first step after bootstrap. Do not move `gh_helpers.sh` to the optional list.
 
+### 20.1 Self-Triggered Autofix Skip
+
+Peer-dedup (§20) only collapses **parallel** runs — it does not address the serial "every autofix commit triggers a fresh `pull_request.synchronize` event that re-runs the full reviewer/editor cycle" pattern that roughly doubles LLM spend per fix round (one verification pass producing a `not-edited` comment, immediately followed by the next autofix iteration producing an `edited` comment). The self-triggered autofix skip collapses those serial verification passes at the gate.
+
+Contract:
+
+- Repository variable `AUTOFIX_SKIP_SELF_TRIGGERED` (default `true`; set to literal string `false` to opt out) is wired into two evaluation points in `review_autofix.yml`:
+  1. **Gate job** (`jobs.gate.steps.evaluate`) — runs **before** every downstream job. When the event is `pull_request.synchronize` and the flag is not `false`, the step issues exactly **1** `gh api repos/<repo>/commits/<PR_HEAD_SHA> --jq '[(.commit.message // "" | split("\n")[0]), (.author.login // ""), (.committer.login // "")] | @tsv'` call (no retry wrapper — the probe is best-effort and fails open). The `split("\n")[0]` extracts the subject line only; `// ""` defaults ensure missing fields produce an empty string rather than `null` / jq error. If the subject begins with `[ai-autofix]` **and** at least one of `.author.login` / `.committer.login` equals `AUTOFIX_BOT_LOGIN` (default `codex`), the gate sets `should_run=false` and writes `skip_reason=self_triggered_autofix` to `$GITHUB_OUTPUT`. Critically, the gate reads `.author.login` / `.committer.login` — GitHub-attributed identity resolved server-side from the push credentials — **not** `.commit.author.email`, which is user-controlled `git config` metadata and therefore spoofable. When the subject matches but neither login equals the configured bot, the gate logs `AUTOFIX_GATE_NO_SKIP_IDENTITY ...` and leaves `SHOULD_RUN=true`. All other events (`workflow_dispatch`, `opened`, `reopened`, `ready_for_review`, `closed`) bypass the probe unconditionally.
+  2. **Post-commit `workflow_dispatch` retrigger step** — mirrors the gate filter but guards on locally-available signals instead of re-querying the HEAD commit: skip only when `DID_COMMIT=true` **AND** `CONFLICT_RESOLVED!=true`. This preserves the post-conflict-resolution verification pass for `[ai-merge-resolve]` commits (a resolver-produced HEAD must still get reviewed). The guard runs **before** the existing `autofix_retrigger_has_inflight_peer` peer-dedup.
+- **Identity guard is load-bearing and must use GitHub-attributed identity**: the gate compares `.author.login` / `.committer.login` (resolved by GitHub from the push credentials) against `AUTOFIX_BOT_LOGIN` so that a human author cannot suppress review by crafting a commit with `git config user.email=codex@users.noreply.github.com` and an `[ai-autofix]`-prefixed subject. Do not replace the `login` comparison with `.commit.author.email` or `.commit.author.name` — those come from local `git config` and are user-controlled. Treat both logins being empty (unauthenticated mirror push, or an email not linked to any GitHub account) as "fail open, run review".
+- **Event guard is load-bearing**: `workflow_dispatch` (including orchestrator stall-cron re-kicks) and `opened` / `reopened` / `ready_for_review` events must always run the full cycle — they represent explicit human/system intent to re-verify. The gate's `EVENT_NAME == 'pull_request' && EVENT_ACTION == 'synchronize'` condition is the only path that can skip.
+- **Fail-open on probe error**: when the `gh api commits/<sha>` call fails, the gate emits `AUTOFIX_GATE_SKIP_QUERY_FAILED pr=<n> head_sha=<sha> reason=api_error` and leaves `SHOULD_RUN=true`. Never convert this to a hard fail; a GitHub API blip must not cause the review to be silently dropped.
+
+Log prefix contract (stable — renames are breaking changes per CLAUDE.md §6):
+
+- `AUTOFIX_GATE_SKIP reason=self_triggered_autofix pr=<n> head_sha=<sha> head_prefix=[ai-autofix] author_login=<login> committer_login=<login> bot_login=<expected>` — gate skip decision. The `author_login` / `committer_login` / `bot_login` fields are GitHub-attributed identity used by the identity guard (see §20.1 contract).
+- `AUTOFIX_GATE_NO_SKIP_IDENTITY pr=<n> head_sha=<sha> head_prefix=[ai-autofix] author_login=<login> committer_login=<login> bot_login=<expected>` — subject matched `[ai-autofix]` but neither login equalled `AUTOFIX_BOT_LOGIN`; gate falls through and runs review (spoofed-subject defence, audit handle).
+- `AUTOFIX_GATE_SKIP_QUERY_FAILED pr=<n> head_sha=<sha> reason=api_error` — probe fail-open fallthrough.
+- `AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=<n> current_run=<r> source=post_commit_retrigger` — new `reason=` value on the existing dispatch-skipped prefix. Downstream log analysis should treat `self_triggered_autofix` as a distinct bucket from `peer_inflight` / `sync_event_inflight`.
+
+Safety net:
+
+- If a required verification pass is incorrectly skipped (e.g. the author guard misfires or an edge case slips through), the orchestrator stall cron (`internal-orchestrate-poll.yml`, cron `*/30 * * * *`) detects the stalled `ai:done` phase and re-dispatches `review_autofix.yml` via `workflow_dispatch` — which bypasses the skip. Worst-case recovery window is ~30 min. Do **not** lengthen the stall cron cadence beyond this value without re-evaluating the skip contract.
+
+API cost audit (CLAUDE.md §15):
+
+- The gate adds **at most 1** `gh api commits/<sha>` call per `pull_request.synchronize` run, and only when the flag is enabled. The saved cost when the probe matches is the full downstream `review`/`editor` job chain — 5 reviewer codex-cli invocations + 1 consensus summariser + 1 editor invocation = 7 LLM calls, plus the existing per-step `gh` overhead. Net API cost is strongly negative on the hit path.
+- The post-commit guard adds **zero** new `gh` calls (it reads pre-existing shell vars `DID_COMMIT` / `CONFLICT_RESOLVED`). It saves a `gh workflow run` dispatch on the hit path.
+- Neither path is a candidate for cycle-local caching because each evaluation is scoped to a single run.
+
+Operational rules:
+
+- Renames of `AUTOFIX_SKIP_SELF_TRIGGERED`, `AUTOFIX_BOT_LOGIN`, the `skip_reason` output key, `self_triggered_autofix` as a reason literal, or any of the log prefixes above are **breaking changes** per CLAUDE.md §6. Add alongside the old name and continue emitting the old log line in parallel for at least one stable-channel cycle before removing.
+- The gate evaluation step must remain the **first** decision point in the review pipeline so consumer-repo wrappers inherit the skip for free via the reusable-workflow call. Do not move the skip logic downstream into per-reviewer jobs.
+- Do **not** extend the skip to `[ai-merge-resolve]` commits without also adding a post-resolution review path — the current design relies on the mirror guard's `CONFLICT_RESOLVED!=true` clause to ensure resolver commits still get reviewed exactly once before merge.
+
 ---
 
 ## FINAL REMINDER

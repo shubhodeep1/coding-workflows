@@ -62,6 +62,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `MAX_AUTOFIX_ITERATIONS` | No | `3` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and marks the PR `ai:review-blocked`. |
 | `REVIEW_FLOOR_KEYWORDS_FILE` | No | (built-in catalog in script) | review_autofix | Optional path to a custom floor-rule keyword catalog consumed by `scripts/review_floor_rules.sh`. When unset, missing, or unreadable, the script falls back to its built-in keywords and logs a warning. |
 | `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` | No | `8` | review_autofix | Seconds the post-commit and editor-changes-lost retrigger steps wait before checking for an already-queued peer review run on the same PR branch. If a peer is found the retrigger skips its own `workflow_dispatch` to avoid creating a redundant queued run (and extra API/UI noise) in the `pr-autofix-${PR}` concurrency group (see [Autofix retrigger dedup](#autofix-retrigger-dedup)). Must be an integer in `0..60`; invalid values clamp to `8`. |
+| `AUTOFIX_SKIP_SELF_TRIGGERED` | No | `true` | review_autofix | Skip the full reviewer/editor cycle on `pull_request.synchronize` events whose HEAD commit is a `[ai-autofix]` commit pushed by the configured bot account (GitHub-attributed identity, see `AUTOFIX_BOT_LOGIN`). These synchronize events are self-triggered by the prior autofix commit and otherwise cost a second full review pass (5 reviewers + consensus + editor) per fix round — roughly 2× LLM spend per autofix iteration. The gate job in `review_autofix.yml` queries the HEAD commit via one `GET /repos/{repo}/commits/{sha}` call and extracts `(commit.message first line, author.login, committer.login)` — `.author.login` / `.committer.login` are GitHub-resolved from the push credentials and are not user-controlled (unlike `.commit.author.email`, which git will accept from any local config). The gate sets `should_run=false` only when the subject starts with `[ai-autofix]` AND at least one of `.author.login` / `.committer.login` equals `AUTOFIX_BOT_LOGIN` (default `codex`); fails open on API error or when both logins are empty. The post-commit `workflow_dispatch` retrigger step applies a mirror guard that only skips when `DID_COMMIT=true` AND `CONFLICT_RESOLVED!=true`, so `[ai-merge-resolve]` commits still dispatch a follow-up verification pass for post-conflict-resolution safety. `workflow_dispatch`, `opened`, `reopened`, and `ready_for_review` events always run regardless of this flag. Set to `false` to opt out and restore the legacy "every commit re-verifies" behaviour. Safety net: the orchestrator stall cron (`internal-orchestrate-poll.yml`, `*/30 * * * *`) re-kicks autofix via `workflow_dispatch` (which bypasses the skip) if a PR stalls, so the worst-case window between a missed verification and recovery is ~30 min. Audit via `AUTOFIX_GATE_SKIP reason=self_triggered_autofix` / `AUTOFIX_GATE_NO_SKIP_IDENTITY` / `AUTOFIX_GATE_SKIP_QUERY_FAILED` / `AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix` log lines (see [Autofix retrigger dedup](#autofix-retrigger-dedup)). |
+| `AUTOFIX_BOT_LOGIN` | No | `codex` | review_autofix | GitHub login that the gate job accepts as the authoritative bot identity for the self-triggered autofix skip. Compared against `.author.login` / `.committer.login` on the HEAD commit API response — both are GitHub-attributed (resolved server-side from push credentials), not user-controlled git metadata. Override if you run the workflow under a fork of codex that pushes as a different bot account (e.g. `codex-bot`, `my-org-codex`). Unset or empty falls back to the default `codex` (via shell `${AUTOFIX_BOT_LOGIN:-codex}` expansion) — to disable the skip entirely, set `AUTOFIX_SKIP_SELF_TRIGGERED=false` instead. |
 | `ENABLE_REVIEWER_TWO_PASS` | No | `true` | review_autofix | When true, reviewers run two passes per iteration: pass 1 at `medium` reasoning (broad sweep), then pass 2 at the scheduled reasoning level with a cross-pollination summary of pass 1 findings. Set to `false` to use a single pass at the scheduled reasoning level. |
 | `XPOLL_SUMMARISER_MODEL` | No | `openai/gpt-5.4-mini` | review_autofix | Model slug (resolved through codex-cli's OpenRouter provider) used by `scripts/summarize_reviewer_consensus.sh`. After each review pass finishes, this model consolidates every reviewer's output into one ledger: a `=== CONSENSUS FINDINGS ===` block with cross-reviewer dedup (entries carry `flagged_by: [slug, ...]`) followed by per-reviewer sections. The pass-1 ledger feeds pass-2 reviewers; the pass-2 ledger is written to `REVIEWER_CONSENSUS_FILE` and feeds the editor + memory-record step. |
 | `XPOLL_SUMMARISER_REASONING` | No | `xhigh` | review_autofix | Reasoning effort (`xhigh` / `high` / `medium` / `low`) applied to the summariser model via its isolated `CODEX_HOME` config.toml. Keeps dedup quality high. Isolated config guarantees the override cannot leak into the editor's codex-cli invocation. |
@@ -330,6 +332,45 @@ jobs:
 > dispatch so the cycle is never silently broken. Look for
 > `AUTOFIX_PEER_CHECK` / `AUTOFIX_DISPATCH_SKIPPED` / `AUTOFIX_DISPATCH_ISSUED`
 > lines when auditing collision behaviour in Actions logs.
+>
+> **Self-triggered autofix skip** — Peer-dedup only collapses parallel runs; it
+> does not stop the serial "every autofix commit re-runs the full reviewer/editor
+> cycle" pattern that otherwise doubles LLM spend per fix round (seen as a
+> `not-edited` comment immediately followed by an `edited` comment on every
+> iteration). When `AUTOFIX_SKIP_SELF_TRIGGERED` is left at its default (`true`),
+> the `gate` job in `review_autofix.yml` inspects the HEAD commit on
+> `pull_request.synchronize` events via `GET /repos/{repo}/commits/{sha}` and
+> sets `should_run=false` when the subject begins with `[ai-autofix]` *and*
+> at least one of `.author.login` / `.committer.login` equals
+> `AUTOFIX_BOT_LOGIN` (default `codex`). These `login` fields are
+> GitHub-attributed — resolved server-side from the push credentials — so they
+> cannot be set by a user crafting a local commit with a spoofed
+> `git config user.email`. The gate emits
+> `AUTOFIX_GATE_SKIP reason=self_triggered_autofix pr=<n> head_sha=<sha>
+> head_prefix=[ai-autofix] author_login=<login> committer_login=<login>
+> bot_login=<expected>` for the skip decision,
+> `AUTOFIX_GATE_NO_SKIP_IDENTITY ...` when the subject matches but neither
+> login does (a third-party commit with the `[ai-autofix]` prefix — runs
+> normally), or
+> `AUTOFIX_GATE_SKIP_QUERY_FAILED pr=<n> head_sha=<sha> reason=api_error` and
+> falls open (runs the full cycle) if the commit lookup fails. The post-commit
+> `workflow_dispatch` retrigger step mirrors the guard and emits
+> `AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=<n>
+> current_run=<r> source=post_commit_retrigger` only when `DID_COMMIT=true`
+> AND `CONFLICT_RESOLVED!=true`; that path relies on local workflow state
+> (the step just executed the push), not commit identity, so no API
+> identity check is required there. `[ai-merge-resolve]` commits still fire a
+> follow-up verification pass for post-conflict-resolution safety.
+> `workflow_dispatch`, `opened`, `reopened`, and `ready_for_review`
+> events are never skipped, and the orchestrator stall cron
+> (`internal-orchestrate-poll.yml`, `*/30 * * * *`) re-dispatches via
+> `workflow_dispatch` — which bypasses the skip — so the worst-case delay
+> between a missed verification and automatic recovery is ~30 min. Log
+> prefixes `AUTOFIX_GATE_SKIP`, `AUTOFIX_GATE_NO_SKIP_IDENTITY`,
+> `AUTOFIX_GATE_SKIP_QUERY_FAILED`, and
+> `AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix` are stable audit
+> handles. Set `vars.AUTOFIX_SKIP_SELF_TRIGGERED=false` to opt out, or set
+> `vars.AUTOFIX_BOT_LOGIN` to override the expected bot login.
 
 ### Local replay helper for review artifacts
 

@@ -79,6 +79,7 @@ jobs:
     outputs:
       should_run: ${{ steps.evaluate.outputs.should_run }}
       post_merge_dispatch: ${{ steps.evaluate.outputs.post_merge_dispatch }}
+      skip_reason: ${{ steps.evaluate.outputs.skip_reason }}
     steps:
       - name: Evaluate review gate
         id: evaluate
@@ -86,21 +87,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
           PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_IS_DRAFT: ${{ inputs.pr_is_draft }}
           PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
           PR_TITLE: ${{ inputs.pr_title }}
           PR_BODY: ${{ inputs.pr_body }}
+          AUTOFIX_SKIP_SELF_TRIGGERED: ${{ vars.AUTOFIX_SKIP_SELF_TRIGGERED }}
+          AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
         run: |
           set -euo pipefail
 
           SHOULD_RUN="true"
           POST_MERGE_DISPATCH="false"
+          SKIP_REASON=""
 
           pr_state=""
           pr_merged="false"
           if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             SHOULD_RUN="false"
+            SKIP_REASON="invalid_pr_number"
             echo "::warning::PR_NUMBER '${PR_NUMBER}' is not numeric; skipping review run."
           else
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false)] | @tsv')"; then
@@ -113,20 +120,100 @@ jobs:
 
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ -z "${pr_state}" ]; then
             SHOULD_RUN="false"
+            SKIP_REASON="pr_state_unknown"
             echo "::warning::Unable to determine PR state for #${PR_NUMBER}; skipping review run."
           elif [ "${pr_state}" = "closed" ]; then
             SHOULD_RUN="false"
+            SKIP_REASON="pr_closed"
             if [ "${pr_merged}" = "true" ]; then
               POST_MERGE_DISPATCH="true"
             fi
           elif [ "${PR_IS_DRAFT}" = "true" ] || [ "${PR_SKIP_AI}" = "true" ]; then
             SHOULD_RUN="false"
+            SKIP_REASON="draft_or_skip_ai"
           elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
             SHOULD_RUN="false"
+            SKIP_REASON="skip_ai_marker"
+          fi
+
+          # Self-triggered autofix skip:
+          # When a pull_request.synchronize event was fired by the autofix's
+          # own [ai-autofix] commit push (GitHub-attributed .author.login or
+          # .committer.login equals AUTOFIX_BOT_LOGIN, default "codex"), the
+          # follow-up "verification" run re-executes the full reviewer panel + editor
+          # pass on the tree that was just committed. In the common case
+          # every reviewer finding has already been applied or classified in
+          # the preceding fix run, so this pass returns Change status:
+          # not-edited and contributes no new work — it is pure cost
+          # (~7 LLM calls per follow-up run). Skipping it cuts ~50% of
+          # autofix LLM spend per fix cycle.
+          #
+          # Safety boundary:
+          #   * Only synchronize events are eligible. workflow_dispatch (the
+          #     post-commit fallback, EDITOR_CHANGES_LOST re-dispatch,
+          #     orchestrator conflict-dispatch in _dispatch_review_for_conflicts,
+          #     and manual re-runs) always runs.
+          #   * pull_request.opened / reopened / ready_for_review always run.
+          #   * Only the [ai-autofix] prefix is skipped; [ai-merge-resolve]
+          #     commits still run the verification pass so post-resolution
+          #     reviewer coverage is preserved (conflict-resolved code is
+          #     higher-risk than a vanilla autofix edit).
+          #   * Identity guard is based on GitHub-attributed identity:
+          #     .author.login or .committer.login on the commit API response
+          #     must equal AUTOFIX_BOT_LOGIN (default "codex"). These fields
+          #     are resolved server-side by GitHub from the push credentials
+          #     and are NOT user-controlled — unlike .commit.author.email,
+          #     which is spoofable. If both logins are empty (e.g. an
+          #     unauthenticated mirror push or a commit whose author email
+          #     is not linked to any GitHub account), the gate fails open
+          #     and runs review normally.
+          #
+          # Safety net:
+          #   If a [ai-autofix] commit is incomplete or regresses the tree,
+          #   the orchestrator stall cron (internal-orchestrate-poll.yml
+          #   every 30 min) re-kicks autofix via workflow_dispatch, which
+          #   bypasses this skip. Worst-case window: ~30 min.
+          #
+          # Opt-out: set repository variable AUTOFIX_SKIP_SELF_TRIGGERED=false.
+          # Override bot login: set repository variable AUTOFIX_BOT_LOGIN.
+          if [ "${SHOULD_RUN}" = "true" ] \
+            && [ "${EVENT_NAME}" = "pull_request" ] \
+            && [ "${EVENT_ACTION}" = "synchronize" ] \
+            && [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-true}" != "false" ] \
+            && [ -n "${PR_HEAD_SHA}" ]; then
+            head_meta=""
+            if ! head_meta="$(gh api "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}" \
+              --jq '[(.commit.message // "" | split("\n")[0]), (.author.login // ""), (.committer.login // "")] | @tsv' \
+              2>/dev/null)"; then
+              # Fail open — API error falls through to normal run so the
+              # cycle is never silently broken.
+              echo "AUTOFIX_GATE_SKIP_QUERY_FAILED pr=${PR_NUMBER:-?} head_sha=${PR_HEAD_SHA} reason=api_error"
+              head_meta=""
+            fi
+            if [ -n "${head_meta}" ]; then
+              head_msg_line="$(printf '%s' "${head_meta}" | cut -f1)"
+              head_author_login="$(printf '%s' "${head_meta}" | cut -f2)"
+              head_committer_login="$(printf '%s' "${head_meta}" | cut -f3)"
+              bot_login="${AUTOFIX_BOT_LOGIN:-codex}"
+              case "${head_msg_line}" in
+                "[ai-autofix]"*)
+                  if [ -n "${bot_login}" ] \
+                    && { [ "${head_author_login,,}" = "${bot_login,,}" ] \
+                      || [ "${head_committer_login,,}" = "${bot_login,,}" ]; }; then
+                    SHOULD_RUN="false"
+                    SKIP_REASON="self_triggered_autofix"
+                    echo "AUTOFIX_GATE_SKIP reason=self_triggered_autofix pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} head_prefix=[ai-autofix] author_login=${head_author_login} committer_login=${head_committer_login} bot_login=${bot_login}"
+                  else
+                    echo "AUTOFIX_GATE_NO_SKIP_IDENTITY pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} head_prefix=[ai-autofix] author_login=${head_author_login} committer_login=${head_committer_login} bot_login=${bot_login}"
+                  fi
+                  ;;
+              esac
+            fi
           fi
 
           echo "should_run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
           echo "post_merge_dispatch=${POST_MERGE_DISPATCH}" >> "${GITHUB_OUTPUT}"
+          echo "skip_reason=${SKIP_REASON}" >> "${GITHUB_OUTPUT}"
 
   post-merge-validate-dispatch:
     needs: gate
@@ -3747,9 +3834,36 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CURRENT_RUN_ID: ${{ github.run_id }}
+          AUTOFIX_SKIP_SELF_TRIGGERED: ${{ vars.AUTOFIX_SKIP_SELF_TRIGGERED }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+
+          # Self-triggered autofix skip (mirrors gate-job behavior):
+          # The gate job suppresses self-triggered autofix follow-up runs for
+          # pull_request.synchronize events (by matching subject [ai-autofix]
+          # against AUTOFIX_BOT_LOGIN-attributed .author.login/.committer.login),
+          # but workflow_dispatch does not go through that same event filter.
+          # Without this guard, the dispatch below could spawn a verification
+          # run for the autofix we just pushed and effectively bypass that
+          # suppression.
+          #
+          # This guard keys off this run's outcome flags, not commit identity:
+          # skip dispatch when the just-pushed change is a pure [ai-autofix]
+          # edit (DID_COMMIT=true and CONFLICT_RESOLVED!=true). Since these
+          # flags are set by the step that just performed the push, there is
+          # no spoofing vector here — no commit-API identity check required.
+          # [ai-merge-resolve] / conflict-resolved pushes still dispatch so
+          # the post-resolution reviewer pass runs (conflict-resolved code
+          # is higher-risk than a vanilla autofix edit).
+          #
+          # Opt-out: AUTOFIX_SKIP_SELF_TRIGGERED=false on the repo variable.
+          if [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-true}" != "false" ] \
+            && [ "${DID_COMMIT:-false}" = "true" ] \
+            && [ "${CONFLICT_RESOLVED:-false}" != "true" ]; then
+            echo "AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+            exit 0
+          fi
 
           # Preflight dedup: the push above fires a pull_request.synchronize
           # event that produces its own review_autofix run via the caller
