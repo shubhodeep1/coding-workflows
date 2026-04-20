@@ -7,7 +7,7 @@
   "prs": [
     {
       "pr_number": 1465,
-      "state": "in_progress",
+      "state": "closed",
       "url": "https://github.com/shubhodeep1/coding-workflows/pull/1465"
     }
   ],
@@ -18,9 +18,16 @@
       "status": "in_progress",
       "timestamp": "2026-04-20T19:08:37Z",
       "workflow": "implement"
+    },
+    {
+      "run_attempt": 1,
+      "run_id": "24686545722",
+      "status": "closed",
+      "timestamp": "2026-04-20T19:40:12Z",
+      "workflow": "Internal: Issue-PR Status Sync"
     }
   ],
   "schema_version": "task_lineage.v1",
-  "state": "in_progress",
-  "updated_at": "2026-04-20T19:08:37Z"
+  "state": "closed",
+  "updated_at": "2026-04-20T19:40:12Z"
 }
