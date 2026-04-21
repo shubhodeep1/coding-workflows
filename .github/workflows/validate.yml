@@ -293,6 +293,8 @@ jobs:
           workflow-templates/validation-harness/node-hardhat-solidity/tests/00_canary.sh.j2
           workflow-templates/validation-harness/node-hardhat-solidity/tests/10_family_marker.sh.j2
           workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2
+          workflow-templates/validation-harness/node-hardhat-solidity/tests/20_import_audit.sh.j2
+          workflow-templates/validation-harness/node-hardhat-solidity/tests/_lib/import_audit.py.j2
           workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2
           workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2
           workflow-templates/validation-harness/python-mongo-flask/Dockerfile.app.j2

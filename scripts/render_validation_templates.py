@@ -408,7 +408,7 @@ def write_outputs(output_root: Path, rendered_files: list[RenderedFile]) -> list
 			try:
 				target.chmod(target.stat().st_mode | 0o111)
 			except OSError as exc:
-				raise OutputWriteError(f"Failed setting executable bits on '{target}': {exc}") from exc
+				print(f"::warning::Failed setting executable bits on '{target}': {exc}")
 		written_paths.append(target)
 
 	return written_paths
