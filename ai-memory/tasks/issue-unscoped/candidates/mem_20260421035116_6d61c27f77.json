@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2109-2118 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: Ledger-only commit detection compares the git path output to `REVIEW_LEDGER_PATH` using a brittle string-equality check that can fail on non-canonical path forms or formatting differences.\n  WHY: Multiple reviewers identified false-negative risk if the configured ledger path is not normalized to the repo-relative form that `git diff-tree` emits, which would leave `LEDGER_ONLY_COMMIT=false` and block downstream auto-merge gates.\n- .github/workflows/review_autofix.yml:2112-2118 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: The single-path comparison is implemented with `printf '%s\\n' ... | sed '/^$/d'`, which is fragile around newline handling and can produce false negatives even when the commit contains only the ledger file.\n  WHY: The reviewers agree the current pipeline is more brittle than necessary for a one-file check, and a more direct path extraction/comparison would avoid string-formatting edge cases.\n- .github/workflows/review_autofix.yml:2110-2118 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The detection logic does not use the null-terminated `git diff-tree -z` form already used elsewhere in the file.\n  WHY: This is a robustness/consistency concern rather than a confirmed runtime bug, but it would better handle special characters and match the surrounding code\u2019s safer path handling.\n- .github/workflows/review_autofix.yml:2110-2118 | severity=medium | confidence=4\n  flagged_by: [stepfun_step-3_5-flash]\n  PROBLEM: `REVIEW_LEDGER_PATH` is compared directly without normalizing leading `./` or rejecting absolute paths, so valid overrides can fail the ledger-only check.\n  WHY: If the configured path is not repo-relative in the same form as `git diff-tree` output, the equality test misses the ledger commit and downstream gates stay blocked.\n- .github/workflows/review_autofix.yml:2112 | severity=medium | confidence=3\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The use of `HEAD` in `git diff-tree --no-commit-id --name-only -r HEAD` assumes the local `HEAD` always reflects the intended pushed commit.\n  WHY: The reviewer noted a possible race/staleness concern where detection could inspect local state that does not correspond to the commit just pushed.\n- .github/workflows/review_autofix.yml:2103-2118 | severity=medium | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The ledger-only detection runs before push outcome is known, so it can set `LEDGER_ONLY_COMMIT=true` even if the subsequent push fails.\n  WHY: The reviewer noted this could let same-run gates proceed on a local commit that never reaches the remote, though they characterized it as behavioral rather than a clear correctness bug.\n\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:2110-2118 | severity=medium | confidence=3\n  PROBLEM: The path comparison uses simple string equality and is brittle around whitespace or special characters in the git output.\n  WHY: If `git diff-tree` output is not formatted exactly as expected, `LEDGER_ONLY_COMMIT` can remain `false` even when the commit is ledger-only.\n- .github/workflows/review_autofix.yml:2110 | severity=low | confidence=2\n  PROBLEM: The `git diff-tree --no-commit-id --name-only -r HEAD` usage is inconsistent with the safer null-terminated variant used elsewhere in the file.\n  WHY: This is a consistency and robustness concern for path handling, not a confirmed runtime bug.\n- .github/workflows/review_autofix.yml:2112-2118 | severity=medium | confidence=2\n  PROBLEM: `LEDGER_ONLY_COMMIT` may be unset if the commit detection path is skipped or exits early.\n  WHY: The reviewer warned that an unset env var could behave differently in GitHub Actions condition evaluation than an explicit `true` or `false`.\n\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml:2112-2114 | severity=medium | confidence=4\n  PROBLEM: The ledger-only detection logic is vulnerable to string comparison failures caused by trailing whitespace or blank-line handling in the command-substitution pipeline.\n  WHY: The reviewer believes the current `printf`/`sed`/counting approach can fail even for a correct single-path ledger commit.\n- .github/workflows/review_autofix.yml:2112 | severity=medium | confidence=3\n  PROBLEM: Using `HEAD` assumes the local checkout state exactly matches the commit that was just pushed.\n  WHY: The reviewer flagged a possible stale-state or race-condition scenario where the detection could inspect the wrong commit.\n\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:2112-2118 | severity=medium | confidence=3\n  PROBLEM: The path comparison is brittle because the `printf '%s\\n'` plus `sed` pipeline can introduce newline-related mismatches.\n  WHY: The reviewer says the comparison can fail even when `git diff-tree` reports the correct ledger path, causing a false negative in ledger-only detection.\n- .github/workflows/review_autofix.yml:2103-2118 | severity=medium | confidence=2\n  PROBLEM: Ledger-only detection happens before the push outcome is known, so downstream gates may use `LEDGER_ONLY_COMMIT=true` even if the push later fails.\n  WHY: The reviewer notes the workflow can proceed on a local commit that never reaches the remote, making the behavior potentially misleading.\n\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/review_autofix.yml:2109-2112 | severity=medium | confidence=4\n  PROBLEM: `REVIEW_LEDGER_PATH` is compared directly to git output without normalizing a leading `./` or rejecting absolute paths.\n  WHY: If a consumer overrides the ledger path in a non-canonical form, the equality check fails and the workflow misses a genuine ledger-only commit.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "69732fda58d39a02283c284c1d45c0914110fee380d5888780cc2a6b5f409689",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1476,
+    "run_id": "24702543778",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24702543778",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421035116_6d61c27f77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1476,
+    "run_id": "24702543778"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T03:51:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
