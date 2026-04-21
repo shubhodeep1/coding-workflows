@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- `git rev-parse HEAD`: `080480e3c505fdd6ffe0ff16d7ab5c09419ce9f5`\n- Checked-out branch: `orchestrator/project-1469`\n- Integration branch metadata: `orchestrator/project-1469`\n- Integration branch mismatch: `false` (planning can proceed)\n\nClarification interpretation\n- No clarification Q-IDs were issued in this issue.\n- `/answer [auto-answered-by-orchestrator]` indicates continuation is approved for planning.\n\nRepresentative existing implementation patterns to follow\n- Consumer repo registry read pattern: `.github/workflows/mark-stable.yml` and `.github/workflows/test-and-mark-stable.yml` (`.github/ai/consumer_repos.json` handling).\n- Draft-PR + branch lifecycle pattern: `.github/workflows/validation-improvements-intake.yml`.\n- Deterministic validation pipeline components:\n  - `scripts/render_validation_templates.py`\n  - `scripts/validation_lint.py`\n  - `scripts/validate_driver.sh`\n\nFactual conflicts detected\n- Backlog docs (`docs/validation-templates-plan.md`) refer to `auto-merge:validation-refresh` merge-bot handling, but no runtime merge-bot config/implementation for that label exists in code today.\n- The requested behavior should therefore use the existing repository auto-merge mechanism already used elsewhere (`gh pr merge --squash --auto`) rather than relying on missing label-based merge-bot logic.\n\nImplementation plan\n\n1. Files likely to change\n- New: `.github/workflows/validation-refresh.yml`\n- New: `scripts/validation_refresh_runner.py`\n- New: `tests/test_validation_refresh_workflow_contract.py`\n- New: `tests/test_validation_refresh_runner.py`\n- Update: `.github/workflows/ci.yml` (add execution of new tests)\n- Update: `README.md` (document new workflow and operational behavior)\n- Do not touch orchestrator poll/review core scripts for this issue.\n\n2. Functions/modules to implement\n- `scripts/validation_refresh_runner.py`:\n  - Load and validate target repos from `.github/ai/consumer_repos.json`.\n  - For each repo:\n    - Clone/fetch working copy.\n    - Regenerate validation assets via `render_validation_templates.py`.\n    - Run deterministic lint via `validation_lint.py`.\n    - Run deterministic self-tests via `validate_driver.sh`.\n    - Compute git diff and commit refresh changes when present.\n    - Open or update PR:\n      - Green path: non-draft, merge-ready, enable auto-merge via `gh pr merge --squash --auto`.\n      - Red path: draft PR with failure diagnostics in body.\n  - Emit per-repo summary (status, PR URL, diagnostics) and overall exit behavior.\n- `.github/workflows/validation-refresh.yml`:\n  - `on.schedule` + `on.workflow_dispatch`.\n  - Single runner job that executes the script with `GH_PAT` auth and optional Telegram notification on failures.\n  - Job summary output for green/red/skip counts.\n\n3. Data structures affected\n- Input contract: `.github/ai/consumer_repos.json` as JSON array of `\"owner/repo\"` strings.\n- New internal result model in runner (per repo): repository, branch, outcome (`green`/`red`/`skipped`/`error`), PR number/url, diagnostics path/text.\n- New workflow summary artifact/output (machine-readable JSON + human-readable step summary).\n\n4. API/interface changes\n- New reusable workflow interface:\n  - Trigger: scheduled cron + manual dispatch.\n  - No breaking changes to existing workflows.\n- GitHub operations (via existing `gh` tooling):\n  - PR lookup/update/create: `gh pr list`, `gh pr create`, `gh pr edit`, `gh pr ready --undo` (draft fallback), `gh pr ready` (promote).\n  - Auto-merge enablement: `gh pr merge --squash --auto`.\n- No MongoDB schema/contract/index changes.\n\n5. Potential risks and edge cases\n- Repo lacks `.ai/validate.yml` or has unsupported manifest type.\n- Render/lint/test failures with no file diff (cannot meaningfully open a code-change PR).\n- Existing open refresh PR branch divergence/race with parallel runs.\n- Consumer repo protection/settings may reject auto-merge even on green.\n- GH API/rate-limit pressure across many repos in one run.\n- Private dependency/runtime variance in consumer repos causing deterministic tests to fail frequently.\n\n6. Testing considerations\n- `tests/test_validation_refresh_workflow_contract.py`:\n  - Assert workflow has both `schedule` and `workflow_dispatch`.\n  - Assert it invokes the runner script and wires required secrets/env correctly.\n- `tests/test_validation_refresh_runner.py`:\n  - Consumer repo list parsing (valid, empty, malformed).\n  - Green path transitions: non-draft PR + auto-merge command.\n  - Red path transitions: draft PR with diagnostics body.\n  - Existing PR update path vs new PR creation path.\n  - No-change path handling.\n  - Command failure propagation and per-repo fail-open vs hard-fail boundaries.\n- CI wiring:\n  - Add new test files to `.github/workflows/ci.yml` execution list.\n  - Keep tests deterministic by mocking command execution instead of real network/API calls.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ac460ab3f26d335c005236206eafceeaa9b15278611c3d595a37c044a7a49a66",
+  "lineage": {
+    "issue_number": 1507,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24751970038",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24751970038",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1507"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421234108_68d7a84bdc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1507,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24751970038"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1507",
+  "timestamps": {
+    "created_at": "2026-04-21T23:41:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
