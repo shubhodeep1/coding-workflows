@@ -678,13 +678,12 @@ def _normalize_error_text(exc: Exception) -> str:
 
 def _is_missing_log_archive_error(error_text: str, run_id: int) -> bool:
     normalized = error_text.lower()
-    has_not_found = "not found" in normalized
     has_404 = "404" in normalized
     has_archive_endpoint = (
         f"actions/runs/{run_id}/logs" in normalized
         or ("actions/runs/" in normalized and "/logs" in normalized)
     )
-    return (has_404 and has_not_found and has_archive_endpoint) or "log archive not found" in normalized
+    return (has_404 and has_archive_endpoint) or "log archive not found" in normalized
 
 
 def _normalize_log_archive_exception(repo: str, run_id: int, exc: Exception) -> Exception:
@@ -727,13 +726,11 @@ def _fetch_run_log_archive(
         return cached
 
     endpoint = _build_logs_endpoint(repo, run_id)
-    last_error: Exception | None = None
     for attempt in range(1, LOG_ARCHIVE_FETCH_RETRIES + 1):
         try:
             payload = gh_api_bytes(endpoint, token=token, retries=1)
         except Exception as exc:  # noqa: BLE001
             normalized_exc = _normalize_log_archive_exception(repo, run_id, exc)
-            last_error = normalized_exc
             is_missing_archive = _normalize_error_text(normalized_exc).startswith(
                 f"{MISSING_LOG_ARCHIVE_MARKER} "
             )
@@ -746,17 +743,13 @@ def _fetch_run_log_archive(
                 continue
             if cache is not None:
                 cache[identity] = normalized_exc
-            raise normalized_exc
+            if normalized_exc is exc:
+                raise
+            raise normalized_exc from exc
 
         if cache is not None:
             cache[identity] = payload
         return payload
-
-    if last_error is None:
-        last_error = RuntimeError(f"gh api failed for {endpoint} after retries")
-    if cache is not None:
-        cache[identity] = last_error
-    raise last_error
 
 
 def list_run_log_excerpts(
