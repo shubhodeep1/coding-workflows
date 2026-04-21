@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2117-2119 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview]\n  PROBLEM: `normalize_rel_path` feeds `sed` from `printf '%s' \"$1\"` without a trailing newline, which can behave inconsistently across some `sed` implementations.\n  WHY: Both reviewers reported that this can make normalization return an empty or incorrect value on some environments, breaking the ledger-path comparison; one reviewer rated the issue as a portability concern only, while the other described it as runtime-failing behavior, so the higher severity is kept.\n- .github/workflows/review_autofix.yml:2125 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview]\n  PROBLEM: `SINGLE_COMMIT_PATH` is derived through command substitution and only lightly filtered, leaving a defensive gap if the captured value is empty or contains unexpected whitespace/control characters.\n  WHY: Both reviewers pointed at the same commit-path capture/comparison flow and described it as a robustness concern around empty or malformed path values; neither review claimed a stronger failure mode than a low-severity hardening issue.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:2118 | severity=low | confidence=4\n  PROBLEM: `normalize_rel_path` uses `printf '%s' \"$1\"` without a trailing newline, which may cause `sed` path normalization to misbehave on some implementations.\n  WHY: The reviewer said this can prevent `s#/$##` from matching reliably and leave `LEDGER_ONLY_COMMIT` false when it should be true.\n- .github/workflows/review_autofix.yml:2125 | severity=low | confidence=2\n  PROBLEM: `SINGLE_COMMIT_PATH` may still be vulnerable to malformed whitespace-only output from `git diff-tree`, which the current filtering does not explicitly trim.\n  WHY: The reviewer noted that `sed '/^$/d'` removes empty lines but not whitespace-only lines, so comparison robustness is reduced.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml:2117-2119 | severity=low | confidence=5\n  PROBLEM: `normalize_rel_path` lacks a trailing newline in its input stream, which causes inconsistent behavior with `sed` across different environments.\n  WHY: The reviewer said some POSIX `sed` implementations may not process the last line without a newline, making the normalization return empty and incorrectly triggering the ledger-only path logic.\n- .github/workflows/review_autofix.yml:2125 | severity=low | confidence=4\n  PROBLEM: `SINGLE_COMMIT_PATH` is captured and normalized defensively, but the reviewer still flagged the surrounding flow as needing stronger protection against empty or malformed path values.\n  WHY: The reviewer\u2019s concern centered on the commit-path capture and the downstream `normalize_rel_path` call, describing it as a low-probability robustness issue around unexpected path content.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/24a70b27-287-1-32a1.workflows/24a70b27-287-1-32a1. yml:line 21a19 | severity=low | confidence=1\n  PROBLEM: `normalize_24a70b27_287` uses `printf '%s' \"$1\"` without a trailing newline, which may cause inconsistent behavior across `sed` implementations.\n  WHY: The reviewer described this as a minor defensive hardening issue that could leave `NORMALIZED_LEDGER_PATH` empty or malformed in edge cases.\n- .github/24a70b27-287-1-32a1.workflows/24a70b27-287-1-32a1. yml:line 2a125 | severity=low | confidence=1\n  PROBLEM: The `SINGLE_COMMIT_PATH` command substitution is not defensively quoted in the reviewer\u2019s reported hardening suggestion.\n  WHY: The reviewer characterized this as a minor robustness improvement to avoid malformed path comparison in edge cases.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/review_autofix.yml (commit-changes step):normalize_rel_path function uses `printf '%s' \"$1\"` piped to sed | severity=low | confidence=2\n  PROBLEM: The reviewer considered the no-trailing-newline concern to be standard shell behavior rather than a bug.\n  WHY: The reviewer explicitly concluded that the pipeline is safe for the expected single-path input and that empty input is already handled downstream.\n- .github/workflows/review_autofix.yml (commit-changes step):`SINGLE_COMMIT_PATH=\"$(printf '%s\\n' \"${COMMIT_PATHS_RAW}\" | sed '/^$/d')\"` | severity=low | confidence=2\n  PROBLEM: The reviewer did not identify a concrete bug in the current quoting, only a possible future misuse concern.\n  WHY: The reviewer stated the existing assignment and call-site quoting are already safe and recommended only a clarifying comment.\n- .github/workflows/review_autofix.yml (commit-changes step):LEDGER_PATH_FOR_DETECTOR absolute-path comparison behavior | confidence=4\n  PROBLEM: The reviewer described absolute-path mismatch behavior as intentional and safe, not a runtime bug.\n  WHY: The reviewer explicitly said this outcome is expected configuration handling, not a correctness issue.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "0d4a3fd5810cbaef4f4f8053821b36a093e1744fc16b03b3fa70d1c3b9e9f22f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1476,
+    "run_id": "24702727287",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24702727287",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421042525_518b874c22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1476,
+    "run_id": "24702727287"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T04:25:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
