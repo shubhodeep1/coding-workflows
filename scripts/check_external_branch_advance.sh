@@ -92,9 +92,9 @@ if ! git fetch --quiet --no-tags --prune origin \
 	exit 0
 fi
 
-REMOTE_TIP_SHA="$(git rev-parse --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null || true)"
+REMOTE_TIP_SHA="$(git rev-parse --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null || git rev-parse --verify --quiet FETCH_HEAD 2>/dev/null || true)"
 if [ -z "${REMOTE_TIP_SHA}" ]; then
-	log "::warning::check_external_branch_advance: refs/remotes/origin/${TARGET_BRANCH} not resolvable; fail-open."
+	log "::warning::check_external_branch_advance: refs/remotes/origin/${TARGET_BRANCH} and FETCH_HEAD both unresolved; fail-open."
 	printf 'ADVANCE=unknown\n'
 	exit 0
 fi

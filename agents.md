@@ -555,7 +555,7 @@ Safety net:
 - If both gates mis-fire and incorrectly soft-exit on an advance that was in fact our own autofix (e.g. identity API returned stale data), the orchestrator stall cron (`internal-orchestrate-poll.yml`, cron `*/30 * * * *`) detects the stalled `ai:done` phase and re-dispatches `review_autofix.yml` via `workflow_dispatch`. Worst-case recovery window: ~30 min. Same safety net as §20.1.
 - If both gates fail-open on detection error and the push subsequently hard-fails at the merge-retry step, the existing `phase_failed` ledger entry + Telegram failure alert fires as before. Detection failure gracefully degrades to the pre-gate behaviour.
 
-### 20.2 Ledger-Only Commit Auto-Merge
+### 20.3 Ledger-Only Commit Auto-Merge
 
 §20.1's skip creates an interaction bug: when a review pass produces no productive edit but `scripts/review_issue_ledger.sh` still writes `REVIEW_LEDGER_PATH` (default `.ai/review_issue_ledger.txt`), the `commit_changes` step produces an `[ai-autofix]` commit whose only tracked path is the ledger. That commit sets `DID_COMMIT=true`, which historically gated three "clean review" steps (ready-to-merge label, enable auto-merge, telegram success) out of firing. The subsequent `pull_request.synchronize` event is then skipped by §20.1, so there is no follow-up run in which those gates could fire. Result: a PR that the editor cleared as no-change gets stuck in `mergeable_state=clean` indefinitely (see PR #1472).
 
