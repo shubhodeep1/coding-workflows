@@ -5,13 +5,31 @@
   "entry_id": "processed_command_1500_4289504748_approved",
   "issue_number": 1500,
   "metadata": {
+    "branch": "ai/issue-1500",
+    "changed_files": [
+      "scripts/render_validation_templates.py",
+      "tests/fixtures/validation_harness/python_mongo_flask/docker-compose.test.yml",
+      "tests/fixtures/validation_harness/python_mongo_flask/tests/11_http_smoke.sh",
+      "tests/test_family_python_mongo_flask.py",
+      "tests/test_render_validation_templates.py",
+      "tests/test_render_validation_templates_node_hardhat_regressions.py",
+      "workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2",
+      "workflow-templates/validation-harness/node-hardhat-solidity/tests/20_import_audit.sh.j2",
+      "workflow-templates/validation-harness/node-hardhat-solidity/tests/_lib/import_audit.py.j2",
+      "workflow-templates/validation-harness/python-mongo-flask/docker-compose.test.yml.j2"
+    ],
+    "issue_number": 1500,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1500",
+    "pr_number": 1501,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1501",
+    "run_attempt": "1",
+    "run_id": "24729285397",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24729285397"
   },
   "run_attempt": 1,
   "run_id": "24729285397",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-21T14:52:49Z",
+  "status": "completed",
+  "timestamp": "2026-04-21T16:08:25Z",
   "workflow": "implement"
 }
