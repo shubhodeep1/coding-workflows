@@ -33,7 +33,7 @@
 set -euo pipefail
 
 if [ -z "${COMMITTED_FILES_FILE:-}" ]; then
-  if [ -n "${RUNTIME_DIR:-}" ]; then
+  if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
     COMMITTED_FILES_FILE="${RUNTIME_DIR}/committed_files.txt"
     echo "::warning::COMMITTED_FILES_FILE was unset; defaulting to ${COMMITTED_FILES_FILE}."
   else
