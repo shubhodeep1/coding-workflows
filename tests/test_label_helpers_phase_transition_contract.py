@@ -28,3 +28,13 @@ def test_resilient_phase_transition_helper_avoids_full_label_set_put() -> None:
 	text = _helper_text()
 	assert 'gh_retry gh api -X PUT "repos/${repo}/issues/${issue_number}/labels"' not in text
 	assert "printf '{\"labels\":%s}'" not in text
+
+
+def main() -> int:
+	test_resilient_phase_transition_helper_uses_targeted_add_remove()
+	test_resilient_phase_transition_helper_avoids_full_label_set_put()
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

@@ -34,3 +34,13 @@ def test_issue_pr_status_uses_shared_phase_label_transition_helper() -> None:
 	wf = _workflow_text()
 	assert 'set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"' in wf
 	assert 'gh_retry gh api -X PUT "repos/${REPOSITORY}/issues/${issue_number}/labels"' not in wf
+
+
+def main() -> int:
+	test_issue_pr_status_prefers_event_payload_before_rest_fallback()
+	test_issue_pr_status_uses_shared_phase_label_transition_helper()
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

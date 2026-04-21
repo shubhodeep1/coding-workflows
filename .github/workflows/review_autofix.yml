@@ -3478,8 +3478,8 @@ jobs:
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
-            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
+            :
           else
             # Fetched helper artifacts can be removed in caller repos during
             # commit cleanup; keep a local fallback for this late stage.
