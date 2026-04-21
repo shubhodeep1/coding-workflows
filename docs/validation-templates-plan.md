@@ -297,3 +297,4 @@ service-side CLIs`) and is live on `claude/analyze-job-logs-JKNlF`.
 - [ ] Flip `VALIDATION_USE_TEMPLATES` default from `false` to `true` after stability soak.
 - [ ] Remove freehand harness generation path from `scripts/validate_process.sh` once template mode is default.
 - [ ] Remove superseded freehand sections from `prompts/mode-validate-generate.txt` after cutover.
+- [ ] Update `agents.md` and `README.md` with the new manifest-centric flow.
