@@ -101,6 +101,7 @@ jobs:
           python3 -m py_compile scripts/analyze_workflow_logs.py
           python3 -m py_compile scripts/semantic_cache.py
           python3 -m py_compile scripts/check_workflow_script_refs.py
+          python3 -m py_compile scripts/verify_integration_fingerprints.py
 
       - name: Orchestrate lib unit tests
         run: |

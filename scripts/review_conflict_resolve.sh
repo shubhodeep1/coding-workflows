@@ -42,7 +42,7 @@ RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
 attempt=1
 while [ "${attempt}" -le 3 ]; do
   tmp_output="$(mktemp)"
-  if codex exec --model "${MODEL_EDITOR}" --full-auto "$(cat "${CONFLICT_RESOLVER_PROMPT_FILE}")" > "${tmp_output}"; then
+  if codex exec --model "${MODEL_EDITOR}" --full-auto < "${CONFLICT_RESOLVER_PROMPT_FILE}" > "${tmp_output}"; then
     if [ -s "${tmp_output}" ]; then
       mv "${tmp_output}" "${CONFLICT_RESOLVER_SUMMARY_FILE}"
       echo "Conflict resolver succeeded on attempt ${attempt}."
@@ -411,7 +411,7 @@ if [ -n "$(git status --porcelain)" ]; then
   fi
 
   git commit -m "[ai-merge-resolve] resolve merge conflicts"
-  git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+  git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
   # NOTE: push deferred to final "Push all pending commits" step.
   echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
   echo "Conflicts resolved and committed (push deferred)"
