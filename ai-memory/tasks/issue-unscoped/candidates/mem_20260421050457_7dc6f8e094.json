@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2118 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview]\n  PROBLEM: The `normalize_rel_path` `sed` expression uses non-portable `\\+` repetition and an overly broad `//*` replacement that can mis-handle path normalization.\n  WHY: Both reviewers flagged the same normalization logic as brittle; one noted portability/runtime correctness concerns while the other noted absolute-path mismatches. The higher severity among the sources is low, and confidence remains high because both point at the same code.\n- .github/workflows/review_autofix.yml:2207,2419 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: The safety-gate `if:` conditions do not include `max_iterations_reached`, so they can evaluate `steps.commit_changes.outputs.did_commit` even when `commit_changes` is skipped.\n  WHY: The reviewer identified a skipped-step/output edge case in the gate conditions; this was not corroborated by other reviewers, so it remains a singleton at the reported severity and confidence.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:2118 | severity=low | confidence=5\n  PROBLEM: The `sed` expression in `normalize_rel_path` uses GNU-specific `\\+` syntax and an incorrect `//*` pattern.\n  WHY: `\\+` is literal `+` in POSIX basic regex, so `\\(\\./\\)\\+` may not behave portably, and `//*` can corrupt URL-like paths containing `://`.\n- .github/workflows/review_autofix.yml:2207,2419 | severity=medium | confidence=3\n  PROBLEM: The safety gates do not check `max_iterations_reached`, which can leave them referencing `steps.commit_changes.outputs.did_commit` after `commit_changes` is skipped.\n  WHY: If `max_iterations_reached=true`, `commit_changes` does not run, so its output may be missing when the gates evaluate the condition.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml | severity=medium | confidence=4\n  PROBLEM: Absolute `REVIEW_LEDGER_PATH` values still fail to match the git-relative path produced by `git diff-tree`.\n  WHY: The normalization logic preserves a leading `/`, so an absolute repo-root path remains absolute while the git output stays relative, preventing the detector from marking the commit as ledger-only.\n- .github/workflows/review_autofix.yml | severity=low | confidence=3\n  PROBLEM: `COMMIT_PATHS_RAW` counting via `printf '%s\\n' ... | wc -l` can miscount when the variable is empty or edge-case commit metadata is unusual.\n  WHY: The reviewer noted this path-counting pipeline is mostly robust for normal PR commits but could be tightened for empty or unusual commit states.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "5fd1805e031058b62125c8043be84d87f78f2347c8d740053e63f3db47feeb16",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1476,
+    "run_id": "24704399380",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24704399380",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421050457_7dc6f8e094",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1476,
+    "run_id": "24704399380"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T05:04:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
