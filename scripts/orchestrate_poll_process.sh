@@ -1030,6 +1030,85 @@ get_issue_labels_json() {
   gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" --jq '[.[].name]' || echo '[]'
 }
 
+# _fetch_issue_labels_batch_graphql — Batch-fetch issue labels for a list
+# of issue numbers using GraphQL aliases.
+#
+# Input: JSON array of issue numbers, e.g. "[123, 456]"
+# Output: JSON object keyed by stringified issue number:
+#   {"123":["ai:done",...], "456":[...]}.
+#
+# Fail-open contract:
+# - Any failed batch is skipped (its issues are omitted from the cache).
+# - Callers must treat missing keys as cache misses and fall back to the
+#   legacy per-issue REST labels lookup for those specific issues.
+_fetch_issue_labels_batch_graphql() {
+  local numbers_json="$1"
+  local count
+  count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
+  if [ -z "${count}" ] || [ "${count}" -eq 0 ]; then
+    echo '{}'
+    return
+  fi
+
+  local owner="${GITHUB_REPOSITORY%%/*}"
+  local name="${GITHUB_REPOSITORY##*/}"
+  local batch_size=25
+  local merged='{}'
+  local start=0
+  local end
+  local i
+  local n
+  local query
+  local fragment
+  local batch_resp
+  local batch_transformed
+
+  while [ "${start}" -lt "${count}" ]; do
+    end=$(( start + batch_size ))
+    [ "${end}" -gt "${count}" ] && end="${count}"
+
+    fragment=""
+    for ((i=start; i<end; i++)); do
+      n="$(printf '%s' "${numbers_json}" | jq -r ".[$i]")"
+      [[ "${n}" =~ ^[0-9]+$ ]] || continue
+      fragment+=$'\n'"        i${i}: issue(number: ${n}) {
+          number
+          labels(first: 50) { nodes { name } }
+        }"
+    done
+
+    if [ -z "${fragment}" ]; then
+      start="${end}"
+      continue
+    fi
+
+    query="query {
+  repository(owner: \"${owner}\", name: \"${name}\") {${fragment}
+  }
+}"
+
+    if ! batch_resp="$(gh_retry gh api graphql -f query="${query}" 2>/dev/null)"; then
+      start="${end}"
+      continue
+    fi
+
+    batch_transformed="$(printf '%s' "${batch_resp}" | jq -c '
+      (.data.repository // {}) | to_entries | map(
+        select(.value != null and (.value.number? != null)) | {
+          key: (.value.number | tostring),
+          value: [(.value.labels.nodes // [])[]?.name]
+        }
+      ) | from_entries
+    ' 2>/dev/null || echo '{}')"
+
+    merged="$(jq -s '.[0] * .[1]' <(printf '%s\n' "${merged}") <(printf '%s\n' "${batch_transformed}") 2>/dev/null || echo "${merged}")"
+
+    start="${end}"
+  done
+
+  echo "${merged}"
+}
+
 # get_issue_state_labels_json — fetch {state, state_reason, labels} in a single
 # API call.  Used by the validation fix-up loop to consolidate what used to be
 # two separate round-trips (labels + state) and to make the loop state-aware
@@ -4841,7 +4920,8 @@ _fetch_standalone_marker_issues_graphql() {
 # (aliased issue selectors).  Replaces the per-candidate REST /labels,
 # /comments and /timeline round-trips with ceil(N / batch_size) GraphQL
 # calls.  Returns a JSON object keyed by stringified issue number:
-#   { "123": {"labels": ["ai:clarification"],
+#   { "123": {"state": "open|closed",
+#             "labels": ["ai:clarification"],
 #             "comments": [{"id":N,"body":"...","created_at":"..."},...],
 #             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"headPushedAt":"ISO8601"|null} | null },
 #     ... }
@@ -4905,6 +4985,7 @@ _fetch_candidate_issue_details_graphql() {
       [[ "${n}" =~ ^[0-9]+$ ]] || continue
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
+          state
           labels(first: 50) { nodes { name } }
           comments(last: 100) { nodes { databaseId body createdAt } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
@@ -4949,6 +5030,7 @@ _fetch_candidate_issue_details_graphql() {
         select(.value != null and (.value.number? != null)) | {
           key: (.value.number | tostring),
           value: {
+            state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
             labels: [(.value.labels.nodes // [])[]?.name],
             comments: [(.value.comments.nodes // [])[]? | {
               id: .databaseId,
@@ -7034,6 +7116,20 @@ The poller will resume processing on the next cycle."
 
   PRIOR_WAVE_REMEDIATED="false"
   if [ "${WAVE_IDX}" -gt 0 ]; then
+    PRIOR_NON_TERMINAL_BATCH="$(jq -c --argjson wave_idx "${WAVE_IDX}" '
+      [
+        .waves[0:$wave_idx][]?.issues[]?
+        | select(.status != "merged" and .status != "closed" and .status != "skipped")
+        | (.github_issue | tostring)
+        | select(test("^[0-9]+$"))
+        | tonumber
+      ] | unique
+    ' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+    PRIOR_LABELS_JSON="$(_fetch_issue_labels_batch_graphql "${PRIOR_NON_TERMINAL_BATCH}")"
+    if ! printf '%s' "${PRIOR_LABELS_JSON}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      PRIOR_LABELS_JSON='{}'
+    fi
+
     for prior_idx in $(seq 0 $(( WAVE_IDX - 1 ))); do
       PRIOR_NON_TERMINAL="$(jq -r --argjson wi "${prior_idx}" \
         '.waves[$wi].issues[] | select(.status != "merged" and .status != "closed" and .status != "skipped") | .github_issue' \
@@ -7041,7 +7137,12 @@ The poller will resume processing on the next cycle."
       for pw_inum in ${PRIOR_NON_TERMINAL}; do
         [ -n "${pw_inum}" ] && [ "${pw_inum}" != "null" ] || continue
         echo "  [backward-scan] Prior wave $((prior_idx + 1)) issue #${pw_inum} is non-terminal. Checking labels..."
-        PW_LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" --jq '[.[].name]' || echo '[]')"
+        if echo "${PRIOR_LABELS_JSON}" | jq -e --arg key "${pw_inum}" 'has($key)' >/dev/null 2>&1; then
+          PW_LABELS="$(echo "${PRIOR_LABELS_JSON}" | jq -c --arg key "${pw_inum}" '.[$key] // []')"
+        else
+          PW_LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${pw_inum}/labels" --jq '[.[].name]' || echo '[]')"
+          PRIOR_LABELS_JSON="$(echo "${PRIOR_LABELS_JSON}" | jq -c --arg key "${pw_inum}" --argjson labels "${PW_LABELS:-[]}" '. + {($key): $labels}' 2>/dev/null || echo "${PRIOR_LABELS_JSON}")"
+        fi
         [ -n "${PW_LABELS}" ] || PW_LABELS='[]'
         PW_LOCAL_ID="$(jq -r --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
           '.waves[$wi].issues[] | select((.github_issue | tostring) == $inum) | .id' "${STATE_FILE}" | head -n 1)"
@@ -7274,79 +7375,43 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     continue
   fi
 
-  # Batch-fetch labels for all wave issues in a single GraphQL query
-  # instead of N individual REST calls (one per issue).
-  _repo_owner="${GITHUB_REPOSITORY%%/*}"
-  _repo_name="${GITHUB_REPOSITORY##*/}"
-  _gql_fields=""
-  _gql_issue_nums=()
+  _wave_issue_nums=()
   for inum in ${ISSUE_NUMS}; do
     [ -n "${inum}" ] && [ "${inum}" != "null" ] || continue
-    _gql_fields+=" i${inum}: issue(number: ${inum}) { labels(first: 50) { nodes { name } } }"
-    _gql_issue_nums+=("${inum}")
+    _wave_issue_nums+=("${inum}")
   done
 
-  if [ "${#_gql_issue_nums[@]}" -gt 0 ]; then
-    _gql_query="query { repository(owner: \"${_repo_owner}\", name: \"${_repo_name}\") {${_gql_fields} } }"
-    # _safe_gh_jq → clean empty stdout on failure so the `|| echo '{}'`
-    # fallback stays valid JSON for the downstream python parser.
-    _labels_result="$(gh_retry _safe_gh_jq graphql -f query="${_gql_query}" 2>/dev/null || echo '{}')"
-    LABELS_JSON="$(echo "${_labels_result}" | python3 -c "
-import json, sys
-raw = json.load(sys.stdin)
-nums = $(printf '%s\n' "${_gql_issue_nums[@]}" | jq -R 'tonumber' | jq -s '.')
-data = raw.get('data')
-if not isinstance(data, dict):
-    print('{}')
-    sys.exit(0)
-repo = data.get('repository')
-if not isinstance(repo, dict):
-    print('{}')
-    sys.exit(0)
-result = {}
-for n in nums:
-    key = 'i' + str(n)
-    issue_data = repo.get(key)
-    if not isinstance(issue_data, dict):
-        print('{}')
-        sys.exit(0)
-    labels_data = issue_data.get('labels')
-    if not isinstance(labels_data, dict):
-        print('{}')
-        sys.exit(0)
-    nodes = labels_data.get('nodes')
-    if not isinstance(nodes, list):
-        print('{}')
-        sys.exit(0)
-    names = []
-    for node in nodes:
-        if not isinstance(node, dict) or not isinstance(node.get('name'), str):
-            print('{}')
-            sys.exit(0)
-        names.append(node['name'])
-    result[str(n)] = names
-json.dump(result, sys.stdout)
-" 2>/dev/null || echo '{}')"
-  else
-    LABELS_JSON="{}"
+  _wave_issue_nums_json='[]'
+  if [ "${#_wave_issue_nums[@]}" -gt 0 ]; then
+    _wave_issue_nums_json="$(printf '%s\n' "${_wave_issue_nums[@]}" | jq -R 'select(length > 0) | select(test("^[0-9]+$")) | tonumber' | jq -s '.')"
   fi
 
-  # Fallback: if GraphQL failed, fall back to per-issue REST
-  if [ "${LABELS_JSON}" = "{}" ] && [ "${#_gql_issue_nums[@]}" -gt 0 ]; then
-    echo "  [labels] GraphQL batch failed, falling back to per-issue REST"
-    LABELS_JSON="{"
-    first=true
-    for inum in "${_gql_issue_nums[@]}"; do
-      LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
-      if [ "${first}" = true ]; then
-        first=false
-      else
-        LABELS_JSON+=","
-      fi
-      LABELS_JSON+="\"${inum}\":${LABELS}"
-    done
-    LABELS_JSON+="}"
+  # Batch-fetch current-wave issue details once per cycle.  The state
+  # field feeds ISSUE_STATES_JSON cache-first population below; labels
+  # still come from the dedicated label batch helper so the two cache
+  # paths remain independently fail-open.
+  _current_wave_details_json="$(_fetch_candidate_issue_details_graphql "${_wave_issue_nums_json}")"
+  if ! printf '%s' "${_current_wave_details_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    _current_wave_details_json='{}'
   fi
+
+  LABELS_JSON="$(_fetch_issue_labels_batch_graphql "${_wave_issue_nums_json}")"
+  if ! printf '%s' "${LABELS_JSON}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    LABELS_JSON='{}'
+  fi
+
+  if [ "${LABELS_JSON}" = "{}" ] && [ "${#_wave_issue_nums[@]}" -gt 0 ]; then
+    echo "  [labels] GraphQL batch failed, falling back to per-issue REST"
+  fi
+
+  for inum in "${_wave_issue_nums[@]}"; do
+    if echo "${LABELS_JSON}" | jq -e --arg key "${inum}" 'has($key)' >/dev/null 2>&1; then
+      continue
+    fi
+    LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
+    [ -n "${LABELS}" ] || LABELS='[]'
+    LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
+  done
 
   # ---------------------------------------------------------------
   # Reconcile managed issue labels + truth signals before status/stall checks
@@ -7359,8 +7424,15 @@ json.dump(result, sys.stdout)
       continue
     fi
 
-    ISSUE_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}" --jq '.state' | grep -xE 'open|closed' || echo "open")"
-    ISSUE_STATES_JSON="$(echo "${ISSUE_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${ISSUE_STATE}" '. + {($key): $state}')"
+    ISSUE_STATE=""
+    if printf '%s' "${_current_wave_details_json}" | jq -e --arg key "${inum}" 'has($key)' >/dev/null 2>&1; then
+      ISSUE_STATE="$(printf '%s' "${_current_wave_details_json}" | jq -r --arg key "${inum}" '.[$key].state // empty' 2>/dev/null | grep -xE 'open|closed' || true)"
+    fi
+    if [ -z "${ISSUE_STATE}" ]; then
+      ISSUE_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}" --jq '.state' | grep -xE 'open|closed' || echo "open")"
+    fi
+    [ -n "${ISSUE_STATE}" ] || ISSUE_STATE="open"
+    ISSUE_STATES_JSON="$(echo "${ISSUE_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${ISSUE_STATE}" '. + {($key): $state}' 2>/dev/null || echo "${ISSUE_STATES_JSON}")"
 
     LINKED_PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
     PR_STATE="unknown"
@@ -7371,13 +7443,13 @@ json.dump(result, sys.stdout)
       PR_MERGED="$(_jq_field "${_linked_pr_json}" '.merged_at != null' 'true|false')"
       [ -n "${PR_MERGED}" ] || PR_MERGED="false"
     fi
-    PR_STATES_JSON="$(echo "${PR_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${PR_STATE}" --arg merged "${PR_MERGED}" '. + {($key): {state: $state, merged: ($merged == "true")}}')"
+    PR_STATES_JSON="$(echo "${PR_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${PR_STATE}" --arg merged "${PR_MERGED}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || echo "${PR_STATES_JSON}")"
 
     BEFORE_LABELS="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')"
     AFTER_LABELS="$(reconcile_managed_issue_labels "${inum}" "${BEFORE_LABELS}" "${ISSUE_STATE}" "${PR_STATE}" "${PR_MERGED}")"
     if [ "${BEFORE_LABELS}" != "${AFTER_LABELS}" ]; then
       RECONCILE_LABELS_CHANGED=true
-      LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${AFTER_LABELS}" '. + {($key): $labels}')"
+      LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" --argjson labels "${AFTER_LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
     fi
   done
 
@@ -8706,7 +8778,7 @@ ${RB_FIX_DESC}
         fi
         LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
         [ -z "${LABELS}" ] && LABELS='[]'
-        LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}')"
+        LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
       done
 
       WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
@@ -9003,7 +9075,7 @@ if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
     if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then continue; fi
     LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
     [ -z "${LABELS}" ] && LABELS='[]'
-    LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}')"
+    LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
   done
 fi
 
