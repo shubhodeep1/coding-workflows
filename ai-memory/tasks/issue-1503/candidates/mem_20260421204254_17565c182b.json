@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning context interpreted:\n- Clarification mapping: no Q1/Q2 were asked; `/answer [auto-answered-by-orchestrator]` indicates continuation without extra constraints.\n- Ref context: `HEAD=daa383987ad80d6f3c38457cb55fc474246836a1`, checked out on `orchestrator/project-1479`, integration metadata is `orchestrator/project-1479`, mismatch is `false`.\n\nConflict detection:\n- The issue requires using `set_issue_phase_label_resilient` from `scripts/label_helpers.sh`, but that function is currently not present in this branch (nor in the checked-in support copy), while workflows still contain manual `_AI_PHASE_LABELS` + GET/PUT/POST blocks.\n- `review_autofix.yml` has multiple fallback PR refetch callsites (more than one phase-transition block); plan scope includes all fallback issue-number extraction paths to satisfy \u201cfetch only when payload missing.\u201d\n\nImplementation checklist:\n- [ ] Add shared resilient phase-label transition helper in `scripts/label_helpers.sh`.\n- [ ] Migrate `issue_pr_status.yml` manual phase-label mutation block to helper.\n- [ ] Migrate all `review_autofix.yml` manual phase-label mutation callsites to helper.\n- [ ] Rework fallback issue-number parsing to use already-available PR title/body first; call PR API only when missing.\n- [ ] Add/adjust contract tests for helper adoption and fallback fetch gating.\n\n1. Files likely to change\n- `.github/workflows/issue_pr_status.yml`\n- `.github/workflows/review_autofix.yml`\n- `scripts/label_helpers.sh`\n- `tests/test_ai_label_precreation_contract.py` (extend contract checks)\n- `tests/test_phase_label_transition_and_fallback_contract.py` (new targeted contract test, if preferred over expanding existing one)\n\n2. Functions/modules to implement\n- `scripts/label_helpers.sh`: add `set_issue_phase_label_resilient <issue_number> <target_label> <repo>`; mirror existing resilient semantics from representative implementation `scripts/review_rb_judge.sh::_resilient_phase_swap` (GET labels -> PUT swap phase labels + target -> POST add fallback, with warning logs and fail-open behavior).\n- `issue_pr_status.yml` step \u201cUpdate linked issues\u2026\u201d: replace inline `_AI_PHASE_LABELS`/PUT logic with `set_issue_phase_label_resilient`.\n- `review_autofix.yml` callsites:\n  - `ai:ready-to-merge` transition block\n  - `ai:review-blocked` transition on autofix exhaustion\n  - `ai:review-blocked` transition on workflow failure\n  Replace each inline `_AI_PHASE_LABELS`/PUT logic with helper invocation.\n\n3. Data structures affected\n- Phase-label set currently duplicated as inline `_AI_PHASE_LABELS` JSON string in workflows will become centralized in `label_helpers.sh`.\n- Fallback parsing input source will change from unconditional PR refetch to precedence chain:\n  - existing event/input/payload title+body\n  - PR API fetch only if those are empty/unavailable\n\n4. API/interface changes\n- No external interface changes (no label/env var/log-key renames).\n- Internal behavior change: fewer avoidable `GET /repos/{repo}/pulls/{pr}` calls in fallback paths; same non-fallback happy path.\n- Keep warning/fail-open semantics equivalent (GET/PUT failures warn and continue with POST add fallback).\n\n5. Risks and edge cases\n- `workflow_dispatch` paths may lack `github.event.pull_request.*`; must keep API fetch fallback for that case.\n- Empty PR title/body must still allow branch-name fallback and graceful \u201cno linked issues\u201d exit.\n- Helper return codes under `set -e` must not abort loops; callsites should keep explicit fail-open handling.\n- Preserve existing warning semantics text pattern as much as possible to avoid downstream log-analysis drift.\n\n6. Testing considerations\n- Contract assertions:\n  - migrated callsites contain `set_issue_phase_label_resilient` and no local `_AI_PHASE_LABELS` mutation blocks.\n  - fallback issue-number parsing uses payload/event title/body first and only refetches PR when missing.\n  - fail-open paths still present (warning + POST fallback).\n- Update/extend `tests/test_ai_label_precreation_contract.py` for workflow contract patterns.\n- Add a focused workflow-text contract test for fallback fetch gating in both workflows.\n- Run targeted tests plus CI suite gates that already validate workflow contract files.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ec2abd4568cba5d8d0e3150c07fa98f5e365c155a0e16cafbca6b59a18aade4f",
+  "lineage": {
+    "issue_number": 1503,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24745162872",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24745162872",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1503"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421204254_17565c182b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1503,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24745162872"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1503",
+  "timestamps": {
+    "created_at": "2026-04-21T20:42:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
