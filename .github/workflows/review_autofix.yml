@@ -2106,10 +2106,24 @@ jobs:
             # self-triggered-autofix gate skip (PR #1459) short-circuits the
             # synchronize re-run that would otherwise enable auto-merge, so
             # auto-merge must be enabled in THIS run for ledger-only commits.
+            # Normalize both sides of the path comparison so equivalent
+            # relative-path spellings match. `git diff-tree --name-only`
+            # emits canonical relative paths (no ./ prefix, no repeated
+            # slashes, no trailing slash), but a consumer that sets
+            # REVIEW_LEDGER_PATH to e.g. ./.ai/review_issue_ledger.txt
+            # or .ai//review_issue_ledger.txt would otherwise silently
+            # fail to match and leave the PR stuck in the stuck-auto-merge
+            # state this step is designed to resolve. See PR #1476.
+            normalize_rel_path() {
+              printf '%s' "$1" | sed -e 's#^\(\./\)\+##' -e 's#//*#/#g' -e 's#/$##'
+            }
             LEDGER_PATH_FOR_DETECTOR="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger.txt}"
+            NORMALIZED_LEDGER_PATH_FOR_DETECTOR="$(normalize_rel_path "${LEDGER_PATH_FOR_DETECTOR}")"
             COMMIT_PATHS_RAW="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)"
             COMMIT_PATH_COUNT="$(printf '%s\n' "${COMMIT_PATHS_RAW}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
-            if [ "${COMMIT_PATH_COUNT}" = "1" ] && [ "$(printf '%s\n' "${COMMIT_PATHS_RAW}" | sed '/^$/d')" = "${LEDGER_PATH_FOR_DETECTOR}" ]; then
+            SINGLE_COMMIT_PATH="$(printf '%s\n' "${COMMIT_PATHS_RAW}" | sed '/^$/d')"
+            NORMALIZED_SINGLE_COMMIT_PATH="$(normalize_rel_path "${SINGLE_COMMIT_PATH}")"
+            if [ "${COMMIT_PATH_COUNT}" = "1" ] && [ "${NORMALIZED_SINGLE_COMMIT_PATH}" = "${NORMALIZED_LEDGER_PATH_FOR_DETECTOR}" ]; then
               echo "Commit contains only the review-issue ledger (${LEDGER_PATH_FOR_DETECTOR}); marking as editor no-op for downstream clean-review gates."
               echo "LEDGER_ONLY_COMMIT=true" >> "$GITHUB_ENV"
               echo "ledger_only_commit=true" >> "$GITHUB_OUTPUT"
