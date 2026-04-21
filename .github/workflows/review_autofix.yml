@@ -2237,6 +2237,8 @@ jobs:
         # the iteration cap.  Also runs when did_commit is true since the push
         # is deferred — both autofix and conflict resolution are pushed together.
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"

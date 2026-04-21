@@ -32,6 +32,10 @@
 
 set -euo pipefail
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+if ! command -v gh_retry >/dev/null 2>&1; then
+  echo "::warning::gh_helpers.sh unavailable or incomplete; falling back to direct gh calls without retry helper."
+  gh_retry() { "$@"; }
+fi
 
 echo "Running Codex resolver"
 
@@ -392,4 +396,3 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
   sort -u -o "${CONFLICTED_PATHS_FILE}" "${CONFLICTED_PATHS_FILE}"
   echo "Conflicted paths captured: $(wc -l < "${CONFLICTED_PATHS_FILE}") entries"
 fi
-
