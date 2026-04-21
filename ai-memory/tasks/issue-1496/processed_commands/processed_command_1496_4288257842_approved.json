@@ -5,13 +5,27 @@
   "entry_id": "processed_command_1496_4288257842_approved",
   "issue_number": 1496,
   "metadata": {
+    "branch": "ai/issue-1496",
+    "changed_files": [
+      ".github/workflows/clarify.yml",
+      ".github/workflows/implement.yml",
+      ".github/workflows/orchestrate_clarify_respond.yml",
+      ".github/workflows/plan.yml",
+      ".github/workflows/validate.yml",
+      "tests/test_workflow_checkout_integration_ref_audit.py"
+    ],
+    "issue_number": 1496,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1496",
+    "pr_number": 1498,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1498",
+    "run_attempt": "1",
+    "run_id": "24720546396",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24720546396"
   },
   "run_attempt": 1,
   "run_id": "24720546396",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-21T11:45:42Z",
+  "status": "completed",
+  "timestamp": "2026-04-21T11:51:12Z",
   "workflow": "implement"
 }
