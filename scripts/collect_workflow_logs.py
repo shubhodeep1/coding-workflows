@@ -47,6 +47,9 @@ LOG_EXPORT_CATEGORIES = ("errors", "slow", "recent")
 LOG_EXCERPT_MAX_CHARS = 4000
 SLOW_RUNS_PER_REPO = 10
 DEFAULT_SUCCESS_SAMPLE_RATE = 0.07
+LOG_ARCHIVE_FETCH_RETRIES = 3
+LOG_ARCHIVE_FETCH_BACKOFF_SECONDS = 1.0
+MISSING_LOG_ARCHIVE_MARKER = "partial_data:missing_log_archive"
 RETRY_MARKERS = (
     "rate limit",
     "secondary",
@@ -668,6 +671,47 @@ def extract_log_excerpts(log_archive: bytes, max_chars: int = LOG_EXCERPT_MAX_CH
     return excerpts
 
 
+def _normalize_error_text(exc: Exception) -> str:
+    text = " ".join(str(exc).split()).strip()
+    return text or exc.__class__.__name__
+
+
+def _is_missing_log_archive_error(error_text: str, run_id: int) -> bool:
+    normalized = error_text.lower()
+    has_not_found = "not found" in normalized
+    has_404 = "404" in normalized
+    has_archive_endpoint = (
+        f"actions/runs/{run_id}/logs" in normalized
+        or ("actions/runs/" in normalized and "/logs" in normalized)
+    )
+    return (has_404 and has_not_found and has_archive_endpoint) or "log archive not found" in normalized
+
+
+def _normalize_log_archive_exception(repo: str, run_id: int, exc: Exception) -> Exception:
+    detail = _normalize_error_text(exc)
+    if _is_missing_log_archive_error(detail, run_id):
+        return RuntimeError(
+            f"{MISSING_LOG_ARCHIVE_MARKER} repository={repo} run_id={run_id} detail={detail}"
+        )
+    return exc
+
+
+def _is_retryable_log_archive_exception(exc: Exception) -> bool:
+    message = _normalize_error_text(exc).lower()
+    return any(marker in message for marker in RETRY_MARKERS)
+
+
+def _append_log_error(errors: list[dict[str, str]], repository: str, run_id: int, exc: Exception) -> None:
+    errors.append(
+        {
+            "repository": repository,
+            "run_id": str(run_id),
+            "scope": "logs",
+            "message": _normalize_error_text(exc),
+        }
+    )
+
+
 def _fetch_run_log_archive(
     repo: str,
     run_id: int,
@@ -682,15 +726,37 @@ def _fetch_run_log_archive(
             raise cached
         return cached
 
-    try:
-        payload = gh_api_bytes(_build_logs_endpoint(repo, run_id), token=token)
-    except Exception as exc:  # noqa: BLE001
+    endpoint = _build_logs_endpoint(repo, run_id)
+    last_error: Exception | None = None
+    for attempt in range(1, LOG_ARCHIVE_FETCH_RETRIES + 1):
+        try:
+            payload = gh_api_bytes(endpoint, token=token, retries=1)
+        except Exception as exc:  # noqa: BLE001
+            normalized_exc = _normalize_log_archive_exception(repo, run_id, exc)
+            last_error = normalized_exc
+            is_missing_archive = _normalize_error_text(normalized_exc).startswith(
+                f"{MISSING_LOG_ARCHIVE_MARKER} "
+            )
+            if (
+                not is_missing_archive
+                and attempt < LOG_ARCHIVE_FETCH_RETRIES
+                and _is_retryable_log_archive_exception(normalized_exc)
+            ):
+                time.sleep(LOG_ARCHIVE_FETCH_BACKOFF_SECONDS * attempt)
+                continue
+            if cache is not None:
+                cache[identity] = normalized_exc
+            raise normalized_exc
+
         if cache is not None:
-            cache[identity] = exc
-        raise
+            cache[identity] = payload
+        return payload
+
+    if last_error is None:
+        last_error = RuntimeError(f"gh api failed for {endpoint} after retries")
     if cache is not None:
-        cache[identity] = payload
-    return payload
+        cache[identity] = last_error
+    raise last_error
 
 
 def list_run_log_excerpts(
@@ -1102,14 +1168,7 @@ def export_categorized_logs(
             )
             full_logs_by_identity[identity] = extract_full_logs(payload)
         except Exception as exc:  # noqa: BLE001
-            errors.append(
-                {
-                    "repository": repository,
-                    "run_id": str(run_id),
-                    "scope": "logs",
-                    "message": str(exc),
-                }
-            )
+            _append_log_error(errors, repository, run_id, exc)
 
     for category in LOG_EXPORT_CATEGORIES:
         for run in categories[category]:
@@ -1366,14 +1425,7 @@ def main(argv: list[str] | None = None) -> int:
                 repo_cache["rows_snapshot"] = updated_rows
                 repo_cache["last_updated"] = _format_iso8601(datetime.now(timezone.utc))
         except Exception as exc:  # noqa: BLE001
-            errors.append(
-                {
-                    "repository": repository,
-                    "run_id": str(run_id),
-                    "scope": "logs",
-                    "message": str(exc),
-                }
-            )
+            _append_log_error(errors, repository, run_id, exc)
 
     _cache_write_context(
         repo_root=repo_root,
