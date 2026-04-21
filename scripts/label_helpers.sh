@@ -144,6 +144,13 @@ _AI_PHASE_TRANSITION_LABELS=(
 	"ai:ready-to-merge"
 	"ai:review-blocked"
 	"ai:implementation-failed"
+	"ai:validating"
+	"ai:validated"
+	"ai:validation-failed"
+	"ai:validation-fixing"
+	"ai:validation-recovery"
+	"ai:needs-human"
+	"ai:blocked"
 	"ai:merged"
 	"ai:closed"
 )
@@ -156,8 +163,8 @@ _urlencode_label_name() {
 		return 0
 	fi
 
-	# Minimal fallback: ai:* labels only need '%' ':' and '/' escaping.
-	printf '%s' "${label_name}" | sed 's/%/%25/g; s/:/%3A/g; s#/#%2F#g'
+	# Minimal fallback: ai:* labels only need '%' ':' '/' and space escaping.
+	printf '%s' "${label_name}" | sed 's/%/%25/g; s/:/%3A/g; s#/#%2F#g; s/ /%20/g'
 }
 
 _remove_issue_label_if_present() {

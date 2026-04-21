@@ -3554,7 +3554,7 @@ jobs:
                 printf '%s' "${label_name}" | jq -sRr @uri
                 return 0
               fi
-              printf '%s' "${label_name}" | sed 's/%/%25/g; s/:/%3A/g; s#/#%2F#g'
+              printf '%s' "${label_name}" | sed 's/%/%25/g; s/:/%3A/g; s#/#%2F#g; s/ /%20/g'
             }
 
             _remove_issue_label_if_present() {
@@ -3596,6 +3596,13 @@ jobs:
                 "ai:ready-to-merge"
                 "ai:review-blocked"
                 "ai:implementation-failed"
+                "ai:validating"
+                "ai:validated"
+                "ai:validation-failed"
+                "ai:validation-fixing"
+                "ai:validation-recovery"
+                "ai:needs-human"
+                "ai:blocked"
                 "ai:merged"
                 "ai:closed"
               )
@@ -3676,14 +3683,16 @@ jobs:
           if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
             :
           else
-            if [ -f .codex-workflow-src/scripts/label_helpers.sh ]; then
-              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              install -m 0755 .codex-workflow-src/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
-              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
-            elif [ -f .codex-workflow-src-main/scripts/label_helpers.sh ]; then
-              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              install -m 0755 .codex-workflow-src-main/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
-              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
+            if [ -f .codex-workflow-src/scripts/label_helpers.sh ] && \
+              mkdir -p "${SUPPORT_SCRIPTS_DIR}" && \
+              install -m 0755 .codex-workflow-src/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" && \
+              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
+              :
+            elif [ -f .codex-workflow-src-main/scripts/label_helpers.sh ] && \
+              mkdir -p "${SUPPORT_SCRIPTS_DIR}" && \
+              install -m 0755 .codex-workflow-src-main/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" && \
+              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
+              :
             else
               type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
               ensure_label_exists() {
@@ -3705,7 +3714,7 @@ jobs:
                   printf '%s' "${label_name}" | jq -sRr @uri
                   return 0
                 fi
-                printf '%s' "${label_name}" | sed 's/%/%25/g; s/:/%3A/g; s#/#%2F#g'
+                printf '%s' "${label_name}" | sed 's/%/%25/g; s/:/%3A/g; s#/#%2F#g; s/ /%20/g'
               }
 
               _remove_issue_label_if_present() {
@@ -3747,6 +3756,13 @@ jobs:
                   "ai:ready-to-merge"
                   "ai:review-blocked"
                   "ai:implementation-failed"
+                  "ai:validating"
+                  "ai:validated"
+                  "ai:validation-failed"
+                  "ai:validation-fixing"
+                  "ai:validation-recovery"
+                  "ai:needs-human"
+                  "ai:blocked"
                   "ai:merged"
                   "ai:closed"
                 )
@@ -4349,7 +4365,7 @@ jobs:
                 printf '%s' "${label_name}" | jq -sRr @uri
                 return 0
               fi
-              printf '%s' "${label_name}" | sed 's/%/%25/g; s/:/%3A/g; s#/#%2F#g'
+              printf '%s' "${label_name}" | sed 's/%/%25/g; s/:/%3A/g; s#/#%2F#g; s/ /%20/g'
             }
 
             _remove_issue_label_if_present() {
@@ -4391,6 +4407,13 @@ jobs:
                 "ai:ready-to-merge"
                 "ai:review-blocked"
                 "ai:implementation-failed"
+                "ai:validating"
+                "ai:validated"
+                "ai:validation-failed"
+                "ai:validation-fixing"
+                "ai:validation-recovery"
+                "ai:needs-human"
+                "ai:blocked"
                 "ai:merged"
                 "ai:closed"
               )
