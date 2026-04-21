@@ -134,3 +134,54 @@ ensure_label_exists() {
 	echo "::warning::ensure_label_exists: failed to create label '${label_name}' in repo '${repo}': ${_label_err}" >&2
 	return 1
 }
+
+# set_issue_phase_label_resilient <issue_number> <target_label> [repo]
+#
+# Atomically swaps mutually exclusive AI phase labels by fetching current
+# issue labels and PUT-ing a replacement label set. If GET/PUT fails,
+# falls back to a POST add-only mutation for the target label.
+#
+# $1  — issue number  (required)
+# $2  — target label  (required)
+# $3  — repo slug     (optional; defaults to GITHUB_REPOSITORY)
+set_issue_phase_label_resilient() {
+	local issue_number="${1:?set_issue_phase_label_resilient: issue_number required}"
+	local target_label="${2:?set_issue_phase_label_resilient: target_label required}"
+	local repo="${3:-${GITHUB_REPOSITORY:-}}"
+	local phase_labels='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
+	local cur_labels=""
+	local new_labels=""
+
+	if [ -z "${repo}" ]; then
+		echo "set_issue_phase_label_resilient: repo required (pass as \$3 or set GITHUB_REPOSITORY)" >&2
+		return 1
+	fi
+
+	if ! cur_labels="$(gh_retry gh api --paginate "repos/${repo}/issues/${issue_number}/labels" \
+		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
+		echo "::warning::GET labels failed for #${issue_number} — falling back to POST add." >&2
+		if gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+			-f "labels[]=${target_label}" >/dev/null 2>&1; then
+			return 0
+		fi
+		echo "::warning::POST fallback also failed for #${issue_number}." >&2
+		return 1
+	fi
+
+	cur_labels="${cur_labels:-[]}"
+	new_labels="$(echo "${cur_labels}" | jq -c --argjson p "${phase_labels}" --arg t "${target_label}" \
+		'(. - $p) + [$t] | unique')"
+	if printf '{"labels":%s}' "${new_labels}" | \
+		gh_retry gh api -X PUT "repos/${repo}/issues/${issue_number}/labels" \
+			--input - >/dev/null 2>&1; then
+		return 0
+	fi
+
+	echo "::warning::PUT labels failed for #${issue_number} — falling back to POST add." >&2
+	if gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+		-f "labels[]=${target_label}" >/dev/null 2>&1; then
+		return 0
+	fi
+	echo "::warning::POST fallback also failed for #${issue_number}." >&2
+	return 1
+}
