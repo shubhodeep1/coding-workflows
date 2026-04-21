@@ -47,6 +47,7 @@ HEALTHCHECK_TEST_KEY_RE = re.compile(r"^\s*test\s*:\s*(?P<value>.*)$")
 YAML_LIST_ITEM_RE = re.compile(r"^\s*-\s*(?P<value>.*)$")
 
 REQUIRED_BASH_SHEBANG = "#!/usr/bin/env bash"
+REQUIRED_BASH_SHEBANG_RE = re.compile(r"^\s*#!/usr/bin/env bash(?:\s+#.*)?\s*$")
 
 SERVICE_TOOL_DENYLIST = (
 	"mongosh",
@@ -439,7 +440,7 @@ def _iter_top_level_test_scripts(context: LintContext) -> list[Path]:
 	tests_dir = context.resolve("tests")
 	if not tests_dir.exists() or not tests_dir.is_dir():
 		return []
-	return sorted(path for path in tests_dir.glob("*.sh") if path.is_file())
+	return sorted(path for path in tests_dir.glob("*.sh") if path.is_file() or path.is_symlink())
 
 
 def _is_explicitly_quoted_yaml_scalar(value: str) -> bool:
@@ -556,6 +557,7 @@ def _check_canary_ordering(context: LintContext) -> list[Finding]:
 					hint="Reserve prefix 00 for canary and use 01+ for subsequent scripts.",
 				)
 			)
+			continue
 
 		if prefix in seen_prefixes and seen_prefixes[prefix] != script.name:
 			findings.append(
@@ -594,7 +596,7 @@ def _check_test_script_prologue(context: LintContext) -> list[Finding]:
 			)
 			continue
 
-		if not lines or _strip_inline_comment(lines[0]).strip() != REQUIRED_BASH_SHEBANG:
+		if not lines or REQUIRED_BASH_SHEBANG_RE.match(lines[0]) is None:
 			findings.append(
 				Finding(
 					path=script,
@@ -667,11 +669,18 @@ def _check_healthcheck_test_strings(context: LintContext) -> list[Finding]:
 			continue
 
 		indent = len(clean_line) - len(clean_line.lstrip(" "))
+		item_match = YAML_LIST_ITEM_RE.match(clean_line)
 
-		if in_test_list and indent < test_indent:
+		if in_test_list and (
+			indent < test_indent
+			or (indent == test_indent and item_match is None)
+		):
 			in_test_list = False
 
-		if in_healthcheck and indent < healthcheck_indent and not HEALTHCHECK_BLOCK_RE.match(clean_line):
+		if in_healthcheck and (
+			indent < healthcheck_indent
+			or (indent == healthcheck_indent and not HEALTHCHECK_BLOCK_RE.match(clean_line))
+		):
 			in_healthcheck = False
 			in_test_list = False
 
@@ -738,7 +747,6 @@ def _check_healthcheck_test_strings(context: LintContext) -> list[Finding]:
 		if not in_test_list:
 			continue
 
-		item_match = YAML_LIST_ITEM_RE.match(clean_line)
 		if item_match is None:
 			continue
 
