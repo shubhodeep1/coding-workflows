@@ -66,12 +66,20 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 	resolver_id = "id: refctx"
 	checkout_ref = "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
 	resolved_ref_log = "echo \"Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
-	canonical_fetch = "contents/scripts/resolve_integration_ref.sh?ref=${resolver_ref}"
 	canonical_exec = "bash \"${resolver_script}\""
+	canonical_stage_markers = (
+		"resolver_stage_root=\"${RUNNER_TEMP}/integration-ref-resolver-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\"",
+		"stage_resolver_ref() {",
+		"git -C \"${dest}\" fetch --quiet --depth 1 origin \"${ref}\"",
+	)
 	disallowed_inline_markers = (
 		"sed -nE 's/^- Integration branch:",
 		"grep -Eq '^orchestrator/project-[0-9]+$'",
 		"/git/ref/heads/",
+	)
+	disallowed_remote_exec_markers = (
+		"contents/scripts/resolve_integration_ref.sh?ref=${resolver_ref}",
+		"base64 --decode",
 	)
 
 	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS):
@@ -82,11 +90,16 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		assert resolved_ref_log in wf, f"{workflow_name} missing resolved-ref log output"
 		assert "git rev-parse HEAD" in wf, f"{workflow_name} missing HEAD commit log"
 		assert "git symbolic-ref --short HEAD" in wf, f"{workflow_name} missing branch/detached log"
-		assert canonical_fetch in wf, f"{workflow_name} missing canonical resolver fetch"
 		assert canonical_exec in wf, f"{workflow_name} missing canonical resolver invocation"
+
+		for marker in canonical_stage_markers:
+			assert marker in wf, f"{workflow_name} missing staged/local resolver marker: {marker}"
 
 		for marker in disallowed_inline_markers:
 			assert marker not in wf, f"{workflow_name} still contains inline resolver marker: {marker}"
+
+		for marker in disallowed_remote_exec_markers:
+			assert marker not in wf, f"{workflow_name} still contains remote decode/execute marker: {marker}"
 
 		resolver_idx = wf.find(resolver_step)
 		checkout_ref_idx = wf.find(checkout_ref)

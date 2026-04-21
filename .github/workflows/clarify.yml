@@ -57,15 +57,48 @@ jobs:
             exit 0
           fi
 
-          resolver_script="${RUNNER_TEMP}/resolve_integration_ref.sh"
           resolver_repo="shubhodeep1/coding-workflows"
           resolver_ref="stable"
           if [ "${{ github.repository }}" = "${resolver_repo}" ]; then
             resolver_ref="${{ github.sha }}"
           fi
 
-          if ! gh api "repos/${resolver_repo}/contents/scripts/resolve_integration_ref.sh?ref=${resolver_ref}" --jq '.content' | base64 --decode > "${resolver_script}"; then
-            echo "::warning::Failed to load canonical integration resolver; falling back to default branch."
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          resolver_remote_url="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${resolver_repo}"
+          resolver_stage_root="${RUNNER_TEMP}/integration-ref-resolver-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          resolver_stage_dir="${resolver_stage_root}/primary"
+          resolver_fallback_dir="${resolver_stage_root}/main"
+
+          stage_resolver_ref() {
+            local ref="$1"
+            local dest="$2"
+            rm -rf "${dest}"
+            mkdir -p "${dest}"
+            if git -C "${dest}" init --quiet && \
+               git -C "${dest}" remote add origin "${resolver_remote_url}" && \
+               git -C "${dest}" fetch --quiet --depth 1 origin "${ref}" && \
+               git -C "${dest}" checkout --quiet FETCH_HEAD; then
+              return 0
+            fi
+            rm -rf "${dest}"
+            return 1
+          }
+
+          resolver_root=""
+          resolved_resolver_ref="${resolver_ref}"
+          if stage_resolver_ref "${resolver_ref}" "${resolver_stage_dir}"; then
+            resolver_root="${resolver_stage_dir}"
+          elif stage_resolver_ref "main" "${resolver_fallback_dir}"; then
+            echo "::warning::Resolver support ref ${resolver_ref} is unavailable; using main."
+            resolver_root="${resolver_fallback_dir}"
+            resolved_resolver_ref="main"
+          fi
+
+          resolver_script="${resolver_root}/scripts/resolve_integration_ref.sh"
+          if [ -z "${resolver_root}" ] || [ ! -f "${resolver_script}" ]; then
+            echo "::warning::Failed to load canonical integration resolver from ${resolver_repo}@${resolved_resolver_ref}; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
