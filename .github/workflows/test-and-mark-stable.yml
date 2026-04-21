@@ -631,6 +631,12 @@ jobs:
             if [ -n "$IMPL_RUNS_JSON" ]; then
               IMPL_RUN_TOTAL=$(echo "$IMPL_RUNS_JSON" | jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | length' 2>/dev/null || echo "0")
               IMPL_RUN_IN_PROGRESS=$(echo "$IMPL_RUNS_JSON" | jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped") | select(.status != "completed")] | length' 2>/dev/null || echo "0")
+              if ! printf '%s' "$IMPL_RUN_TOTAL" | grep -Eq '^[0-9]+$'; then
+                IMPL_RUN_TOTAL="0"
+              fi
+              if ! printf '%s' "$IMPL_RUN_IN_PROGRESS" | grep -Eq '^[0-9]+$'; then
+                IMPL_RUN_IN_PROGRESS="0"
+              fi
               IMPL_RUN_STATUS=$(echo "$IMPL_RUNS_JSON" | jq -r '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
               IMPL_RUN_ID_LATEST=$(echo "$IMPL_RUNS_JSON" | jq -r '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
             else
