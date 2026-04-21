@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:101-120 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3-flash-preview, stepfun_step-3_5-flash]\n  PROBLEM: A destination path that exists as a directory is not rejected before `cp`, so the workflow can fail later with a confusing copy error.\n  WHY: Both reviewers identified the same root cause in the preflight path validation; one described it as a target-path collision with directories and the other as a missing explicit directory rejection before the writability check.\n- .ai/review_issue_ledger.txt:1 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: `.ai/review_issue_ledger.txt` is tracked in git even though it is a runtime artifact.\n  WHY: The reviewer explicitly flagged the file as tracked when it should be untracked, warning that it can lead to unintended artifact commits and review-pipeline edge cases.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/update_workflows.yml:322 | severity=low | confidence=4\n  PROBLEM: `FAILURE_REASON_DETAIL` is inserted into the GitHub summary without escaping markdown-sensitive characters.\n  WHY: Special characters like `*`, `_`, `` ` ``, `#`, `[`, `]`, `(`, and `)` can alter markdown rendering or layout in the step summary.\n- .github/workflows/update_workflows.yml:114-120 | severity=medium | confidence=3\n  PROBLEM: The existing workflow-file check can be misleading when `$local_file` is a directory.\n  WHY: The check only covers writability semantics and does not explicitly distinguish directories, so the later copy can fail with a less useful error.\n- .github/workflows/update_workflows.yml:96 | severity=low | confidence=3\n  PROBLEM: Writing `failure_reason_detail` to `$GITHUB_OUTPUT` is treated as shell-sensitive in the reviewer\u2019s assessment.\n  WHY: The reviewer says unescaped special characters in `detail_sanitized` could produce incorrect output or assignment behavior.\n- .ai/review_issue_ledger.txt:1 | severity=low | confidence=4\n  PROBLEM: `.ai/review_issue_ledger.txt` is tracked in git even though it is a runtime artifact.\n  WHY: The reviewer says this can cause unintended commits of runtime artifacts and review-pipeline edge cases.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/update_workflows.yml:66-120 | severity=medium | confidence=5\n  PROBLEM: `SKIPPED_FILES`, `UPDATED_FILES`, and `CREATED_FILES` are not explicitly initialized before additive use.\n  WHY: The reviewer says these shell variables can inherit stale state from the environment or prior steps and contaminate the workflow outputs.\n- .github/workflows/update_workflows.yml:101-105 | severity=medium | confidence=4\n  PROBLEM: A destination directory named like a workflow file is not rejected before `cp`.\n  WHY: The reviewer says the current existence and writability check allows a directory collision that can lead to silent misconfiguration or later execution errors.\n- .github/workflows/update_workflows.yml:165 | severity=low | confidence=3\n  PROBLEM: `printf '%b'` is used on filename lists, which can interpret backslash escapes.\n  WHY: The reviewer says a template filename containing backslash sequences could be expanded into unintended newlines and break formatting or parsing.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/update_workflows.yml:285 | severity=low | confidence=2\n  PROBLEM: `FAILURE_REASON_DETAIL` is only partially hardened before being written into the summary.\n  WHY: The reviewer says newlines and carriage returns are sanitized, but markdown-sensitive characters are still not escaped.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/update_workflows.yml:118-120 | severity=medium | confidence=4\n  PROBLEM: A directory at the destination path is not explicitly rejected before the copy step.\n  WHY: The reviewer says the preflight checks allow a writable directory to pass, so `cp` later fails with a less clear error instead of failing fast.\n- .github/workflows/update_workflows.yml:92-93,96 | severity=low | confidence=1\n  PROBLEM: `FAILURE_REASON_DETAIL` in the GitHub output is considered safe by the reviewer, but the finding was still recorded as a low-confidence concern.\n  WHY: The reviewer says the existing sanitization is sufficient for the intended `key=value` output format and does not demonstrate a concrete failure mode.\n- .github/workflows/update_workflows.yml:322 | severity=low | confidence=1\n  PROBLEM: `FAILURE_REASON_DETAIL` is expanded directly into the GitHub step summary markdown.\n  WHY: The reviewer says markdown characters could alter the visual rendering, but this is cosmetic and not shown to break correctness.\n- .ai/review_issue_ledger.txt:1 | severity=low | confidence=1\n  PROBLEM: `.ai/review_issue_ledger.txt` is tracked in the repository.\n  WHY: The reviewer says this is intentional design for persistent review-state tracking and therefore not a bug.\n- .github/workflows/update_workflows.yml:165-167 | severity=low | confidence=1\n  PROBLEM: `printf '%b'` interprets backslash escapes in the accumulated file lists.\n  WHY: The reviewer says this behavior is intentional because the lists are built to render literal newlines for human-readable output.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "45943d9c94d0b0235fca2183d53873e60365b58021f73b88d2d4e0b33a278287",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1499,
+    "run_id": "24737494065",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24737494065",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421180755_e57d44b9f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1499,
+    "run_id": "24737494065"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T18:07:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
