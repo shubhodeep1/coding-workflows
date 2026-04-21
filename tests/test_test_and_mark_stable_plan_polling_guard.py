@@ -44,7 +44,7 @@ def test_other_active_plan_runs_is_numeric_before_arithmetic_comparison() -> Non
 
 
 def main() -> int:
-	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	for test in tests:
 		test()
 	print(f"{len(tests)} passed")
