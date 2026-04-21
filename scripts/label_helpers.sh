@@ -55,6 +55,41 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:needs-prompt-review"]="fbca04"
 )
 
+_AI_PHASE_TRANSITION_LABELS=(
+	"ai:clarification"
+	"ai:planning"
+	"ai:awaiting-approval"
+	"ai:implementing"
+	"ai:validating"
+	"ai:validated"
+	"ai:validation-failed"
+	"ai:validation-fixing"
+	"ai:validation-recovery"
+	"ai:clarify-failed"
+	"ai:clarify-respond-failed"
+	"ai:plan-failed"
+	"ai:implement-diagnose-failed"
+	"ai:review-autofix-failed"
+	"ai:validate-failed"
+	"ai:integration-judge-failed"
+	"ai:log-analysis-failed"
+	"ai:memory-maintenance-failed"
+	"ai:done"
+	"ai:ready-to-merge"
+	"ai:needs-human"
+	"ai:blocked"
+	"ai:merged"
+	"ai:implementation-failed"
+	"ai:implement-fix-up"
+	"ai:destructive-blocked"
+	"ai:closed"
+	"ai:orchestrator-tracking"
+	"ai:orchestrator-managed"
+	"ai:orchestrator-validate-required"
+	"ai:comprehensive-test-pending"
+	"ai:needs-prompt-review"
+)
+
 declare -A _AI_LABEL_DESCS=(
 	["ai:clarification"]="AI clarification required before planning"
 	["ai:planning"]="AI planning in progress"
@@ -135,26 +170,6 @@ ensure_label_exists() {
 	return 1
 }
 
-_AI_PHASE_TRANSITION_LABELS=(
-	"ai:done"
-	"ai:implementing"
-	"ai:awaiting-approval"
-	"ai:planning"
-	"ai:clarification"
-	"ai:ready-to-merge"
-	"ai:review-blocked"
-	"ai:implementation-failed"
-	"ai:validating"
-	"ai:validated"
-	"ai:validation-failed"
-	"ai:validation-fixing"
-	"ai:validation-recovery"
-	"ai:needs-human"
-	"ai:blocked"
-	"ai:merged"
-	"ai:closed"
-)
-
 _urlencode_label_name() {
 	local label_name="${1:?_urlencode_label_name: label_name required}"
 
@@ -163,8 +178,9 @@ _urlencode_label_name() {
 		return 0
 	fi
 
-	# Minimal fallback: ai:* labels only need '%' ':' '/' and space escaping.
-	printf '%s' "${label_name}" | sed 's/%/%25/g; s/:/%3A/g; s#/#%2F#g; s/ /%20/g'
+	# Minimal fallback: escape the characters used by ai:* labels plus
+	# the common URL-reserved characters that can appear in custom labels.
+	printf '%s' "${label_name}" | sed 's/%/%25/g; s/:/%3A/g; s#/#%2F#g; s/ /%20/g; s/&/%26/g; s/+/%2B/g; s/=/%3D/g; s/?/%3F/g'
 }
 
 _remove_issue_label_if_present() {

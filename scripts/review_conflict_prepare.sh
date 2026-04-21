@@ -31,7 +31,7 @@
 #   - Exits 0 + clears MERGE_CONFLICT when merge replay produces no unmerged paths.
 
 set -euo pipefail
-source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
+source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
 echo "Running Codex resolver"
 
