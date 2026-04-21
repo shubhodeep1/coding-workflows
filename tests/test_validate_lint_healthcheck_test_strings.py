@@ -87,3 +87,21 @@ def test_healthcheck_test_strings_escape_hatch_suppresses_violation() -> None:
 
 		assert result.returncode == 0
 		assert "validation-lint: OK" in result.stdout
+
+
+def test_healthcheck_test_strings_accepts_flow_style_quoted_entries() -> None:
+	with tempfile.TemporaryDirectory(prefix="validate-lint-healthcheck-") as td:
+		root = Path(td)
+		_write(
+			root / "docker-compose.test.yml",
+			"services:\n"
+			"  app:\n"
+			"    init: true\n"
+			"    healthcheck:\n"
+			"      test: [\"CMD-SHELL\", \"curl -fsS http://127.0.0.1:8000/health || exit 1\"]\n",
+		)
+
+		result = _run(root)
+
+		assert result.returncode == 0
+		assert "validation-lint: OK" in result.stdout

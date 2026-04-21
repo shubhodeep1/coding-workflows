@@ -594,7 +594,7 @@ def _check_test_script_prologue(context: LintContext) -> list[Finding]:
 			)
 			continue
 
-		if not lines or lines[0].strip() != REQUIRED_BASH_SHEBANG:
+		if not lines or _strip_inline_comment(lines[0]).strip() != REQUIRED_BASH_SHEBANG:
 			findings.append(
 				Finding(
 					path=script,
@@ -624,6 +624,15 @@ def _check_test_script_prologue(context: LintContext) -> list[Finding]:
 		try:
 			mode = script.stat().st_mode
 		except OSError:
+			findings.append(
+				Finding(
+					path=script,
+					line=1,
+					rule_id="test-script-prologue",
+					message=f"{script.name} could not be stat'ed for executable-bit validation.",
+					hint="Ensure the script metadata is readable before linting executable permissions.",
+				)
+			)
 			continue
 		if (mode & 0o111) == 0:
 			findings.append(
@@ -659,10 +668,10 @@ def _check_healthcheck_test_strings(context: LintContext) -> list[Finding]:
 
 		indent = len(clean_line) - len(clean_line.lstrip(" "))
 
-		if in_test_list and indent <= test_indent:
+		if in_test_list and indent < test_indent:
 			in_test_list = False
 
-		if in_healthcheck and indent <= healthcheck_indent and not HEALTHCHECK_BLOCK_RE.match(clean_line):
+		if in_healthcheck and indent < healthcheck_indent and not HEALTHCHECK_BLOCK_RE.match(clean_line):
 			in_healthcheck = False
 			in_test_list = False
 
