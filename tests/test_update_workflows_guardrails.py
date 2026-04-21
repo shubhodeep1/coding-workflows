@@ -39,9 +39,15 @@ def test_guardrail_reason_codes_and_outputs_are_declared() -> None:
 	assert 'ERR_UPSTREAM_SELF_TEMPLATE_MISSING' in wf
 	assert 'ERR_LOCAL_WORKFLOW_DIR_MISSING' in wf
 	assert 'ERR_LOCAL_WORKFLOW_DIR_NOT_WRITABLE' in wf
+	assert 'ERR_LOCAL_TARGET_IS_DIRECTORY' in wf
 	assert 'ERR_LOCAL_TARGET_NOT_WRITABLE' in wf
 	assert 'if [ "$filename" = "$SELF_TEMPLATE" ]; then' in wf
-	assert wf.index('if [ "$filename" = "$SELF_TEMPLATE" ]; then') < wf.index('if [ -e "$local_file" ] && [ ! -w "$local_file" ]; then')
+	directory_guard = 'if [ -e "$local_file" ] && [ -d "$local_file" ]; then'
+	writable_guard = 'if [ -e "$local_file" ] && [ ! -w "$local_file" ]; then'
+	assert directory_guard in wf
+	assert writable_guard in wf
+	assert wf.index('if [ "$filename" = "$SELF_TEMPLATE" ]; then') < wf.index(directory_guard)
+	assert wf.index(directory_guard) < wf.index(writable_guard)
 
 
 def test_failure_summary_contract_is_present() -> None:
