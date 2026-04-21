@@ -537,6 +537,33 @@ Operational rules:
 - Do **not** extend `LEDGER_ONLY_COMMIT=true` to multi-file commits that happen to include the ledger. The signal's entire meaning is "the only tracked change is bookkeeping"; a commit that also touches runtime paths represents a productive edit and the existing `DID_COMMIT=true` path correctly blocks the clean-review gates until the next verification pass.
 - If a future change introduces another always-written bookkeeping path, add it to the detector's single-path comparison as an equal-sized union (e.g. "commit contains exactly the ledger **and** the new bookkeeping file, nothing else"); do not loosen to a subset check.
 
+### 20.3 Failure-Comment Attribution (`EDITOR_SUMMARY_POSTED`)
+
+`jobs.codex-agent` posts two distinct PR comments at end-of-run:
+
+- The **editor summary** (step `Post editor summary comment`, around line 2136 of `review_autofix.yml`) is gated on `!cancelled() && ...`, so it runs even on `failure()`. This is intentional — when the editor finished its work but a downstream step failed, we still want the editor's audit trail on the PR thread.
+- The **failure notification** (step `Post review-blocked comment on PR (workflow failure)`, around line 4307) is gated on `failure() && env.PR_CLOSED != 'true'`.
+
+When a step *after* the editor summary fails (push race against a concurrent push, conflict resolver abort, auto-merge config error, telemetry plumbing), both steps fire and the PR thread shows two comments 10–30s apart. The default failure body — "encountered an error and could not complete. This may be due to an editor failure, missing dependencies, or an infrastructure issue" — directly contradicts the success-looking editor summary above it and mis-attributes the failure for the human reader.
+
+Contract:
+
+- The editor-summary post step writes **`EDITOR_SUMMARY_POSTED=true`** (env, not a step output) only inside the success branch of the `gh api .../comments` call. On retry exhaustion (the `else` branch that emits `::warning::Unable to post editor summary comment after retries.`) the variable is left unset, since the editor summary is then not visible to the reader and the generic failure body is the right thing to post.
+- The failure-notification step branches its `BODY` on `${EDITOR_SUMMARY_POSTED:-false}`:
+  - When `true` — post a narrower "AI review/autofix encountered a post-editor failure" body that names the downstream step domains (push, conflict resolver, label/auto-merge, telemetry) and notes that the editor's commit may not have landed.
+  - When unset/false — post the original generic body (true editor / dependency / infra failure path).
+- The label step (`Mark linked issues review-blocked (workflow failure)`) and `Telegram failure` are **not** gated on `EDITOR_SUMMARY_POSTED`. A failure is still a failure regardless of which comment variant is appropriate; the linked issue still needs `ai:review-blocked` and the operator still needs the Telegram alert.
+
+Operational rules:
+
+- Renames of `EDITOR_SUMMARY_POSTED` are breaking changes per CLAUDE.md §6. Add alongside.
+- Do **not** set `EDITOR_SUMMARY_POSTED=true` from any step other than `Post editor summary comment`'s success branch. The signal's meaning is "the editor summary comment is on the PR thread right now"; setting it speculatively from any other step would re-introduce the contradictory-comment regression in the post-failure case.
+- This change does **not** address the underlying push race that originally surfaced the regression (concurrent push to the PR branch while the workflow's editor was rewriting the same hunk → `git merge` conflict during push retry → step exit 1). That hardening is deliberately out of scope; the comment-attribution fix is the minimum surface area for the reader-facing bug.
+
+API cost audit (CLAUDE.md §15):
+
+- Zero new `gh` calls. The branch is a local `if [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then ... fi` around the existing single `gh api .../comments` POST. No new batched data, no new cache.
+
 ---
 
 ## FINAL REMINDER

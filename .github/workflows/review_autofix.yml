@@ -2187,6 +2187,19 @@ jobs:
 
           if gh_retry gh api repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")" >/dev/null; then
             echo "Posted editor summary comment."
+            # Signal to the failure-comment step (line ~4307) that the
+            # editor summary already landed on the PR thread. The generic
+            # "AI review/autofix failed" body speculates about editor /
+            # dependency / infra failure modes and would contradict the
+            # success-looking summary above when the editor in fact ran
+            # to completion and a later step (push, conflict resolver,
+            # auto-merge config, telemetry) is what actually failed.
+            # Set only on a successful post; on retry exhaustion the
+            # editor summary is not visible to the reader, so the
+            # generic body is the right thing to post. See PR #1476
+            # follow-up for the contradictory-comment regression this
+            # signal resolves.
+            echo "EDITOR_SUMMARY_POSTED=true" >> "$GITHUB_ENV"
           else
             echo "::warning::Unable to post editor summary comment after retries."
           fi
@@ -4314,7 +4327,29 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          BODY="$(cat <<EOF
+          # Pick a body variant that doesn't contradict the editor
+          # summary comment when one was already posted. The editor
+          # summary step (line ~2136) sets EDITOR_SUMMARY_POSTED=true
+          # on a successful post; when that signal is true we know the
+          # editor completed and the failure must be in a downstream
+          # step (push, conflict resolver, auto-merge config, telemetry).
+          # The generic body would otherwise read as "the editor failed"
+          # immediately under a success-looking editor summary, which
+          # mis-attributes the failure for the human reader. See PR
+          # #1476 follow-up.
+          if [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then
+            BODY="$(cat <<EOF
+          **AI review/autofix encountered a post-editor failure — needs human intervention**
+
+          The editor stage completed and posted its summary above, but a downstream step (push, conflict resolver, label/auto-merge configuration, or telemetry) failed before the autofix run could complete. The editor's commit may not have landed on the PR branch.
+
+          [View workflow run](${RUN_URL}) for details.
+
+          Linked issues have been labeled \`ai:review-blocked\`.
+          EOF
+          )"
+          else
+            BODY="$(cat <<EOF
           **AI review/autofix failed — needs human intervention**
 
           The review/autofix workflow encountered an error and could not complete. This may be due to an editor failure, missing dependencies, or an infrastructure issue.
@@ -4324,6 +4359,7 @@ jobs:
           Linked issues have been labeled \`ai:review-blocked\`.
           EOF
           )"
+          fi
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
 
