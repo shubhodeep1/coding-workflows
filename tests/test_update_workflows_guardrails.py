@@ -24,6 +24,8 @@ def test_fail_fast_validation_precedes_any_copy_mutation() -> None:
 def test_guardrail_reason_codes_and_outputs_are_declared() -> None:
 	wf = _workflow_text()
 	assert 'fail_with_reason() {' in wf
+	assert "local detail_sanitized=\"${detail//$'\\r'/ }\"" in wf
+	assert "detail_sanitized=\"${detail_sanitized//$'\\n'/ }\"" in wf
 	assert 'echo "validation_ok=false" >> "$GITHUB_OUTPUT"' in wf
 	assert 'echo "validation_ok=true" >> "$GITHUB_OUTPUT"' in wf
 	assert 'echo "failure_reason_code=' in wf
@@ -44,6 +46,10 @@ def test_failure_summary_contract_is_present() -> None:
 	assert 'ERR_TEMPLATE_FETCH_FAILED' in wf
 	assert 'ERR_UNCATEGORIZED_FAILURE' in wf
 	assert 'FAILURE_REASON_FILE="/tmp/update_workflows_failure_reason.txt"' in wf
+	assert "printf '%s\\n%s\\n' \"${code}\" \"${detail_sanitized}\" > \"${FAILURE_REASON_FILE}\"" in wf
+	assert 'IFS= read -r FAILURE_REASON_CODE < "${FAILURE_REASON_FILE}"' in wf
+	assert "FAILURE_REASON_DETAIL=\"$(sed -n '2p' " in wf
+	assert '"${FAILURE_REASON_FILE}" 2>/dev/null || true)"' in wf
 	assert 'Failure reason code:' in wf
 	assert 'Failure reason detail:' in wf
 	assert 'Failure reason artifact:' in wf

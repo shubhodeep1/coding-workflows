@@ -88,11 +88,13 @@ jobs:
           fail_with_reason() {
             local code="$1"
             local detail="$2"
+            local detail_sanitized="${detail//$'\r'/ }"
+            detail_sanitized="${detail_sanitized//$'\n'/ }"
             echo "::error::${code}: ${detail}"
             echo "validation_ok=false" >> "$GITHUB_OUTPUT"
             echo "failure_reason_code=${code}" >> "$GITHUB_OUTPUT"
-            echo "failure_reason_detail=${detail}" >> "$GITHUB_OUTPUT"
-            printf '%s|%s\n' "${code}" "${detail}" > "${FAILURE_REASON_FILE}"
+            echo "failure_reason_detail=${detail_sanitized}" >> "$GITHUB_OUTPUT"
+            printf '%s\n%s\n' "${code}" "${detail_sanitized}" > "${FAILURE_REASON_FILE}"
             exit 1
           }
 
@@ -138,6 +140,11 @@ jobs:
             fi
 
             # Compare content (ignore trailing whitespace differences)
+            if [ "$filename" = "$SELF_TEMPLATE" ]; then
+              SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater, skipped)\n"
+              continue
+            fi
+
             if ! diff -q --strip-trailing-cr --ignore-space-at-eol "$upstream_file" "$local_file" >/dev/null 2>&1; then
               echo "Updating: ${filename}"
               cp "$upstream_file" "$local_file"
@@ -285,7 +292,8 @@ jobs:
           fi
 
           if [ -z "${FAILURE_REASON_CODE}" ] && [ -f "${FAILURE_REASON_FILE}" ]; then
-            IFS='|' read -r FAILURE_REASON_CODE FAILURE_REASON_DETAIL < "${FAILURE_REASON_FILE}" || true
+            IFS= read -r FAILURE_REASON_CODE < "${FAILURE_REASON_FILE}" || true
+            FAILURE_REASON_DETAIL="$(sed -n '2p' "${FAILURE_REASON_FILE}" 2>/dev/null || true)"
           fi
 
           echo "### Workflow Wrapper Update" >> "$GITHUB_STEP_SUMMARY"
@@ -296,7 +304,7 @@ jobs:
             echo "- **Failure reason code:** \\`ERR_TEMPLATE_FETCH_FAILED\\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason detail:** Fetch step failed before pre-mutation validation could run." >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason artifact:** \\`${FAILURE_REASON_FILE}\\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
 
           if [ "${UPDATE_OUTCOME}" = "failure" ]; then
@@ -308,7 +316,7 @@ jobs:
             echo "- **Failure reason code:** \\`${FAILURE_REASON_CODE}\\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason detail:** ${FAILURE_REASON_DETAIL}" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason artifact:** \\`${FAILURE_REASON_FILE}\\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
 
           echo "- **Templates checked:** ${TEMPLATES_CHECKED}" >> "$GITHUB_STEP_SUMMARY"
