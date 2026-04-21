@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:108-150 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The new regression test `tests/test_test_and_mark_stable_plan_polling_guard.py` is not included in the CI workflow\u2019s explicit test execution list.\n  WHY: CI will not run the regression test, so future regressions in the plan-run polling guard can slip through undetected; all reviewers agreed and one noted this can leave the new guard effectively dead code in CI.\n- .ai/review_issue_ledger.txt:entire file | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The ledger file is being modified in the PR despite being listed in `.gitignore`.\n  WHY: This creates repository hygiene noise and merge-conflict churn; reviewers agreed it is a tracked workflow artifact even though it is expected to be ignored.\n- .github/workflows/test-and-mark-stable.yml:495-502 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, stepfun_step-3_5-flash]\n  PROBLEM: `printf '%s' \"$PLAN_RUNS_JSON\"` may hit argument-size limits if the JSON grows very large.\n  WHY: The concern is low-confidence and unlikely with `per_page=50`, but both reviewers flagged the same potential robustness issue in the polling guard\u2019s shell pipeline.\n- tests/test_test_and_mark_stable_plan_polling_guard.py:47-48 | severity=low | confidence=3\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: The manual test runner in `main()` stops executing after the first failing test.\n  WHY: This reduces diagnostic value when multiple regressions exist because later tests will not run after an earlier failure.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/ci.yml:105-260 | severity=high | confidence=5\n  PROBLEM: The regression test `tests/test_test_and_mark_stable_plan_polling_guard.py` is not executed in CI.\n  WHY: If the plan-run polling guard logic in `test-and-mark-stable.yml` regresses, CI will not detect it because the test that verifies those patterns is never run.\n- .ai/review_issue_ledger.txt:entire file | severity=medium | confidence=4\n  PROBLEM: File listed in `.gitignore` is being modified in PR.\n  WHY: This is a repository hygiene issue and creates version-control noise because the ledger appears to be a workflow artifact that should not be versioned.\n- .github/workflows/test-and-mark-stable.yml:495 | severity=low | confidence=2\n  PROBLEM: `printf '%s' \"$VAR\"` could theoretically hit argument-size limits.\n  WHY: If `PLAN_RUNS_JSON` becomes extremely large, `printf` could fail due to argument length limits; using `<<< \"$PLAN_RUNS_JSON\"` or piping from a file would be more robust.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/ci.yml:Python syntax check, Orchestrate lib unit tests, and subsequent test steps | severity=high | confidence=5\n  PROBLEM: The new regression test `tests/test_test_and_mark_stable_plan_polling_guard.py` is not included in the CI execution list.\n  WHY: The CI workflow uses an explicit allowlist for unit tests, so the missing file will never run and regressions in the plan-run polling guard will not be detected.\n- .ai/review_issue_ledger.txt:entire file | severity=medium | confidence=4\n  PROBLEM: The file is tracked and modified in the PR, despite being a workflow artifact.\n  WHY: Versioning this file creates unnecessary PR churn and increases the risk of merge conflicts in an automated environment.\n- tests/test_test_and_mark_stable_plan_polling_guard.py:47-48 | severity=low | confidence=3\n  PROBLEM: The manual test runner in `main()` stops execution on the first failure.\n  WHY: If the first test fails, the remaining tests will not execute, which reduces the diagnostic value of the suite.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/ci.yml:108-150 | severity=high | confidence=5\n  PROBLEM: The new regression test `tests/test_test_and_and_mark_stable_plan_polling_guard. py` is not included in the CI workflow's explicit test execution allowlist.\n  WHY: Future regressions in the plan-polling-guard hardening will not be detected because CI only runs the allowlisted test files.\n- .ai/review_issue_ledger. txt | severity=medium | confidence=4\n  PROBLEM: This file is explicitly listed in `.gitignore` yet it is being modified in the PR.\n  WHY: This is a repository hygiene issue that creates unnecessary version control churn and potential merge conflicts.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/ci.yml:108-150 | severity=high | confidence=5\n  PROBLEM: The newly added regression test `tests/test_test_and_mark_stable_plan_polling_guard.py` is not included in the CI workflow's test execution list.\n  WHY: CI uses an explicit allowlist, so the missing test will never execute automatically and future regressions in the plan-run polling guard will go undetected.\n- .ai/review_issue_ledger.txt:line 18 | severity=medium | confidence=4\n  PROBLEM: This file is listed in `.gitignore` but is being tracked and modified in this PR.\n  WHY: It creates repository hygiene issues and potential pipeline edge cases because the ledger is a workflow runtime artifact.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/ci.yml:unit-test steps lines ~108-150 | severity=high | confidence=5\n  PROBLEM: The regression test `tests/test_test_and_mark_stable_plan_polling_guard.py` is not included in any CI unit-test execution step.\n  WHY: CI will never catch regressions in the plan polling guard, so a future bug could pass CI and break production stability.\n- .ai/review_issue_ledger.txt | severity=medium | confidence=4\n  PROBLEM: This ledger artifact is tracked in git and modified by the PR despite being listed in `.gitignore`.\n  WHY: This causes ongoing version-control churn and merge-conflict noise because artifact files should not be versioned.\n- .github/workflows/test-and-mark-stable.yml:495-502 | severity=low | confidence=2\n  PROBLEM: The `printf` command may exceed the system's maximum argument length if `PLAN_RUNS_JSON` is extremely large.\n  WHY: The `printf` process could fail and break the polling guard's ability to parse active plan runs.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "00441f0e6a61dfea22d9adb51d278cd863a9a0c8cf8796b63b21ac4d32becbbf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1499,
+    "run_id": "24733477799",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24733477799",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421164705_df907ea7a0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1499,
+    "run_id": "24733477799"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T16:47:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
