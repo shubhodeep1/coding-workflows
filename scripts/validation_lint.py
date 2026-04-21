@@ -607,11 +607,13 @@ def _check_test_script_prologue(context: LintContext) -> list[Finding]:
 				)
 			)
 
-		has_strict_mode = any(
-			SET_EUO_PIPEFAIL_RE.match(_strip_inline_comment(line))
-			for line in lines
-			if line.strip() and not line.lstrip().startswith("#")
-		)
+		has_strict_mode = False
+		for line in lines:
+			if not line.strip() or line.lstrip().startswith("#"):
+				continue
+			if SET_EUO_PIPEFAIL_RE.match(_strip_inline_comment(line)) is not None:
+				has_strict_mode = True
+				break
 		if not has_strict_mode:
 			findings.append(
 				Finding(
