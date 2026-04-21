@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:2262 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, stepfun_step-3_5-flash]\n  PROBLEM: The missing `.ai/validate.yml` error message could more explicitly state that template mode has no freehand fallback and requires the manifest when `VALIDATION_USE_TEMPLATES` is enabled.\n  WHY: All three reviewers identified the same hardening opportunity; one reviewer noted the current wording is already sufficiently clear, so this is a severity/disagreement on clarity only, but the highest severity reported was low.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/validate_process.sh:2262 | severity=low | confidence=2\n  PROBLEM: The error message could be clearer about template-mode being a hard requirement when enabled.\n  WHY: It currently provides an error when the manifest is missing, but does not explicitly state the no-fallback behavior.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/validate_process.sh:2262 | severity=low | confidence=1\n  PROBLEM: The error message for missing `.ai/validate.yml` is accurate but does not explicitly mention that no freehand fallback will occur.\n  WHY: Clarifying the hard constraint would aid debugging for users trying to opt in.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/validate_process.sh:2262 | severity=low | confidence=4\n  PROBLEM: The error message could mislead users into thinking template-mode failures have a fallback, when `VALIDATION_USE_TEMPLATES=true` makes `.ai/validate.yml` mandatory.\n  WHY: The failure summary is terse and suggests remedial actions without stating the hard constraint clearly.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "a227178a1b4d1089a8d2d6e7af01b9d77f76a5e0b455877d75a5e116f46b9435",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1472,
+    "run_id": "24701496500",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24701496500",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421030516_1a2b39bfa4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1472,
+    "run_id": "24701496500"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T03:05:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
