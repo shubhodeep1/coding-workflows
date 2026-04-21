@@ -17,8 +17,8 @@ services:
       - "8000:8000"
     healthcheck:
       test:
-        - CMD-SHELL
-        - /bin/sh -c "curl -fsS -H \"Host: ${TEST_HOST_HEADER:-app.local.test}\" \"http://127.0.0.1:8000/health\" >/dev/null"
+        - "CMD-SHELL"
+        - '/bin/sh -c "curl -fsS -H \"Host: ${TEST_HOST_HEADER:-app.local.test}\" \"http://127.0.0.1:8000/health\" >/dev/null"'
       interval: 5s
       timeout: 3s
       retries: 20
@@ -34,8 +34,8 @@ services:
       MONGO_INITDB_DATABASE: "app"
     healthcheck:
       test:
-        - CMD-SHELL
-        - /bin/sh -c "mongosh --quiet --eval \"db.runCommand({ ping: 1 }).ok\" \"mongodb://127.0.0.1:27017/app\" >/dev/null"
+        - "CMD-SHELL"
+        - '/bin/sh -c "mongosh --quiet --eval \"db.runCommand({ ping: 1 }).ok\" \"mongodb://127.0.0.1:27017/app\" >/dev/null"'
       interval: 5s
       timeout: 5s
       retries: 20

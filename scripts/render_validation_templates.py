@@ -97,6 +97,15 @@ FAMILY_REGISTRY: dict[str, FamilySpec] = {
 	"node-hardhat-solidity": FamilySpec(name="node-hardhat-solidity", relative_dir="node-hardhat-solidity"),
 }
 
+RENDERED_OUTPUT_ALIASES: dict[str, dict[str, str]] = {
+	"python-mongo-flask": {
+		"tests/10_http_smoke.sh": "tests/11_http_smoke.sh",
+	},
+	"node-hardhat-solidity": {
+		"tests/20_rpc_probe.sh": "tests/25_rpc_probe.sh",
+	},
+}
+
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 MAX_SCHEMA_BYTES = 2 * 1024 * 1024
 
@@ -266,6 +275,16 @@ def _ensure_safe_relative_path(path: Path, *, what: str) -> None:
 		raise TemplateCollectionError(f"{what} must not contain '..': '{path}'")
 
 
+def _resolve_output_rel_path(family: FamilySpec, output_rel: Path) -> Path:
+	family_aliases = RENDERED_OUTPUT_ALIASES.get(family.name, {})
+	remapped = family_aliases.get(output_rel.as_posix())
+	if remapped is None:
+		return output_rel
+	remapped_path = Path(remapped)
+	_ensure_safe_relative_path(remapped_path, what="Rendered output alias path")
+	return remapped_path
+
+
 def collect_templates(templates_root: Path, family: FamilySpec) -> list[TemplateSpec]:
 	if not templates_root.exists() or not templates_root.is_dir():
 		raise TemplateCollectionError(f"Templates root is missing or not a directory: {templates_root}")
@@ -289,6 +308,7 @@ def collect_templates(templates_root: Path, family: FamilySpec) -> list[Template
 			output_rel = template_path.relative_to(family_dir)
 			output_rel = output_rel.with_suffix("")
 			_ensure_safe_relative_path(output_rel, what="Rendered output path")
+			output_rel = _resolve_output_rel_path(family, output_rel)
 			template_map[output_rel.as_posix()] = TemplateSpec(
 				template_rel_path=template_rel_path.as_posix(),
 				output_rel_path=output_rel,
@@ -384,6 +404,11 @@ def write_outputs(output_root: Path, rendered_files: list[RenderedFile]) -> list
 				handle.write(rendered_file.content)
 		except OSError as exc:
 			raise OutputWriteError(f"Failed writing rendered file '{target}': {exc}") from exc
+		if target.suffix == ".sh":
+			try:
+				target.chmod(target.stat().st_mode | 0o111)
+			except OSError as exc:
+				raise OutputWriteError(f"Failed setting executable bits on '{target}': {exc}") from exc
 		written_paths.append(target)
 
 	return written_paths
