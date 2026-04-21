@@ -496,15 +496,21 @@ def test_log_archive_error_classification_uses_error_detail_not_endpoint():
 	missing_false = "gh api failed for repos/o/r/actions/runs/404/logs (exit=1): 403 forbidden"
 	retry_false = "gh api failed for repos/o/r/actions/runs/503/logs (exit=1): 401 unauthorized"
 	retry_429_false = "gh api failed for repos/o/r/actions/runs/429/logs (exit=1): 401 unauthorized"
+	missing_bare_status = "gh api failed for repos/o/r/actions/runs/701/logs (exit=1): 404 not found"
 	missing_true = "gh api failed for repos/o/r/actions/runs/701/logs (exit=1): HTTP 404 Not Found"
+	retry_bare_status = "gh api failed for repos/o/r/actions/runs/701/logs (exit=1): 503 service unavailable"
 	retry_true = "gh api failed for repos/o/r/actions/runs/701/logs (exit=1): HTTP 503 Service Unavailable"
+	retry_429_bare_status = "gh api failed for repos/o/r/actions/runs/701/logs (exit=1): 429 too many requests"
 	retry_429_true = "gh api failed for repos/o/r/actions/runs/701/logs (exit=1): HTTP 429 Too Many Requests"
 
 	assert collector._is_missing_log_archive_message(missing_false) is False
 	assert collector._is_retryable_log_archive_message(retry_false) is False
 	assert collector._is_retryable_log_archive_message(retry_429_false) is False
+	assert collector._is_missing_log_archive_message(missing_bare_status) is True
 	assert collector._is_missing_log_archive_message(missing_true) is True
+	assert collector._is_retryable_log_archive_message(retry_bare_status) is True
 	assert collector._is_retryable_log_archive_message(retry_true) is True
+	assert collector._is_retryable_log_archive_message(retry_429_bare_status) is True
 	assert collector._is_retryable_log_archive_message(retry_429_true) is True
 
 

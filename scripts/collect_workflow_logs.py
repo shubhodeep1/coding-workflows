@@ -693,16 +693,20 @@ def _is_missing_log_archive_message(message: str) -> bool:
     if any(marker in detail_lower for marker in text_markers):
         return True
     status_markers = "|".join(marker for marker in MISSING_LOG_ARCHIVE_MARKERS if marker.isdigit())
-    return re.search(rf"\b(?:http|status)\s*(?:code\s*)?(?:{status_markers})\b", detail_lower) is not None
+    if not status_markers:
+        return False
+    return re.search(rf"\b(?:(?:http|status)\s*(?:code\s*)?)?(?:{status_markers})\b", detail_lower) is not None
 
 
 def _is_retryable_log_archive_message(message: str) -> bool:
     detail_lower = _extract_log_archive_error_detail(message).lower()
-    text_markers = (marker for marker in RETRY_MARKERS if not marker.isdigit())
+    text_markers = tuple(marker for marker in RETRY_MARKERS if not marker.isdigit())
     if any(marker in detail_lower for marker in text_markers):
         return True
     status_markers = "|".join(marker for marker in RETRY_MARKERS if marker.isdigit())
-    return re.search(rf"\b(?:http|status)\s*(?:code\s*)?(?:{status_markers})\b", detail_lower) is not None
+    if not status_markers:
+        return False
+    return re.search(rf"\b(?:(?:http|status)\s*(?:code\s*)?)?(?:{status_markers})\b", detail_lower) is not None
 
 
 def _build_missing_log_archive_error(repo: str, run_id: int, endpoint: str, detail: str) -> MissingLogArchiveError:
