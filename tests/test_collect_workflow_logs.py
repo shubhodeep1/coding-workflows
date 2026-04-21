@@ -1099,7 +1099,7 @@ print(json.dumps({}))
 		assert "log_excerpts" not in by_run_id[301]
 
 		store_after = json.loads(store_file.read_text(encoding="utf-8"))
-		assert store_after["log_call_counts"] == {"301": collector.LOG_ARCHIVE_FETCH_RETRIES}
+		assert store_after["log_call_counts"] == {"301": 1}
 
 
 # ---------------------------------------------------------------------------
