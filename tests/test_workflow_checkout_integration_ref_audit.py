@@ -70,7 +70,8 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 	canonical_stage_markers = (
 		"resolver_stage_root=\"${RUNNER_TEMP}/integration-ref-resolver-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\"",
 		"stage_resolver_ref() {",
-		"git -C \"${dest}\" fetch --quiet --depth 1 origin \"${ref}\"",
+		"fetch --depth 1 origin",
+		"rev-parse --verify FETCH_HEAD",
 	)
 	disallowed_inline_markers = (
 		"sed -nE 's/^- Integration branch:",

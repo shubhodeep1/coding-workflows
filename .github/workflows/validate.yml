@@ -91,6 +91,7 @@ jobs:
           resolver_stage_root="${RUNNER_TEMP}/integration-ref-resolver-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           resolver_stage_dir="${resolver_stage_root}/primary"
           resolver_fallback_dir="${resolver_stage_root}/main"
+          trap 'rm -rf "${resolver_stage_root}"' EXIT
 
           stage_resolver_ref() {
             local ref="$1"
@@ -99,8 +100,9 @@ jobs:
             mkdir -p "${dest}"
             if git -C "${dest}" init --quiet && \
                git -C "${dest}" remote add origin "${resolver_remote_url}" && \
-               git -C "${dest}" fetch --quiet --depth 1 origin "${ref}" && \
-               git -C "${dest}" checkout --quiet FETCH_HEAD; then
+               git -C "${dest}" fetch --depth 1 origin "${ref}" && \
+               git -C "${dest}" rev-parse --verify FETCH_HEAD >/dev/null 2>&1 && \
+               git -C "${dest}" checkout FETCH_HEAD; then
               return 0
             fi
             rm -rf "${dest}"
@@ -112,7 +114,7 @@ jobs:
           if stage_resolver_ref "${resolver_ref}" "${resolver_stage_dir}"; then
             resolver_root="${resolver_stage_dir}"
           elif stage_resolver_ref "main" "${resolver_fallback_dir}"; then
-            echo "::warning::Resolver support ref ${resolver_ref} is unavailable; using main."
+            echo "::warning::Resolver support ref ${resolver_ref} could not be staged; using main."
             resolver_root="${resolver_fallback_dir}"
             resolved_resolver_ref="main"
           fi
