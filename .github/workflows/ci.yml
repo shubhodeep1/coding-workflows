@@ -149,6 +149,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_label_precreation_contract.py
 
+      - name: Test-and-mark-stable plan polling guard regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_plan_polling_guard.py
+
       - name: Workflow log collector coverage gate
         run: |
           set -euo pipefail
