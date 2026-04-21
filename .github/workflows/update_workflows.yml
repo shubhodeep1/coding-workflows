@@ -112,6 +112,9 @@ jobs:
           for upstream_file in "${upstream_templates[@]}"; do
             filename=$(basename "$upstream_file")
             local_file="${LOCAL_DIR}/${filename}"
+            if [ "$filename" = "$SELF_TEMPLATE" ]; then
+              continue
+            fi
             if [ -e "$local_file" ] && [ ! -w "$local_file" ]; then
               fail_with_reason "ERR_LOCAL_TARGET_NOT_WRITABLE" "Existing workflow file is not writable: ${local_file}"
             fi
@@ -159,9 +162,9 @@ jobs:
           echo "templates_created=${TOTAL_CREATED}" >> "$GITHUB_OUTPUT"
 
           # Store multi-line outputs via files
-          printf '%s' "$UPDATED_FILES" > /tmp/updated_files.txt
-          printf '%s' "$CREATED_FILES" > /tmp/created_files.txt
-          printf '%s' "$SKIPPED_FILES" > /tmp/skipped_files.txt
+          printf '%b' "$UPDATED_FILES" > /tmp/updated_files.txt
+          printf '%b' "$CREATED_FILES" > /tmp/created_files.txt
+          printf '%b' "$SKIPPED_FILES" > /tmp/skipped_files.txt
 
           TOTAL_CHANGED=$((TOTAL_UPDATED + TOTAL_CREATED))
           if [ "$TOTAL_CHANGED" -eq 0 ]; then

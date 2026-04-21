@@ -40,6 +40,8 @@ def test_guardrail_reason_codes_and_outputs_are_declared() -> None:
 	assert 'ERR_LOCAL_WORKFLOW_DIR_MISSING' in wf
 	assert 'ERR_LOCAL_WORKFLOW_DIR_NOT_WRITABLE' in wf
 	assert 'ERR_LOCAL_TARGET_NOT_WRITABLE' in wf
+	assert 'if [ "$filename" = "$SELF_TEMPLATE" ]; then' in wf
+	assert wf.index('if [ "$filename" = "$SELF_TEMPLATE" ]; then') < wf.index('if [ -e "$local_file" ] && [ ! -w "$local_file" ]; then')
 
 
 def test_failure_summary_contract_is_present() -> None:
@@ -64,6 +66,9 @@ def test_success_path_contracts_are_preserved() -> None:
 	assert 'SELF_TEMPLATE="ai-update-workflows.yml"' in wf
 	assert 'SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater, skipped)\\n"' in wf
 	assert 'SKIPPED_LIST=$(cat /tmp/skipped_files.txt)' in wf
+	assert "printf '%b' \"$UPDATED_FILES\" > /tmp/updated_files.txt" in wf
+	assert "printf '%b' \"$CREATED_FILES\" > /tmp/created_files.txt" in wf
+	assert "printf '%b' \"$SKIPPED_FILES\" > /tmp/skipped_files.txt" in wf
 	assert '**Skipped files:**' in wf
 	assert "if: steps.update.outputs.has_updates == 'true'" in wf
 	assert "ALLOW_WORKFLOW_EDITS repository variable to '\\''false'\\''." in wf
