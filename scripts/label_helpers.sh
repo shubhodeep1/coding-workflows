@@ -148,7 +148,7 @@ set_issue_phase_label_resilient() {
 	local issue_number="${1:?set_issue_phase_label_resilient: issue_number required}"
 	local target_label="${2:?set_issue_phase_label_resilient: target_label required}"
 	local repo="${3:-${GITHUB_REPOSITORY:-}}"
-	local phase_labels='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
+	local phase_labels='["ai:done","ai:implementing","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
 	local cur_labels=""
 	local new_labels=""
 
