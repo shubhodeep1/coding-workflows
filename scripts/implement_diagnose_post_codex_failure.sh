@@ -360,7 +360,7 @@ if [ "${DIAGNOSE_SUCCESS}" != "true" ]; then
     RAW_CAPTURE_SNIPPET+=$'\n\n[truncated to first 50000 bytes]'
   fi
 
-  FALLBACK_BODY="Investigate post-Codex validation failure for issue #${ISSUE_NUMBER}.\n\nThe diagnose step could not produce a valid JSON contract, so this deterministic fallback issue was generated with raw captured diagnostics.\n\n### Captured diagnostics\n\n\`\`\`text\n${RAW_CAPTURE_SNIPPET}\n\`\`\`"
+  FALLBACK_BODY="$(printf 'Investigate post-Codex validation failure for issue #%s.\n\nThe diagnose step could not produce a valid JSON contract, so this deterministic fallback issue was generated with raw captured diagnostics.\n\n### Captured diagnostics\n\n```text\n%s\n```' "${ISSUE_NUMBER}" "${RAW_CAPTURE_SNIPPET}")"
 
   jq -n \
     --arg diagnosis "Codex diagnose failed or returned invalid JSON. Fallback fix-up issue created with raw captured diagnostics." \
@@ -463,14 +463,15 @@ case "${DIAG_STATUS}" in
         [ -n "${dep_id}" ] || continue
         DEP_NUM="$(echo "${local_to_issue_map}" | jq -r --arg dep_id "${dep_id}" '.[$dep_id] // empty')"
         if [ -n "${DEP_NUM}" ]; then
-          DEP_SUMMARY+="- #${DEP_NUM} (from ${dep_id})\n"
+          DEP_SUMMARY+="- #${DEP_NUM} (from ${dep_id})"$'\n'
         fi
       done < <(jq -r ".fix_issues[${idx}].depends_on[]?" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")
 
       if [ -n "${DEP_SUMMARY}" ]; then
+        DEP_BODY="$(printf '## Dependency Notes\n\nThis fix-up should be applied after:\n%s' "${DEP_SUMMARY}")"
         gh_retry gh issue comment "${FIX_NUM}" \
           --repo "${GITHUB_REPOSITORY}" \
-          --body "## Dependency Notes\n\nThis fix-up should be applied after:\n${DEP_SUMMARY}" >/dev/null || \
+          --body "${DEP_BODY}" >/dev/null || \
           echo "::warning::Failed to post dependency notes to issue #${FIX_NUM}."
       fi
     done
@@ -504,24 +505,26 @@ case "${DIAG_STATUS}" in
 
   harness_error)
     HARNESS_FIXES="$(jq -r '.harness_fixes // "No harness fixes were provided."' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+    COMMENT_BODY="$(printf '## Post-Codex validation harness error\n\n%s\n\nFailed step: %s\n\nHarness fix guidance:\n\n%s\n\nRun: %s' "${DIAG_TEXT}" "${FAILED_STEP_NAME}" "${HARNESS_FIXES}" "${RUN_URL}")"
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
-      -f body="## Post-Codex validation harness error\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}\n\nRun: ${RUN_URL}" >/dev/null || true
+      -f body="${COMMENT_BODY}" >/dev/null || true
 
     ensure_implementation_failed_label
     ;;
 
   infeasible)
+    COMMENT_BODY="$(printf '## Post-Codex validation marked infeasible\n\n%s\n\nFailed step: %s\n\nRun: %s' "${DIAG_TEXT}" "${FAILED_STEP_NAME}" "${RUN_URL}")"
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
-      -f body="## Post-Codex validation marked infeasible\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nRun: ${RUN_URL}" >/dev/null || true
+      -f body="${COMMENT_BODY}" >/dev/null || true
 
     ensure_implementation_failed_label
     ;;
 
   *)
+    COMMENT_BODY="$(printf '## Post-Codex validation diagnosis returned unknown status\n\nStatus: %s\n\n%s\n\nFailed step: %s\n\nRun: %s' "${DIAG_STATUS}" "${DIAG_TEXT}" "${FAILED_STEP_NAME}" "${RUN_URL}")"
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
-      -f body="## Post-Codex validation diagnosis returned unknown status\n\nStatus: ${DIAG_STATUS}\n\n${DIAG_TEXT}\n\nFailed step: ${FAILED_STEP_NAME}\n\nRun: ${RUN_URL}" >/dev/null || true
+      -f body="${COMMENT_BODY}" >/dev/null || true
 
     ensure_implementation_failed_label
     ;;
 esac
-
