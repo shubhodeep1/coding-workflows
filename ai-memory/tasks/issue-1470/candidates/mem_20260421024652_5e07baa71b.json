@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context validated:\n- `HEAD`: `5f5e57a13abdd471fb26d53ad03b620709742f3d`\n- Checked-out branch: `orchestrator/project-1469`\n- Integration metadata branch: `orchestrator/project-1469`\n- Mismatch: `false` (planning can proceed)\n\nClarification mapping:\n- No `Q<ID>` questions were issued in clarify.\n- `/answer [auto-answered-by-orchestrator]` confirms continuation with no additional inputs required.\n\nImplementation plan\n\n1. Files likely to change\n- `docs/validation-templates-plan.md` only\n\n2. Modules/sections to implement\n- Add a new append-only source-of-truth section near the end of `docs/validation-templates-plan.md` with a stable anchor comment, for example:\n  - `<!-- anchor:validation-templates-status -->`\n  - `<!-- Append new status snapshots below; do not rewrite prior snapshots -->`\n- Under that anchor, add one status snapshot for M1..M7 using `Done | Partial | Remaining`.\n- Add a `Remaining implementation backlog` checklist containing only unresolved items.\n\n3. Objective M1..M7 status mapping with repo evidence\n- `M1: Done`\n  - Evidence: `workflow-templates/validation-harness/_shared/**`, `scripts/render_validation_templates.py`, `scripts/templates/slot_manifest.schema.json`, `tests/test_render_validation_templates.py`, template-mode wiring in `scripts/validate_process.sh`, bootstrap support in `.github/workflows/validate.yml`.\n- `M2: Done`\n  - Evidence: `workflow-templates/validation-harness/python-mongo-flask/**`, `tests/test_family_python_mongo_flask.py`, `tests/fixtures/validation_harness/python_mongo_flask/**`.\n- `M3: Done`\n  - Evidence: `workflow-templates/validation-harness/node-hardhat-solidity/**`, `tests/test_render_validation_templates.py`, `tests/test_render_validation_templates_node_hardhat_regressions.py`, `tests/test_validate_harness_rpc.py`.\n- `M4: Done`\n  - Evidence: `scripts/validation_lint.py`, render self-heal path in `scripts/validate_process.sh` (`attempt_self_heal_and_reexec \"render\"`), `tests/test_validate_lint_*.py`, `tests/test_validate_process_render_recovery.py`.\n- `M5: Partial`\n  - Evidence present: `.github/ai/consumer_repos.json`.\n  - Missing evidence: `.github/workflows/validation-refresh.yml`, merge-bot handling for `auto-merge:validation-refresh`.\n- `M6: Remaining`\n  - Missing evidence in this repo: nightly self-test workflow (`.github/workflows/nightly-validation-selftest.yml`), fixture-repo wiring, README streak badge.\n- `M7: Remaining`\n  - Evidence of not yet done: `VALIDATION_USE_TEMPLATES` default still `false` in `scripts/validate_process.sh`; freehand generation path still present; `prompts/mode-validate-generate.txt` still active.\n\n4. Data structures affected\n- Markdown-only structure:\n  - Stable anchor comments\n  - Status snapshot block for M1..M7\n  - Backlog checklist (unchecked items only for unresolved scope)\n\n5. API/interface changes\n- None (docs-only; no runtime/workflow/script behavior changes)\n\n6. Risks and edge cases\n- Existing milestone prose currently contains stale file references; status section must explicitly separate \u201cobjective done\u201d vs \u201cpath/name drift\u201d.\n- Some M6 deliverables refer to external fixture repos; mark as unresolved when not verifiable from this repository.\n- Keep insertion strictly append-only to avoid reflow conflicts with parallel edits.\n\n7. Testing/verification considerations\n- Verify each cited evidence path exists in repo before finalizing status lines.\n- Verify backlog excludes already completed scope (no M1\u2013M4 action items).\n- Verify no non-doc files are changed.\n\nFactual conflicts to flag in the plan doc\n- Milestone text says template opt-in flag is in `scripts/validate_driver.sh`; current implementation is in `scripts/validate_process.sh`.\n- Milestone text references `tests/test_family_node_hardhat_solidity.py`; that file does not exist. Equivalent node-hardhat coverage exists in `tests/test_render_validation_templates_node_hardhat_regressions.py` and related tests.\n- Milestone text lists `.github/workflows/validation-refresh.yml` and `.github/workflows/nightly-validation-selftest.yml`; both are currently absent.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "eef4dea63fcc67b36063adfd0d38c8ba432db631408cac12288fb30fdc57abb1",
+  "lineage": {
+    "issue_number": 1470,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24701196255",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24701196255",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1470"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421024652_5e07baa71b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1470,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24701196255"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1470",
+  "timestamps": {
+    "created_at": "2026-04-21T02:46:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
