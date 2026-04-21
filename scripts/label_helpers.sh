@@ -189,7 +189,7 @@ _remove_issue_label_if_present() {
 		return 0
 	fi
 
-	echo "::warning::set_issue_phase_label_resilient: failed removing '${label_name}' from issue #${issue_number} in '${repo}': ${_rm_err}" >&2
+	echo "::warning::_remove_issue_label_if_present: failed removing '${label_name}' from issue #${issue_number} in '${repo}': ${_rm_err}" >&2
 	return 1
 }
 
@@ -218,6 +218,7 @@ set_issue_phase_label_resilient() {
 	if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 		-f "labels[]=${target_label}" >/dev/null 2>&1; then
 		echo "::warning::set_issue_phase_label_resilient: failed to add '${target_label}' to issue #${issue_number} in '${repo}'." >&2
+		return 1
 	fi
 
 	for phase_label in "${_AI_PHASE_TRANSITION_LABELS[@]}"; do

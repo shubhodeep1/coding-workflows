@@ -3529,7 +3529,7 @@ jobs:
                 return 0
               fi
 
-              echo "::warning::set_issue_phase_label_resilient: failed removing '${label_name}' from issue #${issue_number} in '${repo}': ${rm_err}"
+              echo "::warning::_remove_issue_label_if_present: failed removing '${label_name}' from issue #${issue_number} in '${repo}': ${rm_err}"
               return 1
             }
 
@@ -3552,8 +3552,10 @@ jobs:
               )
 
               ensure_label_exists "${target_label}" "${repo}" || true
-              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" -f "labels[]=${target_label}" >/dev/null 2>&1 || \
+              if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" -f "labels[]=${target_label}" >/dev/null 2>&1; then
                 echo "::warning::set_issue_phase_label_resilient: failed to add '${target_label}' on issue #${issue_number}."
+                return 1
+              fi
 
               for phase_label in "${phase_labels[@]}"; do
                 if [ "${phase_label}" = "${target_label}" ]; then
@@ -3678,7 +3680,7 @@ jobs:
                   return 0
                 fi
 
-                echo "::warning::set_issue_phase_label_resilient: failed removing '${label_name}' from issue #${issue_number} in '${repo}': ${rm_err}"
+                echo "::warning::_remove_issue_label_if_present: failed removing '${label_name}' from issue #${issue_number} in '${repo}': ${rm_err}"
                 return 1
               }
 
@@ -3701,8 +3703,10 @@ jobs:
                 )
 
                 ensure_label_exists "${target_label}" "${repo}" || true
-                gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" -f "labels[]=${target_label}" >/dev/null 2>&1 || \
+                if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" -f "labels[]=${target_label}" >/dev/null 2>&1; then
                   echo "::warning::set_issue_phase_label_resilient: failed to add '${target_label}' on issue #${issue_number}."
+                  return 1
+                fi
 
                 for phase_label in "${phase_labels[@]}"; do
                   if [ "${phase_label}" = "${target_label}" ]; then
@@ -4320,7 +4324,7 @@ jobs:
                 return 0
               fi
 
-              echo "::warning::set_issue_phase_label_resilient: failed removing '${label_name}' from issue #${issue_number} in '${repo}': ${rm_err}"
+              echo "::warning::_remove_issue_label_if_present: failed removing '${label_name}' from issue #${issue_number} in '${repo}': ${rm_err}"
               return 1
             }
 
@@ -4343,8 +4347,10 @@ jobs:
               )
 
               ensure_label_exists "${target_label}" "${repo}" || true
-              gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" -f "labels[]=${target_label}" >/dev/null 2>&1 || \
+              if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" -f "labels[]=${target_label}" >/dev/null 2>&1; then
                 echo "::warning::set_issue_phase_label_resilient: failed to add '${target_label}' on issue #${issue_number}."
+                return 1
+              fi
 
               for phase_label in "${phase_labels[@]}"; do
                 if [ "${phase_label}" = "${target_label}" ]; then
