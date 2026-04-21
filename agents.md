@@ -504,6 +504,39 @@ Operational rules:
 - The gate evaluation step must remain the **first** decision point in the review pipeline so consumer-repo wrappers inherit the skip for free via the reusable-workflow call. Do not move the skip logic downstream into per-reviewer jobs.
 - Do **not** extend the skip to `[ai-merge-resolve]` commits without also adding a post-resolution review path — the current design relies on the mirror guard's `CONFLICT_RESOLVED!=true` clause to ensure resolver commits still get reviewed exactly once before merge.
 
+### 20.2 Ledger-Only Commit Auto-Merge
+
+§20.1's skip creates an interaction bug: when a review pass produces no productive edit but `scripts/review_issue_ledger.sh` still writes `REVIEW_LEDGER_PATH` (default `.ai/review_issue_ledger.txt`), the `commit_changes` step produces an `[ai-autofix]` commit whose only tracked path is the ledger. That commit sets `DID_COMMIT=true`, which historically gated three "clean review" steps (ready-to-merge label, enable auto-merge, telegram success) out of firing. The subsequent `pull_request.synchronize` event is then skipped by §20.1, so there is no follow-up run in which those gates could fire. Result: a PR that the editor cleared as no-change gets stuck in `mergeable_state=clean` indefinitely (see PR #1472).
+
+Contract:
+
+- `jobs.codex-agent.steps.commit_changes` writes a second signal alongside `DID_COMMIT` / `did_commit`: **`LEDGER_ONLY_COMMIT`** (env) and **`ledger_only_commit`** (step output). The flag is `true` iff `git diff-tree --no-commit-id --name-only -r HEAD` emits exactly one path equal to `${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger.txt}`. When `commit_changes` runs, its default is `false` (including the no-commit branch). If `commit_changes` is skipped (e.g. `max_iterations_reached` / `PR_CLOSED` short-circuits), the env var and step output are undefined; downstream `if` expressions must not rely on the flag being set in that case (the `did_commit != 'true'` clause they OR with already handles the skipped-commit branch).
+- **Five gates** OR `env.LEDGER_ONLY_COMMIT == 'true'` into their existing `steps.commit_changes.outputs.did_commit != 'true'` clause:
+  1. `Detect editor-claimed-but-uncommitted changes` (sets `EDITOR_CHANGES_LOST`) — must still run to verify the editor's "no edit" claim.
+  2. `Validate editor no-op disposition` (sets `EDITOR_NOOP_SUSPICIOUS`) — same reason.
+  3. `Mark linked issues ready to merge` — applies `ai:ready-to-merge`.
+  4. `Enable auto-merge on PR` — `gh pr merge --squash --auto`.
+  5. `Telegram success` — DEBUG-level completion notify.
+- The push step (`DID_COMMIT == 'true' || CONFLICT_RESOLVED == 'true'`) is **not** touched. Ledger-only commits still push so `scripts/review_issue_ledger.sh` can read its own prior state on the next iteration — losing the ledger push would reset `persist_count` and re-open already-resolved issues as fresh findings.
+- The §20.1 gate skip is **not** touched either. The subsequent `synchronize` run is still skipped; clean-review work happens in the same run that produced the ledger-only commit.
+
+Why `LEDGER_ONLY_COMMIT` and not repurposing `DID_COMMIT`:
+
+- The push step, peer-dedup retrigger, and iteration counter all key off `DID_COMMIT`. Flipping it to `false` on ledger-only commits would lose the ledger push, defeating the ledger's cross-iteration persistence. Per CLAUDE.md §6 an existing identifier's semantics are immutable; add alongside.
+- The safety gates (`EDITOR_CHANGES_LOST`, `EDITOR_NOOP_SUSPICIOUS`) correctly skip on any `DID_COMMIT=true` before this fix because a productive edit commit self-evidently proves the editor ran. A ledger-only commit does **not** prove the editor ran (the ledger write happens in a separate pipeline stage), so those gates must still run — hence the explicit `|| LEDGER_ONLY_COMMIT == 'true'` in gates 1–2 as well as the clean-review gates 3–5.
+
+API cost audit (CLAUDE.md §15):
+
+- The detection uses a single `git diff-tree --no-commit-id --name-only -r HEAD` — a local git operation, zero GitHub API calls.
+- No new `gh` invocations. No new batched or cached data. No cycle-local caching needed (decision is scoped to the single commit just produced).
+
+Operational rules:
+
+- Renames of `LEDGER_ONLY_COMMIT`, `ledger_only_commit`, or the env var's default path reference `REVIEW_LEDGER_PATH:-.ai/review_issue_ledger.txt` are breaking changes per CLAUDE.md §6. Add alongside.
+- The ledger-path comparison must use `${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger.txt}` (not a hardcoded constant) so a consumer repo overriding `REVIEW_LEDGER_PATH` does not silently lose the auto-merge path — the detector and `scripts/review_issue_ledger.sh` must agree on the path. Both sides of the comparison are passed through a local `normalize_rel_path` shim (`sed -e 's#^\(\./\)\+##' -e 's#//*#/#g' -e 's#/$##'`) so equivalent relative spellings (`./.ai/...`, `.ai//...`, trailing slash) match the canonical form that `git diff-tree --name-only` emits. Absolute `REVIEW_LEDGER_PATH` values still pass through the same shim (the leading `/` is preserved because the first sed expression only strips `./`), so an absolute path's normalized form remains absolute and will not agree with git's relative-path output — the detector correctly declines to mark such commits as ledger-only.
+- Do **not** extend `LEDGER_ONLY_COMMIT=true` to multi-file commits that happen to include the ledger. The signal's entire meaning is "the only tracked change is bookkeeping"; a commit that also touches runtime paths represents a productive edit and the existing `DID_COMMIT=true` path correctly blocks the clean-review gates until the next verification pass.
+- If a future change introduces another always-written bookkeeping path, add it to the detector's single-path comparison as an equal-sized union (e.g. "commit contains exactly the ledger **and** the new bookkeeping file, nothing else"); do not loosen to a subset check.
+
 ---
 
 ## FINAL REMINDER
