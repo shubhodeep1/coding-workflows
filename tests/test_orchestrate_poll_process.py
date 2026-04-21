@@ -473,8 +473,10 @@ def _run_poller(
 			"graphql_mode": gql_mode,
 			"graphql_labels": {str(k): list(v) for k, v in gql_labels.items()},
 			"graphql_calls": 0,
+			"candidate_details_graphql_calls": 0,
 			"label_batch_graphql_calls": 0,
 			"issue_label_calls": {},
+			"issue_state_calls": {},
 			"fail_validation_dispatch": fail_validation_dispatch,
 			"fail_release_dispatch": fail_release_dispatch,
 			"default_branch": "main",
@@ -909,14 +911,24 @@ if args[0] == 'api':
 		for f in fields:
 			if f.startswith('query='):
 				query = f.split('=', 1)[1]
+		has_issue_aliases = bool(re.search(r'i\d+\s*:\s*issue\(number:\s*\d+\)', query))
+		is_candidate_details_batch = (
+			has_issue_aliases
+			and 'comments(last:' in query
+			and 'timelineItems(' in query
+		)
+		if is_candidate_details_batch:
+			store['candidate_details_graphql_calls'] = int(store.get('candidate_details_graphql_calls', 0)) + 1
 		# Classify the query so tests can count wave-label-batch attempts
 		# independently of unrelated GraphQL callers (standalone-stall
 		# marker search, candidate details batch). The wave label batch
 		# uses aliased issue(number:N) selectors and requests only labels —
 		# no comments(last:) and no search(query:).
 		is_label_batch = (
-			bool(re.search(r'i\d+\s*:\s*issue\(number:\s*\d+\)', query))
+			has_issue_aliases
+			and 'labels(first:' in query
 			and 'comments(last:' not in query
+			and 'timelineItems(' not in query
 			and 'search(query:' not in query
 		)
 		if is_label_batch:
@@ -932,8 +944,64 @@ if args[0] == 'api':
 		for num in aliases:
 			if mode == 'partial' and aliases and num == aliases[-1]:
 				continue
+			issue = get_issue(num)
+			issue_state = 'CLOSED' if issue.get('closed') else 'OPEN'
 			labels = store.get('graphql_labels', {}).get(str(num), get_issue(num).get('labels', []))
-			repo[f'i{num}'] = {'labels': {'nodes': [{'name': label} for label in labels]}}
+			issue_payload = {}
+			if 'number' in query:
+				issue_payload['number'] = num
+			if 'state' in query:
+				issue_payload['state'] = issue_state
+			if 'labels(first:' in query:
+				issue_payload['labels'] = {'nodes': [{'name': label} for label in labels]}
+			if 'comments(last:' in query:
+				comment_nodes = []
+				for comment in issue.get('comments', []):
+					comment_nodes.append({
+						'databaseId': int(comment.get('id', 0) or 0),
+						'body': str(comment.get('body', '')),
+						'createdAt': '2026-01-01T00:00:00Z',
+					})
+				issue_payload['comments'] = {'nodes': comment_nodes}
+			if 'timelineItems(' in query:
+				linked_pr_num = store.get('issue_linked_prs', {}).get(str(num))
+				timeline_nodes = []
+				if linked_pr_num is not None:
+					pr = None
+					for entry in store.get('prs', []):
+						if int(entry.get('number', 0) or 0) == int(linked_pr_num):
+							pr = entry
+							break
+					if pr is None:
+						pr = {
+							'number': int(linked_pr_num),
+							'state': 'open',
+							'merged': False,
+							'headRefName': f'ai/issue-{linked_pr_num}',
+							'mergeable': True,
+							'mergeable_state': 'clean',
+						}
+					pr_state = str(pr.get('state', 'open')).upper()
+					if pr_state == 'MERGED':
+						pr_state = 'CLOSED'
+					timeline_nodes.append({
+						'source': {
+							'__typename': 'PullRequest',
+							'number': int(pr.get('number', linked_pr_num)),
+							'state': pr_state,
+							'merged': bool(pr.get('merged', False)),
+							'headRefName': pr.get('headRefName', ''),
+							'mergeable': pr.get('mergeable', None),
+							'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
+							'commits': {
+								'nodes': [
+									{'commit': {'pushedDate': pr.get('headPushedAt', '2026-01-01T00:00:00Z'), 'committedDate': pr.get('headPushedAt', '2026-01-01T00:00:00Z')}}
+								],
+							},
+						},
+					})
+				issue_payload['timelineItems'] = {'nodes': timeline_nodes}
+			repo[f'i{num}'] = issue_payload
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
 
@@ -1002,6 +1070,9 @@ if args[0] == 'api':
 		if jq == '.body':
 			print(issue.get('body', ''))
 		elif jq == '.state':
+			state_counts = store.setdefault('issue_state_calls', {})
+			state_counts[m.group(1)] = int(state_counts.get(m.group(1), 0)) + 1
+			save()
 			print(issue_state)
 		elif jq and (jq == '.title' or jq == '.title // ""'):
 			print(issue.get('title', ''))
@@ -1597,6 +1668,45 @@ def test_label_batch_graphql_full_skips_rest_fallback():
 	)
 	assert result["label_batch_graphql_calls"] == 1
 	assert result["issue_label_calls"].get("10", 0) == 0
+
+
+def test_current_wave_state_graphql_full_skips_rest_fallback():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		gql_mode="full",
+	)
+	assert result["candidate_details_graphql_calls"] > 0
+	assert result["issue_state_calls"].get("10", 0) == 0
+
+
+def test_current_wave_state_graphql_partial_falls_back_to_rest():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		gql_mode="partial",
+	)
+	assert result["candidate_details_graphql_calls"] > 0
+	assert result["issue_state_calls"].get("10", 0) > 0
+
+
+def test_current_wave_state_graphql_error_falls_back_to_rest():
+	state = _base_state(status="in_progress")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		gql_mode="error",
+	)
+	assert result["candidate_details_graphql_calls"] > 0
+	assert result["issue_state_calls"].get("10", 0) > 0
 
 
 def test_ensure_label_exists_avoids_repo_label_get_probe_and_accepts_already_exists():
@@ -3410,6 +3520,7 @@ def test_backward_scan_updates_prior_wave_merged_issue():
 	wave1_issues = {i["id"]: i["status"] for i in ls["waves"][0]["issues"]}
 	assert wave1_issues.get("fixup-1") == "merged", \
 		f"Expected fixup-1 status=merged, got {wave1_issues.get('fixup-1')}"
+	assert result["issue_label_calls"].get("35", 0) == 0
 
 
 def test_backward_scan_updates_prior_wave_closed_issue():
@@ -3455,6 +3566,89 @@ def test_backward_scan_updates_prior_wave_closed_issue():
 	wave1_issues = {i["id"]: i["status"] for i in ls["waves"][0]["issues"]}
 	assert wave1_issues.get("fixup-1") == "closed", \
 		f"Expected fixup-1 status=closed, got {wave1_issues.get('fixup-1')}"
+	assert result["issue_label_calls"].get("35", 0) == 0
+
+
+def test_backward_scan_label_batch_partial_falls_back_to_rest():
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 2,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+					{"id": "fixup-1", "github_issue": 35, "status": "pending"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": 20, "status": "pending"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10, "fixup-1": 35, "issue-2": 20},
+		"pending_issue_defs": {},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 35: ["ai:merged"], 20: ["ai:implementing"]},
+		gql_mode="partial",
+	)
+	assert result["issue_label_calls"].get("35", 0) > 0
+
+
+def test_backward_scan_label_batch_error_falls_back_to_rest():
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 2,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+					{"id": "fixup-1", "github_issue": 35, "status": "pending"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": 20, "status": "pending"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10, "fixup-1": 35, "issue-2": 20},
+		"pending_issue_defs": {},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 35: ["ai:merged"], 20: ["ai:implementing"]},
+		gql_mode="error",
+	)
+	assert result["issue_label_calls"].get("35", 0) > 0
 
 
 def test_in_progress_judge_recreates_closed_fixup_id_stays_on_current_wave():
