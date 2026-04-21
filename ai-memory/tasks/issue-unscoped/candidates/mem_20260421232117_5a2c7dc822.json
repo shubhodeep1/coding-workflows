@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_workflow_logs.py:682-687 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: `_is_missing_log_archive_error` uses overly broad string matching, so unrelated errors mentioning `actions/runs/.../logs` can be misclassified as missing archive soft-fails.\n  WHY: The fallback substring check can match the wrong endpoint or a differently formatted message, which would suppress a real failure instead of surfacing it; reviewers disagreed only on confidence, not the root cause.\n- scripts/collect_workflow_logs.py:746 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: The exception normalization flow relies on `normalized_exc is exc` identity comparison to decide whether to re-raise or chain.\n  WHY: This is fragile because it depends on `_normalize_log_archive_exception` returning the exact same object when unchanged; reviewers agreed it is a maintenance hazard rather than an immediate runtime bug.\n- scripts/collect_workflow_logs.py:729-751 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, stepfun_step-3_5-flash]\n  PROBLEM: `_fetch_run_log_archive` wraps `gh_api_bytes(..., retries=1)` in an outer retry loop, so retry/backoff behavior is nested.\n  WHY: The combined retry layers can compound sleep time on repeated transient failures, increasing latency; one reviewer considered this milder and one treated it as a real concern.\n- scripts/collect_workflow_logs.py:751 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2]\n  PROBLEM: `raise normalized_exc from exc` may create noisy chained tracebacks on repeated failures.\n  WHY: The reviewer flagged this as a readability/diagnostics issue in failure paths, but it is not otherwise corroborated by the other reviews.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/collect_workflow_logs.py:678-685 | severity=medium | confidence=4\n  PROBLEM: `_is_missing_log_archive_error` uses fragile string matching to detect missing log archive errors.\n  WHY: It checks for `\"404\"` and `actions/runs/.../logs` substrings, which can fail if GitHub changes message formatting or can match unrelated errors.\n- scripts/collect_workflow_logs.py:713-751 | severity=low | confidence=3\n  PROBLEM: Nested retry loops in `_fetch_run_log_archive` can compound sleep times.\n  WHY: The outer retry loop and the inner `gh_api_bytes(..., retries=1)` retry logic can stack delays on repeated transient failures.\n- scripts/collect_workflow_logs.py:746 | severity=low | confidence=3\n  PROBLEM: The `if normalized_exc is exc:` check relies on fragile object identity comparison.\n  WHY: It depends on `_normalize_log_archive_exception` returning the exact same object when unchanged.\n- scripts/collect_workflow_logs.py:751 | severity=low | confidence=2\n  PROBLEM: `raise normalized_exc from exc` can create noisy chained tracebacks.\n  WHY: Repeated failures would accumulate chained exceptions, making the traceback harder to read.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- tests/test_collect_workflow_logs.py:496 | severity=high | confidence=5\n  PROBLEM: `orig_sleep` is referenced in test cleanup without being guaranteed to exist in all execution paths.\n  WHY: If the test fails before `orig_sleep` is assigned, the `finally` block can raise `NameError`.\n- scripts/collect_workflow_logs.py:684 | severity=medium | confidence=4\n  PROBLEM: `_is_missing_log_archive_error` uses brittle string matching.\n  WHY: The fallback `(\"actions/runs/\" in normalized and \"/logs\" in normalized)` is too broad and can misclassify unrelated errors as missing archives.\n- scripts/collect_workflow_logs.py:746 | severity=low | confidence=3\n  PROBLEM: The code uses `is` identity checks for exception comparison.\n  WHY: It assumes `_normalize_log_archive_exception` returns the same object when unchanged, which is an implementation-detail dependency.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/collect_workspace_logs.py (actually tests/test_collect_workspace_Logs.0py):500-540 | severity=high | confidence=4\n  PROBLEM: `test_fetch_workspace_Log_Archive_Classifies_missing_Archive_Soft_Fail()` does not mock or restore `time.sleep`, so it can inherit stale state and incur real delays.\n  WHY: Unlike the first test, this one does not save `collector.time.sleep`, replace it with a stub, or restore it in `finally`.\n- scripts/collect_workspace_logs.py:746 | severity=low | confidence=3\n  PROBLEM: The code uses `if normalized_Exc is Exc:` to decide whether the exception was transformed.\n  WHY: This depends on object identity instead of explicit state, so refactoring the helper could change control flow.\n- scripts/collect_workspace_logs.py:679-687 | severity=medium | confidence=3\n  PROBLEM: `_is_missing_Log_Archive_error` uses overly broad string matching for missing archive classification.\n  WHY: The fallback `(\"actions/runs/\" in normalized and \"/logs\" in normalized)` can match unrelated endpoints and misclassify errors.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/collect_workflow_logs.py:682-684 | severity=medium | confidence=4\n  PROBLEM: The condition `(\"actions/runs/\" in normalized and \"/logs\" in normalized)` is overly broad and does not verify that the run_id matches.\n  WHY: It can misclassify a 404 error mentioning some other `actions/runs/.../logs` path as a missing archive for the current run.\n- scripts/collect_workflow_logs.py:746 | severity=low | confidence=3\n  PROBLEM: Using `normalized_exc is exc` to detect whether the exception was transformed relies on object identity rather than explicit state.\n  WHY: If `_normalize_log_archive_exception` ever returns an equal but non-identical object, the check would alter exception chaining behavior.\n- scripts/collect_workflow_logs.py:729-743 | severity=low | confidence=2\n  PROBLEM: The outer retry loop in `_fetch_run_log_archive` nests retries on top of `gh_api_bytes(..., retries=1)`.\n  WHY: The layered retries can compound total sleep time during repeated transient failures.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "a2c75af8a340c81d620e5f6d44a3f090e10451b7a6a6f1afc72784a0d3ff2a47",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1505,
+    "run_id": "24750953763",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24750953763",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421232117_5a2c7dc822",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1505,
+    "run_id": "24750953763"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T23:21:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
