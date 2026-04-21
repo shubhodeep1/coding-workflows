@@ -454,6 +454,44 @@ def test_extract_full_logs_decodes_without_truncation():
 	assert full_logs == [{"step_name": "failure", "content": "E" * 5000}]
 
 
+def test_fetch_run_log_archive_retries_transient_failure_then_success():
+	orig_gh_api_bytes = collector.gh_api_bytes
+	orig_sleep = collector.time.sleep
+	cache: dict[tuple[str, int], bytes | Exception] = {}
+	attempts = {"count": 0}
+	sleep_calls: list[float] = []
+
+	def fake_gh_api_bytes(
+		endpoint: str,
+		*,
+		token: str,
+		retries: int = 3,
+		backoff_seconds: float = 1.0,
+	) -> bytes:
+		attempts["count"] += 1
+		assert retries == 1
+		assert backoff_seconds == collector.LOG_ARCHIVE_FETCH_BACKOFF_SECONDS
+		if attempts["count"] == 1:
+			raise RuntimeError(f"gh api failed for {endpoint} (exit=1): 503 temporarily unavailable")
+		return b"zip-bytes"
+
+	def fake_sleep(seconds: float) -> None:
+		sleep_calls.append(seconds)
+
+	collector.gh_api_bytes = fake_gh_api_bytes
+	collector.time.sleep = fake_sleep
+	try:
+		payload = collector._fetch_run_log_archive("owner/repo", 701, token="token", cache=cache)
+	finally:
+		collector.gh_api_bytes = orig_gh_api_bytes
+		collector.time.sleep = orig_sleep
+
+	assert payload == b"zip-bytes"
+	assert attempts["count"] == 2
+	assert sleep_calls == [collector.LOG_ARCHIVE_FETCH_BACKOFF_SECONDS]
+	assert cache[("owner/repo", 701)] == b"zip-bytes"
+
+
 def test_select_notable_runs_success_sampling():
 	# Build 30 successful runs — the slow bucket picks the top SLOW_RUNS_PER_REPO (10)
 	# by duration; remaining successful runs are candidates for random sampling.
@@ -886,6 +924,160 @@ print(json.dumps({}))
 
 		store_after = json.loads(store_file.read_text(encoding="utf-8"))
 		assert store_after["log_call_counts"] == {"201": 1, "202": 1}
+
+
+def test_main_missing_log_archive_soft_fails_and_dedupes_attempts():
+	with tempfile.TemporaryDirectory(prefix="collector-missing-log-archive-test-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir(parents=True)
+		store_file = tmp / "gh_store.json"
+		report_file = tmp / "report.json"
+		log_output_dir = tmp / "log-output"
+
+		store = {
+			"runs_pages": {
+				"1": [
+					{
+						"id": 301,
+						"name": "AI Implement",
+						"path": ".github/workflows/implement.yml",
+						"status": "completed",
+						"conclusion": "failure",
+						"run_attempt": 1,
+						"created_at": "2026-04-10T14:00:00Z",
+						"run_started_at": "2026-04-10T14:00:00Z",
+						"updated_at": "2026-04-10T14:06:40Z",
+					}
+				],
+				"2": [],
+			},
+			"jobs": {
+				"301": {
+					"1": [
+						{
+							"id": 9301,
+							"name": "implement",
+							"conclusion": "failure",
+							"steps": [{"name": "run implement", "conclusion": "failure"}],
+						}
+					],
+					"2": [],
+				}
+			},
+			"log_call_counts": {},
+			"fail_logs_for": [301],
+		}
+		store_file.write_text(json.dumps(store), encoding="utf-8")
+
+		gh_mock = r'''#!/usr/bin/env python3
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+store_path = Path(os.environ["GH_MOCK_STORE"])
+store = json.loads(store_path.read_text(encoding="utf-8"))
+args = sys.argv[1:]
+if not args or args[0] != "api":
+	print("unsupported", file=sys.stderr)
+	sys.exit(1)
+
+endpoint = ""
+for arg in args[1:]:
+	if not arg.startswith("-"):
+		endpoint = arg
+		break
+if not endpoint:
+	print("missing endpoint", file=sys.stderr)
+	sys.exit(1)
+
+if "/actions/runs?" in endpoint and "/jobs?" not in endpoint:
+	query = parse_qs(urlparse("https://api/" + endpoint).query)
+	page = query.get("page", ["1"])[0]
+	print(json.dumps({"workflow_runs": store.get("runs_pages", {}).get(page, [])}))
+	sys.exit(0)
+
+m = re.search(r"/actions/runs/(\d+)/jobs\?", endpoint)
+if m:
+	run_id = int(m.group(1))
+	query = parse_qs(urlparse("https://api/" + endpoint).query)
+	page = query.get("page", ["1"])[0]
+	run_pages = store.get("jobs", {}).get(str(run_id), {})
+	print(json.dumps({"jobs": run_pages.get(page, [])}))
+	sys.exit(0)
+
+m = re.search(r"/actions/runs/(\d+)/logs$", endpoint)
+if m:
+	run_id = int(m.group(1))
+	counts = store.setdefault("log_call_counts", {})
+	key = str(run_id)
+	counts[key] = int(counts.get(key, 0)) + 1
+	store_path.write_text(json.dumps(store), encoding="utf-8")
+	if run_id in store.get("fail_logs_for", []):
+		print("HTTP 404 Not Found", file=sys.stderr)
+		sys.exit(1)
+	import io
+	import zipfile
+	buffer = io.BytesIO()
+	with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+		archive.writestr("01_run.txt", "ok\n")
+	sys.stdout.buffer.write(buffer.getvalue())
+	sys.exit(0)
+
+print(json.dumps({}))
+'''
+		_write_exec(bin_dir / "gh", gh_mock)
+
+		env = os.environ.copy()
+		env.update(
+			{
+				"GH_TOKEN": "token",
+				"AI_MEMORY_ENABLED": "false",
+				"GH_MOCK_STORE": str(store_file),
+				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			}
+		)
+		proc = subprocess.run(
+			[
+				"python3",
+				str(COLLECTOR_PATH),
+				"--repo",
+				"owner/repo",
+				"--lookback-days",
+				"7",
+				"--max-pages",
+				"2",
+				"--max-log-runs",
+				"1",
+				"--log-output-dir",
+				str(log_output_dir),
+				"--output",
+				str(report_file),
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+		assert report["summary"]["total_runs"] == 1
+		assert len(report["errors"]) == 1
+		error = report["errors"][0]
+		assert error["repository"] == "owner/repo"
+		assert error["run_id"] == "301"
+		assert error["scope"] == "logs"
+		assert error["message"].startswith(f"{collector.MISSING_LOG_ARCHIVE_ERROR_MARKER}:")
+
+		by_run_id = {item["run_id"]: item for item in report["runs"]}
+		assert "log_excerpts" not in by_run_id[301]
+
+		store_after = json.loads(store_file.read_text(encoding="utf-8"))
+		assert store_after["log_call_counts"] == {"301": collector.LOG_ARCHIVE_FETCH_RETRIES}
 
 
 # ---------------------------------------------------------------------------

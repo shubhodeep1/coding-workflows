@@ -58,8 +58,16 @@ RETRY_MARKERS = (
     "503",
     "504",
 )
+LOG_ARCHIVE_FETCH_RETRIES = 3
+LOG_ARCHIVE_FETCH_BACKOFF_SECONDS = 1.0
+MISSING_LOG_ARCHIVE_MARKERS = ("404", "not found")
+MISSING_LOG_ARCHIVE_ERROR_MARKER = "partial_data:missing_log_archive"
 WORKFLOW_LOG_CACHE_SCHEMA_VERSION = "v1"
 WORKFLOW_LOG_CACHE_SEEN_SET_LIMIT = 500
+
+
+class MissingLogArchiveError(RuntimeError):
+    """Raised when a workflow run log archive does not exist (404)."""
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -668,6 +676,22 @@ def extract_log_excerpts(log_archive: bytes, max_chars: int = LOG_EXCERPT_MAX_CH
     return excerpts
 
 
+def _is_missing_log_archive_message(message: str) -> bool:
+    message_lower = message.lower()
+    return any(marker in message_lower for marker in MISSING_LOG_ARCHIVE_MARKERS)
+
+
+def _is_retryable_log_archive_message(message: str) -> bool:
+    message_lower = message.lower()
+    return any(marker in message_lower for marker in RETRY_MARKERS)
+
+
+def _build_missing_log_archive_error(repo: str, run_id: int, endpoint: str, detail: str) -> MissingLogArchiveError:
+    return MissingLogArchiveError(
+        f"{MISSING_LOG_ARCHIVE_ERROR_MARKER}: repository={repo} run_id={run_id} endpoint={endpoint} detail={detail}"
+    )
+
+
 def _fetch_run_log_archive(
     repo: str,
     run_id: int,
@@ -682,15 +706,53 @@ def _fetch_run_log_archive(
             raise cached
         return cached
 
-    try:
-        payload = gh_api_bytes(_build_logs_endpoint(repo, run_id), token=token)
-    except Exception as exc:  # noqa: BLE001
-        if cache is not None:
-            cache[identity] = exc
-        raise
-    if cache is not None:
-        cache[identity] = payload
-    return payload
+    endpoint = _build_logs_endpoint(repo, run_id)
+    for attempt in range(1, LOG_ARCHIVE_FETCH_RETRIES + 1):
+        try:
+            payload = gh_api_bytes(
+                endpoint,
+                token=token,
+                retries=1,
+                backoff_seconds=LOG_ARCHIVE_FETCH_BACKOFF_SECONDS,
+            )
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc)
+            missing_log_archive = _is_missing_log_archive_message(message)
+            retryable = _is_retryable_log_archive_message(message)
+            if missing_log_archive and attempt >= LOG_ARCHIVE_FETCH_RETRIES:
+                missing_error = _build_missing_log_archive_error(repo, run_id, endpoint, message)
+                if cache is not None:
+                    cache[identity] = missing_error
+                raise missing_error from exc
+            if attempt < LOG_ARCHIVE_FETCH_RETRIES and (missing_log_archive or retryable):
+                time.sleep(LOG_ARCHIVE_FETCH_BACKOFF_SECONDS * attempt)
+                continue
+            if cache is not None:
+                cache[identity] = exc
+            raise
+        else:
+            if cache is not None:
+                cache[identity] = payload
+            return payload
+
+    raise RuntimeError(f"failed to fetch workflow run logs for {endpoint}")
+
+
+def _append_log_fetch_error(
+    errors: list[dict[str, str]],
+    *,
+    repository: str,
+    run_id: int,
+    exc: Exception,
+) -> None:
+    errors.append(
+        {
+            "repository": repository,
+            "run_id": str(run_id),
+            "scope": "logs",
+            "message": str(exc),
+        }
+    )
 
 
 def list_run_log_excerpts(
@@ -1102,14 +1164,7 @@ def export_categorized_logs(
             )
             full_logs_by_identity[identity] = extract_full_logs(payload)
         except Exception as exc:  # noqa: BLE001
-            errors.append(
-                {
-                    "repository": repository,
-                    "run_id": str(run_id),
-                    "scope": "logs",
-                    "message": str(exc),
-                }
-            )
+            _append_log_fetch_error(errors, repository=repository, run_id=run_id, exc=exc)
 
     for category in LOG_EXPORT_CATEGORIES:
         for run in categories[category]:
@@ -1366,14 +1421,7 @@ def main(argv: list[str] | None = None) -> int:
                 repo_cache["rows_snapshot"] = updated_rows
                 repo_cache["last_updated"] = _format_iso8601(datetime.now(timezone.utc))
         except Exception as exc:  # noqa: BLE001
-            errors.append(
-                {
-                    "repository": repository,
-                    "run_id": str(run_id),
-                    "scope": "logs",
-                    "message": str(exc),
-                }
-            )
+            _append_log_fetch_error(errors, repository=repository, run_id=run_id, exc=exc)
 
     _cache_write_context(
         repo_root=repo_root,
