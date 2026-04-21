@@ -144,6 +144,16 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_blocked_output.py
 
+      - name: Phase-label transition contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_label_helpers_phase_transition_contract.py
+
+      - name: Issue PR status payload fallback contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_issue_pr_status_payload_fallback_contract.py
+
       - name: AI label precreation contract test
         run: |
           set -euo pipefail

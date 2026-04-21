@@ -182,7 +182,7 @@ _remove_issue_label_if_present() {
 
 	local _rm_err_file
 	_rm_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
-	if gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${encoded_label}" \
+	if GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${encoded_label}" \
 		>/dev/null 2>"${_rm_err_file}"; then
 		[ "${_rm_err_file}" = "/dev/null" ] || rm -f "${_rm_err_file}"
 		return 0

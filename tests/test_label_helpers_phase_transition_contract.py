@@ -20,7 +20,7 @@ def test_resilient_phase_transition_helper_uses_targeted_add_remove() -> None:
 	assert "set_issue_phase_label_resilient()" in text
 	assert '_AI_PHASE_TRANSITION_LABELS=(' in text
 	assert 'gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels"' in text
-	assert 'gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${encoded_label}"' in text
+	assert 'GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${encoded_label}"' in text
 	assert '_remove_issue_label_if_present "${issue_number}" "${phase_label}" "${repo}" || true' in text
 
 
