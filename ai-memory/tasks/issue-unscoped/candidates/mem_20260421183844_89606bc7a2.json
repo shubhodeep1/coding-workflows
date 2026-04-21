@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:299 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: `FAILURE_REASON_DETAIL` is read with `sed -n '2p'`, so any multiline failure detail would be truncated to only the first line.\n  WHY: Both reviewers identified the same potential loss of detail in the failure-summary readback path; one reviewer noted the sanitization may prevent it, but the finding was still reported on the same code path and severity is the highest reported.\n- tests/test_update_workflows_guardrails.py:27 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v3_2, minimax_minimax-m2_5]\n  PROBLEM: The test assertion was reported as potentially mismatching the workflow\u2019s `\\r` sanitization pattern.\n  WHY: Both reviewers raised the same test-string concern on the same line, though both also noted it may be a false positive; severity is the highest reported.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/update_workflows.yml:299 | severity=low | confidence=2\n  PROBLEM: `FAILURE_REASON_DETAIL` is read with `sed -n '2p'`, so any multiline failure detail would be truncated to only the first line.\n  WHY: If `detail` contains newline characters or `\\n` sequences not handled by sanitization, `printf` writes multiple lines and `sed -n '2p'` only captures the first line of detail.\n- tests/test_update_workflows_guardrails.py:27 | severity=low | confidence=1\n  PROBLEM: The test checks for `$'\\\\r'` and was reported as potentially mismatching the actual workflow escape syntax.\n  WHY: The reviewer believed the string pattern could be off, though they also noted the test passed and may not actually be a runtime issue.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/update_workflows.yml:310 | severity=medium | confidence=5\n  PROBLEM: The summary step redundantly checks `FAILURE_REASON_CODE` before reading the failure-reason file.\n  WHY: The reviewer judged the fallback read path unnecessary because the `update` step already sets outputs before failing, so the extra file-read branch may never be needed.\n- tests/test_update_workflows_guardrails.py | severity=low | confidence=5\n  PROBLEM: The assertion on `detail_sanitized` was flagged as potentially fragile due to backslash escaping in the Python string literal.\n  WHY: The reviewer noted the test could fail if the literal pattern did not match the shell syntax exactly, though they also observed the current CI passed.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/update_workflows.yl | severity=medium | confidence=4\n  PROBLEM: The sanitization logic was reported as not replacing actual carriage-return and newline characters as intended.\n  WHY: The reviewer argued that the parameter expansion using `$'\\r'` and `$'\\n'` would not sanitize real control characters, leaving raw newlines in the failure reason file.\n- .github/workflows/update_workflows.yml:299 | severity=low | confidence=3\n  PROBLEM: `sed -n '2p'` only captures the first line of the failure-detail file.\n  WHY: The reviewer said multiline details would be truncated if they reach the summary step, because only line 2 is read back.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "bfd81dd4acc91f1b5867d482891aa47a5e693ee89e669fca7efed6ae3b0bca95",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1489,
+    "run_id": "24738577150",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24738577150",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421183844_89606bc7a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1489,
+    "run_id": "24738577150"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T18:38:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
