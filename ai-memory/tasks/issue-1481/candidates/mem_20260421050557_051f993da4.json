@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Ref Context**\n- `HEAD`: `7342faa9155af83163a10e56816e147bd2b94344`\n- Checked-out branch: `orchestrator/project-1479`\n- Integration metadata branch: `orchestrator/project-1479`\n- Mismatch: `false` (planning can proceed)\n\n**Clarification Mapping**\n- No `Q1/Q2/...` were asked in Clarify.\n- `/answer [auto-answered-by-orchestrator]` indicates continuation approval with no additional constraints.\n\n**Implementation Plan**\n\n1. Files likely to change\n- [.github/workflows/test-and-mark-stable.yml](.github/workflows/test-and-mark-stable.yml:369) (Phase 2 `wait-plan` block; specifically the `OTHER_ACTIVE_PLAN_RUNS` logic around lines ~482-485)\n- New targeted regression test file under `tests/` (recommended: `tests/test_test_and_mark_stable_workflow_contract.py`) to cover malformed/non-numeric active-run output behavior\n\n2. Functions/modules to implement\n- In Phase 2 (`id: wait-plan`) of `test-and-mark-stable.yml`:\n- Replace `OTHER_ACTIVE_PLAN_RUNS=$(gh api ... || echo \"0\")` command-substitution fallback pattern with guarded fetch + validate + parse flow\n- Reuse the existing in-file robustness pattern from the `_jobs_json_valid` approach in the same workflow ([test-and-mark-stable.yml](.github/workflows/test-and-mark-stable.yml:1331))\n- Add a strict numeric guard before `-gt` comparison so non-numeric payloads never reach integer comparison\n- Keep existing decision flow unchanged: if active plan runs exist, continue waiting; otherwise keep current failure path\n\n3. Data structures affected\n- GitHub Actions runs response payload for `GET /repos/${TEST_REPO}/actions/runs?per_page=50&created=>...`\n- Expected schema used in guard: top-level object containing `.workflow_runs` array\n- Shell variable contract: `OTHER_ACTIVE_PLAN_RUNS` must be guaranteed numeric before arithmetic comparison\n\n4. API/interface changes\n- No user-facing interface changes\n- No env var changes\n- Same GitHub API endpoint and query params; only parsing/validation hardening is changed\n\n5. Potential risks and edge cases\n- Malformed JSON, multi-document/contaminated stdout, missing `.workflow_runs`, empty API output\n- Preserving rate-limit and backoff behavior in `gh_api_safe`\n- Avoiding behavioral regressions in phase timeout handling and plan-failure signaling\n\n6. Testing considerations\n- Add a regression test that simulates malformed/non-numeric active-run output and verifies no integer-expression crash path\n- Add/keep a positive-path assertion that when active Plan runs are present, polling stays in wait behavior\n- Run targeted test module plus existing workflow-contract tests to ensure no unrelated phase behavior changed\n\n**Conflict Detection**\n- No factual conflict found between issue description and repository state; BUG-001 location and behavior match the current code path.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "36dab8392d889c535f8b60155cfdb45129244bc1f2c1bb9e31887cdbb6699211",
+  "lineage": {
+    "issue_number": 1481,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24704922323",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24704922323",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1481"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421050557_051f993da4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1481,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24704922323"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1481",
+  "timestamps": {
+    "created_at": "2026-04-21T05:05:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
