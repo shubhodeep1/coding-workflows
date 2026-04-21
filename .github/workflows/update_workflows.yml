@@ -115,6 +115,9 @@ jobs:
             if [ "$filename" = "$SELF_TEMPLATE" ]; then
               continue
             fi
+            if [ -e "$local_file" ] && [ -d "$local_file" ]; then
+              fail_with_reason "ERR_LOCAL_TARGET_IS_DIRECTORY" "Existing workflow path is a directory, not a file: ${local_file}"
+            fi
             if [ -e "$local_file" ] && [ ! -w "$local_file" ]; then
               fail_with_reason "ERR_LOCAL_TARGET_NOT_WRITABLE" "Existing workflow file is not writable: ${local_file}"
             fi
