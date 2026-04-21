@@ -742,13 +742,13 @@ def _fetch_run_log_archive(
             message = str(exc)
             missing_log_archive = _is_missing_log_archive_message(message)
             retryable = _is_retryable_log_archive_message(message)
-            if missing_log_archive:
+            if missing_log_archive and attempt >= LOG_ARCHIVE_FETCH_RETRIES:
                 detail = _extract_log_archive_error_detail(message)
                 missing_error = _build_missing_log_archive_error(repo, run_id, endpoint, detail)
                 if cache is not None:
                     cache[identity] = missing_error
                 raise missing_error from exc
-            if attempt < LOG_ARCHIVE_FETCH_RETRIES and retryable:
+            if attempt < LOG_ARCHIVE_FETCH_RETRIES and (missing_log_archive or retryable):
                 time.sleep(LOG_ARCHIVE_FETCH_BACKOFF_SECONDS * attempt)
                 continue
             if cache is not None:
