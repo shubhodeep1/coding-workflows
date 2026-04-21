@@ -2112,7 +2112,7 @@ jobs:
             # slashes, no trailing slash), but a consumer that sets
             # REVIEW_LEDGER_PATH to e.g. ./.ai/review_issue_ledger.txt
             # or .ai//review_issue_ledger.txt would otherwise silently
-            # fail to match and leave the PR stuck in the stuck-auto-merge
+            # fail to match and leave the PR stuck in the auto-merge
             # state this step is designed to resolve. See PR #1476.
             normalize_rel_path() {
               printf '%s\n' "$1" | sed -e 's#^\(\./\)\+##' -e 's#//*#/#g' -e 's#/$##'

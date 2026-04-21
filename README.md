@@ -375,7 +375,12 @@ jobs:
 > **Ledger-only commit auto-merge** — `scripts/review_issue_ledger.sh`
 > updates `REVIEW_LEDGER_PATH` (default `.ai/review_issue_ledger.txt`) on
 > every review pass, including passes where the editor reports
-> `Change status: not-edited`. When the resulting `[ai-autofix]` commit
+> `Change status: not-edited`. This ledger-only commit scenario applies
+> only when `REVIEW_LEDGER_PATH` is Git-tracked (or explicitly
+> force-added); with the default `.ai/review_issue_ledger.txt`
+> runtime-artifact path in repos that leave it gitignored, the ledger is
+> still updated locally for the run but is not part of the commit/push
+> and this bug cannot manifest. When the resulting `[ai-autofix]` commit
 > contains **only** the ledger, the `commit_changes` step sets
 > `LEDGER_ONLY_COMMIT=true` (and the `ledger_only_commit` step output) in
 > addition to `DID_COMMIT=true`. Five downstream gates OR this signal into
@@ -384,12 +389,13 @@ jobs:
 > `Validate editor no-op disposition`, `Mark linked issues ready to merge`,
 > `Enable auto-merge on PR`, and `Telegram success`. The two safety gates
 > still run to validate the editor's no-op claim, and the three
-> clean-review gates fire in the same run — required because the
-> `[ai-autofix]` ledger push triggers a `synchronize` event whose gate
-> job is skipped by `AUTOFIX_SKIP_SELF_TRIGGERED`, so auto-merge cannot
-> be deferred to the next run. The push step (`DID_COMMIT=true`) still
-> fires so the ledger lands on the PR branch and cross-iteration ledger
-> continuity is preserved.
+> clean-review gates fire in the same run — required because any
+> `[ai-autofix]` ledger push in tracked-ledger configurations triggers a
+> `synchronize` event whose gate job is skipped by
+> `AUTOFIX_SKIP_SELF_TRIGGERED`, so auto-merge cannot be deferred to the
+> next run. In tracked-ledger configurations the push step
+> (`DID_COMMIT=true`) still fires so the ledger lands on the PR branch
+> and cross-iteration ledger continuity is preserved there as well.
 
 ### Local replay helper for review artifacts
 
