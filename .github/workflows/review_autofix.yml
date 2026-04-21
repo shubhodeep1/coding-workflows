@@ -2115,7 +2115,7 @@ jobs:
             # fail to match and leave the PR stuck in the stuck-auto-merge
             # state this step is designed to resolve. See PR #1476.
             normalize_rel_path() {
-              printf '%s' "$1" | sed -e 's#^\(\./\)\+##' -e 's#//*#/#g' -e 's#/$##'
+              printf '%s\n' "$1" | sed -e 's#^\(\./\)\+##' -e 's#//*#/#g' -e 's#/$##'
             }
             LEDGER_PATH_FOR_DETECTOR="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger.txt}"
             NORMALIZED_LEDGER_PATH_FOR_DETECTOR="$(normalize_rel_path "${LEDGER_PATH_FOR_DETECTOR}")"
