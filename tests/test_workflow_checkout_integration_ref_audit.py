@@ -70,7 +70,7 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 	canonical_exec = "bash \"${resolver_script}\""
 	disallowed_inline_markers = (
 		"contents/scripts/resolve_integration_ref.sh?ref=${resolver_ref}",
-		"base64 --decode --output",
+		"base64 --decode >",
 		"sed -nE 's/^- Integration branch:",
 		"grep -Eq '^orchestrator/project-[0-9]+$'",
 		"/git/ref/heads/",
