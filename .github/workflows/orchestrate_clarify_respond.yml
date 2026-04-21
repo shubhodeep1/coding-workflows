@@ -93,7 +93,7 @@ jobs:
           resolver_stage_root="${RUNNER_TEMP}/integration-ref-resolver-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           resolver_stage_dir="${resolver_stage_root}/primary"
           resolver_fallback_dir="${resolver_stage_root}/main"
-          trap 'rm -rf "${resolver_stage_root}"' EXIT
+          trap '[ -n "${resolver_stage_root:-}" ] && rm -rf "${resolver_stage_root}"' EXIT
 
           stage_resolver_ref() {
             local ref="$1"
