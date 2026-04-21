@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `scripts/collect_workflow_logs.py`:701-705 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: In `_is_retryable_log_archive_message`, the status-code regex requires `http` or `status` before numeric codes, so bare status messages like `429 Too Many Requests` or `502 Bad Gateway` are not classified as retryable.\n  WHY: Multiple reviewers identified the same restrictive pattern; this can cause transient GitHub CLI/server errors to bypass the retry path and fail immediately.\n- `scripts/collect_workflow_logs.py`:701 | severity=low | confidence=4\n  flagged_by: [google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash, deepseek_deepseek-v3_2]\n  PROBLEM: `_is_retryable_log_archive_message` defines `text_markers` as a generator expression instead of a reusable tuple, unlike the sibling helper.\n  WHY: The current code works because `any()` consumes it once, but the iterator is fragile if the variable is ever reused; reviewers treated this as a low-severity consistency issue.\n- `scripts/collect_workflow_logs.py`:704-705 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, stepfun_step-3_5-flash]\n  PROBLEM: The regex construction can become overly permissive if `status_markers` is empty, because the alternation would collapse to an empty match.\n  WHY: This was raised as a defensive hardening concern; reviewers noted the current constants prevent it today, but the code would misclassify messages if the digit markers were ever removed.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- `scripts/collect_workflow_logs.py`:701-705 | severity=medium | confidence=5\n  PROBLEM: In `_is_retryable_log_archive_message`, the status-code regex requires `http` or `status` before numeric codes, so bare status messages like `429 Too Many Requests` or `502 Bad Gateway` are not classified as retryable.\n  WHY: The regex only matches prefixed forms, which can prevent legitimate transient errors from reaching the retry path.\n- `scripts/collect_workflow_logs.py`:701 | severity=low | confidence=3\n  PROBLEM: `_is_retryable_log_archive_message` uses a generator expression for `text_markers` instead of a tuple.\n  WHY: It works today because `any()` consumes it once, but it is fragile if the variable is reused later.\n- `scripts/collect_workflow_logs.py`:704-705 | severity=low | confidence=1\n  PROBLEM: If `status_markers` were ever empty, the regex could match `http` or `status` alone.\n  WHY: The current constants make this unlikely, but the constructed pattern would be overly broad in that edge case.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `scripts/collect_workflow_logs.py`:695 and 704 | severity=medium | confidence=5\n  PROBLEM: The regex `rf\"\\b(?:http|status)\\s*(?:code\\s*)?(?:{status_markers})\\b\"` requires the presence of word \"http\" or \"status\" to match a status code.\n  WHY: Standard HTTP error messages from the GitHub CLI or underlying library often contain just the code and reason (e.g., \"502 Bad Gateway\"), so the exception will not be classified as retryable and the fetch can fail immediately.\n- `scripts/collect_workflow_logs.py`:701 | severity=low | confidence=4\n  PROBLEM: `text_markers` is defined as a generator expression `(marker for ...)` rather than a static container like a `tuple`.\n  WHY: It is only consumed once today, but the generator would be exhausted if reused, making the logic fragile and inconsistent with the sibling helper.\n- `scripts/collect_workflow_logs.py`:704 | severity=low | confidence=3\n  PROBLEM: The regex construction fails to handle cases where `status_markers` might be empty.\n  WHY: If the digit markers were ever removed, the resulting empty alternation would match too broadly and cause false-positive retry classifications.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `scripts/collect_workflow_logs.py`:697-705 | severity=medium | confidence=4\n  PROBLEM: The regex `\\b(?:http|status)\\s*(?:code\\s*)?(?:{status_markers})\\b` requires the literal prefixes `http` or `status` before numeric status codes, so bare status text like `429 Too Many Requests` or `502 Bad Gateway` is not detected.\n  WHY: Messages from GitHub API that contain only the status code and description will not be classified as retryable or missing, which can cause immediate failure on subsequent calls.\n- `scripts/collect_workflow_logs.py`:701 | severity=low | confidence=3\n  PROBLEM: `_is_retryable_log_archive_message` uses a generator expression for `text_markers` instead of a tuple.\n  WHY: It works because `any()` consumes the generator once, but it becomes exhausted afterward and is more fragile than the sibling implementation.\n- `scripts/collect_workflow_logs.py`:695 and 704 | severity=low | confidence=3\n  PROBLEM: If the marker tuples ever contained no digit-only strings, the regex pattern would match `http` or `status` alone without any status code.\n  WHY: That would make the classification overly permissive and incorrectly mark many messages as retryable or missing.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- `scripts/collect_workflow_logs.py`:700-701 | severity=low | confidence=3\n  PROBLEM: `_is_retryable_log_archive_message` uses a generator expression for `text_markers` while `_is_missing_log_archive_message` uses a tuple.\n  WHY: It currently works because `any()` consumes the generator once, but future reuse would see an exhausted iterator; this is a style inconsistency rather than a runtime bug.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- `scripts/collect_workflow_logs.py`:701 | severity=low | confidence=4\n  PROBLEM: In `_is_retryable_log_archive_message`, text_markers is defined as a generator expression `(marker for marker in RETRY_MARKERS if not marker.isdigit())` instead of a tuple.\n  WHY: The generator is consumed on first use, so a later second iteration would silently be empty and could misclassify retryable errors.\n- `scripts/collect_workflow_logs.py`:704-705 | severity=medium | confidence=3\n  PROBLEM: The digit-status regex in `_is_retryable_log_archive_message` only matches numeric status codes when they are preceded by \"http\" or \"status\".\n  WHY: Bare status lines such as `429 Too Many Requests` or `502 Bad Gateway` will not be recognized as retryable, causing the retry loop to raise immediately instead of backing off.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "45c02956fba48df48cf67d9d18341206b2c6639fa5da78768f269f4826d71687",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1489,
+    "run_id": "24731251371",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24731251371",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421161017_09dbb40001",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1489,
+    "run_id": "24731251371"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T16:10:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
