@@ -7383,7 +7383,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 
   _wave_issue_nums_json='[]'
   if [ "${#_wave_issue_nums[@]}" -gt 0 ]; then
-    _wave_issue_nums_json="$(printf '%s\n' "${_wave_issue_nums[@]}" | jq -R 'select(length > 0) | tonumber' | jq -s '.')"
+    _wave_issue_nums_json="$(printf '%s\n' "${_wave_issue_nums[@]}" | jq -R 'select(length > 0) | select(test("^[0-9]+$")) | tonumber' | jq -s '.')"
   fi
 
   # Batch-fetch current-wave issue details once per cycle.  The state

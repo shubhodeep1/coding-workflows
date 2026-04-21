@@ -948,7 +948,7 @@ if args[0] == 'api':
 			issue_state = 'CLOSED' if issue.get('closed') else 'OPEN'
 			labels = store.get('graphql_labels', {}).get(str(num), get_issue(num).get('labels', []))
 			issue_payload = {}
-			if 'number' in query:
+			if re.search(r'(?m)^\s*number\s*$', query):
 				issue_payload['number'] = num
 			if 'state' in query:
 				issue_payload['state'] = issue_state
