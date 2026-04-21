@@ -492,6 +492,18 @@ def test_fetch_run_log_archive_retries_transient_failure_then_success():
 	assert cache[("owner/repo", 701)] == b"zip-bytes"
 
 
+def test_log_archive_error_classification_uses_error_detail_not_endpoint():
+	missing_false = "gh api failed for repos/o/r/actions/runs/404/logs (exit=1): 403 forbidden"
+	retry_false = "gh api failed for repos/o/r/actions/runs/503/logs (exit=1): 401 unauthorized"
+	missing_true = "gh api failed for repos/o/r/actions/runs/701/logs (exit=1): HTTP 404 Not Found"
+	retry_true = "gh api failed for repos/o/r/actions/runs/701/logs (exit=1): HTTP 503 Service Unavailable"
+
+	assert collector._is_missing_log_archive_message(missing_false) is False
+	assert collector._is_retryable_log_archive_message(retry_false) is False
+	assert collector._is_missing_log_archive_message(missing_true) is True
+	assert collector._is_retryable_log_archive_message(retry_true) is True
+
+
 def test_select_notable_runs_success_sampling():
 	# Build 30 successful runs — the slow bucket picks the top SLOW_RUNS_PER_REPO (10)
 	# by duration; remaining successful runs are candidates for random sampling.

@@ -676,14 +676,29 @@ def extract_log_excerpts(log_archive: bytes, max_chars: int = LOG_EXCERPT_MAX_CH
     return excerpts
 
 
+def _extract_log_archive_error_detail(message: str) -> str:
+    if message.startswith("gh api timed out for "):
+        return "timed out"
+    marker = "):"
+    detail_index = message.find(marker)
+    if detail_index == -1:
+        return message
+    return message[detail_index + len(marker) :].strip()
+
+
 def _is_missing_log_archive_message(message: str) -> bool:
-    message_lower = message.lower()
-    return any(marker in message_lower for marker in MISSING_LOG_ARCHIVE_MARKERS)
+    detail_lower = _extract_log_archive_error_detail(message).lower()
+    if "not found" in detail_lower:
+        return True
+    return re.search(r"\b(?:http|status)\s*(?:code\s*)?404\b", detail_lower) is not None
 
 
 def _is_retryable_log_archive_message(message: str) -> bool:
-    message_lower = message.lower()
-    return any(marker in message_lower for marker in RETRY_MARKERS)
+    detail_lower = _extract_log_archive_error_detail(message).lower()
+    text_markers = (marker for marker in RETRY_MARKERS if not marker.isdigit())
+    if any(marker in detail_lower for marker in text_markers):
+        return True
+    return re.search(r"\b(?:http|status)\s*(?:code\s*)?(502|503|504)\b", detail_lower) is not None
 
 
 def _build_missing_log_archive_error(repo: str, run_id: int, endpoint: str, detail: str) -> MissingLogArchiveError:
@@ -734,8 +749,6 @@ def _fetch_run_log_archive(
             if cache is not None:
                 cache[identity] = payload
             return payload
-
-    raise RuntimeError(f"failed to fetch workflow run logs for {endpoint}")
 
 
 def _append_log_fetch_error(
