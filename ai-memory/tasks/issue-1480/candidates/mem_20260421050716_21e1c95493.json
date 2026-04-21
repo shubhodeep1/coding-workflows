@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification interpretation\n- No Q1/Q2/etc. were issued in Clarify; `/answer [auto-answered-by-orchestrator]` means proceed with planning (no additional decisions required).\n\nPlanning ref context\n- HEAD: `7342faa9155af83163a10e56816e147bd2b94344`\n- Checked-out branch: `orchestrator/project-1479`\n- Integration metadata branch: `orchestrator/project-1479`\n- Mismatch: `false` (planning can proceed)\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/clarify.yml`\n- `.github/workflows/plan.yml`\n- `.github/workflows/implement.yml`\n- `.github/workflows/validate.yml`\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `tests/test_workflow_checkout_integration_ref_audit.py`\n\n2. Functions/modules to implement\n- In each of the five workflows, replace the resolver load path in the `Resolve integration ref` step so it no longer executes bytes decoded from `contents/.../resolve_integration_ref.sh`.\n- Use a staged/local resolver path consistent with existing support-checkout trust model (stable/`github.sha` primary, `main` fallback, local file execution).\n- Keep resolver execution contract unchanged:\n  - input env: `REPO`, `ISSUE`, `GH_TOKEN`\n  - execute local script file\n  - write `ref=` output on success/fail-open fallback.\n- Preserve workflow-specific behavior:\n  - `plan.yml` must still emit `integration_branch_meta` when a non-empty branch resolves.\n  - `validate.yml` must keep its current checkout fallback semantics and only change how resolver script is loaded/executed.\n\n3. Data structures affected\n- `steps.refctx.outputs.ref` remains the canonical output in all five workflows.\n- `steps.refctx.outputs.integration_branch_meta` in `plan.yml` remains additive and unchanged in meaning.\n- No schema/JSON/db contract changes.\n\n4. API or interface changes\n- No external interface changes (no new inputs/outputs/env vars).\n- Internal security hardening: remove direct execute-from-contents-API pattern; execute only from staged/local script file.\n- Fail-open behavior preserved: on load/exec failure, warn and set empty `ref` so checkout falls back to default branch.\n\n5. Risks and edge cases\n- Support source unavailable (token/network/ref missing): must warn and fail open to default branch (not fail workflow).\n- Resolver script missing in selected support ref: must warn and fail open.\n- Maintain ordering: resolver still runs before repository checkout so `refctx` checkout binding remains valid.\n- Avoid unrelated YAML reflow/reordering per scope constraints.\n\n6. Testing considerations\n- Update `tests/test_workflow_checkout_integration_ref_audit.py` to enforce the new canonical resolver-loading pattern.\n- Remove old canonical assertions tied to `contents/scripts/resolve_integration_ref.sh?ref=${resolver_ref}`.\n- Add/adjust assertions to:\n  - require local/staged resolver execution markers in required workflows,\n  - explicitly forbid direct content-fetch + decode execution markers (`contents/...resolve_integration_ref.sh`, `base64 --decode` execute path).\n- Run targeted audit test: `python3 tests/test_workflow_checkout_integration_ref_audit.py`.\n\nConflict detection\n- No factual conflicts found between issue description and current codebase.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "43e9c8be09cdab45f1fa92466fe6a2c6d88a9783b4f7b27b689b3a8f7a77f9a1",
+  "lineage": {
+    "issue_number": 1480,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24704917857",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24704917857",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1480"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421050716_21e1c95493",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1480,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24704917857"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1480",
+  "timestamps": {
+    "created_at": "2026-04-21T05:07:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
