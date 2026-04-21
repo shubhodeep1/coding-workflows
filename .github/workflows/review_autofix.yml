@@ -1705,6 +1705,8 @@ jobs:
 
           echo "DID_COMMIT=false" >> "$GITHUB_ENV"
           echo "did_commit=false" >> "$GITHUB_OUTPUT"
+          echo "LEDGER_ONLY_COMMIT=false" >> "$GITHUB_ENV"
+          echo "ledger_only_commit=false" >> "$GITHUB_OUTPUT"
 
           if [ "${CAN_PUSH:-false}" != "true" ]; then
             echo "Skipping commit/push: branch is not writable from this workflow."
@@ -2090,6 +2092,45 @@ jobs:
             # that kills all subsequent steps.
             echo "DID_COMMIT=true" >> "$GITHUB_ENV"
             echo "did_commit=true" >> "$GITHUB_OUTPUT"
+
+            # Detect ledger-only commits: the autofix bookkeeping ledger
+            # (REVIEW_LEDGER_PATH, default .ai/review_issue_ledger.txt) is
+            # updated by scripts/review_issue_ledger.sh on every review pass
+            # regardless of whether the editor actually edited any repo file.
+            # When the commit's only tracked path is the ledger, the editor
+            # made no productive change and downstream "clean review" gates
+            # (auto-merge, ready-to-merge label, telegram success) should
+            # still fire. The safety gates (EDITOR_CHANGES_LOST,
+            # EDITOR_NOOP_SUSPICIOUS) also need to run so the no-op claim is
+            # still verified. See PR #1472 for the bug this addresses: the
+            # self-triggered-autofix gate skip (PR #1459) short-circuits the
+            # synchronize re-run that would otherwise enable auto-merge, so
+            # auto-merge must be enabled in THIS run for ledger-only commits.
+            # Normalize both sides of the path comparison so equivalent
+            # relative-path spellings match. `git diff-tree --name-only`
+            # emits canonical relative paths (no ./ prefix, no repeated
+            # slashes, no trailing slash), but a consumer that sets
+            # REVIEW_LEDGER_PATH to e.g. ./.ai/review_issue_ledger.txt
+            # or .ai//review_issue_ledger.txt would otherwise silently
+            # fail to match and leave the PR stuck in the auto-merge
+            # state this step is designed to resolve. See PR #1476.
+            normalize_rel_path() {
+              printf '%s\n' "$1" | sed -e 's#^\(\./\)\+##' -e 's#//*#/#g' -e 's#/$##'
+            }
+            LEDGER_PATH_FOR_DETECTOR="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger.txt}"
+            NORMALIZED_LEDGER_PATH_FOR_DETECTOR="$(normalize_rel_path "${LEDGER_PATH_FOR_DETECTOR}")"
+            COMMIT_PATHS_RAW="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)"
+            COMMIT_PATH_COUNT="$(printf '%s\n' "${COMMIT_PATHS_RAW}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+            SINGLE_COMMIT_PATH="$(printf '%s\n' "${COMMIT_PATHS_RAW}" | sed '/^$/d')"
+            NORMALIZED_SINGLE_COMMIT_PATH="$(normalize_rel_path "${SINGLE_COMMIT_PATH}")"
+            if [ "${COMMIT_PATH_COUNT}" = "1" ] && [ "${NORMALIZED_SINGLE_COMMIT_PATH}" = "${NORMALIZED_LEDGER_PATH_FOR_DETECTOR}" ]; then
+              echo "Commit contains only the review-issue ledger (${LEDGER_PATH_FOR_DETECTOR}); marking as editor no-op for downstream clean-review gates."
+              echo "LEDGER_ONLY_COMMIT=true" >> "$GITHUB_ENV"
+              echo "ledger_only_commit=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "LEDGER_ONLY_COMMIT=false" >> "$GITHUB_ENV"
+              echo "ledger_only_commit=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Post editor summary comment
@@ -2159,7 +2200,11 @@ jobs:
         # NOT a "clean review" signal and must block auto-merge.
         # See: PR #1136, #1137 where this mismatch caused premature
         # auto-merge of un-fixed PRs.
-        if: "!cancelled() && steps.commit_changes.outputs.did_commit != 'true' && env.PR_CLOSED != 'true'"
+        # LEDGER_ONLY_COMMIT=true: the commit contains only the autofix
+        # ledger, which is a bookkeeping write — not a productive edit — so
+        # this safety check must still run to validate the editor's no-op
+        # claim before downstream clean-review gates fire. See PR #1472.
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.PR_CLOSED != 'true'"
         run: |
           set -euo pipefail
 
@@ -2367,7 +2412,11 @@ jobs:
         #
         # Sets EDITOR_NOOP_SUSPICIOUS=true to block auto-merge when
         # the no-op claim cannot be verified.
-        if: "!cancelled() && steps.commit_changes.outputs.did_commit != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true'"
+        # LEDGER_ONLY_COMMIT=true is treated the same as did_commit=false
+        # here: the ledger is bookkeeping and does not count as a productive
+        # editor change, so the no-op disposition still needs validation
+        # before downstream clean-review gates fire. See PR #1472.
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true'"
         run: |
           set -euo pipefail
 
@@ -3470,7 +3519,7 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Mark linked issues ready to merge
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3771,7 +3820,7 @@ jobs:
           fi
 
       - name: Enable auto-merge on PR
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -4015,7 +4064,7 @@ jobs:
           fi
 
       - name: Telegram success
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
