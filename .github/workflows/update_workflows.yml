@@ -90,7 +90,7 @@ jobs:
             local detail="$2"
             local detail_sanitized="${detail//$'\r'/ }"
             detail_sanitized="${detail_sanitized//$'\n'/ }"
-            echo "::error::${code}: ${detail}"
+            echo "::error::${code}: ${detail_sanitized}"
             echo "validation_ok=false" >> "$GITHUB_OUTPUT"
             echo "failure_reason_code=${code}" >> "$GITHUB_OUTPUT"
             echo "failure_reason_detail=${detail_sanitized}" >> "$GITHUB_OUTPUT"
@@ -303,7 +303,9 @@ jobs:
             echo "- **Status:** failed" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason code:** \\`ERR_TEMPLATE_FETCH_FAILED\\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason detail:** Fetch step failed before pre-mutation validation could run." >> "$GITHUB_STEP_SUMMARY"
-            echo "- **Failure reason artifact:** \\`${FAILURE_REASON_FILE}\\`" >> "$GITHUB_STEP_SUMMARY"
+            if [ -f "${FAILURE_REASON_FILE}" ]; then
+              echo "- **Failure reason artifact:** \\`${FAILURE_REASON_FILE}\\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
             exit 1
           fi
 
@@ -315,7 +317,9 @@ jobs:
             echo "- **Status:** failed" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason code:** \\`${FAILURE_REASON_CODE}\\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason detail:** ${FAILURE_REASON_DETAIL}" >> "$GITHUB_STEP_SUMMARY"
-            echo "- **Failure reason artifact:** \\`${FAILURE_REASON_FILE}\\`" >> "$GITHUB_STEP_SUMMARY"
+            if [ -f "${FAILURE_REASON_FILE}" ]; then
+              echo "- **Failure reason artifact:** \\`${FAILURE_REASON_FILE}\\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
             exit 1
           fi
 
