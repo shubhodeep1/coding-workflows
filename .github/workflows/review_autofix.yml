@@ -420,7 +420,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh setup_serena.sh git_ref_health_check.sh generate_symbol_diff_summary.py serena_efficiency_report.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -1104,6 +1104,15 @@ jobs:
 
           echo "CAN_PUSH=true" >> "$GITHUB_ENV"
           echo "TARGET_BRANCH=${HEAD_REF}" >> "$GITHUB_ENV"
+          # Capture the SHA reviewers/editor will operate against so the
+          # mid-run stale-base gates (see agents.md §20.2) can detect an
+          # external push that happens between here and "Push all pending
+          # commits" ~30 minutes later.  Use the SHA AFTER the hard-reset
+          # above (not github.event.pull_request.head.sha, which may be
+          # stale if another run advanced the branch before this step ran).
+          INITIAL_HEAD_SHA="$(git rev-parse HEAD)"
+          echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"
+          echo "Captured INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA} for stale-base detection."
 
       - name: "Preflight: Warn if protected paths are tracked in consumer repo"
         # Defensive check: in consumer repos, the workflow's runtime helpers
@@ -1525,6 +1534,46 @@ jobs:
 
           true
 
+      - name: Pre-editor stale-base gate
+        # Skip the expensive editor LLM call when the PR branch advanced
+        # with a non-autofix commit during the reviewer pass.  See
+        # agents.md §20.2.  The gate is fail-open: detection failures
+        # (fetch errors, API blips) fall through to the editor so a
+        # GitHub API glitch never silently drops a review.
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CAN_PUSH == 'true'
+        id: pre_editor_stale_base_gate
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
+          LOCAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
+        run: |
+          set -euo pipefail
+          if [ ! -x "${SUPPORT_SCRIPTS_DIR}/check_external_branch_advance.sh" ]; then
+            echo "::warning::check_external_branch_advance.sh missing from support scripts; fail-open (skipping gate)."
+            echo "pre_editor_advance=unknown" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          advance_out="$(bash "${SUPPORT_SCRIPTS_DIR}/check_external_branch_advance.sh" || printf 'ADVANCE=unknown\n')"
+          advance_val="$(printf '%s\n' "${advance_out}" | grep -E '^ADVANCE=' | tail -n 1 | cut -d= -f2 || true)"
+          advance_val="${advance_val:-unknown}"
+          echo "pre_editor_advance=${advance_val}" >> "$GITHUB_OUTPUT"
+          case "${advance_val}" in
+            external)
+              echo "AUTOFIX_PRE_EDITOR_STALE_BASE pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH} action=soft_exit"
+              echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+              ;;
+            self_only)
+              echo "AUTOFIX_PRE_EDITOR_SELF_ADVANCE pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH} action=continue"
+              ;;
+            none)
+              echo "AUTOFIX_PRE_EDITOR_BASE_FRESH pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH}"
+              ;;
+            *)
+              echo "AUTOFIX_PRE_EDITOR_UNKNOWN pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH} action=fail_open"
+              ;;
+          esac
+
       - name: Install project dependencies (best-effort)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         run: |
@@ -1558,14 +1607,14 @@ jobs:
           fi
 
       - name: Switch reasoning effort for editor
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         run: |
           set -euo pipefail
           sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
           echo "Updated reasoning effort to ${EDITOR_REASONING_EFFORT} for editor phase"
 
       - name: Apply fixes with editor model
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -1673,7 +1722,7 @@ jobs:
             }
 
       - name: Commit changes
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         id: commit_changes
         run: |
           set -euo pipefail
@@ -2093,7 +2142,7 @@ jobs:
           fi
 
       - name: Post editor summary comment
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -2159,7 +2208,7 @@ jobs:
         # NOT a "clean review" signal and must block auto-merge.
         # See: PR #1136, #1137 where this mismatch caused premature
         # auto-merge of un-fixed PRs.
-        if: "!cancelled() && steps.commit_changes.outputs.did_commit != 'true' && env.PR_CLOSED != 'true'"
+        if: "!cancelled() && steps.commit_changes.outputs.did_commit != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
         run: |
           set -euo pipefail
 
@@ -2367,7 +2416,7 @@ jobs:
         #
         # Sets EDITOR_NOOP_SUSPICIOUS=true to block auto-merge when
         # the no-op claim cannot be verified.
-        if: "!cancelled() && steps.commit_changes.outputs.did_commit != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true'"
+        if: "!cancelled() && steps.commit_changes.outputs.did_commit != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
         run: |
           set -euo pipefail
 
@@ -2470,7 +2519,7 @@ jobs:
           # git merge later tries to write the same path from origin/BASE_BRANCH.
           # In the source repo these files are tracked, so git reset --hard HEAD
           # will restore them after this removal — no data loss occurs.
-          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh 2>/dev/null || true
+          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
           git reset --hard HEAD
           # Use -ffdx: double-force clears nested git repos (-ff), and -x also
           # removes files matching .gitignore (e.g. .serena/) so nothing
@@ -2481,7 +2530,7 @@ jobs:
           # commit step (caller repos delete fetched scripts before committing)
           # or wiped by git clean -ffdx above.
           # Re-stage any missing scripts from checked-out support source.
-          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               src=".codex-workflow-src/scripts/${f}"
@@ -2684,7 +2733,7 @@ jobs:
           # check_workflow_script_refs.py then fails the [ai-merge-resolve]
           # commit because the referenced scripts are missing from disk.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh 2>/dev/null || true
+            rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
           fi
           RESOLVE_STASH="$(mktemp -d)"
           for d in scripts .serena prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
@@ -3470,7 +3519,7 @@ jobs:
           tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Mark linked issues ready to merge
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3698,7 +3747,7 @@ jobs:
           fi
 
       - name: Enable auto-merge on PR
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -3725,12 +3774,47 @@ jobs:
         # are pushed together AFTER labeling and auto-merge are configured.
         # This avoids a concurrency self-cancel race where the synchronize
         # event from an earlier push would kill subsequent steps.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true'
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
+          LOCAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
         run: |
           set -euo pipefail
           export LANG=C
+
+          # Pre-push stale-base gate.  Soft-exit 0 if the remote tip
+          # advanced past INITIAL_HEAD_SHA with a non-autofix commit
+          # during the editor run — the synchronize event from that
+          # external push has already queued (or will queue) a fresh
+          # review_autofix run against the new tip, so pushing our
+          # locally-committed autofix on top would either lose the
+          # external change via merge or hard-fail at the merge-retry
+          # step below.  See agents.md §20.2.
+          if [ -x "${SUPPORT_SCRIPTS_DIR}/check_external_branch_advance.sh" ]; then
+            pre_push_out="$(bash "${SUPPORT_SCRIPTS_DIR}/check_external_branch_advance.sh" || printf 'ADVANCE=unknown\n')"
+            pre_push_val="$(printf '%s\n' "${pre_push_out}" | grep -E '^ADVANCE=' | tail -n 1 | cut -d= -f2 || true)"
+            pre_push_val="${pre_push_val:-unknown}"
+            case "${pre_push_val}" in
+              external)
+                echo "AUTOFIX_PRE_PUSH_STALE_BASE pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH} action=soft_exit"
+                echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+                exit 0
+                ;;
+              self_only)
+                echo "AUTOFIX_PRE_PUSH_SELF_ADVANCE pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH} action=continue"
+                ;;
+              none)
+                echo "AUTOFIX_PRE_PUSH_BASE_FRESH pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH}"
+                ;;
+              *)
+                echo "AUTOFIX_PRE_PUSH_UNKNOWN pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH} action=fail_open"
+                ;;
+            esac
+          else
+            echo "::warning::check_external_branch_advance.sh missing from support scripts; fail-open (skipping pre-push gate)."
+          fi
 
           git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
           echo "Pushing pending commits to ${TARGET_BRANCH}..."
@@ -3830,7 +3914,7 @@ jobs:
         #      added workflow_dispatch to their caller workflow template).
         #   2. Caller workflow parsed from github.workflow_ref — fallback for
         #      consumer repos whose caller workflow has workflow_dispatch.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true'
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CURRENT_RUN_ID: ${{ github.run_id }}
@@ -3942,7 +4026,7 @@ jobs:
           fi
 
       - name: Telegram success
-        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'"
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit != 'true' && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -4369,7 +4453,7 @@ jobs:
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh
+            rm -f scripts/gh_helpers.sh scripts/setup_serena.sh scripts/git_ref_health_check.sh scripts/serena_efficiency_report.py scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh
             rm -rf .serena prompts
             rm -f .github/ai/orchestrate_schema.v1.json
           fi

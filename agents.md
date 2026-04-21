@@ -504,6 +504,56 @@ Operational rules:
 - The gate evaluation step must remain the **first** decision point in the review pipeline so consumer-repo wrappers inherit the skip for free via the reusable-workflow call. Do not move the skip logic downstream into per-reviewer jobs.
 - Do **not** extend the skip to `[ai-merge-resolve]` commits without also adding a post-resolution review path — the current design relies on the mirror guard's `CONFLICT_RESOLVED!=true` clause to ensure resolver commits still get reviewed exactly once before merge.
 
+### 20.2 Mid-Run External-Push Gates
+
+§20.1 catches the *post-run* self-triggered event (autofix push → synchronize → new run). It does **not** catch the *mid-run* case where a human (or any non-autofix actor) pushes to the PR branch **while** the reviewer/editor cycle is mid-flight. The `codex-agent` job runs ~15-30 min; any push to `TARGET_BRANCH` during that window leaves the editor operating against a stale base, and the deferred `Push all pending commits` step hits one of two failure modes at the end:
+
+1. **Text-disjoint concurrent push** — the merge-retry block in `.github/workflows/review_autofix.yml`'s "Push all pending commits" step fetches origin, does a no-ff merge, and retries the push. Recovers automatically.
+2. **Overlapping concurrent push** — the fetch+merge hits a real content conflict. The retry block intentionally hard-fails (`##[error]git merge origin/${TARGET_BRANCH} failed — merge would introduce new conflicts. Aborting merge and failing the job; refusing to silently resurrect conflict markers.`) rather than silently clobber either side. The whole iteration's work is lost and a `phase_failed` ledger entry is written.
+
+Contract:
+
+- Two evaluation points in `jobs.codex-agent`, both backed by the shared helper `scripts/check_external_branch_advance.sh`:
+  1. **Pre-editor gate** (`steps.pre_editor_stale_base_gate`) — runs after "Record reviewer consensus candidate in memory", before "Install project dependencies" + "Switch reasoning effort for editor" + "Apply fixes with editor model". If the remote tip of `TARGET_BRANCH` advanced past `INITIAL_HEAD_SHA` with a non-autofix commit, the step sets `AUTOFIX_STALE_BASE_SKIP=true` in `$GITHUB_ENV`. Every downstream editor/commit/push/dispatch/clean-review step gates on `env.AUTOFIX_STALE_BASE_SKIP != 'true'` and silently skips — no commit, no push, no retrigger, no `ai:ready-to-merge` label, no Telegram success. The synchronize event from the advancing push is responsible for kicking off a fresh run against the new tip.
+  2. **Pre-push gate** (inline at the top of `Push all pending commits`'s `run:` block) — runs only when the editor actually produced a commit (`DID_COMMIT == 'true'` or `CONFLICT_RESOLVED == 'true'`). Same helper, same detection, same `AUTOFIX_STALE_BASE_SKIP=true` signal. Catches the narrower window where the external push lands **during** the editor run (after the pre-editor gate passed). Soft-exits before attempting `git push`, which means the expensive editor call is lost but no `##[error]` / `phase_failed` is emitted.
+
+- **`INITIAL_HEAD_SHA` is load-bearing**: captured by `Checkout PR head branch` via `git rev-parse HEAD` **after** the hard-reset to `refs/remotes/origin/${HEAD_REF}`, not from `github.event.pull_request.head.sha`. The hard-reset is what the reviewers actually see, so that is the SHA both gates must compare against. Do not replace with the webhook-delivered `head.sha` — the two can differ when another run (or human) advanced the branch between workflow trigger and the `Checkout PR head branch` step.
+
+- **Shared helper contract** (`scripts/check_external_branch_advance.sh`): stdout-only protocol — emits exactly one of `ADVANCE=none`, `ADVANCE=self_only`, `ADVANCE=external`, `ADVANCE=unknown` to stdout; stderr is free-form diagnostic logging; exit code is always 0 in production. Required env: `TARGET_BRANCH`, `LOCAL_HEAD_SHA`, `GH_TOKEN`. Optional: `AUTOFIX_BOT_LOGIN` (default `codex`), `GITHUB_REPOSITORY` (auto-derived from `git remote` when unset). The helper does subject-line screening first (zero-API; any commit whose subject does NOT start with `[ai-autofix]`/`[ai-merge-resolve]` is unambiguously external) and only issues `gh api repos/<repo>/commits/<sha>` calls for commits whose subjects match the autofix prefixes — mirroring §20.1's spoof-defence identity check against `.author.login` / `.committer.login`. Worst-case API cost per gate invocation is O(number of advancing commits with autofix-prefix subjects), which is 0 in the common case.
+
+- **Fail-open on `ADVANCE=unknown`**: any detection failure (fetch error, `gh api` error, empty advance set despite non-equal tips, unset `GITHUB_REPOSITORY`, missing GitHub-attributed identity) continues the cycle normally. Mirrors §20.1's fail-open doctrine — a GitHub API blip must not cause the review to be silently dropped.
+
+- **`ADVANCE=self_only` also continues**: when every advancing commit is attributed to `AUTOFIX_BOT_LOGIN` (GitHub-attributed logins, not `.commit.author.email`), the gate logs `AUTOFIX_PRE_{EDITOR,PUSH}_SELF_ADVANCE ... action=continue` and falls through. In practice this is rare (the `pr-autofix-${PR}` concurrency group with `cancel-in-progress: false` prevents parallel autofix runs per PR), but if it does happen the existing `merge-retry` block handles the fast-forward merge on clean hunks and the existing hard-fail surfaces real conflicts.
+
+- **Merge-conflict hard-fail at push-retry remains**: the existing `Aborting merge and failing the job; refusing to silently resurrect conflict markers` path at the end of the merge-retry loop stays. It is a narrow residual window (external push lands between the pre-push gate firing and the actual `git push`) and the loud failure is preferable to silently merging on the wrong side.
+
+Log prefix contract (stable — renames are breaking changes per CLAUDE.md §6):
+
+- `AUTOFIX_PRE_EDITOR_STALE_BASE pr=<n> local_sha=<sha> target_branch=<ref> action=soft_exit` — pre-editor gate detected external advance; editor + downstream steps skipped.
+- `AUTOFIX_PRE_EDITOR_SELF_ADVANCE pr=<n> local_sha=<sha> target_branch=<ref> action=continue` — pre-editor gate saw `self_only` advance; continuing.
+- `AUTOFIX_PRE_EDITOR_BASE_FRESH pr=<n> local_sha=<sha> target_branch=<ref>` — pre-editor gate saw no advance.
+- `AUTOFIX_PRE_EDITOR_UNKNOWN pr=<n> local_sha=<sha> target_branch=<ref> action=fail_open` — pre-editor detection failed; fail-open.
+- `AUTOFIX_PRE_PUSH_STALE_BASE pr=<n> local_sha=<sha> target_branch=<ref> action=soft_exit` — pre-push gate detected external advance; push + retrigger skipped.
+- `AUTOFIX_PRE_PUSH_SELF_ADVANCE` / `AUTOFIX_PRE_PUSH_BASE_FRESH` / `AUTOFIX_PRE_PUSH_UNKNOWN` — analogous to the pre-editor variants.
+
+Operational rules:
+
+- Renames of `AUTOFIX_STALE_BASE_SKIP` (env var), `INITIAL_HEAD_SHA` (env var), `check_external_branch_advance.sh` (helper name), or any of the log prefixes above are **breaking changes** per CLAUDE.md §6. The env var is referenced by every downstream gated step's `if:` condition — renaming it without keeping the old one active will silently un-gate those steps.
+- The pre-editor gate must stay **after** the reviewer consensus memory record step (reviewer artifacts are discarded by intent — Q4/A) and **before** any step that invokes `review_apply_fixes.sh` or installs project dependencies. Moving it earlier gives a tighter miss window at the cost of slightly less data; moving it later partially defeats the purpose (the editor is the expensive step).
+- The pre-push gate must stay as the **first** lines of the "Push all pending commits" `run:` block — before `git remote set-url` and before the push-retry loop. Do not move it into a separate step: a new step would re-evaluate `if: env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true'` separately from the push and create a race where the push's `if:` fires but the gate doesn't.
+- Consumer repos must include `check_external_branch_advance.sh` in their bootstrap copy. It is part of `REQUIRED_BOOTSTRAP_SCRIPTS` in `review_autofix.yml`'s "Stage workflow support files" step — do not move to the optional list without also adding graceful-degrade behaviour in both gates.
+
+API cost audit (CLAUDE.md §15):
+
+- **Pre-editor gate**: 1 `git fetch` (local; no API), then 0 `gh api` calls on the hit path (external advance with non-autofix subject — the common human-push case). Up to N `gh api commits/<sha>` calls on the rare path where advancing commits have autofix-like subjects and identity must be verified, where N = count of such commits (usually ≤ 2). Net API cost is strongly negative on the hit path — 1 editor invocation (codex-cli, ~10-20 min wall time, bulk of token spend) is saved per skip.
+- **Pre-push gate**: same shape as pre-editor. On hit: saves the merge-retry `git fetch` + `git merge` attempt, avoids the `##[error]` + `phase_failed` ledger write, and avoids the follow-up `workflow_dispatch` retrigger call.
+- Neither gate caches across invocations — each is scoped to a single run and per-PR. Cycle-local caching (§17) is not applicable because the two gates run at different wall-clock times (~10-20 min apart) and the remote tip can advance between them.
+
+Safety net:
+
+- If both gates mis-fire and incorrectly soft-exit on an advance that was in fact our own autofix (e.g. identity API returned stale data), the orchestrator stall cron (`internal-orchestrate-poll.yml`, cron `*/30 * * * *`) detects the stalled `ai:done` phase and re-dispatches `review_autofix.yml` via `workflow_dispatch`. Worst-case recovery window: ~30 min. Same safety net as §20.1.
+- If both gates fail-open on detection error and the push subsequently hard-fails at the merge-retry step, the existing `phase_failed` ledger entry + Telegram failure alert fires as before. Detection failure gracefully degrades to the pre-gate behaviour.
+
 ---
 
 ## FINAL REMINDER

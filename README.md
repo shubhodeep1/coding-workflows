@@ -371,6 +371,22 @@ jobs:
 > `AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix` are stable audit
 > handles. Set `vars.AUTOFIX_SKIP_SELF_TRIGGERED=false` to opt out, or set
 > `vars.AUTOFIX_BOT_LOGIN` to override the expected bot login.
+>
+> **Mid-run external-push gates** — The self-triggered skip above catches
+> *post-run* autofix events. The companion *mid-run* gates (`agents.md §20.2`)
+> catch the case where a non-autofix push lands on the PR branch **while** the
+> reviewer/editor cycle is mid-flight (~15-30 min). Two evaluation points in
+> `jobs.codex-agent`, both backed by `scripts/check_external_branch_advance.sh`:
+> the **pre-editor gate** runs between reviewer consensus and the editor
+> invocation and skips the expensive editor call when the branch advanced with
+> an external commit; the **pre-push gate** runs at the top of the
+> "Push all pending commits" step and soft-exits before the push if the branch
+> advanced during the editor run. Both set `AUTOFIX_STALE_BASE_SKIP=true`
+> (env) which every downstream editor/commit/push/clean-review step gates on.
+> The synchronize event from the advancing push drives a fresh cycle. Log
+> prefixes `AUTOFIX_PRE_EDITOR_STALE_BASE`, `AUTOFIX_PRE_EDITOR_SELF_ADVANCE`,
+> `AUTOFIX_PRE_EDITOR_BASE_FRESH`, `AUTOFIX_PRE_EDITOR_UNKNOWN` and the
+> corresponding `AUTOFIX_PRE_PUSH_*` variants are stable audit handles.
 
 ### Local replay helper for review artifacts
 
