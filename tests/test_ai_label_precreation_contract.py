@@ -49,10 +49,27 @@ WORKFLOW_CONTRACT = {
 		"must_contain": [
 			re.compile(r'for\s+f\s+in\s+[^;\n]*label_helpers\.sh[^;\n]*;\s*do\b'),
 			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?(?:\./)?scripts/label_helpers\.sh["\']?(?=[\s;#]|$)'),
+			"PR_TITLE: ${{ github.event.pull_request.title || '' }}",
+			"PR_BODY: ${{ github.event.pull_request.body || '' }}",
+			'PR_DATA="${PR_TITLE} ${PR_BODY}"',
+			'if [ -z "$(printf \'%s\' "${PR_DATA}" | tr -d \'[:space:]\')" ]; then',
 			'ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"',
+			'set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"',
 		],
 		"must_not_contain": [
 			re.compile(r'repos/\$\{REPOSITORY\}/labels/\$\(printf\s+[\'\"]?%s[\'\"]?\s+[\'\"]?\$\{FINAL_LABEL\}[\'\"]?\)'),
+			re.compile(r'gh_retry\s+gh\s+api\s+-X\s+PUT\s+"repos/\$\{REPOSITORY\}/issues/\$\{issue_number\}/labels"'),
+		],
+	},
+	".github/workflows/review_autofix.yml": {
+		"must_contain": [
+			re.compile(r'(?m)^\s*if\s+\[\s+-f\s+"\$\{SUPPORT_SCRIPTS_DIR\}/label_helpers\.sh"\s*\]\s*&&\s*source\s+"\$\{SUPPORT_SCRIPTS_DIR\}/label_helpers\.sh"'),
+			'set_issue_phase_label_resilient "${issue_number}" "ai:ready-to-merge" "${REPOSITORY}"',
+			'set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"',
+		],
+		"must_not_contain": [
+			re.compile(r'_AI_PHASE_LABELS=\'\["ai:done"'),
+			re.compile(r'gh_retry\s+gh\s+api\s+-X\s+PUT\s+"repos/\$\{REPOSITORY\}/issues/\$\{issue_number\}/labels"'),
 		],
 	},
 }

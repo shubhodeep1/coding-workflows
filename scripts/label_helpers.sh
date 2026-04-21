@@ -134,3 +134,99 @@ ensure_label_exists() {
 	echo "::warning::ensure_label_exists: failed to create label '${label_name}' in repo '${repo}': ${_label_err}" >&2
 	return 1
 }
+
+_AI_PHASE_TRANSITION_LABELS=(
+	"ai:done"
+	"ai:implementing"
+	"ai:awaiting-approval"
+	"ai:planning"
+	"ai:clarification"
+	"ai:ready-to-merge"
+	"ai:review-blocked"
+	"ai:implementation-failed"
+	"ai:merged"
+	"ai:closed"
+)
+
+_urlencode_label_name() {
+	local label_name="${1:?_urlencode_label_name: label_name required}"
+
+	if type jq >/dev/null 2>&1; then
+		printf '%s' "${label_name}" | jq -sRr @uri
+		return 0
+	fi
+
+	# Minimal fallback: ai:* labels only need '%' ':' and '/' escaping.
+	printf '%s' "${label_name}" | sed 's/%/%25/g; s/:/%3A/g; s#/#%2F#g'
+}
+
+_remove_issue_label_if_present() {
+	local issue_number="${1:?_remove_issue_label_if_present: issue_number required}"
+	local label_name="${2:?_remove_issue_label_if_present: label_name required}"
+	local repo="${3:-${GITHUB_REPOSITORY:-}}"
+
+	if [ -z "${repo}" ]; then
+		echo "_remove_issue_label_if_present: repo required (pass as \$3 or set GITHUB_REPOSITORY)" >&2
+		return 1
+	fi
+
+	local encoded_label=""
+	encoded_label="$(_urlencode_label_name "${label_name}")"
+
+	local _rm_err_file
+	_rm_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+	if gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${encoded_label}" \
+		>/dev/null 2>"${_rm_err_file}"; then
+		[ "${_rm_err_file}" = "/dev/null" ] || rm -f "${_rm_err_file}"
+		return 0
+	fi
+
+	local _rm_err=""
+	_rm_err="$(cat "${_rm_err_file}" 2>/dev/null || true)"
+	[ "${_rm_err_file}" = "/dev/null" ] || rm -f "${_rm_err_file}"
+
+	if printf '%s' "${_rm_err}" | grep -Eiq '404|not[[:space:]]+found|does[[:space:]]+not[[:space:]]+exist'; then
+		return 0
+	fi
+
+	echo "::warning::set_issue_phase_label_resilient: failed removing '${label_name}' from issue #${issue_number} in '${repo}': ${_rm_err}" >&2
+	return 1
+}
+
+# set_issue_phase_label_resilient <issue_number> <target_label> [repo]
+#
+# Adds the target phase label, then removes all other known mutually
+# exclusive phase labels via targeted DELETE operations.
+#
+# Fail-open behavior: if any remove operation fails, the target label stays
+# applied and the helper logs a warning instead of failing the caller.
+set_issue_phase_label_resilient() {
+	local issue_number="${1:?set_issue_phase_label_resilient: issue_number required}"
+	local target_label="${2:?set_issue_phase_label_resilient: target_label required}"
+	local repo="${3:-${GITHUB_REPOSITORY:-}}"
+	local phase_label=""
+
+	if [ -z "${repo}" ]; then
+		echo "set_issue_phase_label_resilient: repo required (pass as \$3 or set GITHUB_REPOSITORY)" >&2
+		return 1
+	fi
+
+	if ! ensure_label_exists "${target_label}" "${repo}"; then
+		echo "::warning::set_issue_phase_label_resilient: continuing after ensure_label_exists failure for '${target_label}'." >&2
+	fi
+
+	if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+		-f "labels[]=${target_label}" >/dev/null 2>&1; then
+		echo "::warning::set_issue_phase_label_resilient: failed to add '${target_label}' to issue #${issue_number} in '${repo}'." >&2
+	fi
+
+	for phase_label in "${_AI_PHASE_TRANSITION_LABELS[@]}"; do
+		if [ "${phase_label}" = "${target_label}" ]; then
+			continue
+		fi
+
+		_remove_issue_label_if_present "${issue_number}" "${phase_label}" "${repo}" || true
+	done
+
+	return 0
+}
