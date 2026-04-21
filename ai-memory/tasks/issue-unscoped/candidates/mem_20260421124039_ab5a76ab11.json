@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2227-2242 | severity=high | confidence=5\n  flagged_by: [google_gemini-3-flash-preview, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The \u201cPrepare merge-conflict resolver prompt and pre-snapshot\u201d step invokes `review_conflict_prepare.sh` without exporting GitHub authentication for its `gh api` calls.\n  WHY: Multiple reviewers agreed the script reaches authenticated GitHub API paths and will fail or lose integration-tracking context without `GH_TOKEN` or `GH_PAT`, which can block or degrade conflict resolution.\n- scripts/review_commit_changes.sh:70-71 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `COMMITTED_FILES_FILE` is written without a prior writability check.\n  WHY: The reviewer noted this can fail late if the runtime directory or parent path is missing or unwritable, but treated it as a minor defensive hardening issue.\n- scripts/review_conflict_resolve.sh: top of script near `set -euo pipefail` | severity=low | confidence=1\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: `MODEL_EDITOR` may be unset or empty when the resolver loop runs.\n  WHY: This was reported as a hardening suggestion rather than a confirmed bug, so confidence remains low and no stronger severity was stated.\n- scripts/review_commit_changes.sh and scripts/review_conflict_resolve.sh: `git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}` | severity=low | confidence=3\n  flagged_by: [google_gemini-3-flash-preview]\n  PROBLEM: Both scripts rewrite the `origin` remote URL with an embedded token.\n  WHY: The reviewer flagged the pattern as brittle and redundant with workflow-level git auth setup, but did not claim a blocking runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- The script uses `${MODEL_EDITOR}` directly without checking if it's empty. If `MODEL_\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml:2241-2242 | severity=high | confidence=5\n  PROBLEM: The `Prepare merge-conflict resolver prompt and pre-snapshot` step invokes `scripts/review_conflict_prepare.sh` without exporting `GH_TOKEN` or `GITHUB_TOKEN`.\n  WHY: The reviewer said the `gh api` calls inside `review_conflict_prepare.sh` require authentication and will fail without a token in the environment.\n- .github/workflows/review_autofix.yml:2253-2255 | severity=medium | confidence=4\n  PROBLEM: The `Run Codex resolver, validate, stage, commit` step exports `GH_PAT` but the reviewer flagged credential handling and remote rewriting as potentially inconsistent.\n  WHY: The reviewer described this as a consistency concern and tied it to remote URL rewriting in the scripts, but did not present it as a definite runtime blocker.\n- scripts/review_commit_changes.sh and scripts/review_conflict_resolve.sh: `git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}` | severity=low | confidence=3\n  PROBLEM: Both scripts reset the `origin` remote using an embedded token in an HTTPS URL.\n  WHY: The reviewer said this is redundant with existing workflow auth setup and brittle if runner credential handling differs.\n- scripts/review_conflict_resolve.sh: top of script near `set -euo pipefail` | severity=low | confidence=1\n  PROBLEM: `MODEL_EDITOR` can be unset or empty when the resolver loop runs.\n  WHY: This was explicitly labeled a hardening suggestion with a minimal guard, not a confirmed defect.\n- scripts/review_commit_changes.sh: near `rm -f \"${COMMITTED_FILES_FILE}\"` | severity=low | confidence=1\n  PROBLEM: `COMMITTED_FILES_FILE` is assumed writable without a pre-check.\n  WHY: This was also a hardening suggestion, with the reviewer noting only a minor defensive improvement.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:2227-2242 | severity=high | confidence=5\n  PROBLEM: The \"Prepare merge-conflict resolver prompt and pre-snapshot\" step calls `scripts/review_conflict_prepare.sh` but does NOT export GH_TOKEN or GH_PAT in its environment.\n  WHY: The reviewer said the script\u2019s `gh api` calls on the integration-sync path require authentication and will fail without a token, which blocks correct conflict-preparation context.\n- scripts/review_commit_changes.sh:70-71 | severity=low | confidence=2\n  PROBLEM: The script removes then writes to `${COMMITTED_FILES_FILE}` without verifying the parent directory exists and is writable.\n  WHY: The reviewer said this can fail late if the runtime directory is not properly set, but described it as a minor defensive check.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/review_autofix.yml:2227-2242 | severity=high | confidence=5\n  PROBLEM: The \u201cPrepare merge-conflict resolver prompt and pre-snapshot\u201d step invokes `review_conflict_prepare.sh` without providing GitHub authentication in its environment.\n  WHY: The reviewer said the script\u2019s `gh api` calls need `GH_TOKEN` or `GH_PAT`, especially for private repositories, and without it the resolver loses critical intent context.\n- scripts/review_conflict_resolve.sh and scripts/review_commit_changes.sh: `git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}` | severity=low | confidence=1\n  PROBLEM: The reviewer noted both scripts contain a redundant `git remote set-url` line that rewrites `origin` with an embedded token.\n  WHY: This was explicitly described as a maintainability observation and not a runtime blocker.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "84e296133ae35a2a36920526bec6662584146c52ef1c50c06b44b5c6eb193671",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1492,
+    "run_id": "24721648607",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24721648607",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421124039_ab5a76ab11",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1492,
+    "run_id": "24721648607"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T12:40:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
