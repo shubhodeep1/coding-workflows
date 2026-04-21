@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `080480e3c505fdd6ffe0ff16d7ab5c09419ce9f5`\n- Checked-out branch: `orchestrator/project-1469`\n- Integration branch metadata: `orchestrator/project-1469`\n- Integration mismatch: `false` (planning can proceed)\n\nClarification interpretation:\n- No Q<ID> clarification questions existed for this issue.\n- `/answer [auto-answered-by-orchestrator]` confirms continuation with the issue scope as written.\n\nFactual conflicts detected:\n- Issue asks for fixture manifests under `examples/validation-fixtures`, but that directory does not exist yet (only `examples/ai-validate-hints.yml` exists).\n- Existing fixture coverage currently lives under `tests/fixtures/validation_harness/...`, so this issue introduces a second fixture source path for nightly self-tests.\n- If the new nightly workflow uses `actions/checkout@v5`, `tests/test_workflow_checkout_integration_ref_audit.py` will fail unless the new workflow is explicitly classified.\n\n1. Files likely to change\n- `.github/workflows/nightly-validation-selftest.yml` (new)\n- `examples/validation-fixtures/python-mongo-flask.yml` (new)\n- `examples/validation-fixtures/node-hardhat-solidity.yml` (new)\n- `scripts/validation_selftest_matrix.py` (new runner script)\n- `tests/test_validation_selftest_runner.py` (new runner contract tests)\n- `tests/test_nightly_validation_selftest_workflow_contract.py` (new workflow contract test)\n- `.github/workflows/ci.yml` (add explicit step(s) to run new tests)\n- `tests/test_workflow_checkout_integration_ref_audit.py` (allowlist update only if new workflow uses checkout)\n\n2. Functions/modules to implement\n- `scripts/validation_selftest_matrix.py`:\n  - CLI parsing (`fixtures root`, `summary path`, `log dir`, optional `--skip-compose-config` for unit-testability).\n  - Fixture discovery and execution loop across both manifest files.\n  - Per-fixture stages: render (`scripts/render_validation_templates.py`), lint (`scripts/validation_lint.py`), harness sanity (shell syntax, python compile, compose config sanity).\n  - Structured JSON summary writer and non-zero exit on any fixture failure.\n- `.github/workflows/nightly-validation-selftest.yml`:\n  - Nightly schedule + `workflow_dispatch`.\n  - Setup and run self-test runner.\n  - Always upload artifacts (summary + logs) for diagnosability.\n  - Write concise run summary to `$GITHUB_STEP_SUMMARY`.\n\nRepresentative patterns to follow:\n- Workflow artifact + summary conventions from `.github/workflows/validate.yml`.\n- Fixture/renderer contract style from `tests/test_family_python_mongo_flask.py`.\n\n3. Data structures affected\n- New fixture manifest YAML objects under `examples/validation-fixtures/` with schema-aligned keys:\n  - `type`, `entry`, `port`, `slots.project_name`, `slots.canary_tools`, `slots.tap_plan`.\n- New machine-readable self-test summary JSON:\n  - Stable top-level fields: `schema_version`, `overall_status`, `totals`, `fixtures`, `generated_at`.\n  - Per-fixture fields: `name`, `manifest_path`, stage results (`render`, `lint`, `sanity`), `status`, `duration_seconds`, `log_paths`.\n\n4. API/interface changes\n- New workflow interface:\n  - Triggers: nightly `schedule` + manual `workflow_dispatch`.\n- New script interface:\n  - Command-line entrypoint for self-test matrix execution and summary emission.\n- Artifact contract:\n  - Uploaded artifact includes JSON summary and per-fixture logs for downstream streak/cutover gating consumers.\n- No existing reusable workflow input/output contracts need to change.\n\n5. Potential risks and edge cases\n- Docker/Compose availability can vary outside GH-hosted runners; keep runner testable with a compose-check toggle for unit tests.\n- Manifest drift against renderer/schema can cause immediate failures; summary must clearly attribute stage and fixture.\n- Workflow contract/audit tests may fail if new checkout workflow is not classified.\n- Artifact upload must run `if: always()` or failure diagnosis is lost.\n- Keep scope limited to requested files; no README/agents edits in this issue per instruction.\n\n6. Testing considerations\n- Add runner contract tests (`tests/test_validation_selftest_runner.py`):\n  - Both fixtures pass path.\n  - Single-fixture fail path propagates overall failure.\n  - Summary JSON shape and required keys are stable.\n  - Logs are written and referenced in summary.\n- Add workflow contract test (`tests/test_nightly_validation_selftest_workflow_contract.py`):\n  - Verifies schedule trigger, workflow_dispatch trigger, runner invocation, and always-uploaded artifact behavior.\n- Update CI (`.github/workflows/ci.yml`) to execute the new tests explicitly (current CI uses explicit test file invocations, not generic discovery).\n- If checkout is used in the new workflow, update `tests/test_workflow_checkout_integration_ref_audit.py` allowlist rationale accordingly.\n\nThis plan satisfies acceptance by ensuring both family fixtures run nightly and failures remain diagnosable through uploaded machine-readable summary and logs.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "dcc59dc710918dbfef4f8b311890d253cdc0f842d9f06c52ccb318275cdf4c2a",
+  "lineage": {
+    "issue_number": 1508,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24751972852",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24751972852",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1508"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421234215_4e9d72af5d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1508,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24751972852"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1508",
+  "timestamps": {
+    "created_at": "2026-04-21T23:42:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
