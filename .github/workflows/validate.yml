@@ -87,25 +87,29 @@ jobs:
           resolver_stage_root="${RUNNER_TEMP}/resolve-integration-ref-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           resolver_stage_primary="${resolver_stage_root}/primary"
           resolver_stage_fallback="${resolver_stage_root}/fallback"
-          resolver_repo_url="https://x-access-token:${GH_TOKEN}@github.com/${resolver_repo}"
+          resolver_repo_url="https://github.com/${resolver_repo}"
           rm -rf "${resolver_stage_root}"
           mkdir -p "${resolver_stage_root}"
           resolver_clone_log="${resolver_stage_root}/clone.log"
+          resolver_git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          resolver_git() {
+            git -c "http.extraHeader=Authorization: basic ${resolver_git_auth_header}" "$@"
+          }
           cleanup_resolver_stage() {
             rm -rf "${resolver_stage_root}"
           }
           trap cleanup_resolver_stage EXIT
 
-          if git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_primary}" 2>"${resolver_clone_log}"; then
+          if resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_primary}" 2>"${resolver_clone_log}"; then
             resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
-            if ! git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>>"${resolver_clone_log}" || \
+            if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>>"${resolver_clone_log}" || \
                ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
               echo "::warning::Failed to stage canonical integration resolver ref ${resolver_ref}; using main fallback."
               if [ -s "${resolver_clone_log}" ]; then
                 sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
               fi
             fi
-          elif git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_fallback}" 2>>"${resolver_clone_log}"; then
+          elif resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_fallback}" 2>>"${resolver_clone_log}"; then
             resolver_script="${resolver_stage_fallback}/scripts/resolve_integration_ref.sh"
           else
             echo "::warning::Failed to stage canonical integration resolver; falling back to default branch."
