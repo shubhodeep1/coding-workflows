@@ -78,15 +78,30 @@ jobs:
             exit 0
           fi
 
-          resolver_script="${RUNNER_TEMP}/resolve_integration_ref.sh"
           resolver_repo="shubhodeep1/coding-workflows"
           resolver_ref="stable"
           if [ "${{ github.repository }}" = "${resolver_repo}" ]; then
             resolver_ref="${{ github.sha }}"
           fi
 
-          if ! gh api "repos/${resolver_repo}/contents/scripts/resolve_integration_ref.sh?ref=${resolver_ref}" --jq '.content' | base64 --decode > "${resolver_script}"; then
-            echo "::warning::Failed to load canonical integration resolver; falling back to default branch."
+          resolver_stage_root="${RUNNER_TEMP}/resolve-integration-ref-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          resolver_stage_primary="${resolver_stage_root}/primary"
+          resolver_stage_fallback="${resolver_stage_root}/fallback"
+          rm -rf "${resolver_stage_root}"
+
+          if ! git clone --quiet --no-tags --depth 1 --branch "${resolver_ref}" "https://x-access-token:${GH_TOKEN}@github.com/${resolver_repo}" "${resolver_stage_primary}" 2>/dev/null; then
+            if ! git clone --quiet --no-tags --depth 1 --branch main "https://x-access-token:${GH_TOKEN}@github.com/${resolver_repo}" "${resolver_stage_fallback}" 2>/dev/null; then
+              echo "::warning::Failed to stage canonical integration resolver; falling back to default branch."
+              echo "ref=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            resolver_script="${resolver_stage_fallback}/scripts/resolve_integration_ref.sh"
+          else
+            resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
+          fi
+
+          if [ ! -f "${resolver_script}" ]; then
+            echo "::warning::Canonical integration resolver script not found in staged source; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
             exit 0
           fi

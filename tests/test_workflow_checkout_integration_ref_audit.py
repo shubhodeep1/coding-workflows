@@ -66,9 +66,11 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 	resolver_id = "id: refctx"
 	checkout_ref = "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
 	resolved_ref_log = "echo \"Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
-	canonical_fetch = "contents/scripts/resolve_integration_ref.sh?ref=${resolver_ref}"
+	canonical_stage = "resolver_stage_root=\"${RUNNER_TEMP}/resolve-integration-ref-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\""
 	canonical_exec = "bash \"${resolver_script}\""
 	disallowed_inline_markers = (
+		"contents/scripts/resolve_integration_ref.sh?ref=${resolver_ref}",
+		"base64 --decode >",
 		"sed -nE 's/^- Integration branch:",
 		"grep -Eq '^orchestrator/project-[0-9]+$'",
 		"/git/ref/heads/",
@@ -82,7 +84,7 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		assert resolved_ref_log in wf, f"{workflow_name} missing resolved-ref log output"
 		assert "git rev-parse HEAD" in wf, f"{workflow_name} missing HEAD commit log"
 		assert "git symbolic-ref --short HEAD" in wf, f"{workflow_name} missing branch/detached log"
-		assert canonical_fetch in wf, f"{workflow_name} missing canonical resolver fetch"
+		assert canonical_stage in wf, f"{workflow_name} missing canonical resolver staging"
 		assert canonical_exec in wf, f"{workflow_name} missing canonical resolver invocation"
 
 		for marker in disallowed_inline_markers:
