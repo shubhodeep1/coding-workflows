@@ -447,6 +447,38 @@ def _is_explicitly_quoted_yaml_scalar(value: str) -> bool:
 	return len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in ('"', "'")
 
 
+def _split_flow_style_yaml_items(value: str) -> list[str]:
+	items: list[str] = []
+	current: list[str] = []
+	in_single = False
+	in_double = False
+	escaped = False
+	for ch in value[1:-1]:
+		if escaped:
+			current.append(ch)
+			escaped = False
+			continue
+		if ch == "\\" and in_double:
+			current.append(ch)
+			escaped = True
+			continue
+		if ch == "'" and not in_double:
+			in_single = not in_single
+			current.append(ch)
+			continue
+		if ch == '"' and not in_single:
+			in_double = not in_double
+			current.append(ch)
+			continue
+		if ch == "," and not in_single and not in_double:
+			items.append("".join(current).strip())
+			current = []
+			continue
+		current.append(ch)
+	items.append("".join(current).strip())
+	return [item for item in items if item]
+
+
 # mode-validate-generate.txt: tests/00_canary.sh must be first and scripts must use NN_*.sh ordering.
 def _check_canary_ordering(context: LintContext) -> list[Finding]:
 	tests_dir = context.resolve("tests")
@@ -458,8 +490,8 @@ def _check_canary_ordering(context: LintContext) -> list[Finding]:
 				path=tests_dir,
 				line=1,
 				rule_id="canary-ordering",
-				message="validation/tests directory is missing.",
-				hint="Add validation/tests with 00_canary.sh and zero-padded NN_*.sh scripts.",
+				message="tests directory is missing.",
+				hint="Add tests with 00_canary.sh and zero-padded NN_*.sh scripts.",
 			)
 		]
 
@@ -469,8 +501,8 @@ def _check_canary_ordering(context: LintContext) -> list[Finding]:
 				path=tests_dir,
 				line=1,
 				rule_id="canary-ordering",
-				message="validation/tests contains no top-level shell test scripts.",
-				hint="Add 00_canary.sh and subsequent NN_*.sh scripts under validation/tests/.",
+				message="tests contains no top-level shell test scripts.",
+				hint="Add 00_canary.sh and subsequent NN_*.sh scripts under tests/.",
 			)
 		]
 
@@ -482,12 +514,12 @@ def _check_canary_ordering(context: LintContext) -> list[Finding]:
 				path=tests_dir,
 				line=1,
 				rule_id="canary-ordering",
-				message="validation/tests/00_canary.sh is required as the first test script.",
+				message="tests/00_canary.sh is required as the first test script.",
 				hint="Add 00_canary.sh to gate infrastructure checks before app assertions.",
 			)
 		)
 
-	if scripts[0].name != "00_canary.sh":
+	if canary_present and scripts[0].name != "00_canary.sh":
 		findings.append(
 			Finding(
 				path=scripts[0],
@@ -592,7 +624,7 @@ def _check_test_script_prologue(context: LintContext) -> list[Finding]:
 		try:
 			mode = script.stat().st_mode
 		except OSError:
-			mode = 0
+			continue
 		if (mode & 0o111) == 0:
 			findings.append(
 				Finding(
@@ -652,7 +684,7 @@ def _check_healthcheck_test_strings(context: LintContext) -> list[Finding]:
 				continue
 
 			if value.startswith("[") and value.endswith("]"):
-				entries = [entry.strip() for entry in value[1:-1].split(",") if entry.strip()]
+				entries = _split_flow_style_yaml_items(value)
 				for entry in entries:
 					if _is_explicitly_quoted_yaml_scalar(entry):
 						continue
