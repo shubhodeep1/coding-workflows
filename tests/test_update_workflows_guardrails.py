@@ -27,7 +27,10 @@ def test_guardrail_reason_codes_and_outputs_are_declared() -> None:
 	assert "local detail_sanitized=\"${detail//$'\\r'/ }\"" in wf
 	assert "detail_sanitized=\"${detail_sanitized//$'\\n'/ }\"" in wf
 	assert 'echo "validation_ok=false" >> "$GITHUB_OUTPUT"' in wf
+	assert 'ERR_TEMPLATE_COPY_FAILED' in wf
+	assert 'cp "$upstream_file" "$local_file" || fail_with_reason "ERR_TEMPLATE_COPY_FAILED"' in wf
 	assert 'echo "validation_ok=true" >> "$GITHUB_OUTPUT"' in wf
+	assert wf.index('cp "$upstream_file" "$local_file" || fail_with_reason "ERR_TEMPLATE_COPY_FAILED"') < wf.index('echo "validation_ok=true" >> "$GITHUB_OUTPUT"')
 	assert 'echo "failure_reason_code=' in wf
 	assert 'echo "failure_reason_detail=' in wf
 	assert 'ERR_UPSTREAM_DIR_EMPTY' in wf
@@ -60,6 +63,8 @@ def test_success_path_contracts_are_preserved() -> None:
 	assert "if: ${{ inputs.allow_workflow_edits != false }}" in wf
 	assert 'SELF_TEMPLATE="ai-update-workflows.yml"' in wf
 	assert 'SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater, skipped)\\n"' in wf
+	assert 'SKIPPED_LIST=$(cat /tmp/skipped_files.txt)' in wf
+	assert '**Skipped files:**' in wf
 	assert "if: steps.update.outputs.has_updates == 'true'" in wf
 	assert "ALLOW_WORKFLOW_EDITS repository variable to '\\''false'\\''." in wf
 

@@ -117,10 +117,6 @@ jobs:
             fi
           done
 
-          echo "validation_ok=true" >> "$GITHUB_OUTPUT"
-          echo "failure_reason_code=" >> "$GITHUB_OUTPUT"
-          echo "failure_reason_detail=" >> "$GITHUB_OUTPUT"
-
           for upstream_file in "${upstream_templates[@]}"; do
             filename=$(basename "$upstream_file")
             local_file="${LOCAL_DIR}/${filename}"
@@ -133,7 +129,7 @@ jobs:
               fi
 
               echo "Creating: ${filename}"
-              cp "$upstream_file" "$local_file"
+              cp "$upstream_file" "$local_file" || fail_with_reason "ERR_TEMPLATE_COPY_FAILED" "Failed to create workflow file ${local_file} from ${upstream_file}."
               TOTAL_CREATED=$((TOTAL_CREATED + 1))
               CREATED_FILES="${CREATED_FILES}• ${filename}\n"
               continue
@@ -147,12 +143,16 @@ jobs:
 
             if ! diff -q --strip-trailing-cr --ignore-space-at-eol "$upstream_file" "$local_file" >/dev/null 2>&1; then
               echo "Updating: ${filename}"
-              cp "$upstream_file" "$local_file"
+              cp "$upstream_file" "$local_file" || fail_with_reason "ERR_TEMPLATE_COPY_FAILED" "Failed to update workflow file ${local_file} from ${upstream_file}."
               TOTAL_UPDATED=$((TOTAL_UPDATED + 1))
               UPDATED_FILES="${UPDATED_FILES}• ${filename}\n"
             fi
           done
           shopt -u nullglob
+
+          echo "validation_ok=true" >> "$GITHUB_OUTPUT"
+          echo "failure_reason_code=" >> "$GITHUB_OUTPUT"
+          echo "failure_reason_detail=" >> "$GITHUB_OUTPUT"
 
           echo "templates_checked=${TOTAL_CHECKED}" >> "$GITHUB_OUTPUT"
           echo "templates_updated=${TOTAL_UPDATED}" >> "$GITHUB_OUTPUT"
@@ -331,6 +331,7 @@ jobs:
           if [ "${HAS_UPDATES}" = "true" ]; then
             UPDATED_LIST=$(cat /tmp/updated_files.txt)
             CREATED_LIST=$(cat /tmp/created_files.txt)
+            SKIPPED_LIST=$(cat /tmp/skipped_files.txt)
             if [ -n "$UPDATED_LIST" ]; then
               echo "**Updated files:**" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
@@ -341,6 +342,12 @@ jobs:
               echo "**New files:**" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
               cat /tmp/created_files.txt >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if [ -n "$SKIPPED_LIST" ]; then
+              echo "**Skipped files:**" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              cat /tmp/skipped_files.txt >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
             fi
           else
