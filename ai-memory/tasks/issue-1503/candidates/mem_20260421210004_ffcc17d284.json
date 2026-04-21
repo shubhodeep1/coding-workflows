@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":1503,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/1503\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/1506\",\"pr_number\":1506,\"branch\":\"ai/issue-1503\",\"run_id\":\"24745413136\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/24745413136\",\"changed_files\":[\".github/workflows/issue_pr_status.yml\",\".github/workflows/review_autofix.yml\",\"scripts/label_helpers.sh\",\"tests/test_phase_label_transition_and_fallback_contract.py\"]}",
+  "fingerprint": "41163b8c61be8a602c599a0871d6a8c0dc3544d099610543e924656e9be286dc",
+  "lineage": {
+    "issue_number": 1503,
+    "parent_ids": [],
+    "pr_number": 1506,
+    "run_id": "24745413136",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24745413136",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/1506"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260421210004_ffcc17d284",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1503,
+    "level": "run",
+    "pr_number": 1506,
+    "run_id": "24745413136"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #1503: https://github.com/shubhodeep1/coding-workflows/pull/1506",
+  "timestamps": {
+    "created_at": "2026-04-21T21:00:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
