@@ -223,8 +223,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
-      PR_TITLE: ${{ github.event.pull_request.title || '' }}
-      PR_BODY: ${{ github.event.pull_request.body || '' }}
+      PR_TITLE: ${{ inputs.pr_title || github.event.inputs.pr_title || github.event.pull_request.title || '' }}
+      PR_BODY: ${{ inputs.pr_body || github.event.inputs.pr_body || github.event.pull_request.body || '' }}
       VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
     steps:
       - name: Dispatch standalone validate for orchestrator short-circuit issues
@@ -2333,8 +2333,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
-          PR_TITLE: ${{ github.event.pull_request.title || '' }}
-          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          PR_TITLE: ${{ inputs.pr_title || github.event.inputs.pr_title || github.event.pull_request.title || '' }}
+          PR_BODY: ${{ inputs.pr_body || github.event.inputs.pr_body || github.event.pull_request.body || '' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -2440,8 +2440,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
-          PR_TITLE: ${{ github.event.pull_request.title || '' }}
-          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          PR_TITLE: ${{ inputs.pr_title || github.event.inputs.pr_title || github.event.pull_request.title || '' }}
+          PR_BODY: ${{ inputs.pr_body || github.event.inputs.pr_body || github.event.pull_request.body || '' }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
@@ -3041,8 +3041,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
-          PR_TITLE: ${{ github.event.pull_request.title || '' }}
-          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          PR_TITLE: ${{ inputs.pr_title || github.event.inputs.pr_title || github.event.pull_request.title || '' }}
+          PR_BODY: ${{ inputs.pr_body || github.event.inputs.pr_body || github.event.pull_request.body || '' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true

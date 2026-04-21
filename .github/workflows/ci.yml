@@ -154,6 +154,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_label_precreation_contract.py
 
+      - name: Phase-label transition and fallback contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_label_transition_and_fallback_contract.py
+
       - name: Test-and-mark-stable plan polling guard regression tests
         run: |
           set -euo pipefail
