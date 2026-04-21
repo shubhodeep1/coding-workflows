@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_workflow_logs.py:719-727 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, moonshotai_kimi-k2_5]\n  PROBLEM: 404 missing-log-archive errors are retried before `MissingLogArchiveError` is raised.\n  WHY: A 404 means the archive is permanently absent, so retrying wastes time and API quota; one reviewer disputed this as intentional, but the highest reported severity is medium and the issue remains the same.\n- scripts/collect_workflow_logs.py:737 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The final `RuntimeError` fallback after `_fetch_run_log_archive`'s loop is unreachable.\n  WHY: All loop paths either return success or raise on failure, so this line is dead code; one reviewer argued it could guard invalid retry counts, but the reported issue is still unreachable fallback code.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/collect_workflow_logs.py:728 | severity=high | confidence=5\n  PROBLEM: 404 (missing log archive) errors are retried before raising `MissingLogArchiveError`.\n  WHY: 404 errors indicate the resource doesn't exist, so retrying wastes time and API calls instead of failing immediately.\n- scripts/collect_workflow_logs.py:729 | severity=high | confidence=5\n  PROBLEM: Unreachable `RuntimeError` fallback after loop.\n  WHY: The loop always either returns or raises an exception before reaching this line, so the fallback is dead code.\n- scripts/collect_workflow_logs.py:482-487 | severity=medium | confidence=3\n  PROBLEM: Potential issue with timeout error handling consistency.\n  WHY: `gh_api_bytes` retries timeout errors, but the reviewer is concerned that 5-minute timeouts may indicate deeper issues rather than a transient failure.\n- scripts/collect_workflow_logs.py:50-58 | severity=low | confidence=2\n  PROBLEM: `RETRY_MARKERS` may not catch all transient network errors.\n  WHY: Connection errors like \"connection refused\" or \"connection reset\" might not be matched, causing transient failures to skip retries.\n- tests/test_collect_workflow_logs.py:928-1079 | severity=low | confidence=2\n  PROBLEM: Test incurs real `time.sleep()` delays.\n  WHY: The test adds roughly 3 seconds of CI time because it exercises retry backoff for 404 errors.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/collect_workflow_logs.py:482-487 | severity=high | confidence=5\n  PROBLEM: `gh_api_bytes` does not actually use the `RETRY_MARKERS` logic for `subprocess.TimeoutExpired`.\n  WHY: If the `gh` command hangs, the function waits for 300s and then raises a `RuntimeError` on the first timeout when `retries=1`, so `_fetch_run_log_archive` effectively fails immediately on timeouts.\n- scripts/collect_workflow_logs.py:719-725 | severity=medium | confidence=4\n  PROBLEM: Unnecessary backoff and retry for permanent 404 errors.\n  WHY: A 404 means the log archive is missing, so retrying 3 times wastes several seconds per missing log and unnecessary API quota.\n- scripts/collect_workflow_logs.py:709-715 | severity=medium | confidence=3\n  PROBLEM: Double-layered retry logic.\n  WHY: `_fetch_run_log_archive` has its own 3-attempt loop while `gh_api_bytes` also has retry machinery, making failure counts harder to reason about.\n- scripts/collect_workflow_logs.py:737 | severity=high | confidence=5\n  PROBLEM: Unreachable `RuntimeError` at the end of the function.\n  WHY: The loop covers all exit paths, so the final fallback can never be reached.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/collect_workflow_logs.py:737 | severity=high | confidence=5\n  PROBLEM: The final `raise RuntimeError(f\"failed to fetch workflow run logs for {endpoint}\")` at the end of the loop is unreachable.\n  WHY: All code paths either return in the success case or raise earlier in failure cases, so this is dead code.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/collect_workflow_logs.py:737 | severity=high | confidence=5\n  PROBLEM: The final RuntimeError fallback is unreachable code.\n  WHY: The loop always either returns or raises earlier, so execution never reaches the fallback line.\n- scripts/collect_workflow_logs.py:718-727 | severity=medium | confidence=4\n  PROBLEM: 404 Not Found errors are retried before final failure.\n  WHY: A 404 means the log archive does not exist, so retrying it wastes about 3 seconds per missing run and unnecessary API quota.\n- scripts/collect_workflow_logs.py:713-727 | severity=medium | confidence=3\n  PROBLEM: Timeout exceptions may bypass outer retry logic.\n  WHY: The timeout message may not match the retry markers, so the outer loop can fail immediately instead of retrying as intended.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n(No findings reported.)\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "349bb992f5996111feabb61afdca3196247763fb4f7ca201e35f16b43cce26e6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1489,
+    "run_id": "24705557971",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24705557971",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260421054121_58e674ebe9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1489,
+    "run_id": "24705557971"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-21T05:41:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
