@@ -32,6 +32,16 @@
 
 set -euo pipefail
 
+if [ -z "${COMMITTED_FILES_FILE:-}" ]; then
+  if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
+    COMMITTED_FILES_FILE="${RUNTIME_DIR}/committed_files.txt"
+    echo "::warning::COMMITTED_FILES_FILE was unset; defaulting to ${COMMITTED_FILES_FILE}."
+  else
+    echo "::error::COMMITTED_FILES_FILE is required when RUNTIME_DIR is unavailable."
+    exit 1
+  fi
+fi
+
 # Diagnostic: working tree state at the start of this step.
 # Pairs with the "checkpoint=editor_exit" group emitted at the
 # end of review_apply_fixes.sh.  If editor_exit shows edits but
@@ -123,8 +133,12 @@ fi
 # and for later notification steps (Telegram, labeling).
 # They are cleaned up in the final "Cleanup temporary artifacts" step.
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-  rm -f ./pre_assembled_static.txt
-  rm -f codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md
+  for _artifact in pre_assembled_static.txt codex_system_instructions.md ai_pipeline.md unattended_llm_system_instructions.md agents.md; do
+    if git ls-files --error-unmatch -- "${_artifact}" >/dev/null 2>&1; then
+      continue
+    fi
+    rm -f -- "${_artifact}"
+  done
 fi
 
 git config user.name "codex-bot"
@@ -486,4 +500,3 @@ PY
     echo "ledger_only_commit=false" >> "$GITHUB_OUTPUT"
   fi
 fi
-
