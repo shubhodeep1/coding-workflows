@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q<ID>` items were asked in Clarify; `/answer [auto-answered-by-orchestrator]` means proceed with the issue scope as written.\n\nPlanning ref context:\n- `HEAD`: `ff98351aa8837bd8a56de949f817312f1cbb1138`\n- Checked-out branch: `orchestrator/project-1469`\n- Integration metadata branch: `orchestrator/project-1469`\n- Mismatch: `false` (planning can proceed)\n\nConflict check (issue vs current code):\n- Current rendered outputs for both families do not pass `scripts/validation_lint.py` as-is.\n- `healthcheck-test-strings` currently fails for both family compose templates (healthcheck list entries are not explicitly quoted strings).\n- `canary-ordering` currently fails for python-mongo-flask due duplicate `10_*` prefixes.\n- `import-audit-safety` currently fails for node-hardhat because node family does not render `tests/20_import_audit.sh` and `tests/_lib/import_audit.py`.\n- `test-script-prologue` fails on direct renderer output unless executable bits are set (today chmod happens later in `validate_process.sh`).\n\nImplementation plan:\n\n1. Files likely to change\n- `workflow-templates/validation-harness/python-mongo-flask/docker-compose.test.yml.j2`\n- `workflow-templates/validation-harness/python-mongo-flask/tests/10_http_smoke.sh.j2` (likely rename to unique prefix) and related template/test references\n- `workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2`\n- `workflow-templates/validation-harness/node-hardhat-solidity/tests/<new import-audit script>.sh.j2`\n- `workflow-templates/validation-harness/node-hardhat-solidity/tests/_lib/import_audit.py.j2` (new)\n- `scripts/render_validation_templates.py` (if making rendered `.sh` executable at write-time)\n- `tests/test_family_python_mongo_flask.py`\n- `tests/test_render_validation_templates_node_hardhat_regressions.py`\n- `tests/test_render_validation_templates.py` (if expected file set changes)\n- `tests/fixtures/validation_harness/python_mongo_flask/**` (if script rename/content changes)\n\n2. Functions/modules to implement\n- Keep family dispatch contract unchanged in `scripts/render_validation_templates.py` (`FAMILY_REGISTRY`, `resolve_family` untouched).\n- Update family templates to satisfy deterministic lint rules:\n  - Explicitly quote healthcheck `test` entries in both compose templates.\n  - Remove python duplicate test prefix by renaming one top-level script to a unique `NN_` prefix.\n  - Add node import-audit wrapper/helper templates following the existing python subprocess-isolation pattern.\n- Optional but recommended renderer hardening:\n  - In `write_outputs`, set executable bit for rendered `*.sh` outputs so direct lint on rendered trees passes `test-script-prologue`.\n\n3. Data structures affected\n- Rendered harness file tree per family (managed generated artifacts under `validation/`).\n- Family-specific template inventory for node-hardhat (adds import-audit artifacts).\n- Python family test script ordering in generated filenames (`NN_` prefix uniqueness).\n- No manifest schema or `type -> family` mapping changes.\n\n4. API/interface changes\n- No CLI/API/env var changes expected.\n- Generated artifact interface changes:\n  - Python test script filename may change (`NN_http_smoke.sh` prefix update).\n  - Node generated harness will include import-audit script/helper files.\n- Managed-file rendering behavior remains deterministic and dispatch remains `manifest.type -> family`.\n\n5. Potential risks/edge cases\n- YAML quoting/escaping mistakes can break `docker compose config` or shell command semantics.\n- Script renames can break fixture assertions if every reference is not updated.\n- New node import-audit helper must avoid forbidden patterns (`eval/exec/spec_from_file_location/SourceFileLoader`) or lint will still fail.\n- Executable-bit handling can be platform-sensitive; implementation should be safe on Linux CI (fail-open or guarded on chmod errors if needed).\n- Must preserve known protections:\n  - node-hardhat PATH export for foundry\n  - node `validate.env` quoting\n  - node RPC `.result` object/string probe logic\n  - python import-audit subprocess isolation\n  - graceful-shutdown wiring in both families\n\n6. Testing considerations\n- Update regression tests first around changed invariants:\n  - python family regression test for unique script prefixes + healthcheck quoting.\n  - node regression test for import-audit files + safety content.\n- Add/extend lint-compliance tests that:\n  - render each supported family into temp output\n  - run `scripts/validation_lint.py` against that output\n  - assert zero violations\n- Keep existing guard tests green:\n  - `tests/test_render_validation_templates_node_hardhat_regressions.py`\n  - `tests/test_family_python_mongo_flask.py`\n  - relevant `tests/test_validate_lint_*.py`\n- Stay inside issue scope: templates, renderer, and tests only; no workflow/docs edits.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "deeb998e4dcaf3538b50a2475251fa89e6b86c6da02511a4d638a4126fd2f6d4",
+  "lineage": {
+    "issue_number": 1500,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24728719115",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24728719115",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1500"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260421145151_edef3345af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1500,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24728719115"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1500",
+  "timestamps": {
+    "created_at": "2026-04-21T14:51:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
