@@ -238,7 +238,7 @@ jobs:
           resolver_clone_log="${resolver_stage_root}/clone.log"
           resolver_git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
           resolver_git() {
-            git -c "http.extraHeader=Authorization: basic ${resolver_git_auth_header}" "$@"
+            git -c "http.extraHeader=Authorization: Basic ${resolver_git_auth_header}" "$@"
           }
           cleanup_resolver_stage() {
             rm -rf "${resolver_stage_root}"
