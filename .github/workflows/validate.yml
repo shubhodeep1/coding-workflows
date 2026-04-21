@@ -87,17 +87,33 @@ jobs:
           resolver_stage_root="${RUNNER_TEMP}/resolve-integration-ref-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           resolver_stage_primary="${resolver_stage_root}/primary"
           resolver_stage_fallback="${resolver_stage_root}/fallback"
+          resolver_repo_url="https://x-access-token:${GH_TOKEN}@github.com/${resolver_repo}"
           rm -rf "${resolver_stage_root}"
+          mkdir -p "${resolver_stage_root}"
+          resolver_clone_log="${resolver_stage_root}/clone.log"
+          cleanup_resolver_stage() {
+            rm -rf "${resolver_stage_root}"
+          }
+          trap cleanup_resolver_stage EXIT
 
-          if ! git clone --quiet --no-tags --depth 1 --branch "${resolver_ref}" "https://x-access-token:${GH_TOKEN}@github.com/${resolver_repo}" "${resolver_stage_primary}" 2>/dev/null; then
-            if ! git clone --quiet --no-tags --depth 1 --branch main "https://x-access-token:${GH_TOKEN}@github.com/${resolver_repo}" "${resolver_stage_fallback}" 2>/dev/null; then
-              echo "::warning::Failed to stage canonical integration resolver; falling back to default branch."
-              echo "ref=" >> "$GITHUB_OUTPUT"
-              exit 0
+          if git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_primary}" 2>"${resolver_clone_log}"; then
+            resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
+            if ! git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>>"${resolver_clone_log}" || \
+               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
+              echo "::warning::Failed to stage canonical integration resolver ref ${resolver_ref}; using main fallback."
+              if [ -s "${resolver_clone_log}" ]; then
+                sed -n '1,20p' "${resolver_clone_log}"
+              fi
             fi
+          elif git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_fallback}" 2>>"${resolver_clone_log}"; then
             resolver_script="${resolver_stage_fallback}/scripts/resolve_integration_ref.sh"
           else
-            resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
+            echo "::warning::Failed to stage canonical integration resolver; falling back to default branch."
+            if [ -s "${resolver_clone_log}" ]; then
+              sed -n '1,20p' "${resolver_clone_log}"
+            fi
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           if [ ! -f "${resolver_script}" ]; then
