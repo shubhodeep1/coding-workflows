@@ -305,12 +305,22 @@ def collect_templates(templates_root: Path, family: FamilySpec) -> list[Template
 
 		for template_path in sorted(path for path in family_dir.rglob("*.j2") if path.is_file()):
 			template_rel_path = template_path.relative_to(templates_root)
+			template_rel = template_rel_path.as_posix()
 			output_rel = template_path.relative_to(family_dir)
 			output_rel = output_rel.with_suffix("")
 			_ensure_safe_relative_path(output_rel, what="Rendered output path")
 			output_rel = _resolve_output_rel_path(family, output_rel)
-			template_map[output_rel.as_posix()] = TemplateSpec(
-				template_rel_path=template_rel_path.as_posix(),
+			output_key = output_rel.as_posix()
+			existing_template = template_map.get(output_key)
+			if existing_template is not None:
+				existing_is_shared = existing_template.template_rel_path.startswith("_shared/")
+				current_is_shared = template_rel.startswith("_shared/")
+				if not (existing_is_shared and not current_is_shared):
+					raise TemplateCollectionError(
+						f"Duplicate rendered output path '{output_key}' from template '{template_rel}' (conflicts with '{existing_template.template_rel_path}')"
+					)
+			template_map[output_key] = TemplateSpec(
+				template_rel_path=template_rel,
 				output_rel_path=output_rel,
 			)
 
@@ -404,7 +414,7 @@ def write_outputs(output_root: Path, rendered_files: list[RenderedFile]) -> list
 				handle.write(rendered_file.content)
 		except OSError as exc:
 			raise OutputWriteError(f"Failed writing rendered file '{target}': {exc}") from exc
-		if target.suffix == ".sh":
+		if target.suffix == ".sh" and "_lib" not in rendered_file.output_rel_path.parts:
 			try:
 				target.chmod(target.stat().st_mode | 0o111)
 			except OSError as exc:
