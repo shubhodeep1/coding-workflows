@@ -5,13 +5,23 @@
   "entry_id": "processed_command_1484_4286051797_approved",
   "issue_number": 1484,
   "metadata": {
+    "branch": "ai/issue-1484",
+    "changed_files": [
+      ".github/workflows/update_workflows.yml",
+      "tests/test_update_workflows_guardrails.py"
+    ],
+    "issue_number": 1484,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1484",
+    "pr_number": 1487,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1487",
+    "run_attempt": "1",
+    "run_id": "24705110842",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24705110842"
   },
   "run_attempt": 1,
   "run_id": "24705110842",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-21T05:07:46Z",
+  "status": "completed",
+  "timestamp": "2026-04-21T05:13:47Z",
   "workflow": "implement"
 }
