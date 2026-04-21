@@ -1544,6 +1544,7 @@ jobs:
         id: pre_editor_stale_base_gate
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
           LOCAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
@@ -3777,6 +3778,7 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
           LOCAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}

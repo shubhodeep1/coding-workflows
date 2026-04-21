@@ -56,6 +56,7 @@
 # Stderr is free-form human-readable diagnostic logging.
 
 set -euo pipefail
+export LC_ALL=C
 
 log() { printf '%s\n' "$*" >&2; }
 
