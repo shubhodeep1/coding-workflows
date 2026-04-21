@@ -1576,7 +1576,7 @@ jobs:
           esac
 
       - name: Install project dependencies (best-effort)
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         run: |
           set -euo pipefail
           # Install project dependencies so the editor can validate fixes
@@ -2165,11 +2165,14 @@ jobs:
             # fail to match and leave the PR stuck in the auto-merge
             # state this step is designed to resolve. See PR #1476.
             normalize_rel_path() {
-              printf '%s\n' "$1" | sed -e 's#^\(\./\)\+##' -e 's#//*#/#g' -e 's#/$##'
+              printf '%s\n' "$1" | sed -e 's#//*#/#g' -e 's#^\(\./\)\+##' -e 's#/$##'
             }
             LEDGER_PATH_FOR_DETECTOR="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger.txt}"
             NORMALIZED_LEDGER_PATH_FOR_DETECTOR="$(normalize_rel_path "${LEDGER_PATH_FOR_DETECTOR}")"
-            COMMIT_PATHS_RAW="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)"
+            if ! COMMIT_PATHS_RAW="$(git diff-tree --no-commit-id --name-only -r HEAD)"; then
+              echo "::warning::git diff-tree failed; ledger-only commit detection disabled for this iteration." >&2
+              COMMIT_PATHS_RAW=""
+            fi
             COMMIT_PATH_COUNT="$(printf '%s\n' "${COMMIT_PATHS_RAW}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
             SINGLE_COMMIT_PATH="$(printf '%s\n' "${COMMIT_PATHS_RAW}" | sed '/^$/d')"
             NORMALIZED_SINGLE_COMMIT_PATH="$(normalize_rel_path "${SINGLE_COMMIT_PATH}")"
@@ -4110,7 +4113,7 @@ jobs:
         # carry the original pull_request event payload.
         # Re-dispatched workflow_dispatch runs do not include
         # github.event.pull_request and therefore cannot re-enter this path.
-        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CAN_PUSH == 'true' && github.event.pull_request.number"
+        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CAN_PUSH == 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && github.event.pull_request.number"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CURRENT_RUN_ID: ${{ github.run_id }}

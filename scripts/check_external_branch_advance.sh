@@ -29,17 +29,19 @@
 #                       GitHub-attributed author/committer login does NOT
 #                       match AUTOFIX_BOT_LOGIN — spoof defence); caller
 #                       soft-exits 0.
-#   ADVANCE=unknown   — detection inconclusive (git fetch failed, gh api
-#                       errored, GITHUB_REPOSITORY unresolvable, or
-#                       GitHub-attributed identity empty); caller
-#                       fail-opens and continues.  This mirrors the
-#                       fail-open convention of the gate-job self-trigger
-#                       skip (agents.md §20.1) — GitHub API blips must
-#                       never silently drop the review.
+#   ADVANCE=unknown   — detection inconclusive or inputs unavailable
+#                       (git fetch failed, gh api errored,
+#                       GITHUB_REPOSITORY unresolvable, GitHub-attributed
+#                       identity empty, or TARGET_BRANCH/LOCAL_HEAD_SHA
+#                       missing); caller fail-opens and continues.  This
+#                       mirrors the fail-open convention of the gate-job
+#                       self-trigger skip (agents.md §20.1) — GitHub API
+#                       blips must never silently drop the review.
 #
-# Exit code is always 0 in production.  Non-zero exits are reserved for
-# internal usage errors (missing required env vars) and are not reached
-# on any well-formed caller invocation.
+# Exit code is 0 for all documented production outcomes, including
+# ADVANCE=unknown fail-open cases. Non-zero exits are reserved for
+# internal/script errors outside this protocol and are not expected on
+# any well-formed caller invocation.
 #
 # Required env:
 #   TARGET_BRANCH   — branch name to check (typically the PR head branch)
@@ -83,8 +85,9 @@ fi
 
 # Fetch the current remote tip.  A fetch failure is a detection failure,
 # not a branch-advance signal — fail open.
-if ! git fetch --quiet --no-tags --prune origin "${TARGET_BRANCH}" 2>/dev/null; then
-	log "::warning::check_external_branch_advance: git fetch origin ${TARGET_BRANCH} failed; fail-open."
+if ! git fetch --quiet --no-tags --prune origin \
+	"refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null; then
+	log "::warning::check_external_branch_advance: git fetch origin refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH} failed; fail-open."
 	printf 'ADVANCE=unknown\n'
 	exit 0
 fi
