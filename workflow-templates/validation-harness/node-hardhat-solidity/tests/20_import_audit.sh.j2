@@ -7,6 +7,12 @@ source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 echo "1..1"
 
 set +e
+if ! command -v python3 >/dev/null 2>&1; then
+	tap_skip 1 "import audit subprocess isolation"
+	echo "# python3 not available in image"
+	exit 0
+fi
+
 python3 "${SCRIPT_DIR}/_lib/import_audit.py"
 audit_rc=$?
 set -e
