@@ -679,10 +679,7 @@ def _normalize_error_text(exc: Exception) -> str:
 def _is_missing_log_archive_error(error_text: str, run_id: int) -> bool:
     normalized = error_text.lower()
     has_404 = "404" in normalized
-    has_archive_endpoint = (
-        f"actions/runs/{run_id}/logs" in normalized
-        or ("actions/runs/" in normalized and "/logs" in normalized)
-    )
+    has_archive_endpoint = f"actions/runs/{run_id}/logs" in normalized
     return (has_404 and has_archive_endpoint) or "log archive not found" in normalized
 
 
@@ -743,9 +740,9 @@ def _fetch_run_log_archive(
                 continue
             if cache is not None:
                 cache[identity] = normalized_exc
-            if normalized_exc is exc:
-                raise
-            raise normalized_exc from exc
+            if is_missing_archive:
+                raise normalized_exc from exc
+            raise
 
         if cache is not None:
             cache[identity] = payload
