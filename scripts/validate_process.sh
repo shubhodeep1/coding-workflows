@@ -2259,7 +2259,7 @@ case "${renderer_exit}" in
 		exit 1
 		;;
 	14)
-		local_failure_summary="Template renderer execution failed (exit 14). Ensure python3 >= 3.9 is available and inspect validate_generate.log for renderer errors."
+		local_failure_summary="Template renderer execution failed (exit 14). This indicates either python3 >= 3.9 is unavailable or the renderer script failed; inspect validate_generate.log for the specific error."
 		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
 		set_tracking_phase_label "ai:validation-failed"
 		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
