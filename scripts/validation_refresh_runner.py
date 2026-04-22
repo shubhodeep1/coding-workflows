@@ -212,7 +212,7 @@ class ValidationRefreshRunner:
 
 	def _checkout_refresh_branch(self, repo_dir: Path, default_branch: str) -> None:
 		remote_branch = self.executor.run(
-			["git", "ls-remote", "--heads", "origin", self.branch_name],
+			["git", "ls-remote", "--heads", "origin", f"refs/heads/{self.branch_name}"],
 			cwd=repo_dir,
 			check=False,
 		)
@@ -324,6 +324,7 @@ class ValidationRefreshRunner:
 				self.executor.run(["gh", "pr", "ready", str(pr_number), "--repo", repository])
 			if (not green) and (not is_draft):
 				self.executor.run(["gh", "pr", "ready", "--undo", str(pr_number), "--repo", repository])
+			existing_was_draft = is_draft
 		else:
 			create_command = [
 				"gh",
@@ -372,10 +373,15 @@ class ValidationRefreshRunner:
 				auto_merge_enabled = True
 			except CommandFailure as exc:
 				diagnostics.append(_format_command_failure("auto_merge", exc))
-				self.executor.run(
-					["gh", "pr", "ready", "--undo", str(pr_number), "--repo", repository],
-					check=False,
-				)
+				if existing_prs:
+					undo_ready = existing_was_draft
+				else:
+					undo_ready = False
+				if undo_ready:
+					self.executor.run(
+						["gh", "pr", "ready", "--undo", str(pr_number), "--repo", repository],
+						check=False,
+					)
 
 		return pr_number, pr_url, auto_merge_enabled
 

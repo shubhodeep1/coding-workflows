@@ -1568,7 +1568,7 @@ self-heal patches cannot be merged without explicit human action.
 - Reads target repositories from `.github/ai/consumer_repos.json`
 - For each target repo, clones the repo, checks out/creates `ai/validation-refresh` (or configured branch), renders validation assets from `.ai/validate.yml` using `scripts/render_validation_templates.py`, runs deterministic lint (`scripts/validation_lint.py`) and deterministic self-test (`scripts/validate_driver.sh`), and pushes refresh commits when files changed.
 - PR behavior:
-- Green path (render/lint/self-test pass): opens/updates a non-draft PR and enables existing repo auto-merge via `gh pr merge --squash --auto`.
+- Green path (render/lint/self-test pass): opens/updates a non-draft PR and enables existing repo auto-merge via `gh pr merge --squash --auto`. If auto-merge enablement fails on an existing PR, the workflow preserves the PR's prior draft state instead of forcing it back to draft.
 - Red path (any refresh stage failure with file changes): opens/updates a draft PR including diagnostics in the body.
 - Failure/no-op behavior:
 - No `.ai/validate.yml`: repo is skipped.

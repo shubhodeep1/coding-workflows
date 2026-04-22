@@ -250,7 +250,6 @@ def test_process_repository_green_auto_merge_failure_falls_back_to_red() -> None
 				),
 				PlannedCall(("gh", "pr", "edit", "77")),
 				PlannedCall(("gh", "pr", "merge", "77"), returncode=1, stderr="auto-merge unavailable"),
-				PlannedCall(("gh", "pr", "ready", "--undo", "77", "--repo")),
 			]
 		)
 
