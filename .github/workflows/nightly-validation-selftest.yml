@@ -88,8 +88,8 @@ jobs:
             ] | @tsv
           ' "${summary_file}" 2>/dev/null || true)"
           IFS=$'	' read -r status fixtures passed failed fixture_lines <<EOF
-${summary_data}
-EOF
+          ${summary_data}
+          EOF
           status="${status:-unknown}"
           fixtures="${fixtures:-0}"
           passed="${passed:-0}"
