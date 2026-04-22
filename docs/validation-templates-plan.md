@@ -52,7 +52,7 @@ scripts/render_validation_templates.py
      ├─ reads manifest
      ├─ picks family
      ├─ renders Dockerfile.app, docker-compose.test.yml,
-     │   tests/00_canary.sh, tests/10_http_smoke.py, etc.
+     │   tests/00_canary.sh, tests/11_http_smoke.sh, etc.
      └─ writes to consumer-repo checkout
 
 scripts/validation_lint.py
@@ -64,7 +64,7 @@ scripts/validation_lint.py
      ├─ stdout/stderr bounded-tail capture
      ├─ external-tool dependency analysis (custom_tests)
      ├─ importlib dynamic-loading guard
-     ├─ dependency_auditing sidecar rules
+     ├─ import-audit subprocess-isolation rules
      └─ ~30 encoded rules total — one test each under tests/
 
 .github/workflows/validation-refresh.yml
@@ -89,8 +89,9 @@ log capture, and the `attempt_self_heal_and_reexec` integration points.
 | `Dockerfile.app`                         | `python:3.12-slim` base; `apt-get install -y curl jq`; app deps via `pip install -r`; no service-side CLIs unless manifest opts in |
 | `docker-compose.test.yml`                | `app`, `mongo` (per `services:`); `init: true` on every long-running service; `/bin/sh -c` healthchecks for sh parity              |
 | `tests/00_canary.sh`                     | `CANARY_TOOLS` scoped to client-side only (`curl jq python3 pytest`); service-side CLIs go in a separate `svc_canary.sh`           |
-| `tests/10_http_smoke.py`                 | Uses `TEST_HOST_HEADER` helper to defeat Flask `ALLOWED_HOSTS`/`Host:` checks when hitting the compose service name                |
-| `_lib/import_audit.py`                   | Runs dependency_auditing via `subprocess.run([sys.executable, "-c", ...])` to isolate `sys.modules` side-effects                   |
+| `tests/11_http_smoke.sh`                 | Uses `TEST_HOST_HEADER` helper to defeat Flask `ALLOWED_HOSTS`/`Host:` checks when hitting the compose service name                |
+| `tests/20_import_audit.sh`               | Runs `_lib/import_audit.py` in subprocess isolation before service-specific assertions                                             |
+| `_lib/import_audit.py`                   | Spawns a child Python process that probes an import allowlist via `importlib.import_module` to isolate `sys.modules` side-effects     |
 | `_lib/graceful_shutdown.py`              | Post-SIGTERM readiness polling with bounded timeout + stdout/stderr tail capture on timeout                                        |
 | `tests/90_tap_report.sh`                 | TAP-format `ok N` / `not ok N` aggregator                                                                                          |
 
@@ -101,8 +102,10 @@ log capture, and the `attempt_self_heal_and_reexec` integration points.
 | `Dockerfile.app`                         | `node:20-bookworm` base; `curl -L https://foundry.paradigm.xyz \| bash`; `foundryup`; **`ENV PATH=/root/.foundry/bin:$PATH`** so `forge`/`cast` resolve in non-login shells |
 | `docker-compose.test.yml`                | `app`, `anvil` service; `init: true`; `validate.env` generated with **double-quoted** values to survive compose interpolation      |
 | `tests/00_canary.sh`                     | `CANARY_TOOLS="curl jq node npx forge cast"` — all client-side; no `psql`/`mongosh`                                                |
-| `tests/20_rpc_probe.sh`                  | `curl -s $RPC_URL --data '{...eth_blockNumber...}' \| jq -e '.result'` — probes **`.result`** not `.` (empty body must fail)       |
+| `tests/20_import_audit.sh`               | Runs `_lib/import_audit.py` in subprocess isolation before RPC and Hardhat checks                                                   |
+| `tests/25_rpc_probe.sh`                  | `curl -s $RPC_URL --data '{...eth_blockNumber...}' \| jq -e '.result'` — probes **`.result`** not `.` (empty body must fail)       |
 | `tests/30_hardhat_test.sh`               | `npx hardhat test --network localhost`; captures stdout/stderr tails on timeout                                                    |
+| `_lib/import_audit.py`                   | Isolated import helper that executes each module import in a child Python process                                                   |
 | `_lib/graceful_shutdown.sh`              | Same pattern as python family, shell version                                                                                       |
 
 ## Encoded prompt rules (the ~30)
@@ -120,7 +123,7 @@ Each rule from `prompts/mode-validate-generate.txt` becomes either:
 | 360–424: graceful_shutdown + post-restart readiness polling                 | `_lib/graceful_shutdown.*` + lint check that tests import it               |
 | 426–466: stdout/stderr capture with bounded tails                           | `_lib/` helper + lint check that failure paths invoke it                   |
 | 469–504: custom-test external-tool dependency analysis                      | `validation_lint.py`: every tool in `custom_tests` must appear in Dockerfile |
-| 622–756: importlib dynamic loading, dependency_auditing subprocess isolation | `_lib/import_audit.py` template invariant                                  |
+| 622–756: importlib dynamic loading, import-audit subprocess isolation       | `_lib/import_audit.py` template invariant                                  |
 | (…~22 more rules from the same prompt encoded 1:1)                          | Enumerated in `validation_lint.py` module docstring                        |
 
 Each encoded rule ships with a dedicated test under
@@ -263,3 +266,44 @@ service-side CLIs`) and is live on `claude/analyze-job-logs-JKNlF`.
   both fixture repos for 14 consecutive days before M7 flips the default.
 - Mean time from a new encoded rule (new entry in `validation_lint.py`) to
   consumer-repo enforcement ≤ 24h via the refresh workflow.
+
+<!-- anchor:validation-templates-status -->
+<!-- Append new status snapshots below; do not rewrite prior snapshots. -->
+
+## Source-of-truth status snapshots
+
+### Snapshot — 2026-04-22
+
+| Milestone | Status | Objective evidence from repository |
+| --- | --- | --- |
+| M5 — Refresh workflow + auto-merge gate | Partial | Present: `.github/ai/consumer_repos.json`, `.github/workflows/validation-refresh.yml`, `scripts/validation_refresh_runner.py`, `tests/test_validation_refresh_runner.py`, `tests/test_validation_refresh_workflow_contract.py`; remaining gap: merge-bot/runtime handling for label `auto-merge:validation-refresh` outside this planning doc |
+| M6 — Nightly self-test coverage | Partial | Present in this repository: `.github/workflows/nightly-validation-selftest.yml`, `scripts/validation_selftest_matrix.py`, `tests/test_validation_selftest_runner.py`, `tests/test_nightly_validation_selftest_workflow_contract.py`; remaining gaps: fixture-repo wiring and README streak badge are not present in tracked files |
+| M7 — Flip default + remove freehand path | Remaining | `VALIDATION_USE_TEMPLATES` default remains `false` in `scripts/validate_process.sh`; freehand generation path remains in `scripts/validate_process.sh`; `prompts/mode-validate-generate.txt` remains active |
+
+### Snapshot — 2026-04-21
+
+| Milestone | Status | Objective evidence from repository |
+| --- | --- | --- |
+| M1 — Scaffold + renderer | Done | `workflow-templates/validation-harness/_shared/**`, `scripts/render_validation_templates.py`, `scripts/templates/slot_manifest.schema.json`, `tests/test_render_validation_templates.py`, template-mode wiring in `scripts/validate_process.sh`, bootstrap fetch/staging in `.github/workflows/validate.yml` |
+| M2 — `python-mongo-flask` family | Done | `workflow-templates/validation-harness/python-mongo-flask/**`, `tests/test_family_python_mongo_flask.py`, `tests/fixtures/validation_harness/python_mongo_flask/**` |
+| M3 — `node-hardhat-solidity` family | Done | `workflow-templates/validation-harness/node-hardhat-solidity/**`, `tests/test_render_validation_templates.py`, `tests/test_render_validation_templates_node_hardhat_regressions.py`, `tests/test_validate_harness_rpc.py` |
+| M4 — `validation_lint.py` + render self-heal | Done | `scripts/validation_lint.py`, `tests/test_validate_lint_*.py`, render self-heal path `attempt_self_heal_and_reexec "render"` in `scripts/validate_process.sh`, `tests/test_validate_process_render_recovery.py` |
+| M5 — Refresh workflow + auto-merge gate | Partial | Present: `.github/ai/consumer_repos.json`. Missing: `.github/workflows/validation-refresh.yml`; no merge-bot/runtime handling found for label `auto-merge:validation-refresh` outside this planning doc |
+| M6 — Nightly self-test coverage | Remaining | Missing in this repository: `.github/workflows/nightly-validation-selftest.yml`; fixture-repo wiring and README streak badge are not present in tracked files |
+| M7 — Flip default + remove freehand path | Remaining | `VALIDATION_USE_TEMPLATES` default remains `false` in `scripts/validate_process.sh`; freehand generation path remains in `scripts/validate_process.sh`; `prompts/mode-validate-generate.txt` remains active |
+
+### Factual conflicts captured (plan prose vs codebase truth)
+
+- Milestone prose cites `scripts/validate_driver.sh` for template-flag wiring; current implementation is in `scripts/validate_process.sh`.
+- Milestone prose references `tests/test_family_node_hardhat_solidity.py`; that test file is absent, while coverage is present via `tests/test_render_validation_templates_node_hardhat_regressions.py` and `tests/test_validate_harness_rpc.py`.
+- Milestone prose listed `.github/workflows/validation-refresh.yml` and `.github/workflows/nightly-validation-selftest.yml` as absent; both workflow files now exist and should be treated as delivered baseline.
+
+### Remaining implementation backlog (unresolved scope only)
+
+- [ ] Add merge-bot handling for the `auto-merge:validation-refresh` label.
+- [ ] Add fixture-repo wiring for python-mongo and node-hardhat self-test targets.
+- [ ] Add README surface for nightly validation green-run streak reporting.
+- [ ] Flip `VALIDATION_USE_TEMPLATES` default from `false` to `true` after stability soak.
+- [ ] Remove freehand harness generation path from `scripts/validate_process.sh` once template mode is default.
+- [ ] Remove superseded freehand sections from `prompts/mode-validate-generate.txt` after cutover.
+- [ ] Update `agents.md` and `README.md` with the new manifest-centric flow.
