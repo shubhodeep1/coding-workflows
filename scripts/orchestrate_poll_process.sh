@@ -4547,7 +4547,23 @@ invoke_stall_judge() {
   local issue_comments_json
   issue_comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${comments_issue_num}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
   local recent_comments
-  recent_comments="$(printf '%s' "${issue_comments_json}" | jq -c '[.[] | {author: (.user.login // ""), created_at: (.created_at // ""), body: (.body // "")}] | (if length > 8 then .[-8:] else . end)' 2>/dev/null || echo '[]')"
+  # Filter out ORCHESTRATOR_STATE_V1 snapshots (they are ~57KB each and
+  # are noise for the judge — it wants phase-change / recovery narrative,
+  # not state dumps) and cap each remaining body at 2000 bytes. Without
+  # these two caps, 8 state snapshots produce ~260KB of argv which trips
+  # Linux MAX_ARG_STRLEN (128KB per argv entry) when passed to the final
+  # diagnostics jq via `--argjson recent_comments`, causing execve to
+  # return E2BIG and the diagnostics blob to come out empty.
+  recent_comments="$(printf '%s' "${issue_comments_json}" | jq -c '
+    [.[]
+      | select(((.body // "") | startswith("<!-- ORCHESTRATOR_STATE_V1")) | not)
+      | {
+          author: (.user.login // ""),
+          created_at: (.created_at // ""),
+          body: ((.body // "") | if length > 2000 then .[:2000] + "…[truncated]" else . end)
+        }
+    ] | (if length > 8 then .[-8:] else . end)
+  ' 2>/dev/null || echo '[]')"
 
   local linked_pr
   linked_pr="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
@@ -4634,7 +4650,40 @@ invoke_stall_judge() {
       recent_review_workflow_outcomes: $workflow_outcomes,
       current_wave: $current_wave,
       prior_recovery_actions: $prior_actions
-    }')"
+    }' 2>/dev/null || echo '')"
+
+  # Defensive guard: if the diagnostics builder above silently failed
+  # (empty output or non-JSON), the judge would otherwise receive a
+  # blank blob and escalate blind. Emit a structured warning so the
+  # failure is visible in the workflow log, and fall back to a minimal
+  # payload that still carries the essential decision fields.
+  if [ -z "${diagnostics}" ] || ! printf '%s' "${diagnostics}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "::warning::Stall judge diagnostics builder failed for issue #${issue_num} (empty or non-JSON output); using minimal fallback payload. Likely cause: an --argjson input exceeded Linux MAX_ARG_STRLEN or contained invalid JSON." >&2
+    diagnostics="$(jq -cn \
+      --arg issue_number "${issue_num}" \
+      --arg local_id "${local_id}" \
+      --arg phase "${phase}" \
+      --argjson stall_minutes "${stall_minutes:-0}" \
+      --argjson recovery_count "${recovery_count:-0}" \
+      --arg target_pr "${target_pr}" \
+      --arg pr_state "${pr_state}" \
+      --arg head_ref "${head_ref}" \
+      --arg base_ref "${base_ref}" \
+      '{
+        issue_number: ($issue_number | tonumber? // null),
+        local_id: (if $local_id == "" then null else $local_id end),
+        phase: (if $phase == "" then null else $phase end),
+        stall_minutes: $stall_minutes,
+        recovery_count: $recovery_count,
+        linked_pr: {
+          number: (if $target_pr == "" then null else ($target_pr | tonumber? // null) end),
+          state: (if $pr_state == "" then null else $pr_state end),
+          head_ref: (if $head_ref == "" then null else $head_ref end),
+          base_ref: (if $base_ref == "" then null else $base_ref end)
+        },
+        diagnostics_build_failed: true
+      }' 2>/dev/null || echo '{"diagnostics_build_failed":true}')"
+  fi
 
   local stall_judge_prompt_file="${RUNTIME_DIR}/stall_judge_prompt_${issue_num}.txt"
   local stall_judge_output_file="${RUNTIME_DIR}/stall_judge_output_${issue_num}.txt"
