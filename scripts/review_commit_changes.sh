@@ -469,7 +469,7 @@ PY
   # emits canonical relative paths (no ./ prefix, no repeated
   # slashes, no trailing slash), but a consumer that sets
   # REVIEW_LEDGER_PATH to e.g. ./.ai/review_issue_ledger/pr-123.txt
-  # or .ai//review_issue_ledger.txt would otherwise silently
+  # or .ai//review_issue_ledger/pr-123.txt would otherwise silently
   # fail to match and leave the PR stuck in the auto-merge
   # state this step is designed to resolve. See PR #1476.
   normalize_rel_path() {
