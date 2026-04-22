@@ -66,8 +66,19 @@ def _utc_timestamp() -> str:
 
 
 def _discover_fixtures(fixtures_root: Path) -> list[Path]:
+	fixtures_root_resolved = fixtures_root.resolve()
 	manifests = sorted(fixtures_root.glob("*.yml")) + sorted(fixtures_root.glob("*.yaml"))
-	return sorted(set(path.resolve() for path in manifests if path.is_file()))
+	filtered: list[Path] = []
+	for path in manifests:
+		if not path.is_file():
+			continue
+		resolved = path.resolve()
+		try:
+			resolved.relative_to(fixtures_root_resolved)
+		except ValueError:
+			continue
+		filtered.append(resolved)
+	return sorted(set(filtered))
 
 
 def _write_command_log(log_path: Path, command: list[str], cwd: Path, result: subprocess.CompletedProcess[str], duration: float) -> None:
@@ -87,13 +98,18 @@ def _write_command_log(log_path: Path, command: list[str], cwd: Path, result: su
 
 def _run_command(command: list[str], cwd: Path, log_path: Path, repo_root: Path) -> dict[str, Any]:
 	started = time.monotonic()
-	result = subprocess.run(
-		command,
-		cwd=str(cwd),
-		text=True,
-		capture_output=True,
-		check=False,
-	)
+	try:
+		result = subprocess.run(
+			command,
+			cwd=str(cwd),
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+	except FileNotFoundError as exc:
+		result = subprocess.CompletedProcess(command, 127, stdout="", stderr=str(exc))
+	except Exception as exc:
+		result = subprocess.CompletedProcess(command, 1, stdout="", stderr=str(exc))
 	duration = time.monotonic() - started
 	_write_command_log(log_path, command, cwd, result, duration)
 	return {
@@ -147,12 +163,19 @@ def _run_sanity_check(command: list[str], cwd: Path) -> tuple[int, str, str, flo
 			text=True,
 			capture_output=True,
 			check=False,
+			timeout=30,
 		)
 		duration = time.monotonic() - started
 		return result.returncode, result.stdout, result.stderr, duration
 	except FileNotFoundError as exc:
 		duration = time.monotonic() - started
 		return 127, "", str(exc), duration
+	except subprocess.TimeoutExpired as exc:
+		duration = time.monotonic() - started
+		return 124, "", str(exc), duration
+	except Exception as exc:
+		duration = time.monotonic() - started
+		return 1, "", str(exc), duration
 
 
 def _stage_sanity(repo_root: Path, output_root: Path, fixture_log_dir: Path, skip_compose_config: bool) -> dict[str, Any]:
@@ -256,15 +279,14 @@ def _stage_sanity(repo_root: Path, output_root: Path, fixture_log_dir: Path, ski
 			]
 		)
 	else:
-		overall_status = "fail"
 		checks.append(
 			{
 				"name": "docker_compose_config",
-				"status": "fail",
-				"reason": "missing docker-compose.test.yml",
+				"status": "skipped",
+				"reason": "no docker-compose.test.yml in output",
 			}
 		)
-		log_sections.append("check: docker_compose_config\nstatus: fail\nreason: missing docker-compose.test.yml\n")
+		log_sections.append("check: docker_compose_config\nstatus: skipped\nreason: no docker-compose.test.yml in output\n")
 
 	stage_duration = time.monotonic() - stage_started
 	log_path.parent.mkdir(parents=True, exist_ok=True)

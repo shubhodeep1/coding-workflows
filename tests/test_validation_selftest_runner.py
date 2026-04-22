@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import tempfile
+import importlib.util
 from pathlib import Path
 
 import yaml
@@ -14,6 +15,10 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = REPO_ROOT / "scripts" / "validation_selftest_matrix.py"
+MATRIX_MODULE_SPEC = importlib.util.spec_from_file_location("validation_selftest_matrix", SCRIPT_PATH)
+assert MATRIX_MODULE_SPEC is not None and MATRIX_MODULE_SPEC.loader is not None
+MATRIX_MODULE = importlib.util.module_from_spec(MATRIX_MODULE_SPEC)
+MATRIX_MODULE_SPEC.loader.exec_module(MATRIX_MODULE)
 
 
 def _write_yaml(path: Path, payload: dict) -> None:
@@ -180,10 +185,31 @@ def test_runner_fails_when_no_fixture_manifests_discovered() -> None:
 		assert "error" in summary
 
 
+def test_sanity_skips_compose_when_missing_by_default() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-selftest-runner-") as td:
+		work_root = Path(td)
+		output_root = work_root / "rendered"
+		fixture_log_dir = work_root / "logs" / "fixture"
+		shell_file = output_root / "tests" / "00_canary.sh"
+		python_file = output_root / "tests" / "_lib" / "helper.py"
+
+		shell_file.parent.mkdir(parents=True, exist_ok=True)
+		python_file.parent.mkdir(parents=True, exist_ok=True)
+		shell_file.write_text("#!/usr/bin/env bash\nset -euo pipefail\necho ok\n", encoding="utf-8")
+		python_file.write_text("value = 1\n", encoding="utf-8")
+
+		sanity = MATRIX_MODULE._stage_sanity(REPO_ROOT, output_root, fixture_log_dir, skip_compose_config=False)
+		assert sanity["status"] == "pass"
+		compose_check = next((check for check in sanity.get("checks", []) if check["name"] == "docker_compose_config"), None)
+		assert compose_check is not None
+		assert compose_check["status"] == "skipped"
+		assert compose_check["reason"] == "no docker-compose.test.yml in output"
+
 def main() -> int:
 	test_runner_passes_both_supported_family_fixtures()
 	test_runner_surfaces_fixture_stage_failure_in_summary()
 	test_runner_fails_when_no_fixture_manifests_discovered()
+	test_sanity_skips_compose_when_missing_by_default()
 	return 0
 
 
