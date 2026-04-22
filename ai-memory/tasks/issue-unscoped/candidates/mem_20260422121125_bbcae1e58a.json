@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `tests/test_ai_label_precreation_contract.py:28-36` | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The contract still requires `.github/workflows/comprehensive-test-and-release.yml` to source `scripts/label_helpers.sh` and call `ensure_label_exists`, but that workflow no longer mutates labels.\n  WHY: The workflow refactor removed the label-precreation logic, so this static contract will fail even though the new behavior is intentional.\n\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- `tests/test_ai_label_precreation_contract.py:28-36` | severity=medium | confidence=5\n  PROBLEM: The contract still requires `.github/workflows/comprehensive-test-and-release.yml` to source label helpers and call `ensure_label_exists`, even though that workflow no longer mutates labels.\n  WHY: The workflow change removed the label mutation behavior, so the test will fail with an assertion mismatch.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `tests/test_ai_label_precreation_contract.py:28-36` | severity=medium | confidence=5\n  PROBLEM: The contract still assumes this workflow performs label mutation, so it still mandates `scripts/label_helpers.sh` and `ensure_label_exists`.\n  WHY: The workflow no longer sets the `ai:comprehensive-test-pending` label, so the contract must be updated to match the refactor.\n- `README.md:754-758` | severity=low | confidence=3\n  PROBLEM: The README lists `Phase 2` and `Phase 3` under a `1.`-based list, which can read as a numbering jump.\n  WHY: The documentation is technically correct but mildly confusing because Phase 1 was removed and the list marker no longer matches the phase numbers.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- `tests/test_ai_label_precreation_contracts.py:28-36` | severity=medium | confidence=5\n  PROBLEM: The test contract expects `.github/workflows/comprehensive-test-and-release.yml` to contain `source scripts/label_helpers.sh` and `ensure_label_exists \"${PENDING_LABEL}\" \"${GITHUB_REPOSITORY}\"`, but those lines were removed from the workflow.\n  WHY: The workflow no longer creates or manages the `ai:comprehensive-test-pending` label, so this test will fail against the modified file.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- `.github/workflows/comprehensive-test-and-release.yml:274-277,343` | severity=low | confidence=5\n  PROBLEM: The claimed `REPORT_FILE_INPUT` removal is incorrect because the variable is still present and used.\n  WHY: The env block still defines `REPORT_FILE_INPUT: ${{ needs.phase2-collect-and-analyze-logs.outputs.report_file }}` and the later step correctly references `${REPORT_FILE_INPUT}`.\n- `tests/test_ai_label_precreation_contract.py:28-36` | severity=medium | confidence=5\n  PROBLEM: The contract still requires label-helper and `ensure_label_exists` patterns for `.github/workflows/comprehensive-test-and-release.yml`, but the refactored workflow removed all label mutation logic.\n  WHY: The PR intentionally removed the `ai:comprehensive-test-pending` behavior, so the contract will fail unless that workflow entry is removed.\n- `README.md:746-756` | severity=low | confidence=2\n  PROBLEM: The README phase numbering may look confusing because it lists `Phase 2` and `Phase 3` after removing Phase 1.\n  WHY: The documentation explicitly explains the naming is retained for backward compatibility, so this is intentional rather than a correctness issue.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- `.github/workflows/comprehensive-test-and-release.yml:275-276,343-354` | severity=low | confidence=5\n  PROBLEM: The claim that `REPORT_FILE_INPUT` is missing from phase3 is incorrect.\n  WHY: The workflow still declares `REPORT_FILE_INPUT` in the phase3 env block and validates the sanitized value before use.\n- `.github/workflows/comprehensive-test-and-release.yml:340-347` | severity=low | confidence=5\n  PROBLEM: The claim that sanitized inputs are not checked for emptiness is incorrect.\n  WHY: The code already checks `REPORT_FILE` with `[ -z \"${REPORT_FILE}\" ]` and exits with an error after sanitization.\n- `tests/test_ai_label_precreation_contract.py:28-36` | severity=medium | confidence=5\n  PROBLEM: The workflow contract still expects label-precreation behavior from `.github/workflows/comprehensive-test-and-release.yml`, but that behavior was removed.\n  WHY: The PR intentionally removes the label mutation logic, so the test must be updated to stop expecting those patterns.\n- `README.md:...` | severity=low | confidence=3\n  PROBLEM: The README phase numbering is a readability issue, not a runtime bug.\n  WHY: The phase jump is documented as intentional for backward compatibility, so this is optional cleanup only.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "41b0955d95feb40488521c809db8bcaf0b42c3db04219bf5415f89bab3cfdbbe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1520,
+    "run_id": "24776545847",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24776545847",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422121125_bbcae1e58a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1520,
+    "run_id": "24776545847"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T12:11:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
