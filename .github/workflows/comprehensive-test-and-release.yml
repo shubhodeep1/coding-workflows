@@ -88,6 +88,9 @@ jobs:
                 RATE_LIMIT_BACKOFF=$((RATE_LIMIT_BACKOFF * 2))
               fi
               sleep "${RATE_LIMIT_BACKOFF}"
+            elif [ -s "${err_file}" ]; then
+              echo "::error::gh api call failed: $*"
+              cat "${err_file}" >&2
             fi
 
             rm -f "${err_file}"
@@ -121,15 +124,27 @@ jobs:
             SINCE_ARG="${LAST_COLLECTION_TS}"
           fi
 
-          BEFORE_RUNS_JSON="$(list_dispatch_runs || true)"
+          BEFORE_RUNS_JSON=""
+          for attempt in 1 2 3; do
+            BEFORE_RUNS_JSON="$(list_dispatch_runs || true)"
+            if [ -n "${BEFORE_RUNS_JSON}" ]; then
+              break
+            fi
+            if [ "${attempt}" -lt 3 ]; then
+              sleep 2
+            fi
+          done
           if [ -z "${BEFORE_RUNS_JSON}" ]; then
-            echo "::error::Unable to list existing workflow_dispatch runs for ${WORKFLOW_FILE} before dispatch."
+            echo "::error::Unable to list existing workflow_dispatch runs for ${WORKFLOW_FILE} before dispatch after 3 attempts."
             exit 1
           fi
 
-          BEFORE_IDS_JSON="$(echo "${BEFORE_RUNS_JSON}" | jq -c '[.workflow_runs[]?.id]' 2>/dev/null || true)"
+          if ! BEFORE_IDS_JSON="$(echo "${BEFORE_RUNS_JSON}" | jq -c '[.workflow_runs[]?.id]' 2>&1)"; then
+            echo "::error::Failed to parse workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline: ${BEFORE_IDS_JSON}"
+            exit 1
+          fi
           if ! echo "${BEFORE_IDS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
-            echo "::error::Invalid workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline."
+            echo "::error::Invalid workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline (expected array of run IDs)."
             exit 1
           fi
 
@@ -316,6 +331,9 @@ jobs:
                 RATE_LIMIT_BACKOFF=$((RATE_LIMIT_BACKOFF * 2))
               fi
               sleep "${RATE_LIMIT_BACKOFF}"
+            elif [ -s "${err_file}" ]; then
+              echo "::error::gh api call failed: $*"
+              cat "${err_file}" >&2
             fi
 
             rm -f "${err_file}"
@@ -363,15 +381,27 @@ jobs:
             BEFORE_TRACKING_JSON='[]'
           fi
 
-          BEFORE_RUNS_JSON="$(list_dispatch_runs || true)"
+          BEFORE_RUNS_JSON=""
+          for attempt in 1 2 3; do
+            BEFORE_RUNS_JSON="$(list_dispatch_runs || true)"
+            if [ -n "${BEFORE_RUNS_JSON}" ]; then
+              break
+            fi
+            if [ "${attempt}" -lt 3 ]; then
+              sleep 2
+            fi
+          done
           if [ -z "${BEFORE_RUNS_JSON}" ]; then
-            echo "::error::Unable to list existing workflow_dispatch runs for ${WORKFLOW_FILE} before dispatch."
+            echo "::error::Unable to list existing workflow_dispatch runs for ${WORKFLOW_FILE} before dispatch after 3 attempts."
             exit 1
           fi
 
-          BEFORE_IDS_JSON="$(echo "${BEFORE_RUNS_JSON}" | jq -c '[.workflow_runs[]?.id]' 2>/dev/null || true)"
+          if ! BEFORE_IDS_JSON="$(echo "${BEFORE_RUNS_JSON}" | jq -c '[.workflow_runs[]?.id]' 2>&1)"; then
+            echo "::error::Failed to parse workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline: ${BEFORE_IDS_JSON}"
+            exit 1
+          fi
           if ! echo "${BEFORE_IDS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
-            echo "::error::Invalid workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline."
+            echo "::error::Invalid workflow runs payload while preparing ${WORKFLOW_FILE} dispatch baseline (expected array of run IDs)."
             exit 1
           fi
 
