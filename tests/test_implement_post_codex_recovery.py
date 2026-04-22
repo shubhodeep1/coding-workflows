@@ -350,6 +350,7 @@ def _read_gh_state(state_file: Path) -> dict:
 def _copy_diagnose_assets(repo_dir: Path) -> None:
 	for rel in (
 		"scripts/gh_helpers.sh",
+		"scripts/implement_diagnose_post_codex_failure.sh",
 		"scripts/render_prompt.sh",
 		"scripts/validate_changed_files_syntax.sh",
 		"prompts/mode-implement-diagnose.txt",
@@ -435,6 +436,11 @@ def _run_diagnose_step(
 			"ISSUE_NUMBER": "948",
 			"RUNTIME_DIR": str(runtime_dir),
 			"GITHUB_OUTPUT": str(github_output),
+			"GITHUB_REPOSITORY": "owner/repo",
+			"GITHUB_RUN_ID": "777",
+			"GITHUB_SERVER_URL": "https://github.com",
+			"JOB_STATUS": "failure",
+			"DEFAULT_BRANCH": "main",
 			"MODEL_EDITOR": "openai/gpt-5.3-codex",
 			"PR_BASE_BRANCH": "orchestrator/project-829",
 			"ISSUE_BODY_FILE": str(issue_body_file),
@@ -557,11 +563,10 @@ def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow
 		"Diagnose/fix-up automation must be skipped for destructive-blocked runs"
 	)
 
-	wf = _workflow_text()
-	assert "FIX_COUNT=\"$(jq -r '(.fix_issues // []) | if type == \"array\" then length else 0 end' \"${IMPLEMENT_DIAGNOSE_RESULT_FILE}\")\"" in wf, (
+	diagnose_script = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+	assert 'FIX_COUNT="$(jq -r \'(.fix_issues // []) | if type == "array" then length else 0 end\' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"' in diagnose_script, (
 		"needs_fixes handling must tolerate non-array fix_issues without aborting"
 	)
-
 
 def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
 	commit_block = _step_block_text("Commit changes")
