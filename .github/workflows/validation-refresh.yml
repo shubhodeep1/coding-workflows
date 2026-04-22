@@ -89,7 +89,18 @@ jobs:
           from pathlib import Path
 
           summary_path = Path(sys.argv[1])
-          summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          try:
+              summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError) as exc:
+              lines = [
+                  "## Validation Refresh Summary",
+                  "",
+                  f"- Summary parse failed: {exc}",
+                  f"- Raw path: `{summary_path}`",
+              ]
+              with open(Path.cwd() / "_validation_refresh_summary.md", "w", encoding="utf-8") as handle:
+                  handle.write("\n".join(lines) + "\n")
+              raise SystemExit(0)
           totals = summary.get("totals", {})
           results = summary.get("results", [])
 

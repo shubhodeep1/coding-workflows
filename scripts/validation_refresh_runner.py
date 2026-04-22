@@ -182,17 +182,20 @@ class ValidationRefreshRunner:
 			return result
 
 		pr_green = pipeline_green
+		if default_branch_diag and pr_green:
+			pr_green = False
+			result.diagnostics.append("default_branch_lookup_degraded_forced_red")
 		try:
 			pr_number, pr_url, auto_merge_enabled = self._upsert_refresh_pr(
 				repository=repository,
 				owner=owner,
 				default_branch=default_branch,
-				green=pipeline_green,
+				green=pr_green,
 				diagnostics=result.diagnostics,
 			)
 			result.pr_number = pr_number
 			result.pr_url = pr_url
-			if pipeline_green and not auto_merge_enabled:
+			if pr_green and not auto_merge_enabled:
 				pr_green = False
 		except CommandFailure as exc:
 			result.diagnostics.append(_format_command_failure("pull_request", exc))
@@ -303,7 +306,7 @@ class ValidationRefreshRunner:
 	def _commit_and_push(self, repo_dir: Path) -> None:
 		self.executor.run(["git", "config", "user.name", "coding-workflows[bot]"], cwd=repo_dir)
 		self.executor.run(["git", "config", "user.email", "coding-workflows-bot@users.noreply.github.com"], cwd=repo_dir)
-		self.executor.run(["gh", "auth", "setup-git"], cwd=repo_dir, check=False)
+		self.executor.run(["gh", "auth", "setup-git"], cwd=repo_dir)
 		self.executor.run(["git", "add", "-A"], cwd=repo_dir)
 		if not self._repository_has_changes(repo_dir):
 			raise CommandFailure(

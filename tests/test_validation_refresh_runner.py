@@ -29,6 +29,7 @@ class PlannedCall:
 	stdout: str = ""
 	stderr: str = ""
 	returncode: int = 0
+	check: bool = True
 	callback: Callable[[list[str], Path | None], None] | None = None
 
 
@@ -45,10 +46,10 @@ class FakeExecutor:
 		check: bool = True,
 		env_overrides: dict[str, str] | None = None,
 	) -> subprocess.CompletedProcess[str]:
-		_ = env_overrides
 		self.seen.append((list(command), cwd, check, env_overrides))
 		assert self._calls, f"unexpected command: {command}"
 		plan = self._calls.pop(0)
+		assert check == plan.check, f"expected check={plan.check}, got check={check} for {command}"
 		assert tuple(command[: len(plan.prefix)]) == plan.prefix, (
 			f"expected command prefix {plan.prefix}, got {tuple(command)}"
 		)
@@ -147,7 +148,7 @@ def test_process_repository_green_existing_pr_promotes_and_enables_auto_merge() 
 					stdout='[{"number":42,"url":"https://github.com/octo/demo-repo/pull/42","isDraft":true}]',
 				),
 				PlannedCall(("gh", "pr", "edit", "42")),
-				PlannedCall(("gh", "pr", "ready", "42")),
+				PlannedCall(("gh", "pr", "ready", "42"), check=False),
 				PlannedCall(("gh", "pr", "merge", "42")),
 			]
 		)
@@ -317,7 +318,7 @@ def test_process_repository_green_new_pr_auto_merge_failure_falls_back_to_red_dr
 				PlannedCall(("gh", "pr", "list"), stdout="[]"),
 				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/88\n"),
 				PlannedCall(("gh", "pr", "merge", "88"), returncode=1, stderr="auto-merge unavailable"),
-				PlannedCall(("gh", "pr", "ready", "--undo", "88")),
+				PlannedCall(("gh", "pr", "ready", "--undo", "88"), check=False),
 				PlannedCall(("gh", "pr", "edit", "88")),
 			]
 		)

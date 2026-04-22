@@ -272,6 +272,14 @@ service-side CLIs`) and is live on `claude/analyze-job-logs-JKNlF`.
 
 ## Source-of-truth status snapshots
 
+### Snapshot — 2026-04-22
+
+| Milestone | Status | Objective evidence from repository |
+| --- | --- | --- |
+| M5 — Refresh workflow + auto-merge gate | Partial | Present: `.github/ai/consumer_repos.json`, `.github/workflows/validation-refresh.yml`, `scripts/validation_refresh_runner.py`, `tests/test_validation_refresh_runner.py`, `tests/test_validation_refresh_workflow_contract.py`; remaining gap: merge-bot/runtime handling for label `auto-merge:validation-refresh` outside this planning doc |
+| M6 — Nightly self-test coverage | Partial | Present in this repository: `.github/workflows/nightly-validation-selftest.yml`, `scripts/validation_selftest_matrix.py`, `tests/test_validation_selftest_runner.py`, `tests/test_nightly_validation_selftest_workflow_contract.py`; remaining gaps: fixture-repo wiring and README streak badge are not present in tracked files |
+| M7 — Flip default + remove freehand path | Remaining | `VALIDATION_USE_TEMPLATES` default remains `false` in `scripts/validate_process.sh`; freehand generation path remains in `scripts/validate_process.sh`; `prompts/mode-validate-generate.txt` remains active |
+
 ### Snapshot — 2026-04-21
 
 | Milestone | Status | Objective evidence from repository |
@@ -288,13 +296,11 @@ service-side CLIs`) and is live on `claude/analyze-job-logs-JKNlF`.
 
 - Milestone prose cites `scripts/validate_driver.sh` for template-flag wiring; current implementation is in `scripts/validate_process.sh`.
 - Milestone prose references `tests/test_family_node_hardhat_solidity.py`; that test file is absent, while coverage is present via `tests/test_render_validation_templates_node_hardhat_regressions.py` and `tests/test_validate_harness_rpc.py`.
-- Milestone prose lists `.github/workflows/validation-refresh.yml` and `.github/workflows/nightly-validation-selftest.yml`; both workflow files are currently absent.
+- Milestone prose listed `.github/workflows/validation-refresh.yml` and `.github/workflows/nightly-validation-selftest.yml` as absent; both workflow files now exist and should be treated as delivered baseline.
 
 ### Remaining implementation backlog (unresolved scope only)
 
-- [ ] Add `.github/workflows/validation-refresh.yml` with render, lint, self-test, and PR-open/draft fallback flow.
 - [ ] Add merge-bot handling for the `auto-merge:validation-refresh` label.
-- [ ] Add nightly validation self-test workflow at `.github/workflows/nightly-validation-selftest.yml`.
 - [ ] Add fixture-repo wiring for python-mongo and node-hardhat self-test targets.
 - [ ] Add README surface for nightly validation green-run streak reporting.
 - [ ] Flip `VALIDATION_USE_TEMPLATES` default from `false` to `true` after stability soak.
