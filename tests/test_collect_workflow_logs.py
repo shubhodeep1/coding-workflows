@@ -539,6 +539,49 @@ def test_fetch_run_log_archive_classifies_missing_archive_soft_fail():
 	assert call_retries == [1]
 
 
+def test_fetch_run_log_archive_retry_exhaustion_raises_last_error():
+	orig_gh_api_bytes = collector.gh_api_bytes
+	orig_sleep = collector.time.sleep
+	call_retries: list[int] = []
+	sleep_calls: list[float] = []
+	cache: dict[tuple[str, int], bytes | Exception] = {}
+
+	def fake_gh_api_bytes(
+		endpoint: str,
+		*,
+		token: str,
+		retries: int = 3,
+		backoff_seconds: float = 1.0,
+	) -> bytes:
+		_ = backoff_seconds
+		assert endpoint == "repos/owner/repo/actions/runs/412/logs"
+		assert token == "token"
+		call_retries.append(retries)
+		raise RuntimeError(
+			"gh api failed for repos/owner/repo/actions/runs/412/logs (exit=1): 502 Bad Gateway"
+		)
+
+	collector.gh_api_bytes = fake_gh_api_bytes
+	collector.time.sleep = lambda seconds: sleep_calls.append(seconds)
+	try:
+		try:
+			collector._fetch_run_log_archive("owner/repo", 412, token="token", cache=cache)
+			raise AssertionError("expected retry exhaustion failure")
+		except Exception as exc:  # noqa: BLE001
+			assert "502 Bad Gateway" in str(exc)
+	finally:
+		collector.gh_api_bytes = orig_gh_api_bytes
+		collector.time.sleep = orig_sleep
+
+	assert call_retries == [1, 1, 1]
+	assert sleep_calls == [
+		collector.LOG_ARCHIVE_FETCH_BACKOFF_SECONDS,
+		collector.LOG_ARCHIVE_FETCH_BACKOFF_SECONDS * 2,
+	]
+	cached_error = cache[("owner/repo", 412)]
+	assert isinstance(cached_error, Exception)
+	assert "502 Bad Gateway" in str(cached_error)
+
 def test_fetch_run_log_archive_non_retryable_failure_path():
 	orig_gh_api_bytes = collector.gh_api_bytes
 	call_retries: list[int] = []

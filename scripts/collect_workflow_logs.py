@@ -678,17 +678,27 @@ def _normalize_error_text(exc: Exception) -> str:
 
 def _is_missing_log_archive_error(error_text: str, run_id: int) -> bool:
     normalized = error_text.lower()
-    has_404 = "404" in normalized
+    has_http_404 = any(
+        marker in normalized
+        for marker in (
+            "http 404",
+            "404 not found",
+            "status code 404",
+            "404 error",
+        )
+    )
     has_archive_endpoint = f"actions/runs/{run_id}/logs" in normalized
-    return (has_404 and has_archive_endpoint) or "log archive not found" in normalized
+    return (has_http_404 and has_archive_endpoint) or "log archive not found" in normalized
 
 
 def _normalize_log_archive_exception(repo: str, run_id: int, exc: Exception) -> Exception:
     detail = _normalize_error_text(exc)
     if _is_missing_log_archive_error(detail, run_id):
-        return RuntimeError(
+        wrapped = RuntimeError(
             f"{MISSING_LOG_ARCHIVE_MARKER} repository={repo} run_id={run_id} detail={detail}"
         )
+        wrapped.__cause__ = exc
+        return wrapped
     return exc
 
 
@@ -744,6 +754,8 @@ def _fetch_run_log_archive(
                 raise normalized_exc from exc
             raise
 
+        if not payload:
+            raise RuntimeError(f"Empty log archive received for {repo} run_id={run_id}")
         if cache is not None:
             cache[identity] = payload
         return payload
