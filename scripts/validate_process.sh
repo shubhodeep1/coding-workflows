@@ -2258,6 +2258,14 @@ case "${renderer_exit}" in
 		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
 		exit 1
 		;;
+	14)
+		local_failure_summary="Template renderer execution failed (exit 14). Ensure python3 >= 3.9 is available and inspect validate_generate.log for renderer errors."
+		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+		set_tracking_phase_label "ai:validation-failed"
+		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+		exit 1
+		;;
 	15)
 		local_failure_summary="Template mode requires essential shared templates (_shared/_lib/tap_helpers.sh.j2, _shared/tests/00_canary.sh.j2, _shared/tests/90_tap_report.sh.j2) plus family-specific templates; ensure workflow bootstrap fetched all required template assets under workflow-templates/validation-harness/."
 		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
