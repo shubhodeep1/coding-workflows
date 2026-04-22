@@ -21,7 +21,7 @@ def test_validation_refresh_workflow_has_required_triggers() -> None:
 def test_validation_refresh_workflow_invokes_runner_with_auth() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
 	assert "scripts/validation_refresh_runner.py" in content
-	assert "GH_TOKEN: ${{ secrets.GH_PAT || github.token }}" in content
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in content
 	assert "pull-requests: write" in content
 	assert "contents: write" in content
 	assert "--summary-json" in content

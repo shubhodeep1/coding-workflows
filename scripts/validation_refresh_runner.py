@@ -52,18 +52,35 @@ class CommandExecutor:
 		env_overrides: dict[str, str] | None = None,
 	) -> subprocess.CompletedProcess[str]:
 		env = os.environ.copy()
-		env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
 		if env_overrides:
 			env.update(env_overrides)
-		proc = subprocess.run(
-			command,
-			cwd=str(cwd) if cwd is not None else None,
-			text=True,
-			capture_output=True,
-			check=False,
-			env=env,
-			timeout=300,
-		)
+		try:
+			proc = subprocess.run(
+				command,
+				cwd=str(cwd) if cwd is not None else None,
+				text=True,
+				capture_output=True,
+				check=False,
+				env=env,
+				timeout=300,
+			)
+		except subprocess.TimeoutExpired as exc:
+			raise CommandFailure(
+				command=tuple(command),
+				cwd=str(cwd) if cwd is not None else None,
+				returncode=124,
+				stdout=exc.stdout if isinstance(exc.stdout, str) else "",
+				stderr=exc.stderr if isinstance(exc.stderr, str) else "timeout_expired",
+			) from exc
+		except FileNotFoundError as exc:
+			raise CommandFailure(
+				command=tuple(command),
+				cwd=str(cwd) if cwd is not None else None,
+				returncode=127,
+				stdout="",
+				stderr=str(exc),
+			) from exc
 		if check and proc.returncode != 0:
 			raise CommandFailure(
 				command=tuple(command),
@@ -594,7 +611,7 @@ def _build_pr_body(*, green: bool, branch_name: str, diagnostics: list[str]) -> 
 		"## Validation Refresh",
 		"",
 		f"- Branch: `{branch_name}`",
-		"- Source: `.github/workflows/validation-refresh.yml`",
+		"- Source: validation-refresh workflow in this repository",
 	]
 	if green:
 		lines.append("- Status: green (render, lint, and self-test passed)")

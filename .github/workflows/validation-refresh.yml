@@ -49,9 +49,14 @@ jobs:
       - name: Run validation refresh
         id: refresh
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "ERROR: secrets.GH_PAT is required for validation-refresh cross-repository operations."
+            exit 1
+          fi
+
           RUNTIME_DIR="${RUNNER_TEMP}/validation-refresh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${RUNTIME_DIR}"
           SUMMARY_JSON="${RUNTIME_DIR}/summary.json"

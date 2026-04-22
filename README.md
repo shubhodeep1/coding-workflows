@@ -56,6 +56,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 |---|---|---|---|---|
 | `WORKFLOW_EDITOR_MODEL` | No | `openai/gpt-5.3-codex` | clarify, plan, implement, review_autofix | Model for code editing tasks |
 | `WORKFLOW_VALIDATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | validate | Model override for validation harness generation/diagnosis |
+| `VALIDATION_REFRESH_GH_PAT` | No | required for cross-repo refresh | validation-refresh | GitHub PAT used by the validation refresh workflow to clone, branch, and open PRs in consumer repositories. Must have access to every repository listed in `.github/ai/consumer_repos.json`; the workflow does not safely fall back to `github.token` for cross-repository operations. |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | No | `true` | plan | Auto-trigger implementation when plan is clear |
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows, orchestrate_poll | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. Orchestrator conflict-dispatch (`_dispatch_review_for_conflicts`) forwards this value to the dispatched review workflow via `-f allow_workflow_edits=`. |
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
