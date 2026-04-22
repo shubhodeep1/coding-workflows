@@ -582,6 +582,7 @@ def test_fetch_run_log_archive_retry_exhaustion_raises_last_error():
 	assert isinstance(cached_error, Exception)
 	assert "502 Bad Gateway" in str(cached_error)
 
+
 def test_fetch_run_log_archive_non_retryable_failure_path():
 	orig_gh_api_bytes = collector.gh_api_bytes
 	call_retries: list[int] = []
