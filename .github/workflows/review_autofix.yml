@@ -2689,7 +2689,6 @@ jobs:
           AUTOFIX_SKIP_SELF_TRIGGERED: ${{ vars.AUTOFIX_SKIP_SELF_TRIGGERED }}
           AUTOFIX_CONTINUATION_ENABLED: ${{ vars.AUTOFIX_CONTINUATION_ENABLED }}
           AUTOFIX_CONTINUATION_SETTLE_SECS: ${{ vars.AUTOFIX_CONTINUATION_SETTLE_SECS }}
-          MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -2749,47 +2748,18 @@ jobs:
             && [ "${is_ledger_only_commit}" != "true" ]; then
             is_productive_autofix_commit="true"
           fi
+          is_continuation_dispatch="false"
           if [ "${is_productive_autofix_commit}" = "true" ] && [ "${continuation_enabled}" != "false" ]; then
-            # Iteration-cap pre-check: count consecutive [ai-autofix]
-            # commits from the current (post-push) HEAD.  If the next
-            # run would hit MAX_AUTOFIX_ITERATIONS, skip dispatch — the
-            # target run's retrigger_guard (review_autofix.yml around
-            # line 1141) will skip the editor but the reviewer panel
-            # still runs (~7 LLM calls).  Fails open: a git error falls
-            # through to the dispatch so the cycle is never silently
-            # broken.
-            cap_count=0
-            while :; do
-              _msg="$(git log -1 --format='%s' "HEAD~${cap_count}" 2>/dev/null || true)"
-              [ -n "${_msg}" ] || break
-              case "${_msg}" in
-                "[ai-autofix]"*)
-                  cap_count=$((cap_count + 1))
-                  ;;
-                *)
-                  break
-                  ;;
-              esac
-            done
-            cap_max="${MAX_AUTOFIX_ITERATIONS:-3}"
-            if ! [[ "${cap_max}" =~ ^[0-9]+$ ]] || [ "${cap_max}" -lt 1 ]; then
-              cap_max=3
-            fi
-            if [ "${cap_count}" -ge "${cap_max}" ]; then
-              echo "AUTOFIX_CONTINUATION_CAP_REACHED pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} consecutive_autofix=${cap_count} max=${cap_max} source=post_commit_retrigger"
-              exit 0
-            fi
-
             # Settle delay: allow the push to propagate through GitHub's
             # indices before dispatching a run that will check out the
             # new HEAD SHA.  Tunable via
             # AUTOFIX_CONTINUATION_SETTLE_SECS (default 10, clamped 0..60).
             settle_secs="${AUTOFIX_CONTINUATION_SETTLE_SECS:-10}"
-            if ! [[ "${settle_secs}" =~ ^[0-9]+$ ]] || [ "${settle_secs}" -gt 60 ]; then
+            if ! [[ "${settle_secs}" =~ ^(0|[1-9][0-9]*)$ ]] || [ "${settle_secs}" -gt 60 ]; then
               settle_secs=10
             fi
             sleep "${settle_secs}"
-            echo "AUTOFIX_CONTINUATION_DISPATCH_ISSUED pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} consecutive_autofix=${cap_count} max=${cap_max} settle_secs=${settle_secs} source=post_commit_retrigger"
+            is_continuation_dispatch="true"
           fi
 
           # Preflight dedup: the push above fires a pull_request.synchronize
@@ -2816,7 +2786,12 @@ jobs:
             exit 0
           fi
 
-          echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+          if [ "${is_continuation_dispatch}" = "true" ]; then
+            echo "AUTOFIX_CONTINUATION_DISPATCH_ISSUED pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} settle_secs=${settle_secs} source=post_commit_retrigger"
+            echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation=true"
+          else
+            echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+          fi
 
           dispatched=false
 

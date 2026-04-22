@@ -550,11 +550,11 @@ Contract:
 - `workflow_dispatch` bypasses the gate job's `self_triggered_autofix` skip (§20.1) by design; the continuation is a first-class successor run, not a spurious verification pass.
 - Opt-out: set repository variable `AUTOFIX_CONTINUATION_ENABLED=false` (default `true`). This restores the pre-continuation behaviour where productive `[ai-autofix]` commits relied solely on `AUTOFIX_SKIP_SELF_TRIGGERED` and the stall cron.
 
-Pre-dispatch guards (continuation path only):
+Pre-dispatch guard (continuation path only):
 
-- **Iteration-cap pre-check.** Before dispatching, the step counts consecutive `[ai-autofix]` commits from the post-push HEAD. If `count >= MAX_AUTOFIX_ITERATIONS` (default `3`) it emits `AUTOFIX_CONTINUATION_CAP_REACHED pr=<n> current_run=<r> consecutive_autofix=<k> max=<m> source=post_commit_retrigger` and exits 0 without dispatching. Rationale: the target run's in-workflow cap (`review_autofix.yml` step `Count autofix iterations`, id `retrigger_guard`) would skip the editor but the reviewer panel still runs (~7 LLM calls) — pre-checking saves that waste. Fails open on git error so the cycle is never silently broken.
 - **Settle delay.** The step `sleep`s `AUTOFIX_CONTINUATION_SETTLE_SECS` seconds (default `10`, clamped `0..60`) after the push completes but before dispatch, to let GitHub's internal indices catch up — a newly-dispatched run that immediately checks out the new HEAD SHA can otherwise race the push replication. Tunable via repository variable.
-- Neither guard applies to the conflict-resolved dispatch path — that path keeps its pre-continuation timing and controls (the existing `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` peer-wait still runs for both paths).
+- Iteration-cap handling remains in the dispatched run's in-workflow guard (`review_autofix.yml` step `Count autofix iterations`, id `retrigger_guard`), which gates reviewers/editor and then routes exhausted runs to the `rb_judge`/review-blocked path.
+- The guard does not apply to the conflict-resolved dispatch path — that path keeps its pre-continuation timing and controls (the existing `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` peer-wait still runs).
 
 Alerts:
 
@@ -564,12 +564,11 @@ Alerts:
 Observability / log prefixes:
 
 - `AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=<n> current_run=<r> source=post_commit_retrigger continuation_enabled=<true|false> ledger_only=<true|false>` — the existing skip log, now with two additional key=value pairs so downstream analysis can distinguish: (a) continuation globally disabled, (b) ledger-only commit (clean-review handles auto-merge), (c) legacy pre-continuation opt-out via `AUTOFIX_SKIP_SELF_TRIGGERED=false`. The prefix is unchanged for backward compatibility with `scripts/analyze_workflow_logs.py`.
-- `AUTOFIX_CONTINUATION_CAP_REACHED pr=<n> current_run=<r> consecutive_autofix=<k> max=<m> source=post_commit_retrigger` — continuation skipped because the iteration cap would be hit by the next run. Distinct from `AUTOFIX_DISPATCH_SKIPPED` so cap-driven terminations can be tracked separately.
-- `AUTOFIX_CONTINUATION_DISPATCH_ISSUED pr=<n> current_run=<r> consecutive_autofix=<k> max=<m> settle_secs=<s> source=post_commit_retrigger` — continuation proceeded to the dispatch chain (still subject to the existing peer-dedup at `AUTOFIX_DISPATCH_SKIPPED reason=peer_inflight` / `sync_event_inflight` / final `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected`).
+- `AUTOFIX_CONTINUATION_DISPATCH_ISSUED pr=<n> current_run=<r> settle_secs=<s> source=post_commit_retrigger` — continuation proceeded to the dispatch chain after settle delay (still subject to the existing peer-dedup at `AUTOFIX_DISPATCH_SKIPPED reason=peer_inflight` / `sync_event_inflight`).
+- `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=<n> current_run=<r> source=post_commit_retrigger continuation=true` — final dispatch confirmation for continuation-triggered runs; non-continuation paths keep the historical log without the `continuation=true` suffix.
 
 API cost audit (CLAUDE.md §15):
 
-- Cap pre-check uses local `git log` — zero GitHub API calls.
 - Settle is a `sleep`; no API calls.
 - Dispatch uses the existing `gh workflow run` call chain (direct `review_autofix.yml` → caller-workflow fallback). No new `gh api` call is added by the continuation path.
 
@@ -577,7 +576,7 @@ Operational rules:
 
 - Renames of `AUTOFIX_CONTINUATION_ENABLED`, `AUTOFIX_CONTINUATION_SETTLE_SECS`, or the log prefixes above are breaking changes per CLAUDE.md §6. Add alongside the old name and continue emitting the old log line in parallel for at least one stable-channel cycle before removing.
 - Do not raise `AUTOFIX_CONTINUATION_SETTLE_SECS` clamp beyond `60` without re-evaluating the `timeout-minutes: 180` on `codex-agent` — a long settle on a failing dispatch loop could eat budget otherwise reserved for the editor.
-- Do not remove the cap pre-check without also wiring the target run's `retrigger_guard` to short-circuit the reviewer panel when the editor will be skipped — today it does not, so the pre-check is the only defence against a wasted reviewer run.
+- Do not move or weaken the target run's `retrigger_guard` cap gating (`max_iterations_reached`) without preserving the terminal `rb_judge` / review-blocked path; continuation relies on that in-run guard for cap exhaustion handling.
 - Non-orchestrator PR coverage: continuation is the primary mechanism because the stall cron does not scan PRs that have no orchestrator-pipeline-labelled linked issue. When the cap is reached for such PRs the `rb_judge` step (gated by `ENABLE_REVIEW_BLOCKED_JUDGE`, default `true`, `review_autofix.yml` step `Mark linked issues review-blocked (autofix exhaustion)` at around line 2404) decides the terminal action. See README `ENABLE_REVIEW_BLOCKED_JUDGE` and the §20.3 Judge-at-cap note.
 
 ---
