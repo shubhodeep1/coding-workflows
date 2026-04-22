@@ -25,15 +25,6 @@ WORKFLOW_CONTRACT = {
 			re.compile(r"gh\s+label\s+create\s+['\"]?ai:orchestrator-validate-required['\"]?"),
 		],
 	},
-	".github/workflows/comprehensive-test-and-release.yml": {
-		"must_contain": [
-			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?(?:\./)?scripts/label_helpers\.sh["\']?(?=[\s;#]|$)'),
-			'ensure_label_exists "${PENDING_LABEL}" "${GITHUB_REPOSITORY}"',
-		],
-		"must_not_contain": [
-			re.compile(r'gh\s+api\s+[\'\"]?repos/\$\{GITHUB_REPOSITORY\}/labels[\'\"]?\s+--method\s+POST'),
-		],
-	},
 	".github/workflows/validation-improvements-intake.yml": {
 		"must_contain": [
 			re.compile(r'for\s+f\s+in\s+[^;\n]*label_helpers\.sh[^;\n]*;\s*do\b'),

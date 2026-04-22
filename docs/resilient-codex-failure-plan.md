@@ -162,7 +162,7 @@ This sweep must add **zero new per-issue API calls**: reuse the prefetch already
 - Mirror them in `scripts/label_helpers.sh` (`_AI_LABEL_COLORS` + `_AI_LABEL_DESCS` arrays — currently ends at line 70).
 - Add a one-liner `source scripts/label_helpers.sh && ensure_label_exists "<label>"` before every first use in:
 	- Every workflow in §4 above.
-	- `ai-update-workflows.yml`, `ai-memory-maintenance.yml`, `orchestrate_clarify_respond.yml`, `validation-improvements-intake.yml`, `comprehensive-test-and-release.yml`, `review_autofix.yml`, `orchestrate.yml`, `orchestrate_poll.yml`, `issue_pr_status.yml`, `cancel_on_pr_close.yml`.
+	- `ai-update-workflows.yml`, `ai-memory-maintenance.yml`, `orchestrate_clarify_respond.yml`, `validation-improvements-intake.yml`, `review_autofix.yml`, `orchestrate.yml`, `orchestrate_poll.yml`, `issue_pr_status.yml`, `cancel_on_pr_close.yml`.
 	- `scripts/review_rb_judge.sh`, `scripts/validate_process.sh` (already use labels per earlier grep — verify they all call `ensure_label_exists` first).
 - For the label-repair sweep in `orchestrate_poll_process.sh`, add a pre-flight that iterates the entire contract once **per poller cycle** (not per issue) and runs `ensure_label_exists` for every contract label against `GITHUB_REPOSITORY`. One 21-call burst on cold cache, 0 on warm (label-create is 409-idempotent and cheap).
 - Add a test in `tests/` that asserts every workflow touching an `ai:*` label sources `scripts/label_helpers.sh` and calls `ensure_label_exists` for each label it applies (static-check test, parsed via `yq`/`ruamel.yaml`).
