@@ -78,11 +78,22 @@ jobs:
             exit 0
           fi
 
-          status="$(jq -r '.overall_status // "unknown"' "${summary_file}" 2>/dev/null || echo "unknown")"
-          fixtures="$(jq -r '.totals.fixtures // 0' "${summary_file}" 2>/dev/null || echo "0")"
-          passed="$(jq -r '.totals.passed // 0' "${summary_file}" 2>/dev/null || echo "0")"
-          failed="$(jq -r '.totals.failed // 0' "${summary_file}" 2>/dev/null || echo "0")"
-          fixture_lines="$(jq -r '.fixtures[]? | "- " + .name + ": " + .status + " (render=" + .stages.render.status + ", lint=" + .stages.lint.status + ", sanity=" + .stages.sanity.status + ")"' "${summary_file}" 2>/dev/null || true)"
+          summary_data="$(jq -r '
+            [
+              (.overall_status // "unknown"),
+              ((.totals.fixtures // 0) | tostring),
+              ((.totals.passed // 0) | tostring),
+              ((.totals.failed // 0) | tostring),
+              (.fixtures[]? | "- " + .name + ": " + .status + " (render=" + .stages.render.status + ", lint=" + .stages.lint.status + ", sanity=" + .stages.sanity.status + ")")
+            ] | @tsv
+          ' "${summary_file}" 2>/dev/null || true)"
+          IFS=$'	' read -r status fixtures passed failed fixture_lines <<EOF
+${summary_data}
+EOF
+          status="${status:-unknown}"
+          fixtures="${fixtures:-0}"
+          passed="${passed:-0}"
+          failed="${failed:-0}"
 
           {
             echo "## Nightly Validation Self-Test"

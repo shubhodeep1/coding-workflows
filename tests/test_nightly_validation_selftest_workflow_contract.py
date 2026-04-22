@@ -39,9 +39,11 @@ def test_workflow_emits_machine_readable_summary_to_step_summary() -> None:
 	wf = _workflow_text()
 	assert '- name: Write self-test summary' in wf
 	assert 'summary_file="artifacts/validation-selftest-summary.json"' in wf
-	assert "jq -r '.overall_status // \"unknown\"'" in wf
-	assert "jq -r '.totals.fixtures // 0'" in wf
-	assert "jq -r '.fixtures[]" in wf
+	assert "summary_data=\"$(jq -r '" in wf
+	assert '(.overall_status // "unknown")' in wf
+	assert '(.totals.fixtures // 0)' in wf
+	assert '.fixtures[]?' in wf
+	assert '] | @tsv' in wf
 	assert 'GITHUB_STEP_SUMMARY' in wf
 
 

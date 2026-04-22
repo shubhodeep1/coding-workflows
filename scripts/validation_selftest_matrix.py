@@ -330,7 +330,7 @@ def _stage_sanity(repo_root: Path, output_root: Path, fixture_log_dir: Path, ski
 def _run_fixture(repo_root: Path, manifest_path: Path, logs_root: Path, skip_compose_config: bool) -> dict[str, Any]:
 	fixture_name = manifest_path.name
 	fixture_log_dir = logs_root / fixture_name
-	output_root = fixture_log_dir / "rendered"
+	output_root = fixture_log_dir / "validation"
 	if output_root.exists():
 		shutil.rmtree(output_root)
 	output_root.mkdir(parents=True, exist_ok=True)
