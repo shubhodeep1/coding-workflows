@@ -535,7 +535,7 @@ API cost audit (CLAUDE.md §15):
 
 Operational rules:
 
-- Renames of `LEDGER_ONLY_COMMIT`, `ledger_only_commit`, or the env var's default path reference `REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt` are breaking changes per CLAUDE.md §6. Add alongside.
+- Renames of `LEDGER_ONLY_COMMIT`, `ledger_only_commit`, or the env var's default path reference `${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}` are breaking changes per CLAUDE.md §6. Add alongside.
 - The ledger-path comparison must use `${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}` (not a hardcoded constant) so a consumer repo overriding `REVIEW_LEDGER_PATH` does not silently lose the auto-merge path — the detector and `scripts/review_issue_ledger.sh` must agree on the path. Both sides of the comparison are passed through a local `normalize_rel_path` shim (`sed -e 's#^\(\./\)\+##' -e 's#//*#/#g' -e 's#/$##'`) so equivalent relative spellings (`./.ai/...`, `.ai//...`, trailing slash) match the canonical form that `git diff-tree --name-only` emits. Absolute `REVIEW_LEDGER_PATH` values still pass through the same shim (the leading `/` is preserved because the first sed expression only strips `./`), so an absolute path's normalized form remains absolute and will not agree with git's relative-path output — the detector correctly declines to mark such commits as ledger-only.
 - Do **not** extend `LEDGER_ONLY_COMMIT=true` to multi-file commits that happen to include the ledger. The signal's entire meaning is "the only tracked change is bookkeeping"; a commit that also touches runtime paths represents a productive edit and the existing `DID_COMMIT=true` path correctly blocks the clean-review gates until the next verification pass.
 - If a future change introduces another always-written bookkeeping path, add it to the detector's single-path comparison as an equal-sized union (e.g. "commit contains exactly the ledger **and** the new bookkeeping file, nothing else"); do not loosen to a subset check.
@@ -585,8 +585,8 @@ Operational rules:
 
 `jobs.codex-agent` posts two distinct PR comments at end-of-run:
 
-- The **editor summary** (step `Post editor summary comment`, around line 2136 of `review_autofix.yml`) is gated on `!cancelled() && ...`, so it runs even on `failure()`. This is intentional — when an editor summary is available but a downstream step failed, we still want that audit trail on the PR thread.
-- The **failure notification** (step `Post review-blocked comment on PR (workflow failure)`, around line 4307) is gated on `failure() && env.PR_CLOSED != 'true'`.
+- The **editor summary** (step `Post editor summary comment`, around line 1724 of `review_autofix.yml`) is gated on `!cancelled() && ...`, so it runs even on `failure()`. This is intentional — when an editor summary is available but a downstream step failed, we still want that audit trail on the PR thread.
+- The **failure notification** (step `Post review-blocked comment on PR (workflow failure)`, around line 3213) is gated on `failure() && env.PR_CLOSED != 'true'`.
 
 When a step *after* the editor summary fails (push race against a concurrent push, conflict resolver abort, auto-merge config error, telemetry plumbing), both steps fire and the PR thread shows two comments 10–30s apart. The default failure body — "encountered an error and could not complete. This may be due to an editor failure, missing dependencies, or an infrastructure issue" — directly contradicts the success-looking editor summary above it and mis-attributes the failure for the human reader.
 

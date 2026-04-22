@@ -3229,9 +3229,9 @@ jobs:
           # that invariant.
           if [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then
             BODY="$(cat <<EOF
-          **AI review/autofix encountered a failure after posting an editor summary — needs human intervention**
+          **AI review/autofix encountered a post-editor failure — needs human intervention**
 
-          An editor summary comment is visible above, but the overall review/autofix workflow still failed before completion. Check the workflow run for details; the PR branch may not include all intended editor changes.
+          An editor summary comment is visible above, but a downstream stage still failed before completion. Possible failure domains include push, conflict resolver, label/auto-merge, or telemetry plumbing.
 
           [View workflow run](${RUN_URL}) for details.
 
