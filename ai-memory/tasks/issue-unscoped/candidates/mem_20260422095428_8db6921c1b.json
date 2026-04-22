@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1544 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: Removing `env.CAN_PUSH == 'true'` from `pre_editor_stale_base_gate` lets the gate run in non-push scenarios where it cannot meaningfully skip the expensive editor.\n  WHY: When `CAN_PUSH=false`, `TARGET_BRANCH` is unset, `check_external_branch_advance.sh` fail-opens with `ADVANCE=unknown`, and the downstream editor path still runs; reviewers disagreed on whether this is a correctness bug or just wasted compute, so the highest reported severity is low.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:1544 | severity=high | confidence=4\n  PROBLEM: Removing `CAN_PUSH` from the stale-base gate allows the gate to run when push access is unavailable, but it cannot function because `TARGET_BRANCH` is undefined.\n  WHY: When `CAN_PUSH=false`, the checkout step exits without setting `TARGET_BRANCH`; `check_external_branch_advance.sh` returns `ADVANCE=unknown`, so `AUTOFIX_STALE_BASE_SKIP` is never set and the expensive editor still runs on unreachable branches.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml:1544 | severity=high | confidence=5\n  PROBLEM: The stale-base gate now runs even when `env.CAN_PUSH` is not `true`.\n  WHY: When `CAN_PUSH!=true`, prerequisite branch-state variables may be unset or unreliable, so the gate can only emit warnings or `ADVANCE=unknown` while the editor, commit, and push steps are already disabled by their own `CAN_PUSH` checks.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:1544 | severity=low | confidence=4\n  PROBLEM: Removing `env.CAN_PUSH == 'true'` from the stale-base gate is unnecessary but not a correctness bug.\n  WHY: The helper script fail-opens when `TARGET_BRANCH` is missing, downstream push steps are already gated on `CAN_PUSH=true`, and the only effect is an extra warning and wasted compute.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:1544 | severity=none | confidence=1\n  PROBLEM: None.\n  WHY: The removal of `env.CAN_PUSH == 'true'` is correct because the helper script fail-opens on missing `TARGET_BRANCH`, and push-critical steps remain gated by `CAN_PUSH=true`.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/review_autofix.yml:1544 | severity=high | confidence=5\n  PROBLEM: The pre-editor stale-base gate is missing `&& env.CAN_PUSH == 'true'`, so it runs in fork or other no-push scenarios where it cannot prevent wasted editor work.\n  WHY: In `CAN_PUSH=false` cases the checkout step leaves `TARGET_BRANCH` unset, the helper returns `ADVANCE=unknown`, `AUTOFIX_STALE_BASE_SKIP` stays unset, and the downstream editor path still executes despite the commit/push path being disabled.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "a51eef151ed506daac737439bbd7d88a6e634a91ddd86b07a92f9f405b7bb4ca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1517,
+    "run_id": "24770687676",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24770687676",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422095428_8db6921c1b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1517,
+    "run_id": "24770687676"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T09:54:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
