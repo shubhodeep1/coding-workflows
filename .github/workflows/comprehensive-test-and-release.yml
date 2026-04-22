@@ -1,18 +1,8 @@
-name: Comprehensive Test And Release
+name: Workflow Log Analysis And Improvement
 
 on:
   workflow_dispatch:
     inputs:
-      version_tag:
-        description: Optional release tag in vX.Y.Z format for the dry-run release test.
-        required: false
-        default: ""
-        type: string
-      test_repo:
-        description: Optional owner/repo target used by the dry-run release test.
-        required: false
-        default: ""
-        type: string
       phase_timeout:
         description: Max minutes of inactivity before a phase is considered stalled.
         required: false
@@ -37,185 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  phase1-first-pass-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    outputs:
-      run_id: ${{ steps.phase1.outputs.run_id }}
-    steps:
-      - name: Dispatch and monitor test-and-mark-stable
-        id: phase1
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
-          VERSION_TAG_INPUT: ${{ inputs.version_tag }}
-          TEST_REPO_INPUT: ${{ inputs.test_repo }}
-          PHASE_TIMEOUT: ${{ inputs.phase_timeout }}
-        run: |
-          set -euo pipefail
-
-          WORKFLOW_FILE="test-and-mark-stable.yml"
-          POLL_INTERVAL=20
-          RATE_LIMIT_BACKOFF=0
-
-          sanitize_single_line()
-          {
-            printf '%s' "$1" | tr '\r\n' '  ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //' -e 's/ $//'
-          }
-
-          is_positive_integer()
-          {
-            [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -gt 0 ]
-          }
-
-          gh_api_safe()
-          {
-            local output=""
-            local err_file
-            err_file="$(mktemp)"
-            if output="$(gh api "$@" 2>"${err_file}")"; then
-              RATE_LIMIT_BACKOFF=0
-              rm -f "${err_file}"
-              printf '%s' "${output}"
-              return 0
-            fi
-
-            if grep -qi "rate limit" "${err_file}" 2>/dev/null; then
-              if [ "${RATE_LIMIT_BACKOFF}" -eq 0 ]; then
-                RATE_LIMIT_BACKOFF=30
-              elif [ "${RATE_LIMIT_BACKOFF}" -lt 120 ]; then
-                RATE_LIMIT_BACKOFF=$((RATE_LIMIT_BACKOFF * 2))
-              fi
-              sleep "${RATE_LIMIT_BACKOFF}"
-            fi
-
-            rm -f "${err_file}"
-            return 1
-          }
-
-          list_dispatch_runs()
-          {
-            gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=100"
-          }
-
-          VERSION_TAG="$(sanitize_single_line "${VERSION_TAG_INPUT}")"
-          TEST_REPO="$(sanitize_single_line "${TEST_REPO_INPUT}")"
-          PHASE_TIMEOUT_STR="$(sanitize_single_line "${PHASE_TIMEOUT}")"
-
-          if ! is_positive_integer "${PHASE_TIMEOUT_STR}"; then
-            PHASE_TIMEOUT_STR="30"
-          fi
-          INACTIVITY_LIMIT=$((PHASE_TIMEOUT_STR * 60))
-
-          if [ -n "${VERSION_TAG}" ] && ! [[ "${VERSION_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid version_tag '${VERSION_TAG}'. Expected vX.Y.Z."
-            exit 1
-          fi
-
-          if [ -n "${TEST_REPO}" ] && ! [[ "${TEST_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            echo "::error::Invalid test_repo '${TEST_REPO}'. Expected owner/repo."
-            exit 1
-          fi
-
-          BEFORE_IDS_JSON="$(list_dispatch_runs | jq -c '[.workflow_runs[].id]' 2>/dev/null || echo '[]')"
-          if ! echo "${BEFORE_IDS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
-            BEFORE_IDS_JSON='[]'
-          fi
-
-          RUN_ARGS=("${WORKFLOW_FILE}" "--repo" "${GITHUB_REPOSITORY}" "--ref" "${GITHUB_REF_NAME}" "-f" "dry_run=true" "-f" "phase_timeout=${PHASE_TIMEOUT_STR}")
-          if [ -n "${VERSION_TAG}" ]; then
-            RUN_ARGS+=("-f" "version_tag=${VERSION_TAG}")
-          fi
-          if [ -n "${TEST_REPO}" ]; then
-            RUN_ARGS+=("-f" "test_repo=${TEST_REPO}")
-          fi
-
-          gh workflow run "${RUN_ARGS[@]}"
-
-          RUN_ID=""
-          for _attempt in $(seq 1 30); do
-            RUNS_JSON="$(list_dispatch_runs || true)"
-            if [ -z "${RUNS_JSON}" ]; then
-              sleep 2
-              continue
-            fi
-
-            NEW_RUNS_JSON="$(echo "${RUNS_JSON}" | jq -c --argjson before "${BEFORE_IDS_JSON}" --arg branch "${GITHUB_REF_NAME}" '
-              [
-                .workflow_runs[]
-                | select((.id as $id | ($before | index($id) | not)))
-                | select((.event // "") == "workflow_dispatch")
-                | select((.head_branch // "") == $branch)
-              ]
-              | sort_by(.created_at)
-            ' 2>/dev/null || echo '[]')"
-            NEW_COUNT="$(echo "${NEW_RUNS_JSON}" | jq -r 'length' 2>/dev/null || echo '0')"
-
-            if [ "${NEW_COUNT}" = "1" ]; then
-              RUN_ID="$(echo "${NEW_RUNS_JSON}" | jq -r '.[0].id // ""')"
-              break
-            fi
-
-            if [ "${NEW_COUNT}" != "0" ]; then
-              echo "::error::Ambiguous run selection for ${WORKFLOW_FILE}."
-              exit 1
-            fi
-
-            sleep 2
-          done
-
-          if [ -z "${RUN_ID}" ]; then
-            echo "::error::Unable to resolve dispatched run id for ${WORKFLOW_FILE}."
-            exit 1
-          fi
-
-          LAST_ACTIVITY="$(date +%s)"
-          PREV_STATE=""
-
-          while true; do
-            NOW="$(date +%s)"
-            IDLE=$((NOW - LAST_ACTIVITY))
-
-            RUN_JSON="$(gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" || true)"
-            if [ -z "${RUN_JSON}" ]; then
-              if [ "${IDLE}" -ge "${INACTIVITY_LIMIT}" ]; then
-                echo "::error::Phase 1 stalled while polling run ${RUN_ID}."
-                exit 1
-              fi
-              sleep "${POLL_INTERVAL}"
-              continue
-            fi
-
-            RUN_STATUS="$(echo "${RUN_JSON}" | jq -r '.status // "unknown"' 2>/dev/null || echo 'unknown')"
-            RUN_CONCLUSION="$(echo "${RUN_JSON}" | jq -r '.conclusion // "null"' 2>/dev/null || echo 'null')"
-            RUN_UPDATED="$(echo "${RUN_JSON}" | jq -r '.updated_at // ""' 2>/dev/null || echo '')"
-
-            CUR_STATE="status=${RUN_STATUS};conclusion=${RUN_CONCLUSION};updated=${RUN_UPDATED}"
-            if [ "${CUR_STATE}" != "${PREV_STATE}" ]; then
-              LAST_ACTIVITY="${NOW}"
-              IDLE=0
-              PREV_STATE="${CUR_STATE}"
-            fi
-
-            if [ "${RUN_STATUS}" = "completed" ]; then
-              if [ "${RUN_CONCLUSION}" != "success" ]; then
-                echo "::error::Phase 1 run ${RUN_ID} concluded with '${RUN_CONCLUSION}'."
-                exit 1
-              fi
-              break
-            fi
-
-            if [ "${IDLE}" -ge "${INACTIVITY_LIMIT}" ]; then
-              echo "::error::Phase 1 inactivity timeout reached (${PHASE_TIMEOUT_STR} minutes)."
-              exit 1
-            fi
-
-            sleep "${POLL_INTERVAL}"
-          done
-
-          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
-
   phase2-collect-and-analyze-logs:
-    needs: phase1-first-pass-test
     runs-on: ubuntu-latest
     timeout-minutes: 120
     outputs:
@@ -457,27 +269,18 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT || github.token }}
 
-      - name: Dispatch orchestrator and mark tracking issue
+      - name: Dispatch orchestrator and resolve tracking issue
         id: phase3
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PHASE_TIMEOUT: ${{ inputs.phase_timeout }}
-          VERSION_TAG_INPUT: ${{ inputs.version_tag }}
-          TEST_REPO_INPUT: ${{ inputs.test_repo }}
           REPORT_FILE_INPUT: ${{ needs.phase2-collect-and-analyze-logs.outputs.report_file }}
-          ANALYSIS_RUN_ID: ${{ needs.phase2-collect-and-analyze-logs.outputs.run_id }}
         run: |
           set -euo pipefail
 
           WORKFLOW_FILE="internal-orchestrate.yml"
           POLL_INTERVAL=20
           RATE_LIMIT_BACKOFF=0
-          PENDING_LABEL="ai:comprehensive-test-pending"
-          if [ ! -f "scripts/label_helpers.sh" ]; then
-            echo "::error::Missing required support script scripts/label_helpers.sh" >&2
-            exit 1
-          fi
-          source scripts/label_helpers.sh
 
           sanitize_single_line()
           {
@@ -537,17 +340,7 @@ jobs:
           fi
           INACTIVITY_LIMIT=$((PHASE_TIMEOUT_STR * 60))
 
-          VERSION_TAG="$(sanitize_single_line "${VERSION_TAG_INPUT}")"
-          TEST_REPO="$(sanitize_single_line "${TEST_REPO_INPUT}")"
           REPORT_FILE="$(sanitize_single_line "${REPORT_FILE_INPUT}")"
-
-          if [ -n "${VERSION_TAG}" ] && ! [[ "${VERSION_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            VERSION_TAG=""
-          fi
-
-          if [ -n "${TEST_REPO}" ] && ! [[ "${TEST_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            TEST_REPO=""
-          fi
 
           if [ -z "${REPORT_FILE}" ]; then
             echo "::error::Phase 3 requires a resolved analysis report path from phase 2."
@@ -556,7 +349,7 @@ jobs:
 
           REPORT_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/${REPORT_FILE}"
           SOURCE_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          PROJECT_DESCRIPTION="Comprehensive test-and-release follow-up for ${GITHUB_REPOSITORY}."
+          PROJECT_DESCRIPTION="Workflow log analysis improvement follow-up for ${GITHUB_REPOSITORY}."
           PROJECT_DESCRIPTION+=" Use workflow analysis report ${REPORT_URL}."
           PROJECT_DESCRIPTION+=" Source run ${SOURCE_RUN_URL}."
 
@@ -661,29 +454,5 @@ jobs:
 
             sleep "${POLL_INTERVAL}"
           done
-
-          ensure_label_exists "${PENDING_LABEL}" "${GITHUB_REPOSITORY}"
-
-          gh issue edit "${TRACKING_ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "${PENDING_LABEL}" >/dev/null
-
-          METADATA_MARKER="COMPREHENSIVE_RELEASE_METADATA_V1"
-          DISPATCHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          METADATA_BODY="$(printf '%s\n' \
-            "<!-- ${METADATA_MARKER} -->" \
-            "version_tag: ${VERSION_TAG}" \
-            "test_repo: ${TEST_REPO}" \
-            "source_repo: ${GITHUB_REPOSITORY}" \
-            "source_run_id: ${GITHUB_RUN_ID}" \
-            "source_run_url: ${SOURCE_RUN_URL}" \
-            "analysis_report: ${REPORT_FILE}" \
-            "analysis_report_url: ${REPORT_URL}" \
-            "analysis_workflow_run_id: ${ANALYSIS_RUN_ID}" \
-            "orchestrate_workflow: ${WORKFLOW_FILE}" \
-            "orchestrate_run_id: ${ORCH_RUN_ID}" \
-            "dispatched_at: ${DISPATCHED_AT}" \
-            "<!-- /${METADATA_MARKER} -->")"
-
-          jq -n --arg body "${METADATA_BODY}" '{"body": $body}' | \
-            gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUMBER}/comments" --method POST --input - >/dev/null
 
           echo "tracking_issue=${TRACKING_ISSUE_NUMBER}" >> "${GITHUB_OUTPUT}"
