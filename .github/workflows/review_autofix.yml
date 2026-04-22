@@ -1541,7 +1541,7 @@ jobs:
         # agents.md §20.2.  The gate is fail-open: detection failures
         # (fetch errors, API blips) fall through to the editor so a
         # GitHub API glitch never silently drops a review.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CAN_PUSH == 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         id: pre_editor_stale_base_gate
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
