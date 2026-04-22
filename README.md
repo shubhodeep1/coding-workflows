@@ -390,23 +390,32 @@ jobs:
 > `AUTOFIX_PRE_EDITOR_BASE_FRESH`, `AUTOFIX_PRE_EDITOR_UNKNOWN` and the
 > corresponding `AUTOFIX_PRE_PUSH_*` variants are stable audit handles.
 >
-> **Review-issue ledger persistence** — `scripts/review_issue_ledger.sh`
-> updates `REVIEW_LEDGER_PATH` (default `.ai/review_issue_ledger.txt`) on
-> every review pass, including passes where the editor reports
-> `Change status: not-edited`. The ledger path is **gitignored** and
-> **not committed** to the PR branch — it is persisted across iterations
-> via a per-PR GitHub Actions cache (key
-> `review-ledger-pr-<PR_NUMBER>-<run_id>-<run_attempt>`, restored with
-> fallback key prefix `review-ledger-pr-<PR_NUMBER>-`). Committing the
-> ledger to the branch caused recurring sync conflicts between `main`
-> and `orchestrator/project-*` integration branches because every run
-> rewrites the file wholesale (the header embeds `PR_NUMBER`, body is
-> rewritten per-PR); the cache-backed model eliminates that failure mode.
-> If a consumer repo force-adds the ledger path or overrides
-> `REVIEW_LEDGER_PATH` to a tracked path, the legacy `LEDGER_ONLY_COMMIT`
-> detector in `scripts/review_commit_changes.sh` is retained for
-> backward compatibility but is a no-op in the default configuration
-> (the gitignored untracked ledger never reaches the commit).
+> **Ledger-only commit auto-merge** — `scripts/review_issue_ledger.sh`
+> updates `REVIEW_LEDGER_PATH` (default
+> `.ai/review_issue_ledger/pr-<PR_NUMBER>.txt`) on every review pass,
+> including passes where the editor reports
+> `Change status: not-edited`. In the default configuration the per-PR
+> ledger path is gitignored and persisted across autofix iterations via
+> `actions/cache` in `review_autofix.yml` — the ledger is updated locally
+> for the run but never part of the commit/push, so this bug cannot
+> manifest. The ledger-only commit scenario only applies when
+> `REVIEW_LEDGER_PATH` is explicitly overridden to a Git-tracked (or
+> force-added) path. When the resulting `[ai-autofix]` commit
+> contains **only** the ledger, the `commit_changes` step sets
+> `LEDGER_ONLY_COMMIT=true` (and the `ledger_only_commit` step output) in
+> addition to `DID_COMMIT=true`. Five downstream gates OR this signal into
+> their original `did_commit != 'true'` condition:
+> `Detect editor-claimed-but-uncommitted changes`,
+> `Validate editor no-op disposition`, `Mark linked issues ready to merge`,
+> `Enable auto-merge on PR`, and `Telegram success`. The two safety gates
+> still run to validate the editor's no-op claim, and the three
+> clean-review gates fire in the same run — required because any
+> `[ai-autofix]` ledger push in tracked-ledger configurations triggers a
+> `synchronize` event whose gate job is skipped by
+> `AUTOFIX_SKIP_SELF_TRIGGERED`, so auto-merge cannot be deferred to the
+> next run. In tracked-ledger configurations the push step
+> (`DID_COMMIT=true`) still fires so the ledger lands on the PR branch
+> and cross-iteration ledger continuity is preserved there as well.
 
 ### Local replay helper for review artifacts
 
@@ -723,41 +732,30 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `orchestrate_poll.yml` | `schedule` (every ~30 min) + self-retrigger | Orchestrator progress poller + judge + auto-recovery. Self-retriggers via `workflow_dispatch` when active tracking issues exist for near-immediate next cycles; cron acts as fallback. A rate-limit circuit breaker suppresses self-retrigger when a GitHub API rate limit was hit during the run. |
 | `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates existing and creates new workflow wrappers from upstream templates |
 
-## Comprehensive Test And Release
+## Workflow Log Analysis And Improvement
 
-This repository includes [`.github/workflows/comprehensive-test-and-release.yml`](.github/workflows/comprehensive-test-and-release.yml) for end-to-end release orchestration across first-pass release testing, workflow-log analysis, and orchestrator follow-up.
+This repository includes [`.github/workflows/comprehensive-test-and-release.yml`](.github/workflows/comprehensive-test-and-release.yml) for chaining workflow-log analysis into an orchestrator-driven improvement follow-up. Release dispatch (`test-and-mark-stable.yml`) is no longer invoked from this workflow; it remains available as a standalone workflow for marking stable releases.
 
 ### How to run
 
-Run **Actions -> Comprehensive Test And Release -> Run workflow**.
+Run **Actions -> Workflow Log Analysis And Improvement -> Run workflow**.
 
 `workflow_dispatch` inputs:
 
 | Input | Default | Description |
 |---|---|---|
-| `version_tag` | `""` | Optional release tag for release testing and callback dispatch. Must match `vX.Y.Z` when set. |
-| `test_repo` | `""` | Optional `owner/repo` target for release testing and callback dispatch. |
 | `phase_timeout` | `30` | Per-phase inactivity timeout (minutes) for dispatch-monitor loops. |
 | `lookback_days_fallback` | `7` | Workflow-log-analysis window used when the saved timestamp cursor is missing or invalid. |
 
 ### Phase behavior
 
-1. **Phase 1 (`phase1-first-pass-test`)** dispatches `test-and-mark-stable.yml` with `dry_run=true` and waits for successful completion.
-2. **Phase 2 (`phase2-collect-and-analyze-logs`)** dispatches `workflow-log-analysis.yml` with `codex_mode=true`, waits for completion, and resolves the analysis window from `analysis/last_collection_timestamp.txt`:
+1. **Phase 2 (`phase2-collect-and-analyze-logs`)** dispatches `workflow-log-analysis.yml` with `codex_mode=true`, waits for completion, and resolves the analysis window from `analysis/last_collection_timestamp.txt`:
    - if the file contains a valid UTC ISO timestamp (`YYYY-MM-DDTHH:MM:SSZ`), that value is passed as `since`.
    - otherwise the workflow falls back to `lookback_days_fallback`.
    - after a successful run, the workflow writes the current UTC timestamp back to `analysis/last_collection_timestamp.txt` and commits/pushes it when changed.
-3. **Phase 3 (`phase3-dispatch-orchestrator`)** dispatches `internal-orchestrate.yml`, tags the discovered tracking issue with `ai:comprehensive-test-pending`, and posts a metadata comment marker `COMPREHENSIVE_RELEASE_METADATA_V1` containing callback inputs and source links.
+2. **Phase 3 (`phase3-dispatch-orchestrator`)** dispatches `internal-orchestrate.yml` with a project description that links to the analysis report, then waits for the orchestrator to open a tracking issue and emits the tracking issue number as a job output.
 
-### Callback behavior (poller-driven)
-
-The comprehensive release callback is not a standalone phase/job in `comprehensive-test-and-release.yml`. It is handled by the orchestrator poller (`scripts/orchestrate_poll_process.sh`, `handle_comprehensive_release_callback_if_needed`).
-
-- Callback logic runs only while the tracking issue carries `ai:comprehensive-test-pending`.
-- On project status `complete`, the poller dispatches `test-and-mark-stable.yml` with `dry_run=false`, reusing validated `version_tag`/`test_repo` extracted from tracking comments when present.
-- On project status `failed` or `validation-failed`, the poller sends an abort notification and does not dispatch the release workflow.
-- In successful completion and abort paths, the poller persists `comprehensive_release_callback` state (`handled`, `status`, `handled_at`) and removes `ai:comprehensive-test-pending` best-effort.
-- If release dispatch fails on `complete`, the callback remains unhandled and the label stays so the next poll cycle can retry.
+Job identifiers retain their `phase2-*` / `phase3-*` names for backward compatibility with any external references; there is no `phase1-*` job in this workflow.
 
 ## Workflow Log Analysis
 
@@ -992,7 +990,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ORCHESTRATOR_HOT_FILE_MIN_PROJECTS` | `2` | Minimum distinct orchestrator projects required to promote a path. Prevents a single runaway project from skewing the set. |
 | `REVIEW_LEDGER_ENABLED` | `1` | Enable (`1`) or disable (`0`) review-issue ledger lifecycle tracking in `scripts/review_issue_ledger.sh`; when disabled, `ledger_status.txt` is emitted empty and no ledger file is updated. |
 | `REVIEW_LEDGER_PERSIST_LIMIT` | `2` | Persist-count threshold for transitioning a still-present issue to `accepted-residual` after increment (>= threshold). |
-| `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger.txt` | Runtime ledger file path used by `scripts/review_issue_ledger.sh`; malformed prior ledgers fail-open with `ledger_reset=1` and state reset semantics. |
+| `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt` | Runtime ledger file path used by `scripts/review_issue_ledger.sh`. Per-PR filename isolates concurrent PRs so they never share a file (no cross-PR merge conflicts on main). Gitignored by default; cross-iteration persistence is provided by `actions/cache` restore/save steps in `review_autofix.yml` keyed on `review-ledger-<repo>-pr-<N>-`. Explicit overrides are honored verbatim (legacy single-file path still supported). Malformed prior ledgers fail-open with `ledger_reset=1` and state reset semantics. |
 | `MAX_CODEX_ATTEMPTS` | `3` | Shared Codex retry cap for validate/workflow-log-analysis Codex execution paths. Must be a positive integer; invalid values fail open to `3` with a warning. |
 | `CODEX_RETRY_BACKOFF_BASE_SECS` | `10` | Exponential retry backoff base (seconds) used with `MAX_CODEX_ATTEMPTS` (`base * 2^(attempt-1)`) for validate/workflow-log-analysis Codex execution paths. Must be a positive integer; invalid values fail open to `10` with a warning. |
 | `ENABLE_PHASE_FAILURE_COMMENTS` | `true` | Contract-defined gate for `AI_PHASE_FAILURE_V1` issue comments. Current branch status: reserved (not consumed yet); validate/workflow-log-analysis still emit marker comments when tracking issue context exists. |
@@ -1161,7 +1159,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 Capture is **going-forward only**: sub-issues merged before fingerprinting was enabled have no entries in `merged_issue_fingerprints` and are silently skipped by the verifier (fail-open). Capture and verification are tunable via `FINGERPRINT_PER_FILE_CAP` / `FINGERPRINT_MIN_PATTERN_CHARS`. The verifier script is in `OPTIONAL_BOOTSTRAP_SCRIPTS` so consumer-repo runs whose pinned `script_ref` predates the script bootstrap cleanly with a fail-open warning rather than a hard error. Operationally: a verification rejection always surfaces in the workflow run log with `::error::Aborting [ai-merge-resolve] commit: integration fingerprint verification rejected the resolver output.`, the resolver step exits 1, the conflict resolver workflow lands without a commit, and the orchestrator's next poll tick takes the judge path because `unresolved_ticks` was already incremented by the dispatch.
 12d. **Atomic final merge:** When a project is complete (or validated), the poller creates/reuses a final PR from integration branch to default branch and squash-merges it.
 12e. **Phase-agnostic feature-PR drift sweep:** On every poll tick the orchestrator enumerates all open PRs whose head branch matches `ai/issue-*` and calls the GitHub update-branch endpoint for any whose `mergeStateStatus` is `behind`. This fast-forwards clean-mergeable branches before they accumulate enough drift to become conflicted, regardless of the issue's current pipeline phase. Real conflicts (`dirty`) are left for the existing in-progress conflict loop to handle via the resolver dispatch path.
-12f. **Comprehensive release callback (poller-owned):** Tracking issues labeled `ai:comprehensive-test-pending` are handled by `handle_comprehensive_release_callback_if_needed` in the poller, not by a separate comprehensive-workflow phase. On `complete`, the poller dispatches `test-and-mark-stable.yml` with `dry_run=false` using validated `version_tag`/`test_repo` extracted from tracking comments when present. On `failed` or `validation-failed`, it sends an abort notification and skips dispatch. Successful completion and abort paths record `comprehensive_release_callback.{handled,status,handled_at}` and remove `ai:comprehensive-test-pending` best-effort; dispatch failures in the `complete` path leave callback state/label untouched so a later poll cycle can retry.
+12f. **Comprehensive release callback (poller-owned; currently inert):** Tracking issues labeled `ai:comprehensive-test-pending` are handled by `handle_comprehensive_release_callback_if_needed` in the poller, not by a separate workflow phase. On `complete`, the poller dispatches `test-and-mark-stable.yml` with `dry_run=false` using validated `version_tag`/`test_repo` extracted from tracking comments when present. On `failed` or `validation-failed`, it sends an abort notification and skips dispatch. Successful completion and abort paths record `comprehensive_release_callback.{handled,status,handled_at}` and remove `ai:comprehensive-test-pending` best-effort; dispatch failures in the `complete` path leave callback state/label untouched so a later poll cycle can retry. **Note:** `.github/workflows/comprehensive-test-and-release.yml` no longer applies `ai:comprehensive-test-pending`, so this callback path is currently inert. The poller handler and label definition are retained so the callback can be revived by any future workflow that sets the gating label.
 13. **Stall detection and self-healing:** Every poll cycle, the poller tracks how long each issue has been in its current pipeline phase. Stall thresholds are **adaptive per phase**: lightweight phases (clarification, planning, approval, merge) default to 60 minutes, while heavy phases (implementation, review/autofix) default to 120 minutes. Each threshold is independently configurable via `STALL_THRESHOLD_<PHASE>_MINUTES` env vars, with `STALL_THRESHOLD_MINUTES` as the global fallback. Before stall checks, the poller reconciles managed-issue labels and state truth (labels + issue open/closed + linked PR merge state), repairs missing/conflicting phase labels, and persists reconciled statuses every cycle. Closed/terminal issues are hard-guarded out of retrigger paths; stale `no_labels` on closed issues is healed (label/state repair) instead of retriggered. Early-phase recovery actions (`retrigger_pipeline`, `auto_respond_clarify`, `retrigger_plan`, `auto_approve`, `retrigger_implement`) are additionally guarded against issues that already have an open linked PR. The guard is **state-aware**: (a) if the PR has merge conflicts (`mergeable: false`), the guard dispatches the conflict resolver workflow instead of skipping entirely; (b) if the PR has `CHANGES_REQUESTED` reviews, the guard dispatches the review/autofix workflow; (c) if the PR is clean and progressing, the guard skips the recovery action as before. This prevents re-triggering earlier pipeline phases on issues whose implementation PR already exists, while still routing stuck PRs to the appropriate corrective action. The guard uses the batched GraphQL prefetch cache first (0 extra API calls on hit), with a per-issue REST fallback that reuses the PR JSON already fetched for the merged-PR sub-guard. The review-state check adds at most 1 REST call per stalled issue with an open PR. When an issue exceeds its phase threshold, the poller first selects a declarative action from `STALL_RECOVERY_ACTIONS` by `stall_recovery_count` (per issue): `no_labels` → `retrigger_pipeline`, `ai:clarification` → `auto_respond_clarify`, `ai:planning` → `retrigger_plan`, `ai:awaiting-approval` → `auto_approve`, `ai:implementing` → `retrigger_implement`, `ai:done` → `retrigger_review`, `ai:ready-to-merge` → `attempt_merge`, with each phase ladder ending in `escalate_human`. Backward-compatible default behavior keeps human terminalization disabled: with `ENABLE_STALL_HUMAN_TERMINALIZATION=false` (default), any terminal `escalate_human` result (declarative or judged) is downgraded to the nearest prior non-human phase action. Set `ENABLE_STALL_HUMAN_TERMINALIZATION=true` to allow terminal human escalation. If `ENABLE_STALL_JUDGE=true` and `stall_recovery_count >= STALL_JUDGE_TRIGGER_COUNT` (while still below `MAX_STALL_RECOVERIES_PER_ISSUE`), the recovery action switches to `run_stall_judge` for diagnostics-driven action selection. The stall judge may choose targeted actions including `resolve_merge_conflict`; that path attempts GitHub `update-branch` for the target PR and then dispatches `_dispatch_review_for_conflicts`. If stall-judge execution fails, output parsing fails, or the returned action is unsupported, the poller fail-opens to the same declarative ladder action for that phase/recovery count. If `stall_recovery_count` exceeds the phase ladder length, the final declarative action is repeated until the max budget is hit. After `MAX_STALL_RECOVERIES_PER_ISSUE` (default 5) attempts, the issue is skipped (`ai:closed`) so the wave can advance; the judge evaluates the gap at wave completion and decides whether to reissue, accept, or fail. When `ENABLE_STALL_JUDGE=false`, or when `STALL_JUDGE_TRIGGER_COUNT` is effectively unreachable within the configured recovery budget, recovery remains on the declarative `STALL_RECOVERY_ACTIONS` ladder without judge escalation. All stall recoveries trigger Telegram notifications. Standalone AI issues (not linked to any active orchestrator tracking state) also use the same stall recovery engine and the same human-terminalization gate when `ENABLE_STANDALONE_STALL_RECOVERY=true`; standalone recovery state is persisted per issue in a hidden marker comment. Additionally, all orchestrator-created issues (Wave 1, deferred waves, reissues, and judge fix-ups) now receive the `ai:clarification` label at creation time, ensuring they enter the pipeline immediately without relying solely on the `issues.opened` event trigger.
 13a. **Missing state recovery:** If the orchestrate.yml workflow creates issues but fails before posting the initial state comment (e.g. due to a transient API error or timeout), the poller automatically reconstructs the state. It parses the tracking issue body to extract the wave structure and dependency graph, searches for child issues that reference the tracking issue, and builds a new state object. The reconstructed state is posted as a comment so subsequent poll cycles operate normally. This prevents projects from being permanently stuck when the initial orchestration run fails mid-execution.
 13b. **Phase-failure labels and marker contract:** Runtime semantic validation failures continue to use `ai:validation-failed`; validate-workflow Codex/terminal failures use `ai:validate-failed`; workflow-log-analysis terminal Codex/analyzer failures use `ai:log-analysis-failed` when `tracking_issue > 0`. `scripts/validate_process.sh` and `.github/workflows/workflow-log-analysis.yml` emit `AI_PHASE_FAILURE_V1` marker comments with `schema_version`, `phase`, `failure_mode`, `failed_step_name`, `workflow_run_id`, `workflow_run_attempt`, `workflow_name`, `workflow_file`, `workflow_run_url`, `repository`, `tracking_issue`, `attempt_count`, `recommended_resume_action`, and `timestamp`. Additional failure labels in `.github/ai/label_contract.v1.json` (`ai:clarify-failed`, `ai:clarify-respond-failed`, `ai:plan-failed`, `ai:implement-diagnose-failed`, `ai:review-autofix-failed`, `ai:integration-judge-failed`, `ai:memory-maintenance-failed`) are contract-defined/reserved on this branch; they are recognized by repair/status helpers but are not yet actively emitted by their phase workflows.
@@ -1568,6 +1566,25 @@ self-heal patches cannot be merged without explicit human action.
 - Before execution, validation runs pre-flight checks (`docker compose config`, shell syntax, and compose build path resolution).
 - Pre-flight failures are classified as terminal `harness_error` for that run.
 - The first generated test must be a canary infrastructure check (`00_canary.sh` style); infra-only canary failures shortcut to `harness_error`, while app startup/crash signals continue to diagnosis.
+
+### Validation Refresh Automation
+
+- Authentication:
+  - Uses `GH_PAT` (exported as `GH_TOKEN`) for all cross-repository clone/branch/PR operations.
+- Workflow: [`.github/workflows/validation-refresh.yml`](.github/workflows/validation-refresh.yml)
+- Triggers:
+  - Daily cron (`17 2 * * *`)
+  - Manual dispatch (`workflow_dispatch`) with optional `repos_file` and `branch_name` inputs
+- Runtime:
+  - Reads target repositories from `.github/ai/consumer_repos.json`
+  - For each target repo, clones the repo, checks out/creates `ai/validation-refresh` (or configured branch), renders validation assets from `.ai/validate.yml` using `scripts/render_validation_templates.py`, runs deterministic lint (`scripts/validation_lint.py`) and deterministic self-test (`scripts/validate_driver.sh`), and pushes refresh commits when files changed.
+- PR behavior:
+  - Green path (render/lint/self-test pass): opens/updates a non-draft PR and enables existing repo auto-merge via `gh pr merge --squash --auto`. If auto-merge enablement fails on an existing PR, the workflow preserves the PR's prior draft state instead of forcing it back to draft.
+  - Red path (any refresh stage failure with file changes): opens/updates a draft PR including diagnostics in the body.
+- Failure/no-op behavior:
+  - No `.ai/validate.yml`: repo is skipped.
+  - Pipeline failure with no file diff: records error and does not create a no-op PR.
+  - Workflow writes machine-readable summary JSON, appends a human summary to `$GITHUB_STEP_SUMMARY`, and sends Telegram failure notification (`TG_BOT_SECRET` + `TG_ADMIN_CHAT_ID`) on workflow failure.
 
 ## Repository Structure
 

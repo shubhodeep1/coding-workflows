@@ -4,6 +4,9 @@
 Rule IDs:
 - service-tool-scope
 - shell-parity
+- canary-ordering
+- test-script-prologue
+- healthcheck-test-strings
 - init-true-required
 - graceful-shutdown-hooks
 - bounded-tail-capture
@@ -37,6 +40,14 @@ ALLOW_COMMENT_RE = re.compile(
 )
 SHELL_LC_RE = re.compile(r"(^|[\"'\s])(?:/bin/)?(?:bash|sh)\s+-lc\b")
 SHELL_BASH_C_RE = re.compile(r"(^|[\"'\s])(?:/bin/)?bash\s+-c\b")
+TEST_SCRIPT_FILENAME_RE = re.compile(r"^(?P<prefix>\d{2})_.+\.sh$")
+SET_EUO_PIPEFAIL_RE = re.compile(r"^\s*set\s+-euo\s+pipefail(?:\s|;|$)")
+HEALTHCHECK_BLOCK_RE = re.compile(r"^\s*healthcheck\s*:\s*$")
+HEALTHCHECK_TEST_KEY_RE = re.compile(r"^\s*test\s*:\s*(?P<value>.*)$")
+YAML_LIST_ITEM_RE = re.compile(r"^\s*-\s*(?P<value>.*)$")
+
+REQUIRED_BASH_SHEBANG = "#!/usr/bin/env bash"
+REQUIRED_BASH_SHEBANG_RE = re.compile(r"^#!/usr/bin/env bash(?:\s+#.*)?\s*$")
 
 SERVICE_TOOL_DENYLIST = (
 	"mongosh",
@@ -421,6 +432,339 @@ def _check_shell_parity(context: LintContext) -> list[Finding]:
 						hint="Replace bash invocations with '/bin/sh -c' in compose healthchecks and test scripts.",
 					)
 				)
+
+	return findings
+
+
+def _iter_top_level_test_scripts(context: LintContext) -> list[Path]:
+	tests_dir = context.resolve("tests")
+	if not tests_dir.exists() or not tests_dir.is_dir():
+		return []
+	return sorted(path for path in tests_dir.glob("*.sh") if path.is_file() or path.is_symlink())
+
+
+def _is_explicitly_quoted_yaml_scalar(value: str) -> bool:
+	stripped = value.strip()
+	return len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in ('"', "'")
+
+
+def _split_flow_style_yaml_items(value: str) -> list[str]:
+	items: list[str] = []
+	current: list[str] = []
+	in_single = False
+	in_double = False
+	escaped = False
+	for ch in value[1:-1]:
+		if escaped:
+			current.append(ch)
+			escaped = False
+			continue
+		if ch == "\\" and in_double:
+			current.append(ch)
+			escaped = True
+			continue
+		if ch == "'" and not in_double:
+			in_single = not in_single
+			current.append(ch)
+			continue
+		if ch == '"' and not in_single:
+			in_double = not in_double
+			current.append(ch)
+			continue
+		if ch == "," and not in_single and not in_double:
+			items.append("".join(current).strip())
+			current = []
+			continue
+		current.append(ch)
+	items.append("".join(current).strip())
+	return [item for item in items if item]
+
+
+# mode-validate-generate.txt: tests/00_canary.sh must be first and scripts must use NN_*.sh ordering.
+def _check_canary_ordering(context: LintContext) -> list[Finding]:
+	tests_dir = context.resolve("tests")
+	scripts = _iter_top_level_test_scripts(context)
+
+	if not tests_dir.exists() or not tests_dir.is_dir():
+		return [
+			Finding(
+				path=tests_dir,
+				line=1,
+				rule_id="canary-ordering",
+				message="tests directory is missing.",
+				hint="Add tests with 00_canary.sh and zero-padded NN_*.sh scripts.",
+			)
+		]
+
+	if not scripts:
+		return [
+			Finding(
+				path=tests_dir,
+				line=1,
+				rule_id="canary-ordering",
+				message="tests contains no top-level shell test scripts.",
+				hint="Add 00_canary.sh and subsequent NN_*.sh scripts under tests/.",
+			)
+		]
+
+	findings: list[Finding] = []
+	canary_present = any(path.name == "00_canary.sh" for path in scripts)
+	if not canary_present:
+		findings.append(
+			Finding(
+				path=tests_dir,
+				line=1,
+				rule_id="canary-ordering",
+				message="tests/00_canary.sh is required as the first test script.",
+				hint="Add 00_canary.sh to gate infrastructure checks before app assertions.",
+			)
+		)
+
+	if canary_present and scripts[0].name != "00_canary.sh":
+		findings.append(
+			Finding(
+				path=scripts[0],
+				line=1,
+				rule_id="canary-ordering",
+				message=f"{scripts[0].name} sorts before 00_canary.sh.",
+				hint="Keep 00_canary.sh as the first top-level test script.",
+			)
+		)
+
+	seen_prefixes: dict[int, str] = {}
+	for script in scripts:
+		match = TEST_SCRIPT_FILENAME_RE.match(script.name)
+		if match is None:
+			findings.append(
+				Finding(
+					path=script,
+					line=1,
+					rule_id="canary-ordering",
+					message=f"Test script '{script.name}' must use zero-padded NN_*.sh naming.",
+					hint="Rename script to NN_<name>.sh with a two-digit numeric prefix.",
+				)
+			)
+			continue
+
+		prefix = int(match.group("prefix"))
+		if prefix == 0 and script.name != "00_canary.sh":
+			findings.append(
+				Finding(
+					path=script,
+					line=1,
+					rule_id="canary-ordering",
+					message=f"Only 00_canary.sh may use the 00 prefix (found {script.name}).",
+					hint="Reserve prefix 00 for canary and use 01+ for subsequent scripts.",
+				)
+			)
+			continue
+
+		if prefix in seen_prefixes and seen_prefixes[prefix] != script.name:
+			findings.append(
+				Finding(
+					path=script,
+					line=1,
+					rule_id="canary-ordering",
+					message=(
+						f"Duplicate numeric prefix {prefix:02d} for scripts "
+						f"'{seen_prefixes[prefix]}' and '{script.name}'."
+					),
+					hint="Use unique NN_ prefixes so script execution order stays deterministic.",
+				)
+			)
+			continue
+		seen_prefixes[prefix] = script.name
+
+	return findings
+
+
+# mode-validate-generate.txt: test scripts must include bash shebang, strict mode, and executable bit.
+def _check_test_script_prologue(context: LintContext) -> list[Finding]:
+	findings: list[Finding] = []
+
+	for script in _iter_top_level_test_scripts(context):
+		lines = context.read_lines(script)
+		if lines is None:
+			findings.append(
+				Finding(
+					path=script,
+					line=1,
+					rule_id="test-script-prologue",
+					message=f"{script.name} could not be read for prologue validation.",
+					hint="Ensure the script is a UTF-8 text file with standard shell prologue lines.",
+				)
+			)
+			continue
+
+		if not lines or REQUIRED_BASH_SHEBANG_RE.match(lines[0]) is None:
+			findings.append(
+				Finding(
+					path=script,
+					line=1,
+					rule_id="test-script-prologue",
+					message=f"{script.name} must start with '{REQUIRED_BASH_SHEBANG}'.",
+					hint="Add '#!/usr/bin/env bash' as the first line of every validation test script.",
+				)
+			)
+
+		has_strict_mode = False
+		for line in lines:
+			if not line.strip() or line.lstrip().startswith("#"):
+				continue
+			if SET_EUO_PIPEFAIL_RE.match(_strip_inline_comment(line)) is not None:
+				has_strict_mode = True
+				break
+		if not has_strict_mode:
+			findings.append(
+				Finding(
+					path=script,
+					line=1,
+					rule_id="test-script-prologue",
+					message=f"{script.name} must include 'set -euo pipefail'.",
+					hint="Enable strict shell mode near the top of each test script.",
+				)
+			)
+
+		try:
+			mode = script.stat().st_mode
+		except OSError:
+			findings.append(
+				Finding(
+					path=script,
+					line=1,
+					rule_id="test-script-prologue",
+					message=f"{script.name} could not be stat'ed for executable-bit validation.",
+					hint="Ensure the script metadata is readable before linting executable permissions.",
+				)
+			)
+			continue
+		if (mode & 0o111) == 0:
+			findings.append(
+				Finding(
+					path=script,
+					line=1,
+					rule_id="test-script-prologue",
+					message=f"{script.name} must be executable.",
+					hint="Set executable permissions on generated .sh files (for example, chmod +x).",
+				)
+			)
+
+	return findings
+
+
+# mode-validate-generate.txt: healthcheck.test list entries must be explicitly quoted strings.
+def _check_healthcheck_test_strings(context: LintContext) -> list[Finding]:
+	compose_path = context.resolve("docker-compose.test.yml")
+	compose_lines = context.read_lines(compose_path)
+	if compose_lines is None:
+		return []
+
+	findings: list[Finding] = []
+	in_healthcheck = False
+	healthcheck_indent = -1
+	in_test_list = False
+	test_indent = -1
+
+	for idx, line in enumerate(compose_lines, start=1):
+		clean_line = _strip_inline_comment(line)
+		if not clean_line.strip():
+			continue
+
+		indent = len(clean_line) - len(clean_line.lstrip(" "))
+		item_match = YAML_LIST_ITEM_RE.match(clean_line)
+
+		if in_test_list and (
+			indent < test_indent
+			or (indent == test_indent and item_match is None)
+		):
+			in_test_list = False
+
+		if in_healthcheck and (
+			indent < healthcheck_indent
+			or (indent == healthcheck_indent and not HEALTHCHECK_BLOCK_RE.match(clean_line))
+		):
+			in_healthcheck = False
+			in_test_list = False
+
+		if HEALTHCHECK_BLOCK_RE.match(clean_line):
+			in_healthcheck = True
+			healthcheck_indent = indent
+			in_test_list = False
+			continue
+
+		if not in_healthcheck:
+			continue
+
+		test_match = HEALTHCHECK_TEST_KEY_RE.match(clean_line)
+		if test_match:
+			value = test_match.group("value").strip()
+			if not value:
+				in_test_list = True
+				test_indent = indent
+				continue
+
+			if value.startswith("[") and value.endswith("]"):
+				entries = _split_flow_style_yaml_items(value)
+				for entry in entries:
+					if _is_explicitly_quoted_yaml_scalar(entry):
+						continue
+					findings.append(
+						Finding(
+							path=compose_path,
+							line=idx,
+							rule_id="healthcheck-test-strings",
+							message=f"healthcheck.test entry '{entry}' must be explicitly quoted.",
+							hint="Quote every healthcheck.test list entry, for example \"CMD-SHELL\".",
+						)
+					)
+				continue
+
+			if value.startswith("-"):
+				entry = value[1:].strip()
+				if entry and not _is_explicitly_quoted_yaml_scalar(entry):
+					findings.append(
+						Finding(
+							path=compose_path,
+							line=idx,
+							rule_id="healthcheck-test-strings",
+							message=f"healthcheck.test entry '{entry}' must be explicitly quoted.",
+							hint="Quote every healthcheck.test list entry, for example \"CMD-SHELL\".",
+						)
+					)
+				in_test_list = True
+				test_indent = indent
+				continue
+
+			findings.append(
+				Finding(
+					path=compose_path,
+					line=idx,
+					rule_id="healthcheck-test-strings",
+					message="healthcheck.test must be a list of explicitly quoted strings.",
+					hint="Use list form and quote each entry (for example \"CMD-SHELL\").",
+				)
+			)
+			continue
+
+		if not in_test_list:
+			continue
+
+		if item_match is None:
+			continue
+
+		entry = item_match.group("value").strip()
+		if not entry or _is_explicitly_quoted_yaml_scalar(entry):
+			continue
+
+		findings.append(
+			Finding(
+				path=compose_path,
+				line=idx,
+				rule_id="healthcheck-test-strings",
+				message=f"healthcheck.test entry '{entry}' must be explicitly quoted.",
+				hint="Quote every healthcheck.test list entry, for example \"CMD-SHELL\".",
+			)
+		)
 
 	return findings
 
@@ -854,6 +1198,21 @@ RULES: tuple[Rule, ...] = (
 		rule_id="shell-parity",
 		description="Shell invocations must use /bin/sh -c parity form; login shells are forbidden.",
 		checker=_check_shell_parity,
+	),
+	Rule(
+		rule_id="canary-ordering",
+		description="Top-level test scripts must keep 00_canary.sh first and use deterministic NN_*.sh naming.",
+		checker=_check_canary_ordering,
+	),
+	Rule(
+		rule_id="test-script-prologue",
+		description="Top-level test scripts must include bash shebang, strict mode, and executable permissions.",
+		checker=_check_test_script_prologue,
+	),
+	Rule(
+		rule_id="healthcheck-test-strings",
+		description="Compose healthcheck.test entries must be explicitly quoted YAML strings.",
+		checker=_check_healthcheck_test_strings,
 	),
 	Rule(
 		rule_id="init-true-required",

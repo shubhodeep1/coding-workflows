@@ -323,14 +323,12 @@ After changes: original intent preserved, behavior unchanged unless approved, ba
 - `workflow-log-analysis.yml` remains `workflow_dispatch`-only and has dual execution paths: `codex_mode=true` (default) runs analyzer preprocessing (`--codex-mode`) plus `codex exec`, while `codex_mode=false` uses the legacy analyzer/batch path.
 - `batch_api_disabled` input is validated whenever a non-empty value is provided, but only overrides analyzer batch behavior for `codex_mode=false`; codex-mode runs do not use the batch path.
 
-## 13a. Comprehensive Release Callback (Poller-Owned)
+## 13a. Workflow Log Analysis And Improvement Workflow
 
-- `.github/workflows/comprehensive-test-and-release.yml` has three phases only (`phase1-first-pass-test`, `phase2-collect-and-analyze-logs`, `phase3-dispatch-orchestrator`); callback handling is poller-owned, not a standalone workflow phase.
+- `.github/workflows/comprehensive-test-and-release.yml` (workflow name: **Workflow Log Analysis And Improvement**) has two phases: `phase2-collect-and-analyze-logs` and `phase3-dispatch-orchestrator`. Job IDs retain the `phase2-*` / `phase3-*` names (no `phase1-*` job) for backward compatibility with external references.
 - Phase 2 dispatches `workflow-log-analysis.yml` with `codex_mode=true` and resolves the collector window from `analysis/last_collection_timestamp.txt`; invalid/missing timestamp falls back to `lookback_days_fallback`.
-- Poller callback handling is label-gated: `handle_comprehensive_release_callback_if_needed` runs only while the tracking issue has `ai:comprehensive-test-pending`.
-- On project status `complete`, the poller dispatches `test-and-mark-stable.yml` with `dry_run=false`, reusing validated `version_tag`/`test_repo` extracted from tracking comments when present.
-- On project status `failed` or `validation-failed`, the poller sends an abort notification and does not dispatch release.
-- On completion/abort callback paths, the poller writes `comprehensive_release_callback` (`handled`, `status`, `handled_at`) and removes `ai:comprehensive-test-pending` best-effort. When dispatch fails in the `complete` path, it leaves callback state/label unchanged so the poller retries on a later cycle.
+- Phase 3 dispatches `internal-orchestrate.yml` with a project description that links to the analysis report and emits the resolved orchestrator tracking issue number as a job output. Phase 3 does NOT apply `ai:comprehensive-test-pending` or post a `COMPREHENSIVE_RELEASE_METADATA_V1` comment; release dispatch from this workflow has been removed.
+- Release marking via `test-and-mark-stable.yml` remains available as a standalone workflow; it is no longer invoked from this workflow. The poller's `handle_comprehensive_release_callback_if_needed` code path and the `ai:comprehensive-test-pending` label definition are retained in `scripts/orchestrate_poll_process.sh` and `scripts/label_helpers.sh` but are currently inert because no workflow applies the gating label.
 
 ---
 
@@ -559,13 +557,21 @@ Safety net:
 
 ### 20.3 Ledger Persistence (cache-backed) and the retained `LEDGER_ONLY_COMMIT` flag
 
-Historical context: `scripts/review_issue_ledger.sh` writes `REVIEW_LEDGER_PATH` (default `.ai/review_issue_ledger.txt`) on every review pass regardless of whether the editor produced a productive edit. The path was tracked in git for cross-iteration persistence; that caused two problems — (1) every merged PR rewrote the file wholesale, producing recurring sync conflicts between `main` and any long-lived integration branch (see issue #1469), and (2) no-op editor passes still produced an `[ai-autofix]` commit whose only tracked path was the ledger, which forced the `LEDGER_ONLY_COMMIT` interaction bug described below (see PR #1472 / PR #1476).
+§20.1's skip used to create an interaction bug: when a review pass produced no productive edit but `scripts/review_issue_ledger.sh` still wrote `REVIEW_LEDGER_PATH`, the `commit_changes` step produced an `[ai-autofix]` commit whose only tracked path was the ledger. That commit set `DID_COMMIT=true`, which historically gated three "clean review" steps (ready-to-merge label, enable auto-merge, telegram success) out of firing. The subsequent `pull_request.synchronize` event was then skipped by §20.1, so there was no follow-up run in which those gates could fire. Result: a PR that the editor cleared as no-change got stuck in `mergeable_state=clean` indefinitely (see PR #1472).
+
+In the default configuration the ledger path is now `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt` (per-PR, to prevent cross-PR merge conflicts on main) and is **gitignored**; cross-iteration persistence is handled by `actions/cache` restore/save steps wrapped around `Apply fixes with editor model` in `review_autofix.yml` (keys of the form `review-ledger-<repo>-pr-<N>-<run_id>-<run_attempt>` with `restore-keys: review-ledger-<repo>-pr-<N>-`). The ledger is updated on disk each iteration but never staged, so the ledger-only commit scenario the rest of this section describes **cannot manifest in the default configuration**. The contract below remains enforced because consumer repos that override `REVIEW_LEDGER_PATH` to a tracked path (or force-add the default path) still produce ledger-only commits, and the auto-merge gates must remain correct in that mode.
 
 Current model (post-#1469 fix):
 
-- `.ai/review_issue_ledger.txt` is **gitignored and untracked**. It is persisted across runs on the same PR via `actions/cache@v4` — restored before the "Apply fixes with editor model" step and saved after "Commit changes". Cache key: `review-ledger-pr-${PR_NUMBER}-${github.run_id}-${github.run_attempt}`, restore falls back to any cache whose key starts with `review-ledger-pr-${PR_NUMBER}-`.
-- Because the ledger is never staged (`git add -u` only updates tracked files; `git ls-files --others --exclude-standard` honours `.gitignore`), it is never part of any `[ai-autofix]` commit. Editor-no-op passes therefore produce **no commit at all** — the original `did_commit != 'true'` clause on the five gates below handles them correctly, without needing the `LEDGER_ONLY_COMMIT` fallback.
-- The legacy `LEDGER_ONLY_COMMIT` / `ledger_only_commit` signal (written by `scripts/review_commit_changes.sh`) and the five gates' `|| LEDGER_ONLY_COMMIT == 'true'` clauses are **retained** per CLAUDE.md §6 (naming immutability). In the default configuration they are a no-op: `LEDGER_ONLY_COMMIT` is always `false` because the ledger cannot reach the commit. They only activate if a consumer repo force-tracks `REVIEW_LEDGER_PATH` or points it at an already-tracked path, in which case the original interaction bug could re-emerge and the existing gates remain the safety net.
+- `jobs.codex-agent.steps.commit_changes` writes a second signal alongside `DID_COMMIT` / `did_commit`: **`LEDGER_ONLY_COMMIT`** (env) and **`ledger_only_commit`** (step output). The flag is `true` iff `git diff-tree --no-commit-id --name-only -r HEAD` emits exactly one path equal to `${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}`. When `commit_changes` runs, its default is `false` (including the no-commit branch). In the default configuration the ledger path is gitignored and never staged, so this comparison never matches and the flag is always `false`; the detector exists for consumer repos that override `REVIEW_LEDGER_PATH` to a tracked path. If `commit_changes` is skipped (e.g. `max_iterations_reached` / `PR_CLOSED` short-circuits), the env var and step output are undefined; downstream `if` expressions must not rely on the flag being set in that case (the `did_commit != 'true'` clause they OR with already handles the skipped-commit branch).
+- **Five gates** OR `env.LEDGER_ONLY_COMMIT == 'true'` into their existing `steps.commit_changes.outputs.did_commit != 'true'` clause:
+  1. `Detect editor-claimed-but-uncommitted changes` (sets `EDITOR_CHANGES_LOST`) — must still run to verify the editor's "no edit" claim.
+  2. `Validate editor no-op disposition` (sets `EDITOR_NOOP_SUSPICIOUS`) — same reason.
+  3. `Mark linked issues ready to merge` — applies `ai:ready-to-merge`.
+  4. `Enable auto-merge on PR` — `gh pr merge --squash --auto`.
+  5. `Telegram success` — DEBUG-level completion notify.
+- The push step (`DID_COMMIT == 'true' || CONFLICT_RESOLVED == 'true'`) is **not** touched. Ledger-only commits still push so `scripts/review_issue_ledger.sh` can read its own prior state on the next iteration — losing the ledger push would reset `persist_count` and re-open already-resolved issues as fresh findings.
+- The §20.1 gate skip is **not** touched either. The subsequent `synchronize` run is still skipped; clean-review work happens in the same run that produced the ledger-only commit.
 
 Gates that still OR `LEDGER_ONLY_COMMIT == 'true'` with `did_commit != 'true'` (legacy, no-op in default config):
 
@@ -584,15 +590,10 @@ Cache persistence contract:
 
 Operational rules:
 
-- Renames of `LEDGER_ONLY_COMMIT`, `ledger_only_commit`, the `REVIEW_LEDGER_PATH` env var, or its default `.ai/review_issue_ledger.txt` are breaking changes per CLAUDE.md §6. Add alongside.
-- Do **not** re-track the ledger path. `.gitignore:18` and the absence of the path from the git index are the *only* mechanisms preventing the sync-conflict regression; a PR that re-adds the file (even transiently, e.g. via `git add -f`) revives the issue.
-- If `REVIEW_LEDGER_PATH` is moved to a different path, the `.gitignore` entry and the `actions/cache` `path:` key in `review_autofix.yml` must be updated in lockstep.
-- The `LEDGER_ONLY_COMMIT` detector at `scripts/review_commit_changes.sh:471-487` is intentionally left in place. Do not remove it without removing the five OR'd gate clauses and re-auditing consumer repos for force-tracked ledger configurations.
-
-API cost audit (CLAUDE.md §15):
-
-- Cache restore/save are GitHub Actions cache API calls (not GitHub REST API / rate-limited quotas); no added `gh` invocations.
-- The `LEDGER_ONLY_COMMIT` detector still uses a single local `git diff-tree`; zero GitHub API calls either way.
+- Renames of `LEDGER_ONLY_COMMIT`, `ledger_only_commit`, or the env var's default path reference `${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}` are breaking changes per CLAUDE.md §6. Add alongside.
+- The ledger-path comparison must use `${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}` (not a hardcoded constant) so a consumer repo overriding `REVIEW_LEDGER_PATH` does not silently lose the auto-merge path — the detector and `scripts/review_issue_ledger.sh` must agree on the path. Both sides of the comparison are passed through a local `normalize_rel_path` shim (`sed -e 's#^\(\./\)\+##' -e 's#//*#/#g' -e 's#/$##'`) so equivalent relative spellings (`./.ai/...`, `.ai//...`, trailing slash) match the canonical form that `git diff-tree --name-only` emits. Absolute `REVIEW_LEDGER_PATH` values still pass through the same shim (the leading `/` is preserved because the first sed expression only strips `./`), so an absolute path's normalized form remains absolute and will not agree with git's relative-path output — the detector correctly declines to mark such commits as ledger-only.
+- Do **not** extend `LEDGER_ONLY_COMMIT=true` to multi-file commits that happen to include the ledger. The signal's entire meaning is "the only tracked change is bookkeeping"; a commit that also touches runtime paths represents a productive edit and the existing `DID_COMMIT=true` path correctly blocks the clean-review gates until the next verification pass.
+- If a future change introduces another always-written bookkeeping path, add it to the detector's single-path comparison as an equal-sized union (e.g. "commit contains exactly the ledger **and** the new bookkeeping file, nothing else"); do not loosen to a subset check.
 
 ### 20.4 Autofix Continuation
 

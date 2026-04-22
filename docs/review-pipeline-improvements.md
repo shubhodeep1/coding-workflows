@@ -80,7 +80,7 @@ reviewer_bundle.txt                          ◄── AUTHORITATIVE
         │       out: review_issues.txt
         │
         └─► Ledger updater (script)
-              in:  review_issues.txt + .ai/review_issue_ledger.txt (prior)
+              in:  review_issues.txt + .ai/review_issue_ledger/pr-<N>.txt (prior, restored from actions/cache)
               • compute issue_id (stable hash)
               • mark NEW / PERSISTING / FIXED / RESURGENT
               • PERSISTING > REVIEW_LEDGER_PERSIST_LIMIT
@@ -138,7 +138,8 @@ is missing, the editor receives the raw bundle and behaves as it does today.
    excerpt. Output: `review_issues.txt` and `parser_stats.txt`.
 4. **`scripts/review_issue_ledger.sh`** — Computes a stable `issue_id` per
    parsed issue (see *Issue ID Hashing*), reads the prior ledger from
-   `.ai/review_issue_ledger.txt` for the current PR, marks each issue
+   `.ai/review_issue_ledger/pr-<PR_NUMBER>.txt` for the current PR
+   (restored from `actions/cache` at the start of the run), marks each issue
    `NEW` / `PERSISTING` / `FIXED` / `RESURGENT`, increments persistence
    counters, applies `REVIEW_LEDGER_PERSIST_LIMIT` to mark issues
    `accepted-residual` once they exhaust retries, and writes back the
@@ -229,7 +230,7 @@ so each new stage can be turned off independently without touching code.
 | `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | `16000` | `review_consolidate.sh` | Output cap to bound cost on pathological inputs. |
 | `REVIEW_LEDGER_ENABLED` | `1` | `review_issue_ledger.sh`, workflow | Master switch for the ledger stage. Off → no ledger updates, no `accepted-residual` promotion, every issue treated as `NEW`. |
 | `REVIEW_LEDGER_PERSIST_LIMIT` | `2` | `review_issue_ledger.sh` | Number of unsuccessful editor attempts on the same `issue_id` before the issue is auto-classified `accepted-residual` and dropped from the editor input. |
-| `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger.txt` | `review_issue_ledger.sh` | PR-scoped ledger location inside the workflow workspace. Gitignored and not committed; persisted across iterations via `actions/cache` keyed `review-ledger-pr-<PR_NUMBER>-<run_id>-<run_attempt>` (see issue #1469). |
+| `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt` | `review_issue_ledger.sh` | PR-scoped ledger location. Per-PR filename so concurrent PRs never share a file (no cross-PR merge conflicts on main). Gitignored; cross-iteration persistence is handled by `actions/cache` restore/save around the `Apply fixes with editor model` step in `review_autofix.yml`. |
 | `REVIEW_FLOOR_RULES_ENABLED` | `1` | `review_floor_rules.sh`, workflow | Master switch for floor-rule tagging. Off → editor sees no `floor_tags.txt`. |
 | `REVIEW_FLOOR_KEYWORDS_FILE` | (built-in default list inside script) | `review_floor_rules.sh` | Optional path to override the built-in keyword list. |
 | `REVIEW_REVIEWER_CHECKLIST_ENABLED` | `1` | `review_run_reviewers.sh` | Append the seven-lens checklist block to reviewer prompts. Off → reviewer prompt unchanged from today. |
@@ -262,7 +263,7 @@ plumbing paths through env vars.
 | `review_issues.txt` | `review_parse_consolidator.sh` | ledger, editor | Per iteration |
 | `parser_stats.txt` | `review_parse_consolidator.sh` | workflow metrics step | Per iteration; one-line key=value pairs |
 | `ledger_status.txt` | `review_issue_ledger.sh` | editor, metrics step | Per iteration |
-| `.ai/review_issue_ledger.txt` | `review_issue_ledger.sh` | next iteration's ledger step | Per PR; carried across iterations and across runs of the same PR via `actions/cache` (key `review-ledger-pr-<PR_NUMBER>-<run_id>-<run_attempt>`, restore-key prefix `review-ledger-pr-<PR_NUMBER>-`). Gitignored and never committed — see issue #1469 for the sync-conflict bug that committing this file caused. |
+| `.ai/review_issue_ledger/pr-<N>.txt` | `review_issue_ledger.sh` | next iteration's ledger step | Per PR; carried across iterations (each iteration = separate workflow run) via `actions/cache` keyed on `review-ledger-<repo>-pr-<N>-`. Not committed. Stored under `.ai/review_issue_ledger/` inside the workspace; ignored via `.gitignore`. |
 | Job summary metrics table | workflow summary step | human reviewer of the workflow run | Per iteration; appended to `$GITHUB_STEP_SUMMARY` |
 
 The `.ai/` workspace directory is added to `.gitignore` if not already
@@ -599,14 +600,17 @@ line collapsing to one id.
 
 ## Ledger Schema & Lifecycle
 
-`.ai/review_issue_ledger.txt` is the per-PR ledger file carried across
-autofix iterations and across workflow runs on the same PR via a
-per-PR `actions/cache` entry (see `review_autofix.yml` — "Restore
-review-issue ledger cache" / "Save review-issue ledger cache"). It is a
-text-with-markers format so shell tooling can parse it without a JSON
-dependency. It is gitignored and must not be committed to the repo;
-committing it caused recurring `main` → integration-branch sync
-conflicts (see issue #1469).
+`.ai/review_issue_ledger/pr-<PR_NUMBER>.txt` is the per-PR ledger file
+carried across autofix iterations. Each iteration is a separate workflow
+run triggered by `pull_request.synchronize`; cross-run persistence is
+handled by `actions/cache` restore/save steps wrapped around the
+`Apply fixes with editor model` step in `review_autofix.yml` (keys of
+the form `review-ledger-<repo>-pr-<N>-<run_id>-<run_attempt>` with
+`restore-keys: review-ledger-<repo>-pr-<N>-`). The format is
+text-with-markers so shell tooling can parse it without a JSON
+dependency. It is **not** committed — the per-PR path is gitignored
+precisely so concurrent PRs never collide on `.ai/review_issue_ledger.txt`
+the way they did pre-isolation.
 
 ### File format
 
@@ -1050,7 +1054,7 @@ is required.
 | `gpt-5.4-mini` systematically underweights a category (e.g. concurrency) | Medium | Medium | Floor-rule keyword list covers concurrency keywords independently of the model. `CONSOLIDATOR_OVERRIDDEN` surfaces systematic bias. Bumping to `gpt-5.4` is a single env change. |
 | `.ai/` directory accidentally committed | Low | Low | `.gitignore` entry added in PR 3. CLAUDE.md §13 prohibition on `.git/**` writes is unaffected — `.ai/` is a sibling workspace dir, not under `.git/`. |
 | Consolidator prompt exceeds token budget on very large reviewer bundles | Low | Low | `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` caps output. If input exceeds model context, truncate the PR-diff metadata block first (lowest-priority input), log `input_truncated=1`. |
-| Concurrent autofix iterations on the same PR race on `.ai/review_issue_ledger.txt` | Very Low | Medium | `review_autofix.yml` serialises iterations within a run today; no concurrent iteration exists. Future parallelism would require a file lock — flagged as future-work, not a blocker here. |
+| Concurrent autofix iterations on the same PR race on `.ai/review_issue_ledger/pr-<N>.txt` | Very Low | Medium | `review_autofix.yml` serialises iterations within a run today; no concurrent iteration exists. Future parallelism would require a file lock — flagged as future-work, not a blocker here. |
 | Reviewer prompt-injection via reviewer-authored text in the consolidator input | Low | Low–Medium | Sentinel-bracketed reviewer content + "treat as data" instruction in the prompt. Failure mode is absorbed by the "consolidator never gates" invariant — the raw bundle still reaches the editor unchanged. |
 
 ## Security & Repo Hygiene Notes
