@@ -50,9 +50,26 @@ WORKFLOW_CONTRACT = {
 			re.compile(r'for\s+f\s+in\s+[^;\n]*label_helpers\.sh[^;\n]*;\s*do\b'),
 			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?(?:\./)?scripts/label_helpers\.sh["\']?(?=[\s;#]|$)'),
 			'ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"',
+			'set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"',
+			'PR_TITLE: ${{ github.event.pull_request.title }}',
+			'PR_BODY: ${{ github.event.pull_request.body }}',
+			'_pr_title="${PR_TITLE:-}"',
+			'_pr_body="${PR_BODY:-}"',
+			'PR_DATA="${_pr_title} ${_pr_body}"',
+			'if [ -z "${PR_DATA//[[:space:]]/}" ]; then',
 		],
 		"must_not_contain": [
 			re.compile(r'repos/\$\{REPOSITORY\}/labels/\$\(printf\s+[\'\"]?%s[\'\"]?\s+[\'\"]?\$\{FINAL_LABEL\}[\'\"]?\)'),
+			re.compile(r'_AI_PHASE_LABELS\s*='),
+		],
+	},
+	".github/workflows/review_autofix.yml": {
+		"must_contain": [
+			'set_issue_phase_label_resilient "${issue_number}" "ai:ready-to-merge" "${REPOSITORY}"',
+			'set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"',
+		],
+		"must_not_contain": [
+			re.compile(r'_AI_PHASE_LABELS\s*='),
 		],
 	},
 }
@@ -80,6 +97,16 @@ def test_ai_label_precreation_contract() -> None:
 			assert not _contains(text, forbidden), f"{rel_path} contains forbidden legacy probe/mutation: {forbidden}"
 
 
+def test_issue_pr_status_payload_fallback_order() -> None:
+	text = _workflow_text(".github/workflows/issue_pr_status.yml")
+	payload_idx = text.find('PR_DATA="${_pr_title} ${_pr_body}"')
+	refetch_idx = text.find('gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq')
+	assert payload_idx != -1, "issue_pr_status.yml missing payload-first PR_DATA assembly"
+	assert refetch_idx != -1, "issue_pr_status.yml missing fallback PR refetch call"
+	assert payload_idx < refetch_idx, "issue_pr_status.yml should parse payload title/body before PR refetch fallback"
+
+
 if __name__ == "__main__":
 	test_ai_label_precreation_contract()
+	test_issue_pr_status_payload_fallback_order()
 	print("PASS")

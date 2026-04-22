@@ -91,6 +91,19 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:needs-prompt-review"]="Validation prompt self-heal PR awaiting manual review"
 )
 
+_AI_PHASE_TRANSITION_LABELS=(
+	"ai:done"
+	"ai:implementing"
+	"ai:awaiting-approval"
+	"ai:planning"
+	"ai:clarification"
+	"ai:ready-to-merge"
+	"ai:review-blocked"
+	"ai:implementation-failed"
+	"ai:merged"
+	"ai:closed"
+)
+
 # ensure_label_exists <label_name> [repo]
 #
 # Creates the label if it does not already exist.  Idempotent — safe to
@@ -133,4 +146,57 @@ ensure_label_exists() {
 
 	echo "::warning::ensure_label_exists: failed to create label '${label_name}' in repo '${repo}': ${_label_err}" >&2
 	return 1
+}
+
+# set_issue_phase_label_resilient <issue_number> <target_label> [repo]
+#
+# Best-effort phase transition for mutually-exclusive ai:* phase labels.
+# - Ensures the target label exists (non-fatal on failure).
+# - Removes other phase labels with resilient DELETE calls.
+# - Ensures the target label is present via POST add fallback.
+set_issue_phase_label_resilient() {
+	local issue_number="${1:-}"
+	local target_label="${2:-}"
+	local repo="${3:-${GITHUB_REPOSITORY:-}}"
+
+	if [ -z "${issue_number}" ] || [ -z "${target_label}" ] || [ -z "${repo}" ]; then
+		echo "::warning::set_issue_phase_label_resilient: missing required arguments (issue='${issue_number}', target='${target_label}', repo='${repo}')." >&2
+		return 0
+	fi
+
+	if ! ensure_label_exists "${target_label}" "${repo}"; then
+		echo "::warning::set_issue_phase_label_resilient: ensure_label_exists failed for '${target_label}' in '${repo}' (continuing)." >&2
+	fi
+
+	local _phase_label _encoded_label _del_err_file _del_err
+	for _phase_label in "${_AI_PHASE_TRANSITION_LABELS[@]}"; do
+		[ "${_phase_label}" = "${target_label}" ] && continue
+
+		# ai:* labels contain ':' and '-' only; encode ':' for URL path safety.
+		_encoded_label="${_phase_label//:/%3A}"
+
+		_del_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+		if gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${_encoded_label}" \
+			>/dev/null 2>"${_del_err_file}"; then
+			[ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+			continue
+		fi
+
+		_del_err="$(cat "${_del_err_file}" 2>/dev/null || true)"
+		[ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+
+		if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
+			echo "::debug::set_issue_phase_label_resilient: delete skipped for '${_phase_label}' on #${issue_number}." >&2
+			continue
+		fi
+
+		echo "::warning::set_issue_phase_label_resilient: failed deleting '${_phase_label}' from #${issue_number}: ${_del_err}" >&2
+	done
+
+	if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+		-f "labels[]=${target_label}" >/dev/null 2>&1; then
+		echo "::warning::set_issue_phase_label_resilient: failed to apply '${target_label}' on issue #${issue_number} in repo '${repo}'." >&2
+	fi
+
+	return 0
 }

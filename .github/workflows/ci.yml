@@ -154,6 +154,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_label_precreation_contract.py
 
+      - name: Issue PR status payload fallback contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_issue_pr_status_payload_fallback.py
+
       - name: Test-and-mark-stable plan polling guard regression tests
         run: |
           set -euo pipefail
