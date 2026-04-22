@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4553-4563 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: Comment/implementation mismatch: the comment says the remaining body is capped at 2000 bytes, but the jq truncation uses character length and slices to produce a 2000-character limit.\n  WHY: All reviewers flagged the same documentation-vs-implementation drift; severity is taken as the highest reported disagreement among source reviews.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- scripts/orchestrate_poll_process.sh:4553-4569 | severity=medium | confidence=3\n  PROBLEM: Documentation mismatch between comment and implementation: the comment says \"cap each remaining body at 2000 bytes\" but the jq code truncates by UTF-8 characters rather than bytes.\n  WHY: The review notes this can mislead maintainers and is especially relevant because the upstream limit being avoided is byte-based.\n- scripts/orchestrate_poll_process.sh:4667-4683 | severity=medium | confidence=2\n  PROBLEM: The fallback diagnostics builder uses a different schema for `phase` and `issue_number` than the main builder.\n  WHY: The review warns that downstream consumers may observe different shapes when the fallback path is taken.\n- scripts/orchestrate_poll_process.sh:4667-4683 | severity=medium | confidence=2\n  PROBLEM: The fallback diagnostics builder uses `--argjson` for numeric values with defaults, which can fail if the variables are not numeric.\n  WHY: The review says the fallback path itself could fail and emit empty diagnostics instead of recovering.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- scripts/orchestrate_poll_process.sh:4565 | severity=high | confidence=4\n  PROBLEM: Passing the full un-truncated `issue_comments_json` blob through `printf` into `jq` can still trigger `E2BIG` or shell limits before filtering occurs.\n  WHY: The review says this can cause `recent_comments` to fall back to `[]`, losing comment context even if later truncation would have been safe.\n- scripts/orchestrate_poll_process.sh:4571 | severity=medium | confidence=3\n  PROBLEM: Documentation/implementation mismatch: the comment says \"2000 bytes\" but jq truncation is based on Unicode codepoints, so multi-byte characters can exceed the intended byte cap.\n  WHY: The review says character-based truncation preserves UTF-8 integrity but may still allow the payload to exceed `MAX_ARG_STRLEN` when comments contain many multi-byte characters.\n- scripts/orchestrate_poll_process.sh:4682 | severity=low | confidence=2\n  PROBLEM: The fallback builder coerces `mergeable` to a strict boolean, which can misrepresent non-`true` mergeable states.\n  WHY: The review says states such as `CONFLICTING` could be reported as `false`, misleading the judge.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_ poll_process.sh:4560 (in the original diff) / line 45 (from the last run diff) | severity=high | confidence=5\n  PROBLEM: The truncation implementation is inconsistent with its documentation, and the reported slice math indicates a much smaller effective cap than the comment claims.\n  WHY: The review says the comment, threshold, and slice value are misaligned and that the result is about 2001 characters rather than the documented 20,000-byte cap.\n- scripts/orchestrate_poll_process.sh:45 | severity=medium | confidence=4\n  PROBLEM: The inline comment says \"cap each remaining body at 20,000 bytes\" but the implementation does not match that stated cap.\n  WHY: The review says the mismatch between stated intent and actual truncation behavior could mislead future maintainers.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:4553-4563 | severity=medium | confidence=4\n  PROBLEM: Comment/implementation mismatch in truncation threshold: the comment says \"cap each remaining body at 2000 bytes\" but the logic uses character length and a truncation marker, yielding a character-based limit instead.\n  WHY: The review says this is a clear documentation drift that can mislead future maintainers.\n- scripts/orchestrate_poll_process.sh:4553 | severity=medium | confidence=3\n  PROBLEM: The comment uses \"bytes\" while the jq `length` operation counts Unicode codepoints, so the truncation is not actually byte-based.\n  WHY: The review says multi-byte comments could still exceed the intended byte budget and reduce headroom against `MAX_ARG_STRLEN`.\n- scripts/orchestrate_poll_process.sh:4667-4700 | severity=low | confidence=2\n  PROBLEM: The review initially suspected a fallback schema inconsistency in `issue_number` handling, but concluded the type handling is compatible.\n  WHY: The review states the schema is consistent after deeper inspection and no change is needed.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- scripts/orchestrate_poll_process.sh:4552 | severity=medium | confidence=5\n  PROBLEM: The comment says the body is capped at 2000 bytes, but the jq code actually caps at 2000 characters.\n  WHY: The review says this documentation drift could mislead maintainers into making an incorrect future change.\n- scripts/orchestrate_poll_process.sh:4563 | severity=low | confidence=5\n  PROBLEM: The reported off-by-one in the truncation slice is not a real issue.\n  WHY: The review says the math is correct because the truncation marker is 12 characters and the slice plus marker totals exactly 2000 characters.\n- scripts/orchestrate_poll_process.sh:4563 | severity=low | confidence=5\n  PROBLEM: The reported multi-byte UTF-8 truncation safety issue is not a real issue.\n  WHY: The review says jq slicing works on Unicode code points and preserves UTF-8 validity.\n- scripts/orchestrate_poll_process.sh:4563 | severity=low | confidence=5\n  PROBLEM: The reported condition/slice inconsistency is not a real issue.\n  WHY: The review says the `> 2000` guard and `[:1988] + \"\u2026[truncated]\"` result are consistent given the marker length.\n- scripts/orchestrate_poll_process.sh:4672-4683 | severity=low | confidence=4\n  PROBLEM: The fallback diagnostics type differences are acceptable and do not require a change.\n  WHY: The review says the fallback remains defensive and supplies the same essential fields.\n- scripts/orchestrate_poll_process.sh:4557 | severity=low | confidence=3\n  PROBLEM: The raw `printf` expansion risk is pre-existing and not a regression from this PR.\n  WHY: The review says the existing guard covers failure and the cap keeps the actual payload below the argv limit.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "d7334db6c3d0ceaa91dc7f817553a46a288651dace0150df95fb2979f491fb9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1516,
+    "run_id": "24763786974",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24763786974",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422064427_aeb30de56c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1516,
+    "run_id": "24763786974"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T06:44:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
