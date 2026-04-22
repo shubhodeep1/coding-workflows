@@ -17,7 +17,7 @@ from typing import Any
 
 
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-PR_NUMBER_RE = re.compile(r"/pull/(?P<number>\d+)$")
+PR_NUMBER_RE = re.compile(r"/pull/(?P<number>\d+)(?:/|$|#|\?)")
 
 
 @dataclass(frozen=True)
@@ -206,7 +206,10 @@ class ValidationRefreshRunner:
 
 	def _clone_repository(self, repository: str, repo_dir: Path) -> None:
 		if repo_dir.exists():
-			shutil.rmtree(repo_dir)
+			try:
+				shutil.rmtree(repo_dir)
+			except OSError as exc:
+				print(f"WARNING: failed to remove existing repo dir {repo_dir}: {exc}")
 		self.executor.run(["gh", "repo", "clone", repository, str(repo_dir)])
 
 	def _checkout_refresh_branch(self, repo_dir: Path, default_branch: str) -> None:
@@ -216,6 +219,9 @@ class ValidationRefreshRunner:
 			check=False,
 		)
 		start_ref = f"origin/{self.branch_name}" if (remote_branch.stdout or "").strip() else f"origin/{default_branch}"
+		self.executor.run(["git", "fetch", "origin", default_branch], cwd=repo_dir, check=False)
+		if start_ref == f"origin/{self.branch_name}":
+			self.executor.run(["git", "fetch", "origin", self.branch_name], cwd=repo_dir, check=False)
 		self.executor.run(["git", "checkout", "-B", self.branch_name, start_ref], cwd=repo_dir)
 
 	def _run_refresh_pipeline(self, repo_dir: Path, manifest_path: Path) -> tuple[bool, list[str]]:
@@ -270,6 +276,7 @@ class ValidationRefreshRunner:
 	def _commit_and_push(self, repo_dir: Path) -> None:
 		self.executor.run(["git", "config", "user.name", "coding-workflows[bot]"], cwd=repo_dir)
 		self.executor.run(["git", "config", "user.email", "coding-workflows-bot@users.noreply.github.com"], cwd=repo_dir)
+		self.executor.run(["gh", "auth", "setup-git"], cwd=repo_dir, check=False)
 		self.executor.run(["git", "add", "-A"], cwd=repo_dir)
 		self.executor.run(["git", "commit", "-m", self.commit_message], cwd=repo_dir)
 		self.executor.run(["git", "push", "--set-upstream", "origin", self.branch_name], cwd=repo_dir)
@@ -308,7 +315,16 @@ class ValidationRefreshRunner:
 
 		if existing_prs:
 			existing = existing_prs[0]
-			pr_number = int(existing.get("number"))
+			pr_number_value = existing.get("number")
+			if pr_number_value is None:
+				raise CommandFailure(
+					command=("gh", "pr", "list", "--repo", repository),
+					cwd=None,
+					returncode=1,
+					stdout=list_proc.stdout,
+					stderr="missing_pr_number",
+				)
+			pr_number = int(pr_number_value)
 			pr_url = str(existing.get("url") or "")
 			is_draft = bool(existing.get("isDraft"))
 			self.executor.run(
@@ -341,7 +357,7 @@ class ValidationRefreshRunner:
 				"--base",
 				default_branch,
 				"--head",
-				self.branch_name,
+				head_ref,
 				"--title",
 				self.pr_title,
 				"--body",
@@ -523,6 +539,7 @@ def main() -> int:
 		workspace_path = Path(temporary_root.name)
 	workspace_path.mkdir(parents=True, exist_ok=True)
 
+	results: list[RefreshResult] = []
 	try:
 		runner = ValidationRefreshRunner(
 			source_root=source_root,
@@ -534,10 +551,11 @@ def main() -> int:
 		summary = summarize_results(results)
 		write_summary(summary, args.summary_json)
 		print(json.dumps(summary, sort_keys=True))
-		return 0
 	finally:
 		if temporary_root is not None:
 			temporary_root.cleanup()
+
+	return 1 if any(result.outcome == "error" for result in results) else 0
 
 
 def _extract_url(stdout_text: str) -> str:

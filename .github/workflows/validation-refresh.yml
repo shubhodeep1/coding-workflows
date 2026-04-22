@@ -21,6 +21,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: validation-refresh-${{ github.repository }}
+  cancel-in-progress: true
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
