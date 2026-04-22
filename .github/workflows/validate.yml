@@ -471,7 +471,7 @@ jobs:
             --actor "${{ github.actor }}" \
             --metadata-json "${metadata_json}"
 
-      - name: Install Python dependencies for template mode
+      - name: Install Python dependencies for validation renderer
         continue-on-error: true
         run: |
           set -euo pipefail
