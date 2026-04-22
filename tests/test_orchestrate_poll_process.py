@@ -5152,19 +5152,38 @@ def test_actions_runs_cached_loader_uses_if_none_match_when_stale() -> None:
 
 
 def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
+	# The resolver run: blocks were extracted into
+	# scripts/review_conflict_prepare.sh and
+	# scripts/review_conflict_resolve.sh by PR #1495 to stay under
+	# GitHub Actions' 21,000-char per-step expression-template limit.
+	# The workflow now bootstraps the support scripts and invokes them;
+	# the integration-sync detection, template selection, and fingerprint
+	# verifier gating live inside those scripts. This test verifies the
+	# full wiring across workflow + scripts.
 	wf_path = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
-	body = wf_path.read_text(encoding="utf-8")
+	prepare_path = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
+	resolve_path = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
+	wf_body = wf_path.read_text(encoding="utf-8")
+	prepare_body = prepare_path.read_text(encoding="utf-8")
+	resolve_body = resolve_path.read_text(encoding="utf-8")
 	# Verifier bootstrap must be in OPTIONAL list so older script_refs
 	# do not hard-fail.
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"' in body
-	# The resolver step must dispatch the verifier under the
-	# IS_INTEGRATION_SYNC gate and handle exit codes 0/1/2.
-	assert "IS_INTEGRATION_SYNC" in body
-	assert "verify_integration_fingerprints.py" in body
-	assert "Aborting [ai-merge-resolve] commit: integration fingerprint verification" in body
-	# The integration template selection must look for orchestrator/project-* head refs.
-	assert "orchestrator/project-*" in body
-	assert "integration-sync-conflict-resolver.txt" in body
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"' in wf_body
+	# The workflow must invoke the extracted prepare + resolve scripts so
+	# the integration-sync gate and fingerprint verifier actually run.
+	assert "review_conflict_prepare.sh" in wf_body
+	assert "review_conflict_resolve.sh" in wf_body
+	# The prepare script selects the integration template on
+	# orchestrator/project-* head refs and exports IS_INTEGRATION_SYNC.
+	assert "orchestrator/project-*" in prepare_body
+	assert "integration-sync-conflict-resolver.txt" in prepare_body
+	assert "IS_INTEGRATION_SYNC" in prepare_body
+	# The resolve script dispatches the verifier under the
+	# IS_INTEGRATION_SYNC gate and aborts the [ai-merge-resolve] commit
+	# when fingerprint verification rejects the resolver output.
+	assert "IS_INTEGRATION_SYNC" in resolve_body
+	assert "verify_integration_fingerprints.py" in resolve_body
+	assert "Aborting [ai-merge-resolve] commit: integration fingerprint verification" in resolve_body
 
 
 def main() -> int:
