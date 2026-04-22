@@ -583,10 +583,10 @@ Gates that still OR `LEDGER_ONLY_COMMIT == 'true'` with `did_commit != 'true'` (
 
 Cache persistence contract:
 
-- `jobs.codex-agent.steps.Restore review-issue ledger cache` runs before the editor; `jobs.codex-agent.steps.Save review-issue ledger cache` runs after `commit_changes` with `if: always()` so the ledger for the current iteration is persisted even if a later step (push, conflict resolver) fails.
-- The save step's `hashFiles('.ai/review_issue_ledger.txt') != ''` guard avoids creating an empty-cache entry when the script fell through its `REVIEW_LEDGER_ENABLED=0` branch or errored before writing.
-- The key includes `run_id` + `run_attempt` so each run produces a distinct, immutable cache entry; the `restore-keys` fallback gives every new iteration the latest previously-saved state for the same PR. GitHub's LRU eviction is 7 days since last access, which is well inside any active autofix cycle.
-- Missing cache on first run is handled by `scripts/review_issue_ledger.sh` (it logs `ledger_reset=1` and treats every current issue as `NEW`) — identical to the "malformed prior ledger" fail-open branch.
+- `jobs.codex-agent.steps.Restore review-issue ledger` runs before the editor; `jobs.codex-agent.steps.Save review-issue ledger` runs immediately after `Apply fixes with editor model` (before `commit_changes`) with `if: always()` so the ledger for the current iteration is persisted even if a later step (push, conflict resolver) fails.
+- The save step writes `.ai/review_issue_ledger/` + `${REVIEW_LEDGER_PATH}` through `actions/cache/save@v4`, gated by `if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'`, with `continue-on-error: true` to fail open on cache upload errors.
+- The key includes `${{ github.repository }}` plus `run_id` + `run_attempt` so each run produces a distinct, repository-scoped cache entry; the `restore-keys` fallback gives every new iteration the latest previously-saved state for the same PR. GitHub's LRU eviction is 7 days since last access, which is well inside any active autofix cycle.
+- Missing cache on first run is handled by `scripts/review_issue_ledger.sh` by treating every current issue as `NEW`; `ledger_reset=1` is emitted only for malformed prior-ledger content.
 
 Operational rules:
 
