@@ -47,7 +47,7 @@ HEALTHCHECK_TEST_KEY_RE = re.compile(r"^\s*test\s*:\s*(?P<value>.*)$")
 YAML_LIST_ITEM_RE = re.compile(r"^\s*-\s*(?P<value>.*)$")
 
 REQUIRED_BASH_SHEBANG = "#!/usr/bin/env bash"
-REQUIRED_BASH_SHEBANG_RE = re.compile(r"^\s*#!/usr/bin/env bash(?:\s+#.*)?\s*$")
+REQUIRED_BASH_SHEBANG_RE = re.compile(r"^#!/usr/bin/env bash(?:\s+#.*)?\s*$")
 
 SERVICE_TOOL_DENYLIST = (
 	"mongosh",

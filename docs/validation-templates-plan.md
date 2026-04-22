@@ -52,7 +52,7 @@ scripts/render_validation_templates.py
      ├─ reads manifest
      ├─ picks family
      ├─ renders Dockerfile.app, docker-compose.test.yml,
-     │   tests/00_canary.sh, tests/10_http_smoke.py, etc.
+     │   tests/00_canary.sh, tests/11_http_smoke.sh, etc.
      └─ writes to consumer-repo checkout
 
 scripts/validation_lint.py
@@ -89,7 +89,8 @@ log capture, and the `attempt_self_heal_and_reexec` integration points.
 | `Dockerfile.app`                         | `python:3.12-slim` base; `apt-get install -y curl jq`; app deps via `pip install -r`; no service-side CLIs unless manifest opts in |
 | `docker-compose.test.yml`                | `app`, `mongo` (per `services:`); `init: true` on every long-running service; `/bin/sh -c` healthchecks for sh parity              |
 | `tests/00_canary.sh`                     | `CANARY_TOOLS` scoped to client-side only (`curl jq python3 pytest`); service-side CLIs go in a separate `svc_canary.sh`           |
-| `tests/10_http_smoke.py`                 | Uses `TEST_HOST_HEADER` helper to defeat Flask `ALLOWED_HOSTS`/`Host:` checks when hitting the compose service name                |
+| `tests/11_http_smoke.sh`                 | Uses `TEST_HOST_HEADER` helper to defeat Flask `ALLOWED_HOSTS`/`Host:` checks when hitting the compose service name                |
+| `tests/20_import_audit.sh`               | Runs `_lib/import_audit.py` in subprocess isolation before service-specific assertions                                             |
 | `_lib/import_audit.py`                   | Runs dependency_auditing via `subprocess.run([sys.executable, "-c", ...])` to isolate `sys.modules` side-effects                   |
 | `_lib/graceful_shutdown.py`              | Post-SIGTERM readiness polling with bounded timeout + stdout/stderr tail capture on timeout                                        |
 | `tests/90_tap_report.sh`                 | TAP-format `ok N` / `not ok N` aggregator                                                                                          |
@@ -101,8 +102,10 @@ log capture, and the `attempt_self_heal_and_reexec` integration points.
 | `Dockerfile.app`                         | `node:20-bookworm` base; `curl -L https://foundry.paradigm.xyz \| bash`; `foundryup`; **`ENV PATH=/root/.foundry/bin:$PATH`** so `forge`/`cast` resolve in non-login shells |
 | `docker-compose.test.yml`                | `app`, `anvil` service; `init: true`; `validate.env` generated with **double-quoted** values to survive compose interpolation      |
 | `tests/00_canary.sh`                     | `CANARY_TOOLS="curl jq node npx forge cast"` — all client-side; no `psql`/`mongosh`                                                |
-| `tests/20_rpc_probe.sh`                  | `curl -s $RPC_URL --data '{...eth_blockNumber...}' \| jq -e '.result'` — probes **`.result`** not `.` (empty body must fail)       |
+| `tests/20_import_audit.sh`               | Runs `_lib/import_audit.py` in subprocess isolation before RPC and Hardhat checks                                                   |
+| `tests/25_rpc_probe.sh`                  | `curl -s $RPC_URL --data '{...eth_blockNumber...}' \| jq -e '.result'` — probes **`.result`** not `.` (empty body must fail)       |
 | `tests/30_hardhat_test.sh`               | `npx hardhat test --network localhost`; captures stdout/stderr tails on timeout                                                    |
+| `_lib/import_audit.py`                   | Isolated import helper that executes each module import in a child Python process                                                   |
 | `_lib/graceful_shutdown.sh`              | Same pattern as python family, shell version                                                                                       |
 
 ## Encoded prompt rules (the ~30)
