@@ -755,7 +755,10 @@ def _fetch_run_log_archive(
             raise
 
         if not payload:
-            raise RuntimeError(f"Empty log archive received for {repo} run_id={run_id}")
+            empty_exc = RuntimeError(f"Empty log archive received for {repo} run_id={run_id}")
+            if cache is not None:
+                cache[identity] = empty_exc
+            raise empty_exc
         if cache is not None:
             cache[identity] = payload
         return payload
