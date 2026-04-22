@@ -391,14 +391,16 @@ jobs:
 > corresponding `AUTOFIX_PRE_PUSH_*` variants are stable audit handles.
 >
 > **Ledger-only commit auto-merge** — `scripts/review_issue_ledger.sh`
-> updates `REVIEW_LEDGER_PATH` (default `.ai/review_issue_ledger.txt`) on
-> every review pass, including passes where the editor reports
-> `Change status: not-edited`. This ledger-only commit scenario applies
-> only when `REVIEW_LEDGER_PATH` is Git-tracked (or explicitly
-> force-added); with the default `.ai/review_issue_ledger.txt`
-> runtime-artifact path in repos that leave it gitignored, the ledger is
-> still updated locally for the run but is not part of the commit/push
-> and this bug cannot manifest. When the resulting `[ai-autofix]` commit
+> updates `REVIEW_LEDGER_PATH` (default
+> `.ai/review_issue_ledger/pr-<PR_NUMBER>.txt`) on every review pass,
+> including passes where the editor reports
+> `Change status: not-edited`. In the default configuration the per-PR
+> ledger path is gitignored and persisted across autofix iterations via
+> `actions/cache` in `review_autofix.yml` — the ledger is updated locally
+> for the run but never part of the commit/push, so this bug cannot
+> manifest. The ledger-only commit scenario only applies when
+> `REVIEW_LEDGER_PATH` is explicitly overridden to a Git-tracked (or
+> force-added) path. When the resulting `[ai-autofix]` commit
 > contains **only** the ledger, the `commit_changes` step sets
 > `LEDGER_ONLY_COMMIT=true` (and the `ledger_only_commit` step output) in
 > addition to `DID_COMMIT=true`. Five downstream gates OR this signal into
@@ -999,7 +1001,7 @@ Analyzer script: [`scripts/analyze_workflow_logs.py`](scripts/analyze_workflow_l
 | `ORCHESTRATOR_HOT_FILE_MIN_PROJECTS` | `2` | Minimum distinct orchestrator projects required to promote a path. Prevents a single runaway project from skewing the set. |
 | `REVIEW_LEDGER_ENABLED` | `1` | Enable (`1`) or disable (`0`) review-issue ledger lifecycle tracking in `scripts/review_issue_ledger.sh`; when disabled, `ledger_status.txt` is emitted empty and no ledger file is updated. |
 | `REVIEW_LEDGER_PERSIST_LIMIT` | `2` | Persist-count threshold for transitioning a still-present issue to `accepted-residual` after increment (>= threshold). |
-| `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger.txt` | Runtime ledger file path used by `scripts/review_issue_ledger.sh`; malformed prior ledgers fail-open with `ledger_reset=1` and state reset semantics. |
+| `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt` | Runtime ledger file path used by `scripts/review_issue_ledger.sh`. Per-PR filename isolates concurrent PRs so they never share a file (no cross-PR merge conflicts on main). Gitignored by default; cross-iteration persistence is provided by `actions/cache` restore/save steps in `review_autofix.yml` keyed on `review-ledger-<repo>-pr-<N>-`. Explicit overrides are honored verbatim (legacy single-file path still supported). Malformed prior ledgers fail-open with `ledger_reset=1` and state reset semantics. |
 | `MAX_CODEX_ATTEMPTS` | `3` | Shared Codex retry cap for validate/workflow-log-analysis Codex execution paths. Must be a positive integer; invalid values fail open to `3` with a warning. |
 | `CODEX_RETRY_BACKOFF_BASE_SECS` | `10` | Exponential retry backoff base (seconds) used with `MAX_CODEX_ATTEMPTS` (`base * 2^(attempt-1)`) for validate/workflow-log-analysis Codex execution paths. Must be a positive integer; invalid values fail open to `10` with a warning. |
 | `ENABLE_PHASE_FAILURE_COMMENTS` | `true` | Contract-defined gate for `AI_PHASE_FAILURE_V1` issue comments. Current branch status: reserved (not consumed yet); validate/workflow-log-analysis still emit marker comments when tracking issue context exists. |
