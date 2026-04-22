@@ -676,26 +676,36 @@ def _normalize_error_text(exc: Exception) -> str:
     return text or exc.__class__.__name__
 
 
+def _sanitize_missing_log_archive_detail(detail: str) -> str:
+    sanitized = detail.replace("=", ":")
+    return sanitized[:512] or "unknown"
+
+
 def _is_missing_log_archive_error(error_text: str, run_id: int) -> bool:
     normalized = error_text.lower()
-    has_http_404 = any(
+    has_http_missing = any(
         marker in normalized
         for marker in (
             "http 404",
             "404 not found",
             "status code 404",
             "404 error",
+            "http 410",
+            "410 gone",
+            "status code 410",
+            "410 error",
         )
     )
     has_archive_endpoint = f"actions/runs/{run_id}/logs" in normalized
-    return (has_http_404 and has_archive_endpoint) or "log archive not found" in normalized
+    return (has_http_missing and has_archive_endpoint) or "log archive not found" in normalized
 
 
 def _normalize_log_archive_exception(repo: str, run_id: int, exc: Exception) -> Exception:
     detail = _normalize_error_text(exc)
     if _is_missing_log_archive_error(detail, run_id):
+        sanitized_detail = _sanitize_missing_log_archive_detail(detail)
         wrapped = RuntimeError(
-            f"{MISSING_LOG_ARCHIVE_MARKER} repository={repo} run_id={run_id} detail={detail}"
+            f"{MISSING_LOG_ARCHIVE_MARKER} repository={repo} run_id={run_id} detail={sanitized_detail}"
         )
         wrapped.__cause__ = exc
         return wrapped
@@ -755,10 +765,15 @@ def _fetch_run_log_archive(
             raise
 
         if not payload:
-            empty_exc = RuntimeError(f"Empty log archive received for {repo} run_id={run_id}")
+            empty_exc = RuntimeError("empty_log_archive_payload")
+            wrapped_empty_exc = RuntimeError(
+                f"{MISSING_LOG_ARCHIVE_MARKER} repository={repo} run_id={run_id} "
+                f"detail={_sanitize_missing_log_archive_detail(_normalize_error_text(empty_exc))}"
+            )
+            wrapped_empty_exc.__cause__ = empty_exc
             if cache is not None:
-                cache[identity] = empty_exc
-            raise empty_exc
+                cache[identity] = wrapped_empty_exc
+            raise wrapped_empty_exc from empty_exc
         if cache is not None:
             cache[identity] = payload
         return payload

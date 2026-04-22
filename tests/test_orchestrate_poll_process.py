@@ -950,7 +950,7 @@ if args[0] == 'api':
 			issue_payload = {}
 			if re.search(r'(?m)^\s*number\s*$', query):
 				issue_payload['number'] = num
-			if 'state' in query:
+			if re.search(r'(?m)^\s*state\s*$', query):
 				issue_payload['state'] = issue_state
 			if 'labels(first:' in query:
 				issue_payload['labels'] = {'nodes': [{'name': label} for label in labels]}
