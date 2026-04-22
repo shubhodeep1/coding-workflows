@@ -121,11 +121,10 @@ ensure_implement_fixup_labels() {
   fi
 }
 
-FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
-  --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' || true)"
+FAILED_STEP_JOBS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" || true)"
+FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' 2>/dev/null || true)"
 if [ -z "${FAILED_STEP_NAME}" ] && [ "${JOB_STATUS:-}" != "success" ]; then
-  FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
-    --jq '[.jobs[].steps[] | select(.conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required" or .status == "in_progress")] | first | .name // ""' || true)"
+  FAILED_STEP_NAME="$(printf '%s' "${FAILED_STEP_JOBS_JSON}" | jq -r '[.jobs[].steps[] | select(.conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required" or .status == "in_progress")] | first | .name // ""' 2>/dev/null || true)"
 fi
 if [ -z "${FAILED_STEP_NAME}" ]; then
   FAILED_STEP_NAME="unknown-step"
