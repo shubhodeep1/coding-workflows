@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1582,1649 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: The cache `path` is hardcoded to `.ai/review_issue_ledger`, so `REVIEW_LEDGER_PATH` overrides outside that directory (including the legacy `.ai/review_issue_ledger.txt`) are not restored or saved across iterations.\n  WHY: All reviewers identified the same backward-compatibility regression; severity differs only by reviewer, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:1582 and 1649 | severity=medium | confidence=4\n  PROBLEM: Cache `path` hardcodes `.ai/review_issue_ledger` directory only, breaking backward compatibility for legacy `REVIEW_LEDGER_PATH=.ai/review_issue_ledger.txt` overrides.\n  WHY: When `REVIEW_LEDGER_PATH` is overridden to `.ai/review_issue_ledger.txt`, the cache restore/save steps won't persist that file across iterations because it's outside the cached directory.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- `.github/workflows/review_autofix.yml` | severity=medium | confidence=5\n  PROBLEM: The cache configuration hardcodes the new directory `.ai/review_issue_ledger`, but user overrides like the legacy `.ai/review_issue_ledger.txt` are not cached.\n  WHY: If a consumer repository has `REVIEW_LEDGER_PATH` set to a file outside the `.ai/review_issue_ledger/` directory, the `actions/cache` steps will skip it and the ledger state will be lost between autofix iterations.\n- `scripts/review_issue_ledger.sh` | severity=medium | confidence=4\n  PROBLEM: There is a directory-guard concern around the legacy path handling.\n  WHY: The mismatch between the workflow's cache `path` (directory-only) and the script's flexibility is the root cause of the persistence failure identified in the first issue.\n- `.github/workflows/review_autofix.yml` | severity=low | confidence=3\n  PROBLEM: Hardcoded cache path excludes legacy lidger files.\n  WHY: The suggested fix is to use a more inclusive path list covering both the directory and the legacy file location.\n- `scripts/review_commit_changes.sh` | severity=low | confidence=1\n  PROBLEM: Redundant hardcoded default path calculation.\n  WHY: Relying on an environment variable passed from the workflow or the central ledger script would reduce the risk of the detector getting out of sync.\n- `.github/workflows/review_autofix.yml` | severity=low | confidence=1\n  PROBLEM: Missing explicit directory creation for the cache target.\n  WHY: Adding `mkdir -p .ai/review_issue_ledger` would ensure the directory exists before cache/script interaction in fresh environments.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:15,582 and 16,649 | severity=medium | confidence=4\n  PROBLEM: The cache `path` is hardcoded to `.ai/review_issue_ledger`, which only covers the new per-PR ledger directory and breaks the documented legacy single-file override.\n  WHY: `REVIEW_LEDGER_PATH` respects overrides, but the cache restore/save operations ignore them and only persist `.ai/review_issue_ledger/`, so legacy override users lose cross-iteration ledger persistence.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- `.github/workflows/review_autofix.yml` (cache restore step and save step) | severity=medium | confidence=4\n  PROBLEM: When a consumer repository overrides `REVIEW_LEDGER_PATH` to the legacy single-file path, the cache only restores/saves `.ai/review_issue_ledger/`, not the sibling file.\n  WHY: The workflow caches a static directory while the scripts consume `REVIEW_LEDGER_PATH`, so the overridden ledger is not persisted between iterations.\n- `scripts/review_issue_ledger.sh` line 700 | severity=medium | confidence=4\n  PROBLEM: The script supports a configurable ledger path, but the cache path is static.\n  WHY: With `REVIEW_LEDGER_PATH=.ai/review_issue_ledger.txt`, the script writes to that file while cache operations ignore it, so state resets every run.\n- `README.md` line 988 | severity=low | confidence=2\n  PROBLEM: Consumers overriding `REVIEW_LEDGER_PATH` are not told cache persistence is disabled.\n  WHY: The documentation should note that explicit override to the legacy single-file path disables `actions/cache` persistence and causes ledger resets each iteration.\n- `.github/workflows/review_autofix.yml` | severity=low | confidence=1\n  PROBLEM: No cache hit/miss visibility is logged.\n  WHY: Adding a cache-hit log after restore would make it easier to see whether the ledger was restored or started fresh.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/review_autofix.yml | severity=medium | confidence=4\n  PROBLEM: The cache `path` is hardcoded to `.ai/review_issue_ledger`, but `REVIEW_LEDGER_PATH` determines the actual ledger location.\n  WHY: When `REVIEW_LEDGER_PATH` is overridden to the legacy single-file path or any location outside `.ai/review_issue_ledger`, the ledger is neither restored from the previous iteration nor saved for the next iteration.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "37c76e9a936571985b5f0299c42950e4eaa020da42e3a5027eba6d896f675755",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1517,
+    "run_id": "24762707087",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24762707087",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422063242_3b7426ba88",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1517,
+    "run_id": "24762707087"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T06:32:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
