@@ -123,9 +123,9 @@ ensure_implement_fixup_labels() {
 
 FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
   --jq '[.jobs[].steps[] | select(.conclusion == "failure")] | first | .name // ""' || true)"
-if [ -z "${FAILED_STEP_NAME}" ] && [ "${JOB_STATUS}" = "cancelled" ]; then
+if [ -z "${FAILED_STEP_NAME}" ] && [ "${JOB_STATUS:-}" != "success" ]; then
   FAILED_STEP_NAME="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
-    --jq '[.jobs[].steps[] | select(.conclusion == "cancelled" or .status == "in_progress")] | first | .name // ""' || true)"
+    --jq '[.jobs[].steps[] | select(.conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required" or .status == "in_progress")] | first | .name // ""' || true)"
 fi
 if [ -z "${FAILED_STEP_NAME}" ]; then
   FAILED_STEP_NAME="unknown-step"
