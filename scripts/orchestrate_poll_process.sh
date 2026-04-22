@@ -4560,7 +4560,7 @@ invoke_stall_judge() {
       | {
           author: (.user.login // ""),
           created_at: (.created_at // ""),
-          body: ((.body // "") | if length > 2000 then .[:2000] + "…[truncated]" else . end)
+          body: ((.body // "") | if length > 2000 then .[:1988] + "…[truncated]" else . end)
         }
     ] | (if length > 8 then .[-8:] else . end)
   ' 2>/dev/null || echo '[]')"
@@ -4667,6 +4667,7 @@ invoke_stall_judge() {
       --argjson recovery_count "${recovery_count:-0}" \
       --arg target_pr "${target_pr}" \
       --arg pr_state "${pr_state}" \
+      --arg pr_mergeable "${pr_mergeable}" \
       --arg head_ref "${head_ref}" \
       --arg base_ref "${base_ref}" \
       '{
@@ -4678,6 +4679,7 @@ invoke_stall_judge() {
         linked_pr: {
           number: (if $target_pr == "" then null else ($target_pr | tonumber? // null) end),
           state: (if $pr_state == "" then null else $pr_state end),
+          mergeable: (if $pr_mergeable == "" then null else ($pr_mergeable == "true") end),
           head_ref: (if $head_ref == "" then null else $head_ref end),
           base_ref: (if $base_ref == "" then null else $base_ref end)
         },
