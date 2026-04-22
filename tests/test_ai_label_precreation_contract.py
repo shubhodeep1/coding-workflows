@@ -67,6 +67,8 @@ WORKFLOW_CONTRACT = {
 		"must_contain": [
 			'set_issue_phase_label_resilient "${issue_number}" "ai:ready-to-merge" "${REPOSITORY}"',
 			'set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"',
+			re.compile(r'_delete_failed=0'),
+			re.compile(r'if\s+\[\s+"\$\{_delete_failed\}"\s+-eq\s+1\s+\];\s*then\s*\n\s*echo\s+"::warning::set_issue_phase_label_resilient: some phase-label deletions failed[^\n]*\n\s*return\s+0\s*\n\s*fi'),
 		],
 		"must_not_contain": [
 			re.compile(r'_AI_PHASE_LABELS\s*='),

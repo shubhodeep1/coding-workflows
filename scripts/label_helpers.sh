@@ -195,7 +195,8 @@ set_issue_phase_label_resilient() {
 	done
 
 	if [ "${_delete_failed}" -eq 1 ]; then
-		echo "::warning::set_issue_phase_label_resilient: some phase-label deletions failed for #${issue_number}; continuing to apply '${target_label}'." >&2
+		echo "::warning::set_issue_phase_label_resilient: some phase-label deletions failed for #${issue_number}; skipping '${target_label}' to preserve phase-label exclusivity." >&2
+		return 0
 	fi
 	if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 		-f "labels[]=${target_label}" >/dev/null 2>&1; then

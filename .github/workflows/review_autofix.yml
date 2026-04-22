@@ -2422,7 +2422,7 @@ jobs:
               local issue_number="$1"
               local target_label="$2"
               local repo="$3"
-              local _phase_label _encoded_label _del_err_file _del_err
+              local _phase_label _encoded_label _del_err_file _del_err _delete_failed=0
               local _phase_labels=(
                 "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
                 "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
@@ -2442,7 +2442,13 @@ jobs:
                 if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
                   continue
                 fi
+                _delete_failed=1
+                echo "::warning::set_issue_phase_label_resilient: failed deleting '${_phase_label}' from #${issue_number}: ${_del_err}" >&2
               done
+              if [ "${_delete_failed}" -eq 1 ]; then
+                echo "::warning::set_issue_phase_label_resilient: some phase-label deletions failed for #${issue_number}; skipping '${target_label}' to preserve phase-label exclusivity." >&2
+                return 0
+              fi
               gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 || true
             }
@@ -2453,7 +2459,7 @@ jobs:
               local issue_number="$1"
               local target_label="$2"
               local repo="$3"
-              local _phase_label _encoded_label _del_err_file _del_err
+              local _phase_label _encoded_label _del_err_file _del_err _delete_failed=0
               local _phase_labels=(
                 "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
                 "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
@@ -2475,7 +2481,13 @@ jobs:
                 if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
                   continue
                 fi
+                _delete_failed=1
+                echo "::warning::set_issue_phase_label_resilient: failed deleting '${_phase_label}' from #${issue_number}: ${_del_err}" >&2
               done
+              if [ "${_delete_failed}" -eq 1 ]; then
+                echo "::warning::set_issue_phase_label_resilient: some phase-label deletions failed for #${issue_number}; skipping '${target_label}' to preserve phase-label exclusivity." >&2
+                return 0
+              fi
               gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 || true
             }
@@ -2578,7 +2590,7 @@ jobs:
                 local issue_number="$1"
                 local target_label="$2"
                 local repo="$3"
-                local _phase_label _encoded_label _del_err_file _del_err
+                local _phase_label _encoded_label _del_err_file _del_err _delete_failed=0
                 local _phase_labels=(
                   "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
                   "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
@@ -2598,7 +2610,13 @@ jobs:
                   if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
                     continue
                   fi
+                  _delete_failed=1
+                  echo "::warning::set_issue_phase_label_resilient: failed deleting '${_phase_label}' from #${issue_number}: ${_del_err}" >&2
                 done
+                if [ "${_delete_failed}" -eq 1 ]; then
+                  echo "::warning::set_issue_phase_label_resilient: some phase-label deletions failed for #${issue_number}; skipping '${target_label}' to preserve phase-label exclusivity." >&2
+                  return 0
+                fi
                 gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                   -f "labels[]=${target_label}" >/dev/null 2>&1 || true
               }
@@ -2610,7 +2628,7 @@ jobs:
               local issue_number="$1"
               local target_label="$2"
               local repo="$3"
-              local _phase_label _encoded_label _del_err_file _del_err
+              local _phase_label _encoded_label _del_err_file _del_err _delete_failed=0
               local _phase_labels=(
                 "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
                 "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
@@ -2632,7 +2650,13 @@ jobs:
                 if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
                   continue
                 fi
+                _delete_failed=1
+                echo "::warning::set_issue_phase_label_resilient: failed deleting '${_phase_label}' from #${issue_number}: ${_del_err}" >&2
               done
+              if [ "${_delete_failed}" -eq 1 ]; then
+                echo "::warning::set_issue_phase_label_resilient: some phase-label deletions failed for #${issue_number}; skipping '${target_label}' to preserve phase-label exclusivity." >&2
+                return 0
+              fi
               gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 || true
             }
@@ -3311,7 +3335,7 @@ jobs:
               local issue_number="$1"
               local target_label="$2"
               local repo="$3"
-              local _phase_label _encoded_label _del_err_file _del_err
+              local _phase_label _encoded_label _del_err_file _del_err _delete_failed=0
               local _phase_labels=(
                 "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
                 "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
@@ -3331,7 +3355,13 @@ jobs:
                 if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
                   continue
                 fi
+                _delete_failed=1
+                echo "::warning::set_issue_phase_label_resilient: failed deleting '${_phase_label}' from #${issue_number}: ${_del_err}" >&2
               done
+              if [ "${_delete_failed}" -eq 1 ]; then
+                echo "::warning::set_issue_phase_label_resilient: some phase-label deletions failed for #${issue_number}; skipping '${target_label}' to preserve phase-label exclusivity." >&2
+                return 0
+              fi
               gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 || true
             }
@@ -3342,7 +3372,7 @@ jobs:
               local issue_number="$1"
               local target_label="$2"
               local repo="$3"
-              local _phase_label _encoded_label _del_err_file _del_err
+              local _phase_label _encoded_label _del_err_file _del_err _delete_failed=0
               local _phase_labels=(
                 "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
                 "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
@@ -3364,7 +3394,13 @@ jobs:
                 if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
                   continue
                 fi
+                _delete_failed=1
+                echo "::warning::set_issue_phase_label_resilient: failed deleting '${_phase_label}' from #${issue_number}: ${_del_err}" >&2
               done
+              if [ "${_delete_failed}" -eq 1 ]; then
+                echo "::warning::set_issue_phase_label_resilient: some phase-label deletions failed for #${issue_number}; skipping '${target_label}' to preserve phase-label exclusivity." >&2
+                return 0
+              fi
               gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 || true
             }
