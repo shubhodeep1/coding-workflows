@@ -2773,6 +2773,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CURRENT_RUN_ID: ${{ github.run_id }}
           AUTOFIX_SKIP_SELF_TRIGGERED: ${{ vars.AUTOFIX_SKIP_SELF_TRIGGERED }}
+          AUTOFIX_CONTINUATION_ENABLED: ${{ vars.AUTOFIX_CONTINUATION_ENABLED }}
+          AUTOFIX_CONTINUATION_SETTLE_SECS: ${{ vars.AUTOFIX_CONTINUATION_SETTLE_SECS }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -2795,12 +2797,55 @@ jobs:
           # the post-resolution reviewer pass runs (conflict-resolved code
           # is higher-risk than a vanilla autofix edit).
           #
+          # Autofix continuation (agents.md §20.3): when the just-pushed
+          # [ai-autofix] commit is a productive edit (DID_COMMIT=true,
+          # LEDGER_ONLY_COMMIT!=true, CONFLICT_RESOLVED!=true) and
+          # AUTOFIX_CONTINUATION_ENABLED is not `false`, the dispatch
+          # proceeds even though the gate job would suppress the parallel
+          # pull_request.synchronize event.  This closes the ~0–120 min
+          # stall window where a PR otherwise had to wait for the
+          # orchestrator stall cron before its next autofix iteration —
+          # critical for non-orchestrator PRs that the cron does not
+          # scan.  Ledger-only commits are still skipped here (the
+          # clean-review tail in the same run handles auto-merge, so no
+          # continuation is needed).  Opt out globally with
+          # AUTOFIX_CONTINUATION_ENABLED=false, which restores the
+          # pre-continuation behaviour where AUTOFIX_SKIP_SELF_TRIGGERED
+          # alone gated productive autofixes out of this step.
+          #
           # Opt-out: AUTOFIX_SKIP_SELF_TRIGGERED=false on the repo variable.
+          continuation_enabled="${AUTOFIX_CONTINUATION_ENABLED:-true}"
+          is_ledger_only_commit="${LEDGER_ONLY_COMMIT:-false}"
           if [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-true}" != "false" ] \
             && [ "${DID_COMMIT:-false}" = "true" ] \
-            && [ "${CONFLICT_RESOLVED:-false}" != "true" ]; then
-            echo "AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+            && [ "${CONFLICT_RESOLVED:-false}" != "true" ] \
+            && { [ "${continuation_enabled}" = "false" ] || [ "${is_ledger_only_commit}" = "true" ]; }; then
+            echo "AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation_enabled=${continuation_enabled} ledger_only=${is_ledger_only_commit}"
             exit 0
+          fi
+
+          # Continuation-specific pre-dispatch guards.  Only applied when
+          # the commit was a productive autofix and continuation is
+          # enabled; conflict-resolved and legacy pass-through paths
+          # retain their existing (pre-continuation) dispatch behaviour.
+          is_productive_autofix_commit="false"
+          if [ "${DID_COMMIT:-false}" = "true" ] \
+            && [ "${CONFLICT_RESOLVED:-false}" != "true" ] \
+            && [ "${is_ledger_only_commit}" != "true" ]; then
+            is_productive_autofix_commit="true"
+          fi
+          is_continuation_dispatch="false"
+          if [ "${is_productive_autofix_commit}" = "true" ] && [ "${continuation_enabled}" != "false" ]; then
+            # Settle delay: allow the push to propagate through GitHub's
+            # indices before dispatching a run that will check out the
+            # new HEAD SHA.  Tunable via
+            # AUTOFIX_CONTINUATION_SETTLE_SECS (default 10, clamped 0..60).
+            settle_secs="${AUTOFIX_CONTINUATION_SETTLE_SECS:-10}"
+            if ! [[ "${settle_secs}" =~ ^(0|[1-9][0-9]*)$ ]] || [ "${settle_secs}" -gt 60 ]; then
+              settle_secs=10
+            fi
+            sleep "${settle_secs}"
+            is_continuation_dispatch="true"
           fi
 
           # Preflight dedup: the push above fires a pull_request.synchronize
@@ -2827,7 +2872,12 @@ jobs:
             exit 0
           fi
 
-          echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+          if [ "${is_continuation_dispatch}" = "true" ]; then
+            echo "AUTOFIX_CONTINUATION_DISPATCH_ISSUED pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} settle_secs=${settle_secs} source=post_commit_retrigger"
+            echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation=true"
+          else
+            echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+          fi
 
           dispatched=false
 

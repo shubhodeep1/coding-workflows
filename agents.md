@@ -588,6 +588,47 @@ Operational rules:
 - Do **not** extend `LEDGER_ONLY_COMMIT=true` to multi-file commits that happen to include the ledger. The signal's entire meaning is "the only tracked change is bookkeeping"; a commit that also touches runtime paths represents a productive edit and the existing `DID_COMMIT=true` path correctly blocks the clean-review gates until the next verification pass.
 - If a future change introduces another always-written bookkeeping path, add it to the detector's single-path comparison as an equal-sized union (e.g. "commit contains exactly the ledger **and** the new bookkeeping file, nothing else"); do not loosen to a subset check.
 
+### 20.3 Autofix Continuation
+
+§20.1's skip is measured for the **verification** case (an `[ai-autofix]` commit whose reviewer panel would re-surface the findings already fixed in the preceding run). It is **not** correct for the **continuation** case — when the editor made a productive code edit the downstream state has genuinely changed, and a follow-up reviewer+editor pass is needed to either surface newly-introduced findings or terminate the cycle via the clean-review tail (§20.2). Pre-continuation the only path to that follow-up run was the orchestrator stall cron (`internal-orchestrate-poll.yml`, `*/30 * * * *`), which detects stalls via linked-issue phase timers. That path is unavailable for non-orchestrator PRs (branches like `claude/*` or any human-authored PR whose body does not reference an orchestrator-pipeline issue), so those PRs could remain idle indefinitely after a productive autofix commit.
+
+Contract:
+
+- `jobs.codex-agent.steps.Re-trigger review via workflow_dispatch` emits a `workflow_dispatch` for the same PR when the just-pushed commit was a **productive** autofix edit: `DID_COMMIT=true` AND `LEDGER_ONLY_COMMIT!=true` AND `CONFLICT_RESOLVED!=true`.
+- Ledger-only commits are **not** continuation candidates — the clean-review tail in the current run already marks the PR ready-to-merge and enables auto-merge (§20.2). Continuing would wastefully re-run the reviewer panel on a tree the editor has already cleared.
+- Conflict-resolved commits (`CONFLICT_RESOLVED=true`) continue to dispatch via the legacy path, unchanged from pre-continuation behaviour.
+- `workflow_dispatch` bypasses the gate job's `self_triggered_autofix` skip (§20.1) by design; the continuation is a first-class successor run, not a spurious verification pass.
+- Opt-out: set repository variable `AUTOFIX_CONTINUATION_ENABLED=false` (default `true`). This restores the pre-continuation behaviour where productive `[ai-autofix]` commits relied solely on `AUTOFIX_SKIP_SELF_TRIGGERED` and the stall cron.
+
+Pre-dispatch guard (continuation path only):
+
+- **Settle delay.** The step `sleep`s `AUTOFIX_CONTINUATION_SETTLE_SECS` seconds (default `10`, clamped `0..60`) after the push completes but before dispatch, to let GitHub's internal indices catch up — a newly-dispatched run that immediately checks out the new HEAD SHA can otherwise race the push replication. Tunable via repository variable.
+- Iteration-cap handling remains in the dispatched run's in-workflow guard (`review_autofix.yml` step `Count autofix iterations`, id `retrigger_guard`), which gates reviewers/editor and then routes exhausted runs to the `rb_judge`/review-blocked path.
+- The guard does not apply to the conflict-resolved dispatch path — that path keeps its pre-continuation timing and controls (the existing `AUTOFIX_RETRIGGER_PEER_WAIT_SECS` peer-wait still runs).
+
+Alerts:
+
+- The continuation path is **silent** — no Telegram notification is emitted. Other existing alerts in the same run (clean-review success, editor-changes-lost, review-blocked) are unaffected.
+- Stall-cron `retrigger_review` alerts (`Stall recovery: re-triggered review for PR #<n>…` in `scripts/orchestrate_poll_process.sh:4351`, and the standalone-path analogue at `:5854`) are unchanged. They continue to fire only when the stall cron's phase-timer threshold actually trips for an orchestrator-tracked issue — which should now be rare for the post-autofix case because the continuation path resolves it in the same run.
+
+Observability / log prefixes:
+
+- `AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=<n> current_run=<r> source=post_commit_retrigger continuation_enabled=<true|false> ledger_only=<true|false>` — the existing skip log, now with two additional key=value pairs so downstream analysis can distinguish: (a) continuation globally disabled, (b) ledger-only commit (clean-review handles auto-merge), (c) legacy pre-continuation opt-out via `AUTOFIX_SKIP_SELF_TRIGGERED=false`. The prefix is unchanged for backward compatibility with `scripts/analyze_workflow_logs.py`.
+- `AUTOFIX_CONTINUATION_DISPATCH_ISSUED pr=<n> current_run=<r> settle_secs=<s> source=post_commit_retrigger` — continuation proceeded to the dispatch chain after settle delay (still subject to the existing peer-dedup at `AUTOFIX_DISPATCH_SKIPPED reason=peer_inflight` / `sync_event_inflight`).
+- `AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=<n> current_run=<r> source=post_commit_retrigger continuation=true` — final dispatch confirmation for continuation-triggered runs; non-continuation paths keep the historical log without the `continuation=true` suffix.
+
+API cost audit (CLAUDE.md §15):
+
+- Settle is a `sleep`; no API calls.
+- Dispatch uses the existing `gh workflow run` call chain (direct `review_autofix.yml` → caller-workflow fallback). No new `gh api` call is added by the continuation path.
+
+Operational rules:
+
+- Renames of `AUTOFIX_CONTINUATION_ENABLED`, `AUTOFIX_CONTINUATION_SETTLE_SECS`, or the log prefixes above are breaking changes per CLAUDE.md §6. Add alongside the old name and continue emitting the old log line in parallel for at least one stable-channel cycle before removing.
+- Do not raise `AUTOFIX_CONTINUATION_SETTLE_SECS` clamp beyond `60` without re-evaluating the `timeout-minutes: 180` on `codex-agent` — a long settle on a failing dispatch loop could eat budget otherwise reserved for the editor.
+- Do not move or weaken the target run's `retrigger_guard` cap gating (`max_iterations_reached`) without preserving the terminal `rb_judge` / review-blocked path; continuation relies on that in-run guard for cap exhaustion handling.
+- Non-orchestrator PR coverage: continuation is the primary mechanism because the stall cron does not scan PRs that have no orchestrator-pipeline-labelled linked issue. When the cap is reached for such PRs the `rb_judge` step (gated by `ENABLE_REVIEW_BLOCKED_JUDGE`, default `true`, `review_autofix.yml` step `Mark linked issues review-blocked (autofix exhaustion)` at around line 2404) decides the terminal action. See README `ENABLE_REVIEW_BLOCKED_JUDGE` and the §20.3 Judge-at-cap note.
+
 ---
 
 ## FINAL REMINDER
