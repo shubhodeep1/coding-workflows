@@ -64,7 +64,7 @@ scripts/validation_lint.py
      ├─ stdout/stderr bounded-tail capture
      ├─ external-tool dependency analysis (custom_tests)
      ├─ importlib dynamic-loading guard
-     ├─ dependency_auditing sidecar rules
+     ├─ import-audit subprocess-isolation rules
      └─ ~30 encoded rules total — one test each under tests/
 
 .github/workflows/validation-refresh.yml
@@ -91,7 +91,7 @@ log capture, and the `attempt_self_heal_and_reexec` integration points.
 | `tests/00_canary.sh`                     | `CANARY_TOOLS` scoped to client-side only (`curl jq python3 pytest`); service-side CLIs go in a separate `svc_canary.sh`           |
 | `tests/11_http_smoke.sh`                 | Uses `TEST_HOST_HEADER` helper to defeat Flask `ALLOWED_HOSTS`/`Host:` checks when hitting the compose service name                |
 | `tests/20_import_audit.sh`               | Runs `_lib/import_audit.py` in subprocess isolation before service-specific assertions                                             |
-| `_lib/import_audit.py`                   | Runs dependency_auditing via `subprocess.run([sys.executable, "-c", ...])` to isolate `sys.modules` side-effects                   |
+| `_lib/import_audit.py`                   | Spawns a child Python process that probes an import allowlist via `importlib.import_module` to isolate `sys.modules` side-effects     |
 | `_lib/graceful_shutdown.py`              | Post-SIGTERM readiness polling with bounded timeout + stdout/stderr tail capture on timeout                                        |
 | `tests/90_tap_report.sh`                 | TAP-format `ok N` / `not ok N` aggregator                                                                                          |
 
@@ -123,7 +123,7 @@ Each rule from `prompts/mode-validate-generate.txt` becomes either:
 | 360–424: graceful_shutdown + post-restart readiness polling                 | `_lib/graceful_shutdown.*` + lint check that tests import it               |
 | 426–466: stdout/stderr capture with bounded tails                           | `_lib/` helper + lint check that failure paths invoke it                   |
 | 469–504: custom-test external-tool dependency analysis                      | `validation_lint.py`: every tool in `custom_tests` must appear in Dockerfile |
-| 622–756: importlib dynamic loading, dependency_auditing subprocess isolation | `_lib/import_audit.py` template invariant                                  |
+| 622–756: importlib dynamic loading, import-audit subprocess isolation       | `_lib/import_audit.py` template invariant                                  |
 | (…~22 more rules from the same prompt encoded 1:1)                          | Enumerated in `validation_lint.py` module docstring                        |
 
 Each encoded rule ships with a dedicated test under
