@@ -564,10 +564,9 @@ def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow
 	)
 
 	diagnose_script = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
-	assert "FIX_COUNT=\"$(jq -r '(.fix_issues // []) | if type == \"array\" then length else 0 end' \"${IMPLEMENT_DIAGNOSE_RESULT_FILE}\")\"" in diagnose_script, (
+	assert 'FIX_COUNT="$(jq -r \'(.fix_issues // []) | if type == "array" then length else 0 end\' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"' in diagnose_script, (
 		"needs_fixes handling must tolerate non-array fix_issues without aborting"
 	)
-
 
 def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
 	commit_block = _step_block_text("Commit changes")

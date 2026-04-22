@@ -167,6 +167,15 @@ git ls-files --others --exclude-standard > "${UNTRACKED_LIST_FILE}" || true
   else
     while IFS= read -r untracked_path; do
       [ -n "${untracked_path}" ] || continue
+      lower_untracked_path="$(printf '%s' "${untracked_path}" | tr '[:upper:]' '[:lower:]')"
+      case "${lower_untracked_path}" in
+        */.env|*/.env.*|.env|.env.*|*secret*|*token*|*password*|*credential*|*.pem|*.key|*.p12|*.pfx)
+          echo "--- ${untracked_path} ---"
+          echo "[sensitive file omitted]"
+          echo
+          continue
+          ;;
+      esac
       echo "--- ${untracked_path} ---"
       if [ -f "${untracked_path}" ]; then
         if grep -Iq . "${untracked_path}" 2>/dev/null; then
@@ -294,7 +303,6 @@ extract_last_json_with_key() {
 
   python3 - "${source_file}" "${required_key}" "${output_file}" <<'PY'
 import json
-import re
 import sys
 
 if len(sys.argv) < 4:
@@ -318,8 +326,11 @@ if trimmed:
     except json.JSONDecodeError:
         pass
 
-cleaned = re.sub(r"```(?:json)?\s*", "", raw)
-cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
+lines = raw.splitlines()
+if len(lines) >= 2 and lines[0].strip().startswith("```") and lines[-1].strip().startswith("```"):
+    cleaned = "\n".join(lines[1:-1])
+else:
+    cleaned = raw
 
 decoder = json.JSONDecoder()
 pos = 0
@@ -407,6 +418,12 @@ case "${DIAG_STATUS}" in
           ],
           harness_fixes: ""
         }' > "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"
+    fi
+
+    MAX_FIXUP_ISSUES=10
+    if [ "${FIX_COUNT}" -gt "${MAX_FIXUP_ISSUES}" ]; then
+      echo "::warning::Diagnose returned ${FIX_COUNT} fix_issues; capping to ${MAX_FIXUP_ISSUES}."
+      FIX_COUNT="${MAX_FIXUP_ISSUES}"
     fi
 
     CREATED_FIX_ISSUES_JSON='[]'
