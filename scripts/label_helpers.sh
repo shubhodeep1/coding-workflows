@@ -179,8 +179,8 @@ set_issue_phase_label_resilient() {
 	fi
 
 	cur_labels="${cur_labels:-[]}"
-	if ! new_labels="$(echo "${cur_labels}" | jq -c --argjson p "${phase_labels}" --arg t "${target_label}" \
-		'(. - $p) + [$t] | unique')"; then
+	if ! new_labels="$(jq -c --argjson p "${phase_labels}" --arg t "${target_label}" \
+		'(. - $p) + [$t] | unique' <<< "${cur_labels}")"; then
 		echo "::warning::jq label merge failed for #${issue_number} — falling back to POST add." >&2
 		if gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 			-f "labels[]=${target_label}" >/dev/null 2>&1; then
