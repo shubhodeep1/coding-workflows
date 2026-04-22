@@ -5,13 +5,27 @@
   "entry_id": "processed_command_1507_4292565404_approved",
   "issue_number": 1507,
   "metadata": {
+    "branch": "ai/issue-1507",
+    "changed_files": [
+      ".github/workflows/validation-refresh.yml",
+      "README.md",
+      "scripts/validation_refresh_runner.py",
+      "tests/test_validation_refresh_runner.py",
+      "tests/test_validation_refresh_workflow_contract.py",
+      "tests/test_workflow_checkout_integration_ref_audit.py"
+    ],
+    "issue_number": 1507,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1507",
+    "pr_number": 1509,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1509",
+    "run_attempt": "1",
+    "run_id": "24752217054",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24752217054"
   },
   "run_attempt": 1,
   "run_id": "24752217054",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-21T23:42:03Z",
+  "status": "completed",
+  "timestamp": "2026-04-22T00:01:49Z",
   "workflow": "implement"
 }
