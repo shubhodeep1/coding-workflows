@@ -14,7 +14,12 @@ validation/*
 validation/tests/*
 !validation/tests/*.sh
 validation/
-# Review pipeline runtime artifacts
+# Review pipeline runtime artifacts. Ledger is per-PR (pr-<N>.txt) and
+# persisted across autofix iterations via actions/cache in
+# review_autofix.yml — never committed to the branch.
+.ai/review_issue_ledger/
+# Kept for backward compat with older consumers that still write the
+# legacy single-file path.
 .ai/review_issue_ledger.txt
 
 # Workflow-fetched support-source checkouts (runtime-only, never committed)
