@@ -1,0 +1,136 @@
+---
+name: Validation Refresh
+
+"on":
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      repos_file:
+        description: "Path to consumer repo registry JSON"
+        required: false
+        default: ".github/ai/consumer_repos.json"
+        type: string
+      branch_name:
+        description: "Refresh branch name"
+        required: false
+        default: "ai/validation-refresh"
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: validation-refresh-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyyaml jsonschema jinja2
+
+      - name: Run validation refresh
+        id: refresh
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "ERROR: secrets.GH_PAT is required for validation-refresh cross-repository operations."
+            exit 1
+          fi
+
+          RUNTIME_DIR="${RUNNER_TEMP}/validation-refresh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${RUNTIME_DIR}"
+          SUMMARY_JSON="${RUNTIME_DIR}/summary.json"
+
+          REPOS_FILE="${{ github.event.inputs.repos_file || '.github/ai/consumer_repos.json' }}"
+          BRANCH_NAME="${{ github.event.inputs.branch_name || 'ai/validation-refresh' }}"
+
+          python3 scripts/validation_refresh_runner.py \
+            --repos-file "${REPOS_FILE}" \
+            --branch-name "${BRANCH_NAME}" \
+            --summary-json "${SUMMARY_JSON}"
+
+          echo "summary_json=${SUMMARY_JSON}" >> "${GITHUB_OUTPUT}"
+
+      - name: Summarize results
+        if: always()
+        env:
+          SUMMARY_JSON: ${{ steps.refresh.outputs.summary_json }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUMMARY_JSON:-}" ] || [ ! -f "${SUMMARY_JSON}" ]; then
+            echo "No summary JSON was produced." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          python3 - "${SUMMARY_JSON}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          summary_path = Path(sys.argv[1])
+          summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          totals = summary.get("totals", {})
+          results = summary.get("results", [])
+
+          lines = []
+          lines.append("## Validation Refresh Summary")
+          lines.append("")
+          lines.append(f"- Processed: {totals.get('processed', 0)}")
+          lines.append(f"- Green: {totals.get('green', 0)}")
+          lines.append(f"- Red: {totals.get('red', 0)}")
+          lines.append(f"- Skipped: {totals.get('skipped', 0)}")
+          lines.append(f"- Error: {totals.get('error', 0)}")
+          lines.append("")
+          for item in results:
+              repo = item.get("repository", "unknown")
+              outcome = item.get("outcome", "unknown")
+              pr_url = item.get("pr_url") or ""
+              line = f"- `{repo}`: `{outcome}`"
+              if pr_url:
+                  line += f" ([PR]({pr_url}))"
+              lines.append(line)
+
+          with open(Path.cwd() / "_validation_refresh_summary.md", "w", encoding="utf-8") as handle:
+              handle.write("\n".join(lines) + "\n")
+          PY
+
+          cat "_validation_refresh_summary.md" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Telegram failure notification
+        if: failure()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+            echo "Telegram notification skipped (missing TG_BOT_SECRET or TG_CHAT_ID)."
+            exit 0
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          printf -v TEXT '⚠️ Validation refresh failed in %s\n%s' "${{ github.repository }}" "${RUN_URL}"
+          curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+            -d "chat_id=${TG_CHAT_ID}" \
+            --data-urlencode "text=${TEXT}" \
+            > /dev/null

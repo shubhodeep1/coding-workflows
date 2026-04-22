@@ -56,6 +56,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 |---|---|---|---|---|
 | `WORKFLOW_EDITOR_MODEL` | No | `openai/gpt-5.3-codex` | clarify, plan, implement, review_autofix | Model for code editing tasks |
 | `WORKFLOW_VALIDATE_MODEL` | No | (falls back to `WORKFLOW_EDITOR_MODEL`) | validate | Model override for validation harness generation/diagnosis |
+| `VALIDATION_REFRESH_GH_PAT` | No | required for cross-repo refresh | validation-refresh | GitHub PAT used by the validation refresh workflow to clone, branch, and open PRs in consumer repositories. Must have access to every repository listed in `.github/ai/consumer_repos.json`; the workflow does not safely fall back to `github.token` for cross-repository operations. |
 | `AUTO_IMPLEMENT_ON_CLEAR_PLAN` | No | `true` | plan | Auto-trigger implementation when plan is clear |
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows, orchestrate_poll | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. Orchestrator conflict-dispatch (`_dispatch_review_for_conflicts`) forwards this value to the dispatched review workflow via `-f allow_workflow_edits=`. |
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. |
@@ -1575,6 +1576,23 @@ self-heal patches cannot be merged without explicit human action.
 - Before execution, validation runs pre-flight checks (`docker compose config`, shell syntax, and compose build path resolution).
 - Pre-flight failures are classified as terminal `harness_error` for that run.
 - The first generated test must be a canary infrastructure check (`00_canary.sh` style); infra-only canary failures shortcut to `harness_error`, while app startup/crash signals continue to diagnosis.
+
+### Validation Refresh Automation
+
+- Workflow: [`.github/workflows/validation-refresh.yml`](.github/workflows/validation-refresh.yml)
+- Triggers:
+  - Daily cron (`17 2 * * *`)
+  - Manual dispatch (`workflow_dispatch`) with optional `repos_file` and `branch_name` inputs
+- Runtime:
+  - Reads target repositories from `.github/ai/consumer_repos.json`
+  - For each target repo, clones the repo, checks out/creates `ai/validation-refresh` (or configured branch), renders validation assets from `.ai/validate.yml` using `scripts/render_validation_templates.py`, runs deterministic lint (`scripts/validation_lint.py`) and deterministic self-test (`scripts/validate_driver.sh`), and pushes refresh commits when files changed.
+- PR behavior:
+  - Green path (render/lint/self-test pass): opens/updates a non-draft PR and enables existing repo auto-merge via `gh pr merge --squash --auto`. If auto-merge enablement fails on an existing PR, the workflow preserves the PR's prior draft state instead of forcing it back to draft.
+  - Red path (any refresh stage failure with file changes): opens/updates a draft PR including diagnostics in the body.
+- Failure/no-op behavior:
+  - No `.ai/validate.yml`: repo is skipped.
+  - Pipeline failure with no file diff: records error and does not create a no-op PR.
+  - Workflow writes machine-readable summary JSON, appends a human summary to `$GITHUB_STEP_SUMMARY`, and sends Telegram failure notification (`TG_BOT_SECRET` + `TG_ADMIN_CHAT_ID`) on workflow failure.
 
 ## Repository Structure
 
