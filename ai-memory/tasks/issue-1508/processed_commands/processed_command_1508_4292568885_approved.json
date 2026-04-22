@@ -5,13 +5,28 @@
   "entry_id": "processed_command_1508_4292568885_approved",
   "issue_number": 1508,
   "metadata": {
+    "branch": "ai/issue-1508",
+    "changed_files": [
+      ".github/workflows/nightly-validation-selftest.yml",
+      "examples/validation-fixtures/node-hardhat-solidity.yml",
+      "examples/validation-fixtures/python-mongo-flask.yml",
+      "scripts/validation_selftest_matrix.py",
+      "tests/test_nightly_validation_selftest_workflow_contract.py",
+      "tests/test_validation_selftest_runner.py",
+      "tests/test_workflow_checkout_integration_ref_audit.py"
+    ],
+    "issue_number": 1508,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1508",
+    "pr_number": 1510,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1510",
+    "run_attempt": "1",
+    "run_id": "24752252359",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24752252359"
   },
   "run_attempt": 1,
   "run_id": "24752252359",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-21T23:43:16Z",
+  "status": "completed",
+  "timestamp": "2026-04-22T00:06:55Z",
   "workflow": "implement"
 }
