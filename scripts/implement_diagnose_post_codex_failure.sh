@@ -429,12 +429,11 @@ case "${DIAG_STATUS}" in
     creation_failed=0
     local_to_issue_map='{}'
     ensure_implement_fixup_labels
-
     for idx in $(seq 0 $((FIX_COUNT - 1))); do
-      FIX_ID="$(jq -r ".fix_issues[${idx}].id // \"implement-fix-$((idx + 1))\"" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
-      FIX_TITLE="$(jq -r ".fix_issues[${idx}].title // \"Implement post-Codex fix-up $((idx + 1))\"" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
-      FIX_BODY_BASE="$(jq -r ".fix_issues[${idx}].body // \"No body provided\"" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}" | sed 's/\\n/\n/g')"
-      FIX_PRIORITY="$(jq -r ".fix_issues[${idx}].priority // 5" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+      FIX_ID="$(jq -r --argjson idx "${idx}" '.fix_issues[$idx].id // ("implement-fix-" + (($idx + 1) | tostring))' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+      FIX_TITLE="$(jq -r --argjson idx "${idx}" '.fix_issues[$idx].title // ("Implement post-Codex fix-up " + (($idx + 1) | tostring))' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+      FIX_BODY_BASE="$(jq -r --argjson idx "${idx}" '.fix_issues[$idx].body // "No body provided"' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}" | sed 's/\\n/\n/g')"
+      FIX_PRIORITY="$(jq -r --argjson idx "${idx}" '.fix_issues[$idx].priority // 5' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
 
       FIX_BODY_FULL="${FIX_BODY_BASE}
 
@@ -475,11 +474,15 @@ case "${DIAG_STATUS}" in
     if [ "${creation_failed}" -ne 0 ]; then
       echo "::error::One or more fix-up issues failed to create; skipping dependency comments and summary comment."
       ensure_implementation_failed_label
+      COMMENT_BODY="$(printf '## Post-Codex validation follow-up creation failed\n\nOne or more fix-up issues could not be created.\n\nFailed step: %s\n\nRun: %s' "${FAILED_STEP_NAME}" "${RUN_URL}")"
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+        -f body="${COMMENT_BODY}" >/dev/null || true
       exit 1
     fi
 
+
     for idx in $(seq 0 $((FIX_COUNT - 1))); do
-      FIX_ID="$(jq -r ".fix_issues[${idx}].id // \"implement-fix-$((idx + 1))\"" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+      FIX_ID="$(jq -r --argjson idx "${idx}" '.fix_issues[$idx].id // ("implement-fix-" + (($idx + 1) | tostring))' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
       FIX_NUM="$(echo "${local_to_issue_map}" | jq -r --arg id "${FIX_ID}" '.[$id] // empty')"
       [ -n "${FIX_NUM}" ] || continue
 
@@ -490,7 +493,7 @@ case "${DIAG_STATUS}" in
         if [ -n "${DEP_NUM}" ]; then
           DEP_SUMMARY+="- #${DEP_NUM} (from ${dep_id})"$'\n'
         fi
-      done < <(jq -r ".fix_issues[${idx}].depends_on[]?" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")
+      done < <(jq -r --argjson idx "${idx}" '.fix_issues[$idx].depends_on[]?' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")
 
       if [ -n "${DEP_SUMMARY}" ]; then
         DEP_BODY="$(printf '## Dependency Notes\n\nThis fix-up should be applied after:\n%s' "${DEP_SUMMARY}")"
