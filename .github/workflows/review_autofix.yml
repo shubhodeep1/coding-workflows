@@ -2462,7 +2462,9 @@ jobs:
           if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
             :
           else
-            if [ -f .codex-workflow-src/scripts/label_helpers.sh ] \
+            if [ -f "scripts/label_helpers.sh" ] && source "scripts/label_helpers.sh" 2>/dev/null; then
+              :
+            elif [ -f .codex-workflow-src/scripts/label_helpers.sh ] \
               && mkdir -p "${SUPPORT_SCRIPTS_DIR}" \
               && install -m 0755 .codex-workflow-src/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" \
               && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
