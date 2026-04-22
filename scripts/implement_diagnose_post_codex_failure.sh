@@ -427,6 +427,7 @@ case "${DIAG_STATUS}" in
     fi
 
     CREATED_FIX_ISSUES_JSON='[]'
+    creation_failed=0
     local_to_issue_map='{}'
     ensure_implement_fixup_labels
 
@@ -462,13 +463,21 @@ case "${DIAG_STATUS}" in
           local_to_issue_map="$(echo "${local_to_issue_map}" | jq --arg id "${FIX_ID}" --argjson num "${FIX_NUM}" '. + {($id): $num}')"
         else
           echo "::warning::Could not parse issue number from gh issue create output for local id ${FIX_ID}: ${FIX_URL}" >&2
+          creation_failed=1
         fi
       else
         CREATE_ERR_MSG="$(cat "${CREATE_ERR_FILE}" 2>/dev/null || true)"
         echo "::warning::Failed to create fix-up issue for local id ${FIX_ID}. ${CREATE_ERR_MSG}"
+        creation_failed=1
       fi
       rm -f "${CREATE_ERR_FILE}"
     done
+
+    if [ "${creation_failed}" -ne 0 ]; then
+      echo "::error::One or more fix-up issues failed to create; skipping dependency comments and summary comment."
+      ensure_implementation_failed_label
+      exit 1
+    fi
 
     for idx in $(seq 0 $((FIX_COUNT - 1))); do
       FIX_ID="$(jq -r ".fix_issues[${idx}].id // \"implement-fix-$((idx + 1))\"" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
