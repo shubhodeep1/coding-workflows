@@ -2339,49 +2339,49 @@ jobs:
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
-            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
+          # Fetched helper artifacts can be removed in caller repos during
+          # commit cleanup; recover from local clones when available.
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
+            :
+          elif [ -f "scripts/label_helpers.sh" ] && source "scripts/label_helpers.sh" 2>/dev/null; then
+            :
+          elif [ -f .codex-workflow-src/scripts/label_helpers.sh ] \
+            && mkdir -p "${SUPPORT_SCRIPTS_DIR}" \
+            && install -m 0755 .codex-workflow-src/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" \
+            && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
+            :
+          elif [ -f .codex-workflow-src-main/scripts/label_helpers.sh ] \
+            && mkdir -p "${SUPPORT_SCRIPTS_DIR}" \
+            && install -m 0755 .codex-workflow-src-main/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" \
+            && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
+            :
           else
-            # Fetched helper artifacts can be removed in caller repos during
-            # commit cleanup; recover from local clones when available.
-            if [ -f "scripts/label_helpers.sh" ]; then
-              source "scripts/label_helpers.sh"
-            elif [ -f .codex-workflow-src/scripts/label_helpers.sh ]; then
-              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              install -m 0755 .codex-workflow-src/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
-              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
-            elif [ -f .codex-workflow-src-main/scripts/label_helpers.sh ]; then
-              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              install -m 0755 .codex-workflow-src-main/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
-              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
-            else
-              ensure_label_exists() {
-                local label_name="$1"
-                local repo="$2"
-                case "${label_name}" in
-                  ai:ready-to-merge)
-                    gh_retry gh label create "${label_name}" --repo "${repo}" --color "0e8a16" --description "PR review complete and ready to merge" 2>/dev/null || true
-                    ;;
-                  ai:closed)
-                    gh_retry gh label create "${label_name}" --repo "${repo}" --color "6a737d" --description "Linked PR closed without merge" 2>/dev/null || true
-                    ;;
-                  *)
-                    gh_retry gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
-                    ;;
-                esac
-              }
-              set_issue_phase_label_resilient() {
-                local issue_number="$1"
-                local target_label="$2"
-                local repo="$3"
-                echo "::warning::set_issue_phase_label_resilient helper unavailable; using POST add fallback for #${issue_number}."
-                if gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" -f "labels[]=${target_label}" >/dev/null 2>&1; then
-                  return 0
-                fi
-                echo "::warning::POST fallback also failed for #${issue_number}."
-                return 1
-              }
-            fi
+            ensure_label_exists() {
+              local label_name="$1"
+              local repo="$2"
+              case "${label_name}" in
+                ai:ready-to-merge)
+                  gh_retry gh label create "${label_name}" --repo "${repo}" --color "0e8a16" --description "PR review complete and ready to merge" 2>/dev/null || true
+                  ;;
+                ai:closed)
+                  gh_retry gh label create "${label_name}" --repo "${repo}" --color "6a737d" --description "Linked PR closed without merge" 2>/dev/null || true
+                  ;;
+                *)
+                  gh_retry gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
+                  ;;
+              esac
+            }
+            set_issue_phase_label_resilient() {
+              local issue_number="$1"
+              local target_label="$2"
+              local repo="$3"
+              echo "::warning::set_issue_phase_label_resilient helper unavailable; using POST add fallback for #${issue_number}."
+              if gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" -f "labels[]=${target_label}" >/dev/null 2>&1; then
+                return 0
+              fi
+              echo "::warning::POST fallback also failed for #${issue_number}."
+              return 1
+            }
           fi
 
           ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
@@ -2467,8 +2467,8 @@ jobs:
                     gh_retry gh label create "${label_name}" --repo "${repo}" --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" 2>/dev/null || true
                     ;;
                   *)
-                  gh_retry gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
-                  ;;
+                    gh_retry gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
+                    ;;
                 esac
               }
               set_issue_phase_label_resilient() {
