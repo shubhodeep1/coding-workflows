@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- `git rev-parse HEAD`: `0098891da151fd1927030faea172921abef272ae`\n- Checked-out branch: `orchestrator/project-1479`\n- Integration metadata branch: `orchestrator/project-1479`\n- Mismatch: `false` (planning can proceed)\n\nClarification mapping:\n- No `Q<ID>` clarifications were asked in this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with the issue-defined scope as-is.\u201d\n\nConflicts detected:\n- `review_autofix.yml` currently has an explicit failure-path comment to avoid sourcing `label_helpers.sh` if support scripts were not fetched, but this issue requires shared helper usage in that same path. Plan: use shared helper when available, with fail-open fallback behavior to preserve runtime safety.\n- Requested regression tests (`test_label_helpers_phase_transition_contract.py`, `test_issue_pr_status_payload_fallback_contract.py`) do not currently exist.\n\nImplementation plan:\n\n1. Files likely to change\n- `scripts/label_helpers.sh`\n- `.github/workflows/issue_pr_status.yml`\n- `.github/workflows/review_autofix.yml`\n- `tests/test_label_helpers_phase_transition_contract.py` (new)\n- `tests/test_issue_pr_status_payload_fallback_contract.py` (new)\n- One review-autofix contract test file (new or update existing, likely new for isolation)\n- `.github/workflows/ci.yml` (to run new tests)\n\n2. Functions/modules to implement\n- Add `set_issue_phase_label_resilient` in `scripts/label_helpers.sh` with signature like `set_issue_phase_label_resilient <issue_number> <target_label> [repo]`.\n- Preserve `ensure_label_exists` semantics unchanged.\n- In `issue_pr_status.yml` replace inline `_AI_PHASE_LABELS` GET/PUT/POST mutation loop with calls to `set_issue_phase_label_resilient`.\n- In `review_autofix.yml` replace the three duplicated inline phase-transition blocks with `set_issue_phase_label_resilient` calls in:\n  - `Mark linked issues ready to merge`\n  - `Mark linked issues review-blocked (autofix exhaustion)`\n  - `Mark linked issues review-blocked (workflow failure)`\n\n3. Data structures affected\n- Shared phase-label set (JSON/list inside `label_helpers.sh`) used for exclusivity filtering.\n- Existing workflow vars reused for fallback parsing:\n  - `issue_pr_status.yml`: event payload `PR_TITLE`/`PR_BODY` added to env and consumed before GH pull fetch.\n  - `review_autofix.yml`: `PR_META_FILE` title/body consumed before GH pull fetch fallback.\n- Existing `LINKED_ISSUES_JSON` remains first source in review_autofix.\n\n4. API/interface changes\n- New shared shell helper API: `set_issue_phase_label_resilient`.\n- No breaking renames/removals of existing labels/env vars/steps.\n- API hygiene change: fallback parsing order becomes:\n  - linked issues GraphQL/cache \u2192 local payload/meta text (`PR_TITLE`/`PR_BODY` or `PR_META_FILE`) \u2192 `gh api repos/.../pulls/...` only if local text is empty.\n- No new redundant `gh api` calls; expected reduction in fallback pull fetches.\n\n5. Potential risks/edge cases\n- Failure-path helper availability in `review_autofix.yml` when support scripts are absent; must stay fail-open and not block labeling.\n- Regex issue extraction can over/under-match unusual PR text; keep existing pattern behavior to avoid regressions.\n- Label mutation API failures (GET/PUT/POST) and 404-like responses must not fail the workflow; warn and continue.\n- Ensure exclusivity removes only intended phase labels (avoid accidental removal of non-phase labels).\n\n6. Testing considerations\n- `tests/test_label_helpers_phase_transition_contract.py`:\n  - assert helper exists and uses resilient GET/PUT + POST fallback flow;\n  - assert no legacy fragile remove-label pattern is introduced;\n  - assert `ensure_label_exists` contract remains intact.\n- `tests/test_issue_pr_status_payload_fallback_contract.py`:\n  - assert payload-first fallback (`PR_TITLE`/`PR_BODY`) is present;\n  - assert GH pull fetch is only conditional fallback;\n  - assert workflow calls `set_issue_phase_label_resilient` and no inline `_AI_PHASE_LABELS` block remains there.\n- Review-autofix contract test (new or updated):\n  - assert all 3 targeted steps call `set_issue_phase_label_resilient`;\n  - assert targeted steps no longer define inline `_AI_PHASE_LABELS` mutation blocks;\n  - assert `PR_META_FILE` is used before fallback pull fetch.\n- Update `ci.yml` to execute the new tests explicitly in the existing Python test section.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ad6f207930c0a2efcd249294607d39b773770f37ec271b8558501cf31da7d6c9",
+  "lineage": {
+    "issue_number": 1525,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "24807757232",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24807757232",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1525"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260422232608_fdaa3e0114",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1525,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "24807757232"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1525",
+  "timestamps": {
+    "created_at": "2026-04-22T23:26:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
