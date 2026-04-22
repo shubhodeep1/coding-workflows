@@ -2422,7 +2422,27 @@ jobs:
               local issue_number="$1"
               local target_label="$2"
               local repo="$3"
+              local _phase_label _encoded_label _del_err_file _del_err
+              local _phase_labels=(
+                "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
+                "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
+              )
               ensure_label_exists "${target_label}" "${repo}" || true
+              for _phase_label in "${_phase_labels[@]}"; do
+                [ "${_phase_label}" = "${target_label}" ] && continue
+                _encoded_label="${_phase_label//:/%3A}"
+                _del_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+                if gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${_encoded_label}" \
+                  >/dev/null 2>"${_del_err_file}"; then
+                  [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                  continue
+                fi
+                _del_err="$(cat "${_del_err_file}" 2>/dev/null || true)"
+                [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
+                  continue
+                fi
+              done
               gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 || true
             }
@@ -2433,9 +2453,29 @@ jobs:
               local issue_number="$1"
               local target_label="$2"
               local repo="$3"
+              local _phase_label _encoded_label _del_err_file _del_err
+              local _phase_labels=(
+                "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
+                "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
+              )
               if type ensure_label_exists >/dev/null 2>&1; then
                 ensure_label_exists "${target_label}" "${repo}" || true
               fi
+              for _phase_label in "${_phase_labels[@]}"; do
+                [ "${_phase_label}" = "${target_label}" ] && continue
+                _encoded_label="${_phase_label//:/%3A}"
+                _del_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+                if gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${_encoded_label}" \
+                  >/dev/null 2>"${_del_err_file}"; then
+                  [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                  continue
+                fi
+                _del_err="$(cat "${_del_err_file}" 2>/dev/null || true)"
+                [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
+                  continue
+                fi
+              done
               gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 || true
             }
@@ -2538,7 +2578,27 @@ jobs:
                 local issue_number="$1"
                 local target_label="$2"
                 local repo="$3"
+                local _phase_label _encoded_label _del_err_file _del_err
+                local _phase_labels=(
+                  "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
+                  "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
+                )
                 ensure_label_exists "${target_label}" "${repo}" || true
+                for _phase_label in "${_phase_labels[@]}"; do
+                  [ "${_phase_label}" = "${target_label}" ] && continue
+                  _encoded_label="${_phase_label//:/%3A}"
+                  _del_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+                  if gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${_encoded_label}" \
+                    >/dev/null 2>"${_del_err_file}"; then
+                    [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                    continue
+                  fi
+                  _del_err="$(cat "${_del_err_file}" 2>/dev/null || true)"
+                  [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                  if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
+                    continue
+                  fi
+                done
                 gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                   -f "labels[]=${target_label}" >/dev/null 2>&1 || true
               }
@@ -2550,9 +2610,29 @@ jobs:
               local issue_number="$1"
               local target_label="$2"
               local repo="$3"
+              local _phase_label _encoded_label _del_err_file _del_err
+              local _phase_labels=(
+                "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
+                "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
+              )
               if type ensure_label_exists >/dev/null 2>&1; then
                 ensure_label_exists "${target_label}" "${repo}" || true
               fi
+              for _phase_label in "${_phase_labels[@]}"; do
+                [ "${_phase_label}" = "${target_label}" ] && continue
+                _encoded_label="${_phase_label//:/%3A}"
+                _del_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+                if gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${_encoded_label}" \
+                  >/dev/null 2>"${_del_err_file}"; then
+                  [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                  continue
+                fi
+                _del_err="$(cat "${_del_err_file}" 2>/dev/null || true)"
+                [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
+                  continue
+                fi
+              done
               gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 || true
             }
@@ -3231,7 +3311,27 @@ jobs:
               local issue_number="$1"
               local target_label="$2"
               local repo="$3"
+              local _phase_label _encoded_label _del_err_file _del_err
+              local _phase_labels=(
+                "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
+                "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
+              )
               ensure_label_exists "${target_label}" "${repo}" || true
+              for _phase_label in "${_phase_labels[@]}"; do
+                [ "${_phase_label}" = "${target_label}" ] && continue
+                _encoded_label="${_phase_label//:/%3A}"
+                _del_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+                if gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${_encoded_label}" \
+                  >/dev/null 2>"${_del_err_file}"; then
+                  [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                  continue
+                fi
+                _del_err="$(cat "${_del_err_file}" 2>/dev/null || true)"
+                [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
+                  continue
+                fi
+              done
               gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 || true
             }
@@ -3242,9 +3342,29 @@ jobs:
               local issue_number="$1"
               local target_label="$2"
               local repo="$3"
+              local _phase_label _encoded_label _del_err_file _del_err
+              local _phase_labels=(
+                "ai:done" "ai:implementing" "ai:awaiting-approval" "ai:planning" "ai:clarification"
+                "ai:ready-to-merge" "ai:review-blocked" "ai:implementation-failed" "ai:merged" "ai:closed"
+              )
               if type ensure_label_exists >/dev/null 2>&1; then
                 ensure_label_exists "${target_label}" "${repo}" || true
               fi
+              for _phase_label in "${_phase_labels[@]}"; do
+                [ "${_phase_label}" = "${target_label}" ] && continue
+                _encoded_label="${_phase_label//:/%3A}"
+                _del_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+                if gh_retry gh api -X DELETE "repos/${repo}/issues/${issue_number}/labels/${_encoded_label}" \
+                  >/dev/null 2>"${_del_err_file}"; then
+                  [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                  continue
+                fi
+                _del_err="$(cat "${_del_err_file}" 2>/dev/null || true)"
+                [ "${_del_err_file}" = "/dev/null" ] || rm -f "${_del_err_file}"
+                if printf '%s' "${_del_err}" | grep -Eiq '404|not[[:space:]-]*found|does[[:space:]-]*not[[:space:]-]*exist|unprocessable'; then
+                  continue
+                fi
+              done
               gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
                 -f "labels[]=${target_label}" >/dev/null 2>&1 || true
             }
