@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import shutil
 import subprocess
 import sys
@@ -84,7 +85,7 @@ def _discover_fixtures(fixtures_root: Path) -> list[Path]:
 def _write_command_log(log_path: Path, command: list[str], cwd: Path, result: subprocess.CompletedProcess[str], duration: float) -> None:
 	log_path.parent.mkdir(parents=True, exist_ok=True)
 	payload = [
-		f"command: {' '.join(command)}",
+		f"command: {shlex.join(command)}",
 		f"cwd: {cwd.as_posix()}",
 		f"exit_code: {result.returncode}",
 		f"duration_seconds: {duration:.3f}",
@@ -202,7 +203,7 @@ def _stage_sanity(repo_root: Path, output_root: Path, fixture_log_dir: Path, ski
 		log_sections.extend(
 			[
 				f"check: bash_syntax:{_repo_rel(shell_file, repo_root)}",
-				f"command: {' '.join(command)}",
+				f"command: {shlex.join(command)}",
 				f"exit_code: {exit_code}",
 				f"duration_seconds: {duration:.3f}",
 				"--- stdout ---",
@@ -230,7 +231,7 @@ def _stage_sanity(repo_root: Path, output_root: Path, fixture_log_dir: Path, ski
 		log_sections.extend(
 			[
 				f"check: python_compile:{_repo_rel(python_file, repo_root)}",
-				f"command: {' '.join(command)}",
+				f"command: {shlex.join(command)}",
 				f"exit_code: {exit_code}",
 				f"duration_seconds: {duration:.3f}",
 				"--- stdout ---",
@@ -268,7 +269,7 @@ def _stage_sanity(repo_root: Path, output_root: Path, fixture_log_dir: Path, ski
 		log_sections.extend(
 			[
 				"check: docker_compose_config",
-				f"command: {' '.join(command)}",
+				f"command: {shlex.join(command)}",
 				f"exit_code: {exit_code}",
 				f"duration_seconds: {duration:.3f}",
 				"--- stdout ---",
@@ -300,7 +301,7 @@ def _stage_sanity(repo_root: Path, output_root: Path, fixture_log_dir: Path, ski
 
 
 def _run_fixture(repo_root: Path, manifest_path: Path, logs_root: Path, skip_compose_config: bool) -> dict[str, Any]:
-	fixture_name = manifest_path.stem
+	fixture_name = manifest_path.name
 	fixture_log_dir = logs_root / fixture_name
 	output_root = fixture_log_dir / "rendered"
 	if output_root.exists():
@@ -359,7 +360,7 @@ def _build_summary(repo_root: Path, fixture_results: list[dict[str, Any]]) -> di
 			"failed": len(failed),
 		},
 		"fixtures": fixture_results,
-		"repo_root": repo_root.resolve().as_posix(),
+		"repo_root": _repo_rel(repo_root, repo_root),
 	}
 
 
@@ -385,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
 				"failed": 0,
 			},
 			"fixtures": [],
-			"repo_root": repo_root.resolve().as_posix(),
+			"repo_root": _repo_rel(repo_root, repo_root),
 			"error": f"No fixture manifests found in {fixtures_root.as_posix()}",
 		}
 		summary_path.parent.mkdir(parents=True, exist_ok=True)

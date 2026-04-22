@@ -116,11 +116,12 @@ def test_runner_passes_both_supported_family_fixtures() -> None:
 
 		summary = _load_summary(summary_path)
 		assert summary["schema_version"] == "1"
+		assert summary["repo_root"] == "."
 		assert summary["overall_status"] == "pass"
 		assert summary["totals"] == {"fixtures": 2, "passed": 2, "failed": 0}
 		assert len(summary["fixtures"]) == 2
 		fixture_names = sorted(item["name"] for item in summary["fixtures"])
-		assert fixture_names == ["node-hardhat-solidity", "python-mongo-flask"]
+		assert fixture_names == ["node-hardhat-solidity.yml", "python-mongo-flask.yml"]
 
 		for fixture in summary["fixtures"]:
 			assert fixture["status"] == "pass"
@@ -152,13 +153,14 @@ def test_runner_surfaces_fixture_stage_failure_in_summary() -> None:
 		assert summary_path.exists()
 
 		summary = _load_summary(summary_path)
+		assert summary["repo_root"] == "."
 		assert summary["overall_status"] == "fail"
 		assert summary["totals"]["fixtures"] == 2
 		assert summary["totals"]["failed"] == 1
 		failed = [fixture for fixture in summary["fixtures"] if fixture["status"] == "fail"]
 		assert len(failed) == 1
 		failed_fixture = failed[0]
-		assert failed_fixture["name"] == "broken-node"
+		assert failed_fixture["name"] == "broken-node.yml"
 		assert failed_fixture["stages"]["render"]["status"] == "fail"
 		assert failed_fixture["stages"]["lint"]["status"] == "skipped"
 		assert failed_fixture["stages"]["sanity"]["status"] == "skipped"
@@ -179,6 +181,7 @@ def test_runner_fails_when_no_fixture_manifests_discovered() -> None:
 		assert summary_path.exists()
 
 		summary = _load_summary(summary_path)
+		assert summary["repo_root"] == "."
 		assert summary["overall_status"] == "fail"
 		assert summary["totals"] == {"fixtures": 0, "passed": 0, "failed": 0}
 		assert summary["fixtures"] == []

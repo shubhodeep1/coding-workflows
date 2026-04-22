@@ -20,10 +20,15 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Install self-test dependencies
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check --quiet pyyaml jsonschema jinja2
+          python3 -m pip install --user --disable-pip-version-check --quiet pyyaml jsonschema jinja2
 
       - name: Run validation self-test matrix
         id: selftest
