@@ -128,6 +128,7 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
 			text=True,
 			capture_output=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
 		)
 		assert lint_result.returncode == 0, f"lint failed: {lint_result.stdout}\n{lint_result.stderr}"
 
@@ -327,6 +328,7 @@ def test_renderer_family_dispatch_routing() -> None:
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
 			text=True,
 			capture_output=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
 		)
 		assert lint_result.returncode == 0, f"lint failed: {lint_result.stdout}\n{lint_result.stderr}"
 

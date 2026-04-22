@@ -134,6 +134,13 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_nightly_validation_selftest_workflow_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
 
+      - name: Validation lint rule unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_lint_canary_ordering.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_lint_healthcheck_test_strings.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_lint_test_script_prologue.py
+
       - name: Validate process cross-cycle escalation unit tests
         run: |
           set -euo pipefail
