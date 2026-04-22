@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2754-2790 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v3_2, google_gemini-3-flash-preview, minimax_minimax-m2_5, moonshotai_kimi-k2_5, stepfun_step-3_5-flash]\n  PROBLEM: `sleep \"${settle_secs}\"` runs before the peer-dedup check, so continuation runs can wait unnecessarily even when an in-flight peer already exists.\n  WHY: All five reviewers identified the same ordering issue; it does not break correctness, but it wastes runner time when the later peer check would have exited anyway.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v3_2 ===\n- .github/workflows/review_autofix.yml:2754-2790 | severity=low | confidence=4\n  PROBLEM: Continuation-specific settle delay (`sleep \"${settle_secs}\"`) runs before the peer-dedup check, causing unnecessary wait when a peer run is already in flight\n  WHY: When `is_continuation_dispatch=\"true\"`, the workflow sleeps for settle delay (default 10s) then peer-wait (default 8s) before checking for in-flight peers via `autofix_retrigger_has_inflight_peer`; if a peer already exists, the workflow wastes up to 18 seconds of runner time before discovering it and exiting.\n=== END FINDINGS FROM deepseek_deepseek-v3_2 ===\n\n=== FINDINGS FROM google_gemini-3-flash-preview ===\n- .github/workflows/review_autofix.yml:2754-2789 | severity=low | confidence=5\n  PROBLEM: `sleep \"${settle_secs}\"` is executed before the peer-dedup check.\n  WHY: When a `pull_request.synchronize` event and a `workflow_dispatch` retrigger occur simultaneously, the `autofix_retrigger_has_inflight_peer` check is designed to skip the dispatch, but the runner still waits for the full 10-60 seconds before determining that a peer is already running and exiting.\n=== END FINDINGS FROM google_gemini-3-flash-preview ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:~27,754-27,789 | severity=low | confidence=4\n  PROBLEM: The continuation-specific settle delay (`sleep \"${settle_secs}\"`) runs BEFORE the peer-dedup check (`autofix_retrigger_has_inflight_peer`).\n  WHY: If an in-flight peer run already exists from the prior `synchronize` event, the workflow still waits the full settle period before exiting; this is an efficiency issue, not a correctness bug.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- `.github/workflows/review_autofix.yml`:2754-2789 region | severity=low | confidence=4\n  PROBLEM: The `sleep \"${settle_secs}\"` (settle delay) runs BEFORE the peer-dedup check, so when an in-flight peer already exists the workflow still waits the full settle period before detecting it and exiting.\n  WHY: The current code waits for settle delay, then peer wait, then checks for an in-flight peer; this wastes about 10s (configurable up to 60s) of runner time when a parallel run already exists, but does not affect correctness.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM stepfun_step-3_5-flash ===\n- .github/workflows/review_autofix.yml:2756-2763,2784-2799 | severity=low | confidence=5\n  PROBLEM: Continuation settle delay executes before peer-dedup check, causing unnecessary runner wait when an in-flight peer will cause the dispatch to be skipped.\n  WHY: The `sleep \"${settle_secs}\"` is inside the continuation flag block and happens before `autofix_retrigger_has_inflight_peer`; the peer check should occur first so the settle delay is only paid when dispatch will proceed.\n=== END FINDINGS FROM stepfun_step-3_5-flash ===",
+  "fingerprint": "1e67275b9c99f7dc30851cc0faefd1dac2f8f24ff6cc92ab03d088dfe4491abe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1510,
+    "run_id": "24764791222",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "24764791222",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260422071633_74680b3950",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1510,
+    "run_id": "24764791222"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-04-22T07:16:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
