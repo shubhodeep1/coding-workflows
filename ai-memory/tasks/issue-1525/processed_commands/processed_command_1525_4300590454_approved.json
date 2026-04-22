@@ -5,13 +5,28 @@
   "entry_id": "processed_command_1525_4300590454_approved",
   "issue_number": 1525,
   "metadata": {
+    "branch": "ai/issue-1525",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/issue_pr_status.yml",
+      ".github/workflows/review_autofix.yml",
+      "scripts/label_helpers.sh",
+      "tests/test_issue_pr_status_payload_fallback_contract.py",
+      "tests/test_label_helpers_phase_transition_contract.py",
+      "tests/test_review_autofix_phase_transition_contract.py"
+    ],
+    "issue_number": 1525,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/1525",
+    "pr_number": 1526,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/1526",
+    "run_attempt": "1",
+    "run_id": "24807909039",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/24807909039"
   },
   "run_attempt": 1,
   "run_id": "24807909039",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-04-22T23:27:11Z",
+  "status": "completed",
+  "timestamp": "2026-04-22T23:40:29Z",
   "workflow": "implement"
 }
