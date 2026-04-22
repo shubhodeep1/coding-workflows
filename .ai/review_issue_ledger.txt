@@ -725,7 +725,7 @@ EDITOR_OUTCOMES:
 === END ENTRY ===
 
 === ENTRY iss_a98d382fbec0ff8c ===
-FILE: .github/workflows/review_autofix..yml
+FILE: .github/workflows/review_autofix.yml
 LINES: 17
 LENS: UNKNOWN_LENS
 SEVERITY: low
