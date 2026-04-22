@@ -1581,6 +1581,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
+            .ai/review_issue_ledger/
             ${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
@@ -1649,6 +1650,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
+            .ai/review_issue_ledger/
             ${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
