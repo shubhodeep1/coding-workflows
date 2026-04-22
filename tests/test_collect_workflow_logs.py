@@ -539,6 +539,42 @@ def test_fetch_run_log_archive_classifies_missing_archive_soft_fail():
 	assert call_retries == [1]
 
 
+def test_fetch_run_log_archive_classifies_410_missing_archive_soft_fail():
+	orig_gh_api_bytes = collector.gh_api_bytes
+	call_retries: list[int] = []
+	cache: dict[tuple[str, int], bytes | Exception] = {}
+
+	def fake_gh_api_bytes(
+		endpoint: str,
+		*,
+		token: str,
+		retries: int = 3,
+		backoff_seconds: float = 1.0,
+	) -> bytes:
+		_ = backoff_seconds
+		assert endpoint == "repos/owner/repo/actions/runs/410/logs"
+		assert token == "token"
+		call_retries.append(retries)
+		raise RuntimeError(
+			"gh api failed for repos/owner/repo/actions/runs/410/logs (exit=1): HTTP 410 Gone"
+		)
+
+	collector.gh_api_bytes = fake_gh_api_bytes
+	try:
+		try:
+			collector._fetch_run_log_archive("owner/repo", 410, token="token", cache=cache)
+			raise AssertionError("expected missing-archive soft-fail")
+		except Exception as exc:  # noqa: BLE001
+			message = str(exc)
+			assert message.startswith("partial_data:missing_log_archive ")
+			assert "repository=owner/repo" in message
+			assert "run_id=410" in message
+	finally:
+		collector.gh_api_bytes = orig_gh_api_bytes
+
+	assert call_retries == [1]
+
+
 def test_fetch_run_log_archive_retry_exhaustion_raises_last_error():
 	orig_gh_api_bytes = collector.gh_api_bytes
 	orig_sleep = collector.time.sleep
@@ -618,6 +654,76 @@ def test_fetch_run_log_archive_non_retryable_failure_path():
 	cached_error = cache[("owner/repo", 411)]
 	assert isinstance(cached_error, Exception)
 	assert "400 Bad Request" in str(cached_error)
+
+
+def test_fetch_run_log_archive_empty_payload_classifies_missing_archive_soft_fail():
+	orig_gh_api_bytes = collector.gh_api_bytes
+	call_retries: list[int] = []
+	cache: dict[tuple[str, int], bytes | Exception] = {}
+
+	def fake_gh_api_bytes(
+		endpoint: str,
+		*,
+		token: str,
+		retries: int = 3,
+		backoff_seconds: float = 1.0,
+	) -> bytes:
+		_ = backoff_seconds
+		assert endpoint == "repos/owner/repo/actions/runs/413/logs"
+		assert token == "token"
+		call_retries.append(retries)
+		return b""
+
+	collector.gh_api_bytes = fake_gh_api_bytes
+	try:
+		try:
+			collector._fetch_run_log_archive("owner/repo", 413, token="token", cache=cache)
+			raise AssertionError("expected missing-archive soft-fail")
+		except Exception as exc:  # noqa: BLE001
+			message = str(exc)
+			assert message.startswith("partial_data:missing_log_archive ")
+			assert "repository=owner/repo" in message
+			assert "run_id=413" in message
+			assert "detail=empty_log_archive_payload" in message
+	finally:
+		collector.gh_api_bytes = orig_gh_api_bytes
+
+	assert call_retries == [1]
+	cached_error = cache[("owner/repo", 413)]
+	assert isinstance(cached_error, Exception)
+	assert str(cached_error).startswith("partial_data:missing_log_archive ")
+
+
+def test_fetch_run_log_archive_sanitizes_missing_archive_detail_field():
+	orig_gh_api_bytes = collector.gh_api_bytes
+	cache: dict[tuple[str, int], bytes | Exception] = {}
+
+	def fake_gh_api_bytes(
+		endpoint: str,
+		*,
+		token: str,
+		retries: int = 3,
+		backoff_seconds: float = 1.0,
+	) -> bytes:
+		_ = token, retries, backoff_seconds
+		assert endpoint == "repos/owner/repo/actions/runs/414/logs"
+		raise RuntimeError(
+			"gh api failed for repos/owner/repo/actions/runs/414/logs (exit=1): HTTP 404 Not Found detail=raw"
+		)
+
+	collector.gh_api_bytes = fake_gh_api_bytes
+	try:
+		try:
+			collector._fetch_run_log_archive("owner/repo", 414, token="token", cache=cache)
+			raise AssertionError("expected missing-archive soft-fail")
+		except Exception as exc:  # noqa: BLE001
+			message = str(exc)
+			assert message.startswith("partial_data:missing_log_archive ")
+			assert "run_id=414" in message
+			detail_part = message.split("detail=", 1)[1]
+			assert "=" not in detail_part
+	finally:
+		collector.gh_api_bytes = orig_gh_api_bytes
 
 
 def test_select_notable_runs_success_sampling():
