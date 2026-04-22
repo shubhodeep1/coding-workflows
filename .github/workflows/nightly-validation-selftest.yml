@@ -1,0 +1,113 @@
+---
+name: Nightly Validation Self-Test
+
+"on":
+  schedule:
+    - cron: "15 2 * * *"
+  workflow_dispatch:
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  validation-selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install self-test dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --disable-pip-version-check --quiet pyyaml jsonschema jinja2
+
+      - name: Run validation self-test matrix
+        id: selftest
+        run: |
+          set -euo pipefail
+          python3 scripts/validation_selftest_matrix.py \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --fixtures-root "examples/validation-fixtures" \
+            --summary-path "artifacts/validation-selftest-summary.json" \
+            --log-dir "artifacts/validation-selftest-logs"
+
+      - name: Upload validation self-test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-selftest-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            artifacts/validation-selftest-summary.json
+            artifacts/validation-selftest-logs/
+
+      - name: Write self-test summary
+        if: always()
+        run: |
+          set -euo pipefail
+          summary_file="artifacts/validation-selftest-summary.json"
+          if [ ! -f "${summary_file}" ]; then
+            {
+              echo "## Nightly Validation Self-Test"
+              echo "Summary file missing: ${summary_file}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+
+          if ! command -v jq >/dev/null 2>&1; then
+            {
+              echo "## Nightly Validation Self-Test"
+              echo "jq is unavailable; see artifact for raw summary: ${summary_file}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          summary_data="$(jq -r '
+            [
+              (.overall_status // "unknown"),
+              ((.totals.fixtures // 0) | tostring),
+              ((.totals.passed // 0) | tostring),
+              ((.totals.failed // 0) | tostring),
+              (.fixtures[]? | "- " + .name + ": " + .status + " (render=" + .stages.render.status + ", lint=" + .stages.lint.status + ", sanity=" + .stages.sanity.status + ")")
+            ] | @tsv
+          ' "${summary_file}" 2>/dev/null || true)"
+          IFS=$'	' read -r status fixtures passed failed fixture_lines <<EOF
+${summary_data}
+EOF
+          status="${status:-unknown}"
+          fixtures="${fixtures:-0}"
+          passed="${passed:-0}"
+          failed="${failed:-0}"
+
+          {
+            echo "## Nightly Validation Self-Test"
+            echo "| Key | Value |"
+            echo "|-----|-------|"
+            printf '| Status | `%s` |\n' "${status}"
+            printf '| Fixtures | `%s` |\n' "${fixtures}"
+            printf '| Passed | `%s` |\n' "${passed}"
+            printf '| Failed | `%s` |\n' "${failed}"
+            echo ""
+            echo "### Fixture Results"
+            if [ -n "${fixture_lines}" ]; then
+              printf '%s\n' "${fixture_lines}"
+            else
+              echo "- fixture results unavailable"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
