@@ -184,7 +184,9 @@ git ls-files --others --exclude-standard > "${UNTRACKED_LIST_FILE}" || true
       esac
       echo "--- ${untracked_path} ---"
       if [ -f "${untracked_path}" ]; then
-        if grep -Iq . "${untracked_path}" 2>/dev/null; then
+        if [ ! -s "${untracked_path}" ]; then
+          echo "[empty file]"
+        elif grep -Iq . "${untracked_path}" 2>/dev/null; then
           head -c 16000 "${untracked_path}" || true
           if [ "$(wc -c < "${untracked_path}" 2>/dev/null || echo 0)" -gt 16000 ]; then
             echo
