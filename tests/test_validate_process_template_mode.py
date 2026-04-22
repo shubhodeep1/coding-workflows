@@ -29,10 +29,11 @@ def _self_heal_prompt_text() -> str:
 
 def test_template_mode_selection_contract_present() -> None:
 	text = _validate_process_text()
-	assert 'VALIDATION_USE_TEMPLATES="${VALIDATION_USE_TEMPLATES:-false}"' in text
+	assert 'VALIDATION_USE_TEMPLATES="${VALIDATION_USE_TEMPLATES:-true}"' in text
 	assert 'VALIDATION_USE_TEMPLATES_ENABLED="false"' in text
 	assert "case \"$(printf '%s' \"${VALIDATION_USE_TEMPLATES}\" | tr '[:upper:]' '[:lower:]')\" in" in text
-	assert 'if [ "${VALIDATION_USE_TEMPLATES_ENABLED}" = "true" ]; then' in text
+	assert 'if [ "${VALIDATION_USE_TEMPLATES_ENABLED}" != "true" ]; then' in text
+	assert 'Freehand harness generation has been removed. Set VALIDATION_USE_TEMPLATES=true (or leave it unset) to use template rendering.' in text
 	assert 'HARNESS_MODE="template_generate"' in text
 	assert 'HARNESS_GENERATOR_MODE="templates"' in text
 	assert 'PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"' in text
@@ -42,8 +43,7 @@ def test_template_mode_selection_contract_present() -> None:
 	assert "python3_bin=\"$(command -v python3 2>/dev/null || printf '%s' 'python3')\"" in text
 	assert "if ! \"${python3_bin}\" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then" in text
 	assert 'Template renderer requires python3 >= 3.9' in text
-	assert 'elif [ "${VALIDATION_CYCLE}" -gt 1 ] \\' in text
-	assert 'HARNESS_GENERATOR_MODE="freehand"' in text
+	assert 'Template rendering is now the only supported harness generation path.' in text
 
 
 def test_render_recovery_contract_and_prompt_only_self_heal_scope() -> None:
@@ -167,7 +167,7 @@ case "${renderer_exit}" in
 		exit 0
 		;;
 	10)
-		local_failure_summary="Template mode requires ${PWD}/.ai/validate.yml but it is missing. Add manifest config or disable VALIDATION_USE_TEMPLATES."
+		local_failure_summary="Template mode requires ${PWD}/.ai/validate.yml but it is missing. Add manifest config or set VALIDATION_USE_TEMPLATES=false to stop validation before render."
 		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
 		set_tracking_phase_label "ai:validation-failed"
 		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
@@ -216,11 +216,10 @@ esac
 
 def test_template_mode_harness_contract_accepts_missing_validate_env() -> None:
 	text = _validate_process_text()
-	assert 'if [ "${HARNESS_GENERATOR_MODE:-freehand}" = "templates" ]; then' in text
-	assert '&& [ -f validation/tests/00_canary.sh ]' in text
-	assert '&& [ -f validation/validate.env ]' in text
+	assert 'if [ -f validation/docker-compose.test.yml ] \\' in text
+	assert '&& [ -f validation/tests/00_canary.sh ] \\' in text
 	assert 'if [ ! -f validation/tests/00_canary.sh ]; then' in text
-	assert 'if [ "${HARNESS_GENERATOR_MODE:-freehand}" != "templates" ] && [ ! -f validation/validate.env ]; then' in text
+	assert 'echo "Missing validation/validate.env" >> "${PRE_FLIGHT_LOG_FILE}"' not in text
 	assert 'Template renderer completed but produced non-runnable validation assets (validation/docker-compose.test.yml and validation/tests/00_canary.sh at minimum).' in text
 
 

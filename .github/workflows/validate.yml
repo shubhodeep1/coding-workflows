@@ -473,24 +473,14 @@ jobs:
 
       - name: Install Python dependencies for template mode
         continue-on-error: true
-        env:
-          VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'false' }}
         run: |
           set -euo pipefail
 
-          template_mode_enabled="$(printf '%s' "${VALIDATION_USE_TEMPLATES}" | tr '[:upper:]' '[:lower:]')"
-          case "${template_mode_enabled}" in
-            1|true|yes|on)
-              if [ -f "scripts/render_validation_templates.py" ]; then
-                python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
-              else
-                echo "::warning::VALIDATION_USE_TEMPLATES is enabled but scripts/render_validation_templates.py is unavailable; skipping template dependency installation."
-              fi
-              ;;
-            *)
-              echo "Template mode not enabled; skipping template dependency installation."
-              ;;
-          esac
+          if [ -f "scripts/render_validation_templates.py" ]; then
+            python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2
+          else
+            echo "::warning::scripts/render_validation_templates.py is unavailable; skipping template dependency installation."
+          fi
 
       - name: Run validation process
         id: validate_run
@@ -509,7 +499,7 @@ jobs:
           MODEL_EDITOR: ${{ env.MODEL_EDITOR }}
           MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
           MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
-          VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'false' }}
+          VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}

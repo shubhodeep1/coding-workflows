@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the CANARY_TOOLS scope preflight check in validate_process.sh.
 
-The check enforces mode-validate-generate.txt lines 491-492: service-side CLIs
+The check enforces the validation prompt contract: service-side CLIs
 (mongosh, mongo, psql, redis-cli, mysql, mysqladmin, kafkacat, kcat) must not
 appear in the app container's CANARY_TOOLS unless the app image explicitly
 installs that exact binary. See the motivating run documented in the
