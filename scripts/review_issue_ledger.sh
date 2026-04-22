@@ -676,6 +676,8 @@ rewrite_review_issues_without_residuals()
 
 RUNTIME_DIR="${RUNTIME_DIR:?RUNTIME_DIR is required}"
 PR_NUMBER="${PR_NUMBER:-0}"
+PR_NUMBER="${PR_NUMBER//[^0-9]/}"
+: "${PR_NUMBER:=0}"
 ITERATION_RAW="${AUTOFIX_ITERATION:-${ITERATION:-1}}"
 if [[ ! "${ITERATION_RAW}" =~ ^[0-9]+$ ]] || [ "${ITERATION_RAW}" -lt 1 ]; then
 	ITERATION=1

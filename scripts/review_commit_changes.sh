@@ -468,14 +468,17 @@ PY
   # relative-path spellings match. `git diff-tree --name-only`
   # emits canonical relative paths (no ./ prefix, no repeated
   # slashes, no trailing slash), but a consumer that sets
-  # REVIEW_LEDGER_PATH to e.g. ./.ai/review_issue_ledger.txt
+  # REVIEW_LEDGER_PATH to e.g. ./.ai/review_issue_ledger/pr-123.txt
   # or .ai//review_issue_ledger.txt would otherwise silently
   # fail to match and leave the PR stuck in the auto-merge
   # state this step is designed to resolve. See PR #1476.
   normalize_rel_path() {
     printf '%s\n' "$1" | sed -e 's#^\(\./\)\+##' -e 's#//*#/#g' -e 's#/$##'
   }
-  LEDGER_PATH_FOR_DETECTOR="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}"
+  SAFE_PR_NUMBER="${PR_NUMBER:-0}"
+  SAFE_PR_NUMBER="${SAFE_PR_NUMBER//[^0-9]/}"
+  : "${SAFE_PR_NUMBER:=0}"
+  LEDGER_PATH_FOR_DETECTOR="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${SAFE_PR_NUMBER}.txt}"
   NORMALIZED_LEDGER_PATH_FOR_DETECTOR="$(normalize_rel_path "${LEDGER_PATH_FOR_DETECTOR}")"
   COMMIT_PATHS_RAW="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)"
   COMMIT_PATH_COUNT="$(printf '%s\n' "${COMMIT_PATHS_RAW}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"

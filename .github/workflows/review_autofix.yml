@@ -311,6 +311,7 @@ jobs:
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
 
     steps:
@@ -1580,8 +1581,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            .ai/review_issue_ledger
-            .ai/review_issue_ledger.txt
+            ${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
@@ -1649,8 +1649,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            .ai/review_issue_ledger
-            .ai/review_issue_ledger.txt
+            ${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Log token usage and Serena stats
