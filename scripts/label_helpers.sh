@@ -153,7 +153,7 @@ ensure_label_exists() {
 # Best-effort phase transition for mutually-exclusive ai:* phase labels.
 # - Ensures the target label exists (non-fatal on failure).
 # - Removes other phase labels with resilient DELETE calls.
-# - Ensures the target label is present via POST add fallback.
+# - Adds the target label only when phase-label cleanup has no hard failures.
 set_issue_phase_label_resilient() {
 	local issue_number="${1:-}"
 	local target_label="${2:-}"
@@ -168,7 +168,7 @@ set_issue_phase_label_resilient() {
 		echo "::warning::set_issue_phase_label_resilient: ensure_label_exists failed for '${target_label}' in '${repo}' (continuing)." >&2
 	fi
 
-	local _phase_label _encoded_label _del_err_file _del_err
+	local _phase_label _encoded_label _del_err_file _del_err _delete_failed=0
 	for _phase_label in "${_AI_PHASE_TRANSITION_LABELS[@]}"; do
 		[ "${_phase_label}" = "${target_label}" ] && continue
 
@@ -190,9 +190,14 @@ set_issue_phase_label_resilient() {
 			continue
 		fi
 
+		_delete_failed=1
 		echo "::warning::set_issue_phase_label_resilient: failed deleting '${_phase_label}' from #${issue_number}: ${_del_err}" >&2
 	done
 
+	if [ "${_delete_failed}" -eq 1 ]; then
+		echo "::warning::set_issue_phase_label_resilient: skipping target label '${target_label}' on #${issue_number} to preserve phase-label exclusivity after delete failures." >&2
+		return 0
+	fi
 	if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 		-f "labels[]=${target_label}" >/dev/null 2>&1; then
 		echo "::warning::set_issue_phase_label_resilient: failed to apply '${target_label}' on issue #${issue_number} in repo '${repo}'." >&2
