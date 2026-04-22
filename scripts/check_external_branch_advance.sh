@@ -143,6 +143,11 @@ while IFS= read -r sha; do
 	[ -n "${sha}" ] || continue
 	advance_count=$((advance_count + 1))
 	subject="$(git log -1 --pretty=%s "${sha}" 2>/dev/null || printf '')"
+	if [ -z "${subject}" ]; then
+		log "::warning::check_external_branch_advance: unable to read subject for ${sha}; fail-open."
+		printf 'ADVANCE=unknown\n'
+		exit 0
+	fi
 	case "${subject}" in
 		"[ai-autofix]"*|"[ai-merge-resolve]"*)
 			self_subject_shas+="${sha} "

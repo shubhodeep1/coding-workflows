@@ -311,6 +311,7 @@ jobs:
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
 
     steps:
@@ -1540,7 +1541,7 @@ jobs:
         # agents.md §20.2.  The gate is fail-open: detection failures
         # (fetch errors, API blips) fall through to the editor so a
         # GitHub API glitch never silently drops a review.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CAN_PUSH == 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
         id: pre_editor_stale_base_gate
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1614,6 +1615,28 @@ jobs:
           sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
           echo "Updated reasoning effort to ${EDITOR_REASONING_EFFORT} for editor phase"
 
+      # Restore the per-PR review-issue ledger from the previous autofix
+      # iteration (each iteration is a separate workflow run).  The ledger
+      # lives at .ai/review_issue_ledger/pr-<PR_NUMBER>.txt and is
+      # gitignored, so it never reaches the PR branch — cross-iteration
+      # persistence is provided entirely by this cache pair.  The unique
+      # run-id key ensures every iteration saves a fresh entry; the
+      # restore-keys prefix falls back to the most recent cache from any
+      # prior iteration of the same PR on this repo.  Missing cache is
+      # fail-open: the ledger script treats an absent prior ledger as
+      # iteration-1 state and proceeds normally.
+      - name: Restore review-issue ledger
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .ai/review_issue_ledger/
+            ${{ env.REVIEW_LEDGER_PATH }}
+          key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
+
       - name: Apply fixes with editor model
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
         env:
@@ -1663,6 +1686,24 @@ jobs:
           fi
 
           bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh"
+
+      # Save the updated per-PR review-issue ledger so the next iteration
+      # (separate workflow run triggered by pull_request.synchronize after
+      # the autofix commit) can restore it above.  Runs even if the apply
+      # step failed partway — the ledger is updated in-place by
+      # review_issue_ledger.sh at the start of review_apply_fixes.sh, so
+      # persisting what's on disk keeps issue lifecycle accurate across
+      # iterations even when the editor phase aborted.
+      - name: Save review-issue ledger
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .ai/review_issue_ledger/
+            ${{ env.REVIEW_LEDGER_PATH }}
+          key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
+
       - name: Log token usage and Serena stats
         if: always()
         run: |
@@ -3277,9 +3318,9 @@ jobs:
           # that invariant.
           if [ "${EDITOR_SUMMARY_POSTED:-false}" = "true" ]; then
             BODY="$(cat <<EOF
-          **AI review/autofix encountered a failure after posting an editor summary — needs human intervention**
+          **AI review/autofix encountered a post-editor failure — needs human intervention**
 
-          An editor summary comment is visible above, but the overall review/autofix workflow still failed before completion. Check the workflow run for details; the PR branch may not include all intended editor changes.
+          An editor summary comment is visible above, but a downstream stage still failed before completion. Possible failure domains include push, conflict resolver, label/auto-merge, or telemetry plumbing.
 
           [View workflow run](${RUN_URL}) for details.
 
