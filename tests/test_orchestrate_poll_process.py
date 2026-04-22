@@ -5157,14 +5157,24 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# Verifier bootstrap must be in OPTIONAL list so older script_refs
 	# do not hard-fail.
 	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"' in body
+	# The bootstrap still enumerates the script name in review_autofix.yml
+	# even after PR #1495 moved the resolver logic into support scripts.
+	assert "verify_integration_fingerprints.py" in body
+	# The resolver-side gate content moved out of review_autofix.yml in
+	# PR #1495 (21,000-char template-expression limit fix) and now lives
+	# in scripts/review_conflict_{prepare,resolve}.sh. Verify the gate
+	# logic is still wired through those extracted scripts.
+	prepare_body = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
+	resolve_body = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	gate_body = prepare_body + "\n" + resolve_body
 	# The resolver step must dispatch the verifier under the
 	# IS_INTEGRATION_SYNC gate and handle exit codes 0/1/2.
-	assert "IS_INTEGRATION_SYNC" in body
-	assert "verify_integration_fingerprints.py" in body
-	assert "Aborting [ai-merge-resolve] commit: integration fingerprint verification" in body
+	assert "IS_INTEGRATION_SYNC" in gate_body
+	assert "verify_integration_fingerprints.py" in resolve_body
+	assert "Aborting [ai-merge-resolve] commit: integration fingerprint verification" in resolve_body
 	# The integration template selection must look for orchestrator/project-* head refs.
-	assert "orchestrator/project-*" in body
-	assert "integration-sync-conflict-resolver.txt" in body
+	assert "orchestrator/project-*" in prepare_body
+	assert "integration-sync-conflict-resolver.txt" in prepare_body
 
 
 def main() -> int:
